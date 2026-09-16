@@ -76,6 +76,15 @@ class GatewayConfig:
     receipt_store: str = "/data/receipts.jsonl"
     audit_chain: str = "/data/audit.jsonl"
 
+    # Gate authentication: "off" (trusted internal network, declared
+    # agent_id), "apikey" (per-agent API key, X-Api-Key header), or
+    # "token" (capability token, X-Capability-Token header - the
+    # Lean-proven mode). Default "off" is backwards compatible; the
+    # boot log warns that declared identity is trusted.
+    gate_auth: str = "off"
+    agent_credentials_file: str = "/data/agent-credentials.jsonl"
+    signer_key_path: str = ""  # empty = <data-dir>/gateway-signing-key.pem
+
     # SIEM
     siem_enabled: bool = False
     siem_backend: str = ""  # splunk, elastic, sentinel, kafka
@@ -118,6 +127,11 @@ class GatewayConfig:
             audit_log_file=os.environ.get("RAUCLE_AUDIT_LOG", "/data/gateway-audit.jsonl"),
             compliance_framework=os.environ.get("RAUCLE_COMPLIANCE_FRAMEWORK", "eu-ai-act"),
             registry_path=os.environ.get("RAUCLE_REGISTRY_PATH", "/data/registry.jsonl"),
+            gate_auth=os.environ.get("RAUCLE_GATE_AUTH", "off"),
+            agent_credentials_file=os.environ.get(
+                "RAUCLE_AGENT_CREDENTIALS", "/data/agent-credentials.jsonl"
+            ),
+            signer_key_path=os.environ.get("RAUCLE_SIGNER_KEY_PATH", ""),
         )
 
     @classmethod
@@ -346,8 +360,81 @@ class UserManager:
     - MFA can be disabled by an admin via disable_mfa()
     """
 
-    def __init__(self) -> None:
+    def __init__(self, persist_path: str | Path | None = None) -> None:
+        """User manager with optional file persistence (A3).
+
+        When *persist_path* is given, users are loaded on construction and
+        every mutation (add/remove/MFA change) is written atomically. A
+        corrupt file fails closed. Without it, behaviour is exactly the
+        historical in-memory manager (demo mode relies on this).
+        """
         self._users: dict[str, GatewayUser] = {}
+        self._persist_path = Path(persist_path) if persist_path else None
+        if self._persist_path is not None:
+            self._load_users()
+
+    def _load_users(self) -> None:
+        import json as _json
+
+        assert self._persist_path is not None
+        path = self._persist_path
+        if not path.exists():
+            return
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = _json.loads(line)
+            except _json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"user store {path} is corrupt (line {lineno}: {exc}); refusing to reset"
+                ) from exc
+            if not isinstance(rec, dict):
+                raise ValueError(f"user store {path} is corrupt (line {lineno})")
+            user = GatewayUser(
+                api_key=rec["api_key"],
+                role=rec["role"],
+                name=rec.get("name", ""),
+                expires_at=rec.get("expires_at"),
+            )
+            if rec.get("totp_secret"):
+                user.totp_secret = rec["totp_secret"]
+            self._users[user.api_key] = user
+
+    def _persist_users(self) -> None:
+        import contextlib as _contextlib
+        import json as _json
+        import os
+        import tempfile as _tempfile
+
+        if self._persist_path is None:
+            return
+        path = self._persist_path
+        records = []
+        for user in self._users.values():
+            rec = {
+                "api_key": user.api_key,
+                "role": user.role,
+                "name": user.name,
+                "expires_at": user.expires_at,
+            }
+            if getattr(user, "totp_secret", None):
+                rec["totp_secret"] = user.totp_secret
+            records.append(rec)
+        payload = "".join(_json.dumps(r) + "\n" for r in records)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = _tempfile.mkstemp(dir=str(path.parent), prefix=".users-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+        except Exception:
+            with _contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
 
     def add_user(
         self,
@@ -358,6 +445,7 @@ class UserManager:
     ) -> GatewayUser:
         user = GatewayUser(api_key=api_key, role=role, name=name, expires_at=expires_at)
         self._users[api_key] = user
+        self._persist_users()
         return user
 
     def get_user(self, api_key: str) -> GatewayUser | None:
@@ -386,6 +474,7 @@ class UserManager:
             return None
         secret = pyotp.random_base32()
         user.totp_secret = secret
+        self._persist_users()
         user.mfa_enabled = False  # not enabled until verified
         totp = pyotp.TOTP(secret)
         issuer = "Raucle Gateway"
@@ -431,6 +520,7 @@ class UserManager:
         if user is None:
             return False
         user.totp_secret = ""
+        self._persist_users()
         user.mfa_enabled = False
         return True
 
@@ -440,6 +530,7 @@ class UserManager:
     def remove_user(self, api_key: str) -> bool:
         if api_key in self._users:
             del self._users[api_key]
+            self._persist_users()
             return True
         return False
 
@@ -485,18 +576,62 @@ class RaucleGateway:
         self._connection_log: list[dict[str, Any]] = []
         self._max_log_size = 500
 
+        # Gate authentication (A1). "off" preserves today's behaviour
+        # exactly: declared agent_id is trusted, suitable only for
+        # trusted internal networks. "apikey"/"token" require a
+        # credential before policy evaluation.
+        self._gate_auth_mode = (config.gate_auth or "off").lower()
+        if self._gate_auth_mode not in ("off", "apikey", "token"):
+            raise ValueError(
+                f"invalid RAUCLE_GATE_AUTH {self._gate_auth_mode!r}: expected off, apikey or token"
+            )
+        self._agent_creds = None
+        self._caller_gate = None
+        if self._gate_auth_mode == "off":
+            logger.warning(
+                "gate auth mode is 'off': declared agent_id is TRUSTED. "
+                "Suitable only for trusted internal networks; set "
+                "RAUCLE_GATE_AUTH=apikey or token for authenticated deployment."
+            )
+        elif self._gate_auth_mode == "apikey":
+            from raucle.agent_credentials import AgentCredentialStore
+
+            self._agent_creds = AgentCredentialStore(path=config.agent_credentials_file)
+        elif self._gate_auth_mode == "token":
+            # Caller tokens are verified against the trust registry's
+            # active issuer keys. Built lazily on first use; see
+            # _init_caller_gate().
+            self._caller_gate = None
+        else:  # unreachable: validated above
+            raise ValueError(self._gate_auth_mode)
+
         # Bootstrap from config
         self._init_signer()
         self._load_policies()
 
+    def _signer_key_path(self) -> Path:
+        """Where the local signing key persists (A2)."""
+        from pathlib import Path as _P
+
+        if self.config.signer_key_path:
+            return _P(self.config.signer_key_path)
+        # Default: alongside the receipt store (<data-dir>/gateway-signing-key.pem)
+        base = _P(self.config.receipt_store).parent
+        return base / "gateway-signing-key.pem"
+
     def _init_signer(self) -> None:
-        """Initialise the signer (local or KMS)."""
+        """Initialise the signer (local or KMS).
+
+        Local signers PERSIST (A2): first boot generates the key and writes
+        it (0600); later boots load it, so receipts verify across restarts.
+        A corrupt key file fails closed - regenerating would orphan every
+        receipt signed by the previous key.
+        """
         from raucle.kms import create_signer
 
         if self.config.signer_backend == "local":
-            from raucle.audit import Ed25519Signer
-
-            self._signer = Ed25519Signer.generate()
+            key_path = self._signer_key_path()
+            self._signer = self._load_or_create_local_signer(key_path)
         else:
             self._signer = create_signer(
                 backend=self.config.signer_backend,
@@ -504,12 +639,15 @@ class RaucleGateway:
                 region=self.config.kms_region,
             )
 
-        # Create issuer from signer
+        # Create issuer from THE signer's key material (A2: local signers
+        # now persist, so the issuer identity is stable across restarts -
+        # tokens minted before a restart verify after it)
         from raucle.capability import CapabilityIssuer
 
         if self.config.signer_backend == "local":
-            # Local signer has a private key - use generate
-            self._issuer = CapabilityIssuer.generate(issuer="raucle-gateway")
+            self._issuer = CapabilityIssuer(
+                issuer="raucle-gateway", private_key=self._signer._private_key
+            )
         else:
             self._issuer = CapabilityIssuer.from_signer("raucle-gateway", self._signer)
 
@@ -519,6 +657,56 @@ class RaucleGateway:
         self._gate = CapabilityGate(
             trusted_issuers={self._issuer.key_id: self._issuer.public_key_pem}
         )
+
+    def _load_or_create_local_signer(self, key_path: Path):
+        """Load the persistent Ed25519 signer, creating it on first boot.
+
+        Fail-closed on corrupt material: a regenerated key would orphan
+        every previously-signed receipt.
+        """
+        import os
+
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        from raucle.audit import Ed25519Signer
+
+        if key_path.exists():
+            data = key_path.read_bytes()
+            try:
+                private_key = serialization.load_pem_private_key(data, password=None)
+            except Exception as exc:
+                logger.error(
+                    "gateway signing key %s is corrupt (%s); refusing to "
+                    "regenerate - restore the key file or, if the key is "
+                    "lost, archive all prior receipts and delete the file "
+                    "to start a fresh key",
+                    key_path,
+                    exc,
+                )
+                raise ValueError(f"corrupt gateway signing key {key_path}: {exc}") from exc
+            if not isinstance(private_key, Ed25519PrivateKey):
+                raise ValueError(f"gateway signing key {key_path} is not an Ed25519 key")
+            signer = Ed25519Signer(private_key)
+            logger.info("loaded gateway signing key %s (key_id=%s)", key_path, signer.key_id())
+            return signer
+
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        private_key = Ed25519PrivateKey.generate()
+        pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        # 0600 from creation
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(pem)
+            fh.flush()
+            os.fsync(fh.fileno())
+        signer = Ed25519Signer(private_key)
+        logger.info("generated new gateway signing key %s (key_id=%s)", key_path, signer.key_id())
+        return signer
 
     def _policy_files(self) -> list[Path]:
         """Enumerate policy files from the configured file or directory."""
@@ -643,6 +831,90 @@ class RaucleGateway:
             if rule.matches(source, destination):
                 return rule
         return None
+
+    def authenticate_caller(
+        self,
+        *,
+        api_key: str | None = None,
+        capability_token: dict[str, Any] | None = None,
+        tool: str = "",
+        args: dict[str, Any] | None = None,
+        declared_agent_id: str = "",
+    ) -> tuple[str | None, str]:
+        """Authenticate the caller of /gate under the configured auth mode.
+
+        Returns ``(agent_id, reason)``. On success ``agent_id`` is the
+        AUTHENTICATED identity (never the declared one) and ``reason`` is
+        empty. On failure ``agent_id`` is None and ``reason`` explains the
+        denial (the caller must deny with 401/reason).
+
+        Modes:
+        - off: declared identity passes through unchanged (compat).
+        - apikey: X-Api-Key looked up in the credential store.
+        - token: X-Capability-Token verified (signature, issuer trust,
+          TTL, binding to this tool/args) and the token's agent_id used.
+        """
+        args = args or {}
+        if self._gate_auth_mode == "off":
+            return declared_agent_id, ""
+
+        if self._gate_auth_mode == "apikey":
+            if not api_key:
+                return None, "api key required (X-Api-Key)"
+            assert self._agent_creds is not None
+            agent_id = self._agent_creds.verify(api_key)
+            if agent_id is None:
+                return None, "invalid or revoked api key"
+            return agent_id, ""
+
+        # token mode
+        if not capability_token:
+            return None, "capability token required (X-Capability-Token)"
+        from raucle.capability import Capability
+
+        gate = self._ensure_caller_gate()
+        try:
+            token = (
+                capability_token
+                if isinstance(capability_token, Capability)
+                else Capability.from_dict(capability_token)
+            )
+        except (ValueError, TypeError) as exc:
+            return None, f"malformed capability token: {exc}"
+        decision = gate.check(token, tool=tool, agent_id=token.agent_id, args=args)
+        if not decision.allowed:
+            return None, f"token rejected: {decision.reason}"
+        if declared_agent_id and declared_agent_id != token.agent_id:
+            return None, "agent_id/token mismatch"
+        return token.agent_id, ""
+
+    def _ensure_caller_gate(self):
+        """Lazily build the caller-token verification gate.
+
+        Issuer trust = every ACTIVE key in the trust registry, so a
+        registry revocation propagates to gate auth on the next call
+        (registry reloaded per call - cheap for realistic registry
+        sizes, correct under revocation).
+        """
+        from raucle.capability import CapabilityGate
+        from raucle.trust_registry import TrustRegistry
+
+        issuers: dict[str, str] = {}
+        reg_path = self.config.registry_path
+        if reg_path:
+            try:
+                reg = TrustRegistry(path=reg_path)
+                issuers = reg.as_issuer_map()  # {key_id: pem}, revoked dropped
+            except Exception as exc:  # missing registry file, etc.
+                logger.warning("trust registry unavailable for gate auth: %s", exc)
+        if not issuers:
+            # Fall back to the gateway's own issuer so a zero-registry
+            # deployment can still use token mode (the gateway is the
+            # only issuer in that topology). Documented in auth modes.
+            issuers = {self._issuer.key_id: self._issuer.public_key_pem}
+        # Rebuilt per call so registry revocations propagate immediately.
+        # as_issuer_map is a fold over the registry - cheap at realistic sizes.
+        return CapabilityGate(trusted_issuers=issuers)
 
     def check_tool_call(
         self,

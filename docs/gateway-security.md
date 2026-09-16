@@ -50,6 +50,51 @@ rate limiting at the proxy layer (100 requests/minute).
 - The default admin key is created from `RAUCLE_ADMIN_KEY` at startup
 - Additional users can be created via the admin panel with role-based
   access control (admin, operator, auditor)
+- Admin users persist to disk (default `<data-dir>/users.jsonl`, override
+  with `RAUCLE_USERS_FILE`); MFA secrets survive restarts. Demo-mode
+  synthetic users are in-memory only by design.
+
+## Gate authentication (agent callers)
+
+`RAUCLE_GATE_AUTH` controls how the `/gate` endpoint identifies agents.
+Pick per deployment posture:
+
+| Mode | Mechanism | Use when |
+|---|---|---|
+| `off` (default) | Declared `agent_id` is trusted | Trusted internal networks only. The boot log warns. Kept for backwards compatibility and the demo |
+| `apikey` | Per-agent key in `X-Api-Key`, stored hashed, revocable | Quick wins; agents that cannot hold tokens yet |
+| `token` | Capability token in `X-Capability-Token`, verified against the trust registry (signature, issuer, TTL, tool/args binding) | The deployment-grade answer; the same construction the Lean soundness theorems cover |
+
+Fail-closed details:
+
+- `apikey`: issue with `raucle agents issue-key --agent-id agent:pay`, revoke
+  with `revoke-key`; verification is a constant-time hash lookup; revoked
+  keys fail immediately; the plaintext key is shown once and never stored.
+- `token`: an authenticated identity that contradicts a declared
+  `agent_id` is denied (`agent_id/token mismatch`); expired or tampered
+  tokens are denied; the issuer list is the trust registry's active keys,
+  rebuilt per call, so a registry revocation propagates to gate auth
+  within one request.
+- Authentication failures return a DENY decision with the reason
+  (receipted), not a bare 401: an unauthenticated decision attempt is
+  itself evidence.
+
+In-process framework integrations (LangChain, Agent Framework, CrewAI) are
+observability and correctness controls, not a security boundary: a
+co-resident control cannot resist a compromised host process. The hard
+boundary is the out-of-process gate plus credential isolation: agents hold
+tokens, never raw tool secrets; tool execution verifies the gate's
+signature before running anything.
+
+## Gateway signing key persistence
+
+Local-signer deployments persist the Ed25519 key to
+`RAUCLE_SIGNER_KEY_PATH` (default `<data-dir>/gateway-signing-key.pem`,
+0600). First boot generates it; later boots load it, so receipts and tokens
+verify across restarts. A corrupt key file fails closed with a clear error:
+regenerating silently would orphan every receipt signed by the previous
+key. If the key is genuinely lost, archive the old receipt chain, remove
+the file, and treat the new key as a new identity.
 
 ## Health Check Authentication
 

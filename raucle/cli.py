@@ -122,6 +122,24 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # -- serve --------------------------------------------------------------
+    # -- agents (gateway credential management, A1.5) ----------------------
+    agents_p = subparsers.add_parser(
+        "agents", help="Manage per-agent gateway API credentials (RAUCLE_GATE_AUTH=apikey)"
+    )
+    agents_sub = agents_p.add_subparsers(dest="agents_command")
+    agents_issue = agents_sub.add_parser("issue-key", help="Issue an agent API key")
+    agents_issue.add_argument("--agent-id", required=True, help="Agent id, e.g. agent:pay")
+    agents_issue.add_argument(
+        "--store",
+        default="/data/agent-credentials.jsonl",
+        help="Credential store path (default: /data/agent-credentials.jsonl)",
+    )
+    agents_revoke = agents_sub.add_parser("revoke-key", help="Revoke an agent's API key")
+    agents_revoke.add_argument("--agent-id", required=True)
+    agents_revoke.add_argument("--store", default="/data/agent-credentials.jsonl")
+    agents_list = agents_sub.add_parser("list", help="List agents with active keys")
+    agents_list.add_argument("--store", default="/data/agent-credentials.jsonl")
+
     serve_p = subparsers.add_parser("serve", help="Start the REST API server")
     serve_p.add_argument(
         "--host",
@@ -809,6 +827,41 @@ def _print_scan_results(args: argparse.Namespace, results: list) -> None:
             print()
         else:
             _print_result_table(result)
+
+
+def _cmd_agents_issue_key(args: argparse.Namespace) -> int:
+    from raucle.agent_credentials import AgentCredentialStore
+
+    store = AgentCredentialStore(path=args.store)
+    key = store.issue(agent_id=args.agent_id)
+    print(f"API key issued for {args.agent_id} (shown once, stored hashed):")
+    print(key)
+    print(f'\nUse with: curl -H "X-Api-Key: {key}" ...', file=sys.stderr)
+    return 0
+
+
+def _cmd_agents_revoke_key(args: argparse.Namespace) -> int:
+    from raucle.agent_credentials import AgentCredentialStore
+
+    store = AgentCredentialStore(path=args.store)
+    if store.revoke(agent_id=args.agent_id):
+        print(f"revoked credential for {args.agent_id}", file=sys.stderr)
+        return 0
+    print(f"no active credential for {args.agent_id}", file=sys.stderr)
+    return 1
+
+
+def _cmd_agents_list(args: argparse.Namespace) -> int:
+    from raucle.agent_credentials import AgentCredentialStore
+
+    store = AgentCredentialStore(path=args.store)
+    agents = store.list_agents()
+    if not agents:
+        print("(no agents with active keys)", file=sys.stderr)
+        return 0
+    for agent_id in agents:
+        print(agent_id)
+    return 0
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
@@ -2298,6 +2351,9 @@ def _dispatch(argv: list[str] | None = None) -> int:
         ("cap", "verify"): _cmd_cap_verify,
         ("cap", "check"): _cmd_cap_check,
         ("cap", "attenuate"): _cmd_cap_attenuate,
+        ("agents", "issue-key"): _cmd_agents_issue_key,
+        ("agents", "revoke-key"): _cmd_agents_revoke_key,
+        ("agents", "list"): _cmd_agents_list,
     }
     sub = getattr(args, f"{args.command.replace('-', '_')}_command", None) if args.command else None
     handler = _SUBCOMMANDS.get((args.command, sub))

@@ -120,11 +120,63 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         pass  # slowapi not installed, no rate limiting
 
     @app.post("/gate")
-    def gate_tool_call(request: Request, req: GateRequest) -> dict[str, Any]:
-        """Gate a tool call. Returns allow/deny/escalate decision."""
-        return gateway.check_tool_call(
-            req.tool, req.args, req.agent_id, req.source, req.destination
+    def gate_tool_call(
+        request: Request,
+        req: GateRequest,
+        x_api_key: str | None = Header(None, alias="X-Api-Key"),
+        x_capability_token: str | None = Header(None, alias="X-Capability-Token"),
+    ) -> dict[str, Any]:
+        """Gate a tool call. Returns allow/deny/escalate decision.
+
+        Authentication (RAUCLE_GATE_AUTH): "off" trusts the declared
+        agent_id (internal networks only); "apikey" requires X-Api-Key;
+        "token" requires X-Capability-Token (verified against the trust
+        registry). On auth failure the decision is DENY with the reason
+        - a 401 would hide the denial from the receipt trail, and an
+        unauthenticated decision must still be receipted as denied.
+        """
+        import json as _json
+
+        token_dict = None
+        if x_capability_token:
+            try:
+                token_dict = _json.loads(x_capability_token)
+            except _json.JSONDecodeError:
+                return {
+                    "decision": "deny",
+                    "reason": "X-Capability-Token is not valid JSON",
+                    "tool": req.tool,
+                    "agent_id": req.agent_id,
+                    "source": req.source,
+                    "destination": req.destination,
+                    "policy": None,
+                    "args_hash": "",
+                    "receipt_id": None,
+                    "latency_us": 0,
+                    "timestamp": "",
+                }
+        agent_id, auth_reason = gateway.authenticate_caller(
+            api_key=x_api_key,
+            capability_token=token_dict,
+            tool=req.tool,
+            args=req.args,
+            declared_agent_id=req.agent_id,
         )
+        if agent_id is None:
+            return {
+                "decision": "deny",
+                "reason": f"unauthenticated: {auth_reason}",
+                "tool": req.tool,
+                "agent_id": req.agent_id,
+                "source": req.source,
+                "destination": req.destination,
+                "policy": None,
+                "args_hash": "",
+                "receipt_id": None,
+                "latency_us": 0,
+                "timestamp": "",
+            }
+        return gateway.check_tool_call(req.tool, req.args, agent_id, req.source, req.destination)
 
     @app.get("/health")
     def health(authorization: str | None = Header(None)) -> dict[str, str]:
