@@ -255,6 +255,15 @@ class Capability:
     grammar_hash: str | None = None
     policy_hash: str | None = None
     signature: str = ""
+    # Quantum-ready hybrid tokens (raucle/pq1): the ML-DSA-65 component.
+    # Both default to None (classical-only token, unchanged wire shape);
+    # when pq_key_id is set, the gate requires a valid pq_signature over
+    # the SAME canonical body, verified against the issuer's published
+    # ML-DSA-65 key. Stripping these fields from a hybrid token makes it
+    # classical-only - detectable only via gate policy (the verifier
+    # pins which issuers must be quantum-safe), documented in the spec.
+    pq_key_id: str | None = None
+    pq_signature: str | None = None
 
     def body(self) -> dict[str, Any]:
         # NB: token_id is derived from this body and is NOT a member of it.
@@ -277,6 +286,9 @@ class Capability:
         d = self.body()
         d["token_id"] = self.token_id
         d["signature"] = self.signature
+        if self.pq_key_id is not None:
+            d["pq_key_id"] = self.pq_key_id
+            d["pq_signature"] = self.pq_signature or ""
         return d
 
     @classmethod
@@ -357,6 +369,8 @@ class Capability:
             grammar_hash=d.get("grammar_hash"),
             policy_hash=d.get("policy_hash"),
             signature=d["signature"],
+            pq_key_id=d.get("pq_key_id"),
+            pq_signature=d.get("pq_signature"),
         )
 
     def save(self, path: str | Path) -> None:
@@ -605,12 +619,34 @@ class CapabilityIssuer:
         *,
         require_proof: bool | None = None,
         remote_signer: Any = None,
+        pq_private: Any = None,
     ) -> None:
         if not issuer:
             raise ValueError("issuer must not be empty")
         self.issuer = issuer
         self._priv = private_key
         self._remote_signer = remote_signer
+        # Quantum-ready minting (raucle/pq1): an optional ML-DSA-65 key.
+        # When present, mint(..., quantum=True) signs the token body with
+        # BOTH keys. The token's token_id derivation is unchanged (the PQ
+        # signature is not part of body()), so hybrid tokens stay
+        # content-addressed by the same body hash.
+        self._pq_priv: Any = None
+        self._pq_key_id: str | None = None
+        if pq_private is not None:
+            from cryptography.hazmat.primitives.asymmetric.mldsa import (
+                MLDSA65PrivateKey,
+            )
+
+            if not isinstance(pq_private, MLDSA65PrivateKey):
+                raise TypeError(
+                    "pq_private must be an MLDSA65PrivateKey (generate with "
+                    "raucle.pq.pq_generate and persist the seed)"
+                )
+            from raucle.pq import pq_key_id_from_public_key
+
+            self._pq_priv = pq_private
+            self._pq_key_id = pq_key_id_from_public_key(pq_private.public_key())
         if remote_signer is not None:
             # KMS/HSM mode: public key comes from the remote signer
             self.public_key_pem = remote_signer.public_key_pem().decode("ascii")
@@ -739,6 +775,7 @@ class CapabilityIssuer:
         proof_result: ProofResult | None = None,
         grammar_hash: str | None = None,
         policy_hash: str | None = None,
+        quantum: bool = False,
     ) -> Capability:
         """Mint a fresh capability token.
 
@@ -828,7 +865,19 @@ class CapabilityIssuer:
         )
         cap.token_id = "cap:" + _sha256_hex(_canonical_json(cap.body()))[:24]
         # Re-canonicalise with token_id included.
-        cap.signature = _b64(self._sign(_canonical_json(cap.body())))
+        signing_bytes = _canonical_json(cap.body())
+        cap.signature = _b64(self._sign(signing_bytes))
+        if quantum:
+            if self._pq_priv is None:
+                raise ValueError(
+                    "quantum=True requires the issuer to hold an ML-DSA-65 key "
+                    "(pass pq_private when constructing CapabilityIssuer)"
+                )
+            from raucle.pq import _b64url
+
+            pq_sig = self._pq_priv.sign(signing_bytes)
+            cap.pq_key_id = self._pq_key_id
+            cap.pq_signature = _b64url(pq_sig)
         return cap
 
     @staticmethod
@@ -1138,6 +1187,7 @@ class CapabilityGate:
         proof_enforcement_mode: str = "off",
         trusted_proofs: dict[str, ProofResult] | None = None,
         revoked_token_ids: set[str] | None = None,
+        pq_public_keys: dict[str, str] | None = None,
     ) -> None:
         """Construct a CapabilityGate.
 
@@ -1185,6 +1235,16 @@ class CapabilityGate:
         self._proof_mode = proof_enforcement_mode
         self._trusted_proofs: dict[str, ProofResult] = dict(trusted_proofs or {})
         self._revoked: set[str] = set(revoked_token_ids or ())
+        # ML-DSA-65 keys for hybrid tokens: pq_key_id -> PEM string. A token
+        # carrying pq_key_id fails closed when it cannot be verified here.
+        self._pq_public_keys: dict[str, Any] = {}
+        for kid, pem in (pq_public_keys or {}).items():
+            try:
+                from raucle.pq import pq_public_key_from_pem
+
+                self._pq_public_keys[kid] = pq_public_key_from_pem(pem)
+            except Exception:
+                self._pq_public_keys[kid] = None
 
     def revoke(self, token_id: str) -> None:
         """Add a token id to this gate's revocation denylist.
@@ -1250,6 +1310,34 @@ class CapabilityGate:
             self._verify_signature(token, pem)
         except ValueError as exc:
             return GateDecision(False, f"bad signature: {exc}", token.token_id)
+
+        # 2.5) Quantum hybrid component (raucle/pq1). When the token carries
+        # a pq_key_id, the ML-DSA-65 signature over the SAME canonical body
+        # must verify too - fail-closed, no classical-only acceptance of a
+        # hybrid token (the AND rule; mirrors pq1 receipts and checkpoints).
+        if token.pq_key_id is not None:
+            pq_key = self._pq_public_keys.get(token.pq_key_id)
+            if pq_key is None:
+                return GateDecision(
+                    False,
+                    f"token carries pq_key_id {token.pq_key_id!r} but the gate "
+                    "has no matching ML-DSA-65 key; hybrid token cannot be "
+                    "verified (fail-closed)",
+                    token.token_id,
+                )
+            try:
+                from raucle.pq import _b64url_decode
+
+                pq_sig = _b64url_decode(token.pq_signature or "")
+                if len(pq_sig) != 3309:
+                    raise ValueError(f"ML-DSA-65 signature must be 3309 bytes, got {len(pq_sig)}")
+                pq_key.verify(pq_sig, _canonical_json(token.body()))
+            except Exception as exc:
+                return GateDecision(
+                    False,
+                    f"hybrid ML-DSA-65 component failed verification: {exc}",
+                    token.token_id,
+                )
 
         # 3) token_id matches body?
         expected_id = "cap:" + _sha256_hex(_canonical_json(token.body()))[:24]

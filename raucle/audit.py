@@ -250,8 +250,18 @@ class HashChainSink:
         }
         if self._signer is not None:
             body["key_id"] = self._signer.key_id()
-            sig = self._signer.sign(_canonical_json(body))
-            body["signature"] = base64.b64encode(sig).decode("ascii")
+            signing_bytes = _canonical_json(body)
+            try:
+                from raucle.pq import HybridRecordSigner
+
+                if isinstance(self._signer, HybridRecordSigner):
+                    body.update(self._signer.sign_record(signing_bytes))
+                else:
+                    sig = self._signer.sign(signing_bytes)
+                    body["signature"] = base64.b64encode(sig).decode("ascii")
+            except ImportError:
+                sig = self._signer.sign(signing_bytes)
+                body["signature"] = base64.b64encode(sig).decode("ascii")
         self._file.write(json.dumps(body, ensure_ascii=False) + "\n")
         self._file.flush()
 
@@ -354,13 +364,28 @@ class HashChainSink:
             "merkle_root": merkle_root,
             "key_id": self._signer.key_id(),
         }
-        sig = self._signer.sign(_canonical_json(body))
+        signing_bytes = _canonical_json(body)
         checkpoint = {
             "checkpoint": True,
             **body,
-            "signature": base64.b64encode(sig).decode("ascii"),
             "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
         }
+        # Quantum-ready checkpoints: when the signer is a HybridRecordSigner
+        # (Ed25519 + ML-DSA-65), the checkpoint carries both signatures over
+        # the same canonical body. Verification enforces BOTH when pq_key_id
+        # is present (see verify_chain); there is no classical-only path for
+        # a hybrid checkpoint (downgrade closure, same rule as pq1 receipts).
+        try:
+            from raucle.pq import HybridRecordSigner
+
+            if isinstance(self._signer, HybridRecordSigner):
+                checkpoint.update(self._signer.sign_record(signing_bytes))
+            else:
+                sig = self._signer.sign(signing_bytes)
+                checkpoint["signature"] = base64.b64encode(sig).decode("ascii")
+        except ImportError:
+            sig = self._signer.sign(signing_bytes)
+            checkpoint["signature"] = base64.b64encode(sig).decode("ascii")
         self._file.write(json.dumps(checkpoint, ensure_ascii=False) + "\n")
         self._file.flush()
         return checkpoint
@@ -448,9 +473,31 @@ class AuditVerifier:
         is verified (still detects tampering with event content).
     """
 
-    def __init__(self, public_key_pem: bytes | None = None) -> None:
+    def __init__(
+        self,
+        public_key_pem: bytes | None = None,
+        pq_public_keys: dict[str, bytes | str] | None = None,
+        require_pq: bool = False,
+    ) -> None:
         self._public_pem = public_key_pem
+        # Quantum-strict mode: every signed record (chain_meta, checkpoint)
+        # MUST carry a verifying ML-DSA-65 component. A chain with stripped
+        # PQ fields then fails even though the classical halves verify -
+        # the only complete answer to field-stripping, which leaves no
+        # in-band trace. Deployments pin the operator PQ key id out of band.
+        self._require_pq = require_pq
         self._public_key: Any = None
+        # ML-DSA-65 keys for quantum-ready hybrid checkpoints:
+        # pq_key_id -> PEM (or raw PEM string). A checkpoint that declares
+        # pq_key_id fails closed when it cannot be verified here.
+        self._pq_public_keys: dict[str, Any] = {}
+        for kid, pem in (pq_public_keys or {}).items():
+            try:
+                from raucle.pq import pq_public_key_from_pem
+
+                self._pq_public_keys[kid] = pq_public_key_from_pem(pem)
+            except Exception:
+                self._pq_public_keys[kid] = None
         if public_key_pem:
             from cryptography.hazmat.primitives import serialization
 
@@ -728,7 +775,9 @@ class AuditVerifier:
                 )
                 report.valid = False
                 return
-            body = {k: v for k, v in rec.items() if k != "signature"}
+            body = {
+                k: v for k, v in rec.items() if k not in ("signature", "pq_key_id", "pq_signature")
+            }
             try:
                 self._public_key.verify(base64.b64decode(sig_b64), _canonical_json(body))
             except Exception as exc:
@@ -737,6 +786,35 @@ class AuditVerifier:
                     f"line {line_no}: chain_meta signature verification failed: {exc}"
                 )
                 report.valid = False
+                return
+            # Quantum-ready chain headers: pq_key_id declared -> the ML-DSA-65
+            # component must verify too (same fail-closed rule as checkpoints).
+            pq_key_id = rec.get("pq_key_id")
+            if self._require_pq and not pq_key_id:
+                report.errors.append(
+                    f"line {line_no}: require_pq: chain_meta carries no ML-DSA-65 "
+                    "component (field-stripped hybrid chain, or a classical chain "
+                    "presented to a quantum-strict verifier)"
+                )
+                report.valid = False
+                return
+            if pq_key_id:
+                from raucle.pq import verify_record_hybrid
+
+                if not verify_record_hybrid(
+                    {
+                        "signature": sig_b64,
+                        "pq_key_id": pq_key_id,
+                        "pq_signature": rec.get("pq_signature", ""),
+                    },
+                    _canonical_json(body),
+                    lambda r: True,
+                    pq_public_keys=self._pq_public_keys,
+                ):
+                    report.errors.append(
+                        f"line {line_no}: chain_meta hybrid ML-DSA-65 component failed verification"
+                    )
+                    report.valid = False
 
     def _verify_checkpoint(
         self,
@@ -801,6 +879,42 @@ class AuditVerifier:
                 "key_id": rec.get("key_id", ""),
             }
             self._public_key.verify(sig, _canonical_json(body))
+
+            # Quantum-ready checkpoints: when the record declares pq_key_id,
+            # the ML-DSA-65 component MUST verify too (fail-closed; no
+            # classical-only acceptance of a hybrid checkpoint - the same
+            # downgrade-closure rule as pq1 receipts).
+            pq_key_id = rec.get("pq_key_id")
+            if self._require_pq and not pq_key_id:
+                report.invalid_signatures += 1
+                report.errors.append(
+                    f"checkpoint at index {ckpt_index}: require_pq: no ML-DSA-65 "
+                    "component on this checkpoint"
+                )
+                report.valid = False
+                return
+            if pq_key_id:
+                from raucle.pq import verify_record_hybrid
+
+                body_fields = {
+                    "signature": rec["signature"],
+                    "pq_key_id": pq_key_id,
+                    "pq_signature": rec.get("pq_signature", ""),
+                }
+                if not verify_record_hybrid(
+                    body_fields,
+                    _canonical_json(body),
+                    lambda r: True,  # classical half already verified above
+                    pq_public_keys=self._pq_public_keys,
+                ):
+                    report.invalid_signatures += 1
+                    report.errors.append(
+                        f"checkpoint at index {ckpt_index}: hybrid ML-DSA-65 "
+                        "component failed verification (missing key, unknown "
+                        "pq_key_id, or tampered pq_signature)"
+                    )
+                    report.valid = False
+                    return
             report.valid_signatures += 1
         except Exception as exc:
             report.invalid_signatures += 1

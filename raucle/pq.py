@@ -38,6 +38,8 @@ ML-DSA, so callers can distinguish "not built for PQ" from "bad receipt".
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 from dataclasses import dataclass
 from typing import Any
@@ -358,4 +360,116 @@ __all__ = [
     "verify_hybrid",
     "header_is_pq1",
     "pq1_header",
+    "HybridRecordSigner",
+    "verify_record_hybrid",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Hybrid record signatures for chain surfaces (checkpoints, registry entries)
+# ---------------------------------------------------------------------------
+#
+# The receipt profile packs both signatures into the JWS signature slot; chain
+# records (audit checkpoints, trust-registry entries) are plain JSON with named
+# fields, so the hybrid form carries them as separate fields:
+#
+#   "signature":  base64(Ed25519 sig over the canonical record)
+#   "pq_key_id":  16-hex ML-DSA key id
+#   "pq_signature": base64(ML-DSA-65 sig over the SAME canonical record)
+#
+# Fail-closed rule: a record with "pq_key_id" MUST carry a "pq_signature" that
+# verifies; a record without "pq_key_id" verifies classically (migration window).
+
+
+class HybridRecordSigner:
+    """Signs chain records with both keys, in the named-field form.
+
+    Wraps an existing Ed25519Signer-compatible object (``.sign(bytes)`` +
+    ``.key_id()``) plus an ML-DSA-65 private key. Used by audit checkpoints
+    and trust-registry operator signatures.
+    """
+
+    def __init__(self, classical_signer: Any, pq_private: Any) -> None:
+        m = _mldsa_mod()
+        if not isinstance(pq_private, m.MLDSA65PrivateKey):
+            raise TypeError("pq_private must be an MLDSA65PrivateKey")
+        self._classical = classical_signer
+        self._pq_private = pq_private
+        self._pq_key_id = pq_key_id_from_public_key(pq_private.public_key())
+
+    def key_id(self) -> str:
+        return self._classical.key_id()
+
+    def pq_key_id(self) -> str:
+        return self._pq_key_id
+
+    def public_key_pem(self) -> bytes:
+        """The classical (Ed25519) public key PEM - mirrors Ed25519Signer,
+        so existing surfaces that read the operator's public key keep
+        working unchanged when the signer is upgraded to hybrid."""
+        return self._classical.public_key_pem()
+
+    def sign(self, data: bytes) -> bytes:
+        """Classical-only signing, mirroring Ed25519Signer.sign. Surfaces
+        that have not migrated to hybrid records keep working; hybrid
+        surfaces use sign_record() instead."""
+        return self._classical.sign(data)
+
+    def sign_record(self, body_bytes: bytes) -> dict[str, str]:
+        """Return {"signature": ..., "pq_key_id": ..., "pq_signature": ...}.
+
+        Both signatures are over *body_bytes* (the canonical record bytes,
+        exactly as the classical-only path would sign them).
+        """
+        classical_sig = self._classical.sign(body_bytes)
+        pq_sig = self._pq_private.sign(body_bytes)
+        return {
+            "signature": base64.b64encode(classical_sig).decode("ascii"),
+            "pq_key_id": self._pq_key_id,
+            "pq_signature": base64.b64encode(pq_sig).decode("ascii"),
+        }
+
+
+def verify_record_hybrid(
+    record: dict[str, Any],
+    signing_bytes: bytes,
+    classical_verify: Any,
+    pq_public_keys: dict[str, Any] | None = None,
+) -> bool:
+    """Verify a chain record's signatures, enforcing the fail-closed rule.
+
+    ``classical_verify`` is a callable ``(record) -> bool`` that performs the
+    surface's existing Ed25519 verification (each surface has its own key
+    resolution). The PQ component is checked here when the record declares
+    ``pq_key_id``:
+
+    - no ``pq_key_id``: classical verdict alone (migration window)
+    - ``pq_key_id`` present: BOTH must pass. Unknown key id -> False.
+      Missing/tampered ``pq_signature`` -> False. No PQ keys supplied at
+      all -> False (a verifier that cannot check the PQ half of a hybrid
+      record must not accept it).
+    """
+    pq_key_id = record.get("pq_key_id")
+    if not pq_key_id:
+        return classical_verify(record)
+    if not pq_public_keys:
+        return False
+    pq_key = pq_public_keys.get(pq_key_id)
+    if pq_key is None:
+        return False
+    pq_sig_b64 = record.get("pq_signature")
+    if not isinstance(pq_sig_b64, str) or not pq_sig_b64:
+        return False
+    try:
+        pq_sig = base64.b64decode(pq_sig_b64, validate=True)
+    except (ValueError, binascii.Error):
+        return False
+    if len(pq_sig) != 3309:
+        return False
+    if not classical_verify(record):
+        return False
+    try:
+        pq_key.verify(pq_sig, signing_bytes)
+        return True
+    except Exception:
+        return False
