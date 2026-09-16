@@ -368,7 +368,6 @@ def test_from_env_reads_segmented_store_config(monkeypatch, tmp_path):
     """Regression: from_env must surface RAUCLE_RECEIPT_STORE_DIR (caught
     live on the production deploy 16 Sep - field existed, env wiring did
     not, so the gateway silently wrote the flat file)."""
-    import os
 
     monkeypatch.setenv("RAUCLE_RECEIPT_STORE_DIR", str(tmp_path / "segs"))
     monkeypatch.setenv("RAUCLE_RECEIPT_STORE", str(tmp_path / "flat.jsonl"))
