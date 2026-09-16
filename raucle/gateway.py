@@ -145,6 +145,10 @@ class GatewayConfig:
             signer_key_path=os.environ.get("RAUCLE_SIGNER_KEY_PATH", ""),
             emit_receipts=os.environ.get("RAUCLE_EMIT_RECEIPTS", "1") not in ("0", "false", "no"),
             trace_header=os.environ.get("RAUCLE_TRACE_HEADER", "X-Trace-Id"),
+            receipt_store_dir=os.environ.get("RAUCLE_RECEIPT_STORE_DIR", ""),
+            receipt_segment_max_bytes=int(
+                os.environ.get("RAUCLE_RECEIPT_SEGMENT_MAX_BYTES", "67108864")
+            ),
         )
 
     @classmethod
