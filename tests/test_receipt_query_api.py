@@ -176,7 +176,7 @@ class TestExportAPI:
         resp = admin.get("/api/receipts/export", headers=AUTH)
         assert resp.status_code == 200
         assert "x-ndjson" in resp.headers.get("content-type", "")
-        lines = [l for l in resp.text.splitlines() if l.strip()]
+        lines = [ln for ln in resp.text.splitlines() if ln.strip()]
         assert len(lines) == 2
         rec = json.loads(lines[0])
         assert {"receipt_hash", "jws"} <= set(rec.keys())
@@ -191,11 +191,11 @@ class TestExportAPI:
         resp = admin.get(
             "/api/receipts/export", params={"since": before, "until": after}, headers=AUTH
         )
-        lines = [l for l in resp.text.splitlines() if l.strip()]
+        lines = [ln for ln in resp.text.splitlines() if ln.strip()]
         assert len(lines) == 1
         # window excluding the receipt
         resp2 = admin.get("/api/receipts/export", params={"since": after}, headers=AUTH)
-        lines2 = [l for l in resp2.text.splitlines() if l.strip()]
+        lines2 = [ln for ln in resp2.text.splitlines() if ln.strip()]
         assert len(lines2) == 0
 
     def test_export_requires_auth(self, gw, admin):
