@@ -1001,6 +1001,7 @@ class ProvenanceLogger:
         sink_file: Any | None = None,
         tenant: str | None = None,
         quantum_mode: str = "off",
+        pq_private_key: Any = None,
     ) -> None:
         if (sink_path is None) == (sink_file is None):
             raise ValueError("exactly one of sink_path or sink_file must be provided")
@@ -1010,10 +1011,32 @@ class ProvenanceLogger:
         self._tenant = tenant
         self._hybrid: Any = None
         if quantum_mode == "strict":
-            from raucle.pq import HybridSigner, PQUnavailable
+            from cryptography.hazmat.primitives.asymmetric.mldsa import (
+                MLDSA65PrivateKey,
+            )
+
+            from raucle.pq import (
+                HybridSigner,
+                PQUnavailable,
+                pq_key_id_from_public_key,
+            )
 
             try:
-                self._hybrid = HybridSigner.from_ed25519(agent._private_key)
+                if pq_private_key is not None:
+                    if not isinstance(pq_private_key, MLDSA65PrivateKey):
+                        raise TypeError(
+                            "pq_private_key must be an MLDSA65PrivateKey "
+                            "(generate with raucle.pq.pq_generate and persist the "
+                            "seed; a fresh key every restart changes pqk and "
+                            "splits the chain's key identity)"
+                        )
+                    self._hybrid = HybridSigner(
+                        ed25519_private=agent._private_key,
+                        pq_private=pq_private_key,
+                        pq_key_id=pq_key_id_from_public_key(pq_private_key.public_key()),
+                    )
+                else:
+                    self._hybrid = HybridSigner.from_ed25519(agent._private_key)
             except PQUnavailable as exc:
                 raise RuntimeError(
                     "quantum_mode='strict' requires ML-DSA-65 support; "
