@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added — gateway identity and key persistence (PR-A, production readiness)
+- Gate authentication modes (`RAUCLE_GATE_AUTH=off|apikey|token`): per-agent
+  API keys (`X-Api-Key`, hashed at rest, constant-time verify, instant
+  revocation) and capability-token authentication (`X-Capability-Token`,
+  verified against the trust registry with per-call revocation propagation).
+  `off` preserves the previous declared-identity behaviour (compat).
+  Auth failures return a receipted DENY with the reason, not a bare 401.
+- `raucle agents issue-key|revoke-key|list` CLI for credential management.
+- Gateway signing key persistence: local signers persist the Ed25519 key
+  (0600, default `<data-dir>/gateway-signing-key.pem`); tokens and receipts
+  now verify across restarts; corrupt key material fails closed instead of
+  silently regenerating.
+- Admin user persistence (`RAUCLE_USERS_FILE`): users and MFA secrets
+  survive restarts; demo-mode users remain in-memory by design.
+- `docs/gateway-security.md`: auth-mode selection table, fail-closed
+  semantics, in-process vs out-of-process trust boundary guidance.
+
 ### Added — conformance re-verification layer (`raucle.conformance`)
 
 - Field-level Merkle commitments over call arguments (JCS-canonical leaves,

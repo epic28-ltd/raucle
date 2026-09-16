@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
+from pathlib import Path
 
 import uvicorn
 
@@ -73,8 +75,11 @@ def main() -> None:
     logger.info("Initialising Raucle Gateway...")
     gateway = RaucleGateway(config)
 
-    # Initialise user management
-    users = UserManager()
+    # Initialise user management (A3: persisted to disk beside the data)
+    users_file = os.environ.get(
+        "RAUCLE_USERS_FILE", str(Path(config.receipt_store).parent / "users.jsonl")
+    )
+    users = UserManager(persist_path=users_file)
     if config.admin_api_key:
         users.add_user(config.admin_api_key, "admin", "Default Admin")
         logger.info("Default admin user created from RAUCLE_ADMIN_KEY")
