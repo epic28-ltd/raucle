@@ -1,0 +1,17 @@
+apiVersion: v2
+name: raucle-gateway
+description: Raucle gateway - signed accountability for AI agent actions (policy gate, receipts, trust registry, admin panel)
+type: application
+version: 0.1.0
+appVersion: "0.22.0"
+home: https://raucle.com
+sources:
+  - https://github.com/epic28-ltd/raucle
+keywords:
+  - ai-security
+  - agents
+  - audit
+  - provenance
+maintainers:
+  - name: Epic28
+    url: https://epic28.com
