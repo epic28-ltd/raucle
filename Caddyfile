@@ -7,10 +7,17 @@
 # The Caddy container terminates TLS on ports 443 (gateway + admin)
 # and forwards to the raucle-gateway container on internal ports.
 #
-# Replace raucle.example.com with your domain.
+# Replace {$DOMAIN} with your domain:
+#   docker compose -f docker-compose.gateway.yml up -d
+# The compose file passes DOMAIN=... from the environment.
 # Caddy will automatically provision a Let's Encrypt certificate.
+#
+# NOTE: no rate_limit directive is used here on purpose: stock caddy:2-alpine
+# does not ship the rate_limit plugin, and an unrecognized directive makes the
+# Caddy container crash-loop on boot. Use a plugin build of Caddy if you need
+# in-proxy rate limiting, or rate-limit at your edge (e.g. Cloudflare).
 
-raucle.example.com {
+{$DOMAIN} {
 	# Gateway API
 	handle /gate* {
 		reverse_proxy raucle-gateway:8080
@@ -28,14 +35,6 @@ raucle.example.com {
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		Permissions-Policy "geolocation=(), microphone=(), camera=()"
-	}
-
-	# Rate limiting (basic, per-IP)
-	rate_limit {
-		zone gateway {
-			events 100
-			window 1m
-		}
 	}
 
 	log {
