@@ -42,6 +42,10 @@ post-quantum position to the standard migration frameworks.
 - **Capability tokens**: `CapabilityIssuer(..., pq_private=...)` +
   `mint(quantum=True)`; `CapabilityGate(pq_public_keys=...)` verifies both
   components fail-closed.
+- **Audit packs**: `raucle audit-pack build --pq-pubkeys <pem...> --require-pq`
+  bundles the ML-DSA keys into the self-contained evidence pack;
+  `audit-pack verify` re-verifies the hybrid chain fully offline and
+  enforces the pack's own `require_pq` declaration.
 - **Hashes**: SHA-256 throughout. Quantum collision/preimage bounds
   (2^128) remain infeasible; no hash migration needed.
 - **Downgrade resistance**: a hybrid receipt stripped of its ML-DSA
@@ -57,6 +61,7 @@ post-quantum position to the standard migration frameworks.
 | Audit checkpoints + chain headers | **Hybrid shipped** (HybridRecordSigner; both signatures verified; require_pq strict mode) | Operator tooling |
 | Trust registry | **Hybrid shipped** (dual-key publish/resolve; hybrid operator signatures; issuer PQ keys coexist with classical by design) | Registry sync protocols |
 | Capability tokens | **Hybrid shipped** (issuer pq_private; mint(quantum=True); gate verifies both, fail-closed) | Policy DSL emission |
+| Audit packs | **Hybrid shipped** (`audit-pack build --pq-pubkeys ... --require-pq`; offline verify enforces what the pack declares) | Regulator bundle tooling |
 | KMS/HSM signers | Local ML-DSA keys | AWS KMS/Azure Key Vault as providers ship ML-DSA |
 | Cross-language ports | Python authoritative | TS/Go/Rust/C# via their PQ libraries against the published reference vectors |
 

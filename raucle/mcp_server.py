@@ -205,6 +205,33 @@ def _tool_definitions() -> list[dict[str, Any]]:
                 "required": ["output"],
             },
         },
+        {
+            "name": "verify_receipt",
+            "description": (
+                "Verify a signed raucle provenance/verdict receipt (compact JWS). "
+                "Returns the verified payload, the signing key id, and whether "
+                "the receipt is quantum-hybrid (raucle/pq1). Use this to check "
+                "agent evidence independently, without the raucle CLI."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "receipt": {
+                        "type": "string",
+                        "description": "The compact JWS receipt string",
+                    },
+                    "pubkey_pem": {
+                        "type": "string",
+                        "description": "Ed25519 public key in PEM form",
+                    },
+                    "expected_input": {
+                        "type": "string",
+                        "description": "Optional original input the receipt must bind to",
+                    },
+                },
+                "required": ["receipt", "pubkey_pem"],
+            },
+        },
     ]
 
 
@@ -242,6 +269,7 @@ class MCPServer:
             "list_rules": self._t_list_rules,
             "embed_canary": self._t_embed_canary,
             "check_canary_leak": self._t_check_canary_leak,
+            "verify_receipt": self._t_verify_receipt,
         }
         # Required-argument map derived from the published tool schemas, so
         # enforcement can never drift from what tools/list advertises.
@@ -424,6 +452,26 @@ class MCPServer:
             "leak_count": len(results),
             "leaks": [r.to_dict() for r in results],
         }
+
+    def _t_verify_receipt(self, args: dict[str, Any]) -> dict[str, Any]:
+        from raucle.verdicts import VerdictVerificationError, VerdictVerifier
+
+        receipt = str(args.get("receipt", ""))
+        pubkey_pem = str(args.get("pubkey_pem", ""))
+        if not receipt or not pubkey_pem:
+            raise ValueError("verify_receipt requires receipt and pubkey_pem")
+
+        verifier = VerdictVerifier(public_key_pem=pubkey_pem.encode("ascii"))
+        try:
+            payload = verifier.verify(receipt, expected_input=args.get("expected_input"))
+        except VerdictVerificationError as exc:
+            return {"valid": False, "error": str(exc)}
+
+        data = payload.to_dict()
+        # Surface the profile: a pq1 receipt carries the ML-DSA segment (4-part JWS)
+        # and the crit pin, so consumers can see hybrid evidence at a glance.
+        profile = data.get("profile") or ("raucle/pq1" if receipt.count(".") == 3 else "raucle/v1")
+        return {"valid": True, "profile": profile, "payload": data}
 
     # ------------------------------------------------------------------
     # Helpers
