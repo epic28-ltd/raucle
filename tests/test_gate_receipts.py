@@ -362,3 +362,18 @@ class TestSegmentedStoreIntegration:
 
         payload = _json.loads(_b64.urlsafe_b64decode(recs[0]["jws"].split(".")[1] + "=="))
         assert payload["x_gate"]["trace_id"] == "trace-xyz"
+
+
+def test_from_env_reads_segmented_store_config(monkeypatch, tmp_path):
+    """Regression: from_env must surface RAUCLE_RECEIPT_STORE_DIR (caught
+    live on the production deploy 16 Sep - field existed, env wiring did
+    not, so the gateway silently wrote the flat file)."""
+    import os
+
+    monkeypatch.setenv("RAUCLE_RECEIPT_STORE_DIR", str(tmp_path / "segs"))
+    monkeypatch.setenv("RAUCLE_RECEIPT_STORE", str(tmp_path / "flat.jsonl"))
+    monkeypatch.setenv("RAUCLE_SIGNER_KEY_PATH", str(tmp_path / "k.pem"))
+    from raucle.gateway import GatewayConfig
+
+    cfg = GatewayConfig.from_env()
+    assert cfg.receipt_store_dir == str(tmp_path / "segs")
