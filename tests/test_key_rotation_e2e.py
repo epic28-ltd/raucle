@@ -11,7 +11,6 @@ The rotation contract:
    signatures still verify (revoke != erase).
 """
 
-
 from raucle.capability import CapabilityGate, CapabilityIssuer
 from raucle.trust_registry import TrustRegistry
 
