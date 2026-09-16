@@ -1,0 +1,128 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "raucle-gateway.fullname" . }}
+  labels:
+    {{- include "raucle-gateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "raucle-gateway.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        {{- include "raucle-gateway.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: gateway
+              containerPort: 8080
+            - name: admin
+              containerPort: 8081
+          env:
+            - name: RAUCLE_ADMIN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "raucle-gateway.fullname" . }}-secrets
+                  key: RAUCLE_ADMIN_KEY
+            {{- with .Values.config.demoKey }}
+            - name: RAUCLE_DEMO_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "raucle-gateway.fullname" . }}-secrets
+                  key: RAUCLE_DEMO_KEY
+            {{- end }}
+            {{- with .Values.config.healthKey }}
+            - name: RAUCLE_HEALTH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "raucle-gateway.fullname" . }}-secrets
+                  key: RAUCLE_HEALTH_KEY
+            {{- end }}
+            - name: RAUCLE_GATEWAY_HOST
+              value: "0.0.0.0"
+            - name: RAUCLE_GATE_AUTH
+              value: {{ .Values.config.gateAuth | quote }}
+            - name: RAUCLE_SIGNER
+              value: {{ .Values.config.signer | quote }}
+            {{- with .Values.config.kmsKeyId }}
+            - name: RAUCLE_KMS_KEY_ID
+              value: {{ . | quote }}
+            {{- end }}
+            - name: RAUCLE_EMIT_RECEIPTS
+              value: {{ .Values.config.emitReceipts | quote }}
+            - name: RAUCLE_RECEIPT_STORE_DIR
+              value: {{ .Values.config.receiptStoreDir | quote }}
+            - name: RAUCLE_RECEIPT_SEGMENT_MAX_BYTES
+              value: {{ .Values.config.receiptSegmentMaxBytes | quote }}
+            - name: RAUCLE_RECEIPT_INDEX_PATH
+              value: {{ .Values.config.receiptIndexPath | quote }}
+            - name: RAUCLE_SIGNER_KEY_PATH
+              value: {{ .Values.config.signerKeyPath | quote }}
+            - name: RAUCLE_POLICY_FILE
+              value: {{ .Values.config.policyFile | quote }}
+            - name: RAUCLE_POLICY_DIR
+              value: {{ .Values.config.policyDir | quote }}
+            - name: RAUCLE_COMPLIANCE_FRAMEWORK
+              value: {{ .Values.config.complianceFramework | quote }}
+            - name: RAUCLE_TRACE_HEADER
+              value: {{ .Values.config.traceHeader | quote }}
+            {{- if .Values.siem.enabled }}
+            - name: RAUCLE_SIEM_ENABLED
+              value: "true"
+            - name: RAUCLE_SIEM_BACKEND
+              value: {{ .Values.siem.backend | quote }}
+            - name: RAUCLE_SIEM_URL
+              value: {{ .Values.siem.url | quote }}
+            {{- if .Values.siem.token }}
+            - name: RAUCLE_SIEM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "raucle-gateway.fullname" . }}-secrets
+                  key: RAUCLE_SIEM_TOKEN
+            {{- end }}
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: policies
+              mountPath: /etc/raucle/policies
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: gateway
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: gateway
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "raucle-gateway.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: policies
+          configMap:
+            name: {{ include "raucle-gateway.fullname" . }}-config

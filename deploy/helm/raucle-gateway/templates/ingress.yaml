@@ -1,0 +1,31 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "raucle-gateway.fullname" . }}
+  labels:
+    {{- include "raucle-gateway.labels" . | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.gateway.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "raucle-gateway.fullname" . }}
+                port:
+                  number: {{ .Values.service.gatewayPort }}
+    - host: {{ .Values.ingress.admin.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "raucle-gateway.fullname" . }}
+                port:
+                  number: {{ .Values.service.adminPort }}
+{{- end }}

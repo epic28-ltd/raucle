@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added — key operations, deployment topologies, Helm chart (PR-D)
+- docs/security/key-operations.md: rotation (versioned-issuer zero-downtime
+  procedure; the registry's one-active-key-per-issuer impersonation control
+  is the reason), escrow, recovery, split PQ-key posture, fail-closed list.
+  Maps 1:1 to the executable test.
+- tests/test_key_rotation_e2e.py: the runbook's proof. Old receipts verify
+  after rotation (archival property: revoke != erase), new mints use the new
+  key, revocation fails new authorisation closed while old signatures still
+  verify; gateway signing-key restart rotation with both generations in one
+  chain.
+- docs/deployment-topologies.md: where raucle sits (not the model path),
+  the trust boundary stated plainly (in-process = observability; the
+  boundary is out-of-process gate + credential isolation), single node /
+  hot standby / namespace sharding, edge patterns (TLS/mTLS/OIDC), the
+  Postgres trigger, retention as a file operation.
+- docs/getting-started/20-production-hardening.md: the 90-minute evaluator
+  path (auth on, segments+index, restart test, offline verify, query,
+  checklist, runbooks).
+- deploy/helm/raucle-gateway: chart with REQUIRED adminKey (renders fail
+  without it), replicaCount pinned to 1 (one writer per chain), PVC,
+  probes, ingress; CI job lints + kubeconform-validates templates and
+  asserts the no-adminKey render fails.
+
 ### Added — receipt query index, ancestry API and bulk egress (PR-C)
 - ReceiptIndex: SQLite (WAL) projection over the segmented store; rebuild
   from chain at any time; never a trust decision.

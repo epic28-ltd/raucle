@@ -1,0 +1,70 @@
+# Raucle gateway chart values
+# Every value maps to the documented gateway configuration; see
+# docs/getting-started/20-production-hardening.md for the reasoning.
+
+replicaCount: 1  # ONE writer per chain (tamper-evidence); see deployment-topologies.md
+
+image:
+  repository: ghcr.io/epic28-ltd/raucle-gateway  # build from Dockerfile.gateway
+  tag: ""            # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  gatewayPort: 8080   # /gate, /health
+  adminPort: 8081    # admin panel + API
+
+ingress:
+  enabled: false
+  className: nginx
+  gateway:
+    host: gate.example.com
+    # /gate* only; never expose the admin port here
+  admin:
+    host: admin.example.com  # put behind your SSO/mTLS
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
+
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClass: ""   # cluster default
+
+# Gateway configuration (env-var names mirror the application)
+config:
+  adminKey: ""            # REQUIRED - set via --set or a Secret
+  demoKey: ""             # public read-only evaluator key (optional)
+  gateAuth: "apikey"       # off | apikey | token (off = trusted internal only)
+  signer: "local"         # local | aws | azure
+  kmsKeyId: ""
+  emitReceipts: true
+  receiptStoreDir: /data/receipts-segments
+  receiptSegmentMaxBytes: "67108864"
+  receiptIndexPath: /data/receipts-segments/index.sqlite
+  signerKeyPath: /data/gateway-signing-key.pem
+  healthKey: ""
+  policyFile: /etc/raucle/policies.yaml
+  policyDir: /etc/raucle/policies-demo
+  complianceFramework: "eu-ai-act"
+  traceHeader: "X-Trace-Id"
+
+siem:
+  enabled: false
+  backend: ""
+  url: ""
+  token: ""
+
+# Policies: map of filename -> YAML content
+policies: {}
+#  banking.yaml: |
+#    version: 1
+#    ...
+
+tolerations: []
+nodeSelector: {}
+affinity: {}
