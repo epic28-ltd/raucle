@@ -41,6 +41,7 @@ from raucle._paths import validate_path
 
 from . import __version__
 from .audit_export import build_report, render_html, sign_manifest, verify_manifest
+from .pq import PQUnavailable
 from .provenance import (
     CapabilityStatement,
     ProvenanceVerifier,
@@ -109,6 +110,8 @@ def build_pack(
     capability_statements: dict[str, CapabilityStatement] | None = None,
     capabilities: list[dict[str, Any]] | None = None,
     proofs: list[dict[str, Any]] | None = None,
+    pq_public_keys: dict[str, bytes | str] | None = None,
+    require_pq: bool = False,
 ) -> dict[str, Any]:
     """Assemble a self-contained, offline-verifiable audit pack.
 
@@ -119,6 +122,7 @@ def build_pack(
     capability_statements = capability_statements or {}
     capabilities = capabilities or []
     proofs = proofs or []
+    pq_public_keys = pq_public_keys or {}
 
     report = build_report(
         chain_path,
@@ -149,6 +153,10 @@ def build_pack(
     _emit("report.html", render_html(manifest).encode("utf-8"), "human-report")
     for key_id, pem in sorted(public_keys.items()):
         _emit(f"pubkeys/{key_id}.pem", pem, "public-key", key_id=key_id)
+    for key_id, pem in sorted(pq_public_keys.items()):
+        if isinstance(pem, str):
+            pem = pem.encode("ascii")
+        _emit(f"pq-pubkeys/{key_id}.pem", pem, "pq-public-key", key_id=key_id)
     for key_id, stmt in sorted(capability_statements.items()):
         _emit(
             f"statements/{key_id}.json",
@@ -174,6 +182,7 @@ def build_pack(
         "generated_at": generated_at,
         "tool_version": __version__,
         "audit_key_id": manifest["signer_key_id"],
+        "require_pq": bool(require_pq),
         "members": members,
         "verify": "raucle audit-pack verify <dir>",
     }
@@ -285,10 +294,15 @@ def _verify_pack_manifest(
 def _load_pack_members(
     members: list[dict[str, Any]], resolved: dict[str, Path]
 ) -> tuple[
-    dict[str, bytes], dict[str, CapabilityStatement], list[dict[str, Any]], list[dict[str, Any]]
+    dict[str, bytes],
+    dict[str, bytes],
+    dict[str, CapabilityStatement],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
 ]:
-    """Load bundled public keys, capability statements, tokens, and proofs."""
+    """Load bundled public keys, PQ keys, capability statements, tokens, and proofs."""
     public_keys: dict[str, bytes] = {}
+    pq_public_keys: dict[str, bytes] = {}
     statements: dict[str, CapabilityStatement] = {}
     capabilities: list[dict[str, Any]] = []
     proofs: list[dict[str, Any]] = []
@@ -299,22 +313,40 @@ def _load_pack_members(
         role = m.get("role")
         if role == "public-key":
             public_keys[m["key_id"]] = safe.read_bytes()
+        elif role == "pq-public-key":
+            pq_public_keys[m["key_id"]] = safe.read_bytes()
         elif role == "capability-statement":
             statements[m["key_id"]] = CapabilityStatement.from_dict(json.loads(safe.read_text()))
         elif role == "capability-token":
             capabilities.append(json.loads(safe.read_text()))
         elif role == "proof":
             proofs.append(json.loads(safe.read_text()))
-    return public_keys, statements, capabilities, proofs
+    return public_keys, pq_public_keys, statements, capabilities, proofs
 
 
 def _verify_pack_chain(
-    resolved: dict[str, Path], public_keys: dict[str, bytes], reasons: list[str]
+    resolved: dict[str, Path],
+    public_keys: dict[str, bytes],
+    reasons: list[str],
+    pq_public_keys: dict[str, bytes] | None = None,
+    require_pq: bool = False,
 ) -> tuple[bool, int]:
-    """Verify the receipt chain against bundled keys. Returns ``(chain_valid, receipt_count)``."""
+    """Verify the receipt chain against bundled keys (classical + PQ).
+
+    ``require_pq`` mirrors the pack's own declaration: packs built with
+    ``require_pq=True`` record it in the index, and verification enforces
+    what the pack says about itself.
+    """
+    pq_public_keys = pq_public_keys or {}
     chain_member = resolved.get(_CHAIN_JSONL)
     if chain_member is not None and public_keys:
-        verdict = ProvenanceVerifier(public_keys=public_keys).verify_chain(chain_member)
+        try:
+            verdict = ProvenanceVerifier(
+                public_keys=public_keys, pq_public_keys=pq_public_keys or None
+            ).verify_chain(chain_member)
+        except PQUnavailable as exc:
+            reasons.append(f"pack declares PQ-signed receipts but ML-DSA is unavailable: {exc}")
+            return False, 0
         if not verdict.valid:
             reasons.append("receipt chain did not verify against bundled keys")
         return verdict.valid, verdict.receipt_count
@@ -420,11 +452,24 @@ def verify_pack(pack_dir: str | Path, *, expected_signer: str | None = None) -> 
 
     # Reload bundled public keys + capability statements (only verified members).
     members = index.get("members", [])
-    public_keys, statements, capabilities, proofs = _load_pack_members(members, resolved)
+    (
+        public_keys,
+        pq_public_keys,
+        statements,
+        capabilities,
+        proofs,
+    ) = _load_pack_members(members, resolved)
+    require_pq = bool(index.get("require_pq", False))
 
-    # 3. Chain verifies against the bundled keys alone.
+    # 3. Chain verifies against the bundled keys alone (classical + any PQ keys).
     chain_member = resolved.get(_CHAIN_JSONL)
-    chain_valid, receipt_count = _verify_pack_chain(resolved, public_keys, reasons)
+    chain_valid, receipt_count = _verify_pack_chain(
+        resolved,
+        public_keys,
+        reasons,
+        pq_public_keys=pq_public_keys,
+        require_pq=require_pq,
+    )
 
     # 4. Reproducibility: signed manifest body AND rendered report must follow
     #    from the bundled evidence — neither view doctorable independently.

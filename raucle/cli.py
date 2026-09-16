@@ -372,6 +372,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sign-key", required=True, help="Ed25519 PEM private key that signs the manifest"
     )
     pack_build.add_argument("--out", required=True, help="Output pack DIRECTORY")
+    pack_build.add_argument(
+        "--pq-pubkeys",
+        nargs="*",
+        default=[],
+        help="ML-DSA-65 public-key PEM files bundled for hybrid chains (optional)",
+    )
+    pack_build.add_argument(
+        "--require-pq",
+        action="store_true",
+        help="Stamp the pack as post-quantum-required; verification enforces it",
+    )
     pack_verify = pack_sub.add_parser(
         "verify", help="Verify a pack fully offline (no network, no external inputs)"
     )
@@ -1347,6 +1358,16 @@ def _cmd_audit_pack_build(args: argparse.Namespace) -> int:
 
     public_keys, statements, proofs, capabilities = _load_audit_inputs(args)
 
+    pq_public_keys: dict[str, bytes | str] = {}
+    for pem_path in getattr(args, "pq_pubkeys", None) or []:
+        from cryptography.hazmat.primitives import serialization as _ser
+
+        from raucle.pq import pq_key_id_from_public_key
+
+        pem = validate_path(pem_path).read_bytes()
+        key_obj = _ser.load_pem_public_key(pem)
+        pq_public_keys[pq_key_id_from_public_key(key_obj)] = pem
+
     try:
         index = build_pack(
             chain_path=args.chain,
@@ -1357,6 +1378,8 @@ def _cmd_audit_pack_build(args: argparse.Namespace) -> int:
             capability_statements=statements or None,
             capabilities=capabilities,
             proofs=proofs,
+            pq_public_keys=pq_public_keys or None,
+            require_pq=getattr(args, "require_pq", False),
         )
     except (ValueError, OSError) as exc:
         print(f"audit-pack build failed: {exc}", file=sys.stderr)
