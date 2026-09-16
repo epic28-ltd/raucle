@@ -51,6 +51,9 @@ server = [
     "pyotp>=2.9",         # TOTP MFA for admin panel authentication
 ]
 compliance = ["cryptography>=42.0"]
+# Post-quantum hybrid signatures (raucle/pq1): ML-DSA-65 needs
+# cryptography>=47 built with AWS-LC/BoringSSL; shipped wheels have it since 48.
+pq = ["cryptography>=48.0"]
 agent-framework = ["agent-framework>=1.0"]
 langchain = ["langchain-core>=0.3"]
 autogen = ["autogen-agentchat>=0.4"]
