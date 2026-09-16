@@ -310,6 +310,24 @@ _EXPECTED_TYP = "provenance-receipt/v1"
 #: understand every entry in ``crit``; this is the only one we understand.
 _RAUCLE_V1 = "raucle/v1"
 _UNDERSTOOD_CRIT = {_RAUCLE_V1}
+
+#: The post-quantum hybrid profile (docs/spec/provenance/v1/pq1-hybrid.md).
+#: Receipts declaring this in crit carry a two-signature slot (Ed25519 +
+#: ML-DSA-65) and are verified fail-closed under both keys.
+_PQ1_PROFILE = "raucle/pq1"
+_PQ1_ALG = "ml-dsa-65"
+
+
+def _has_mldsa() -> bool:
+    """True when this runtime can verify ML-DSA-65 signatures."""
+    try:
+        from raucle.pq import pq_available
+
+        return pq_available()
+    except Exception:
+        return False
+
+
 #: Prefix marking a sanitisation receipt's ``corpus`` removed-taint claim
 #: (``"removed:<tag1>,<tag2>,…"``), used at both build and verify time.
 _REMOVED_PREFIX = "removed:"
@@ -695,8 +713,15 @@ class ProvenanceReceipt:
             out["tenant"] = self.tenant
         return out
 
-    def sign(self, identity: AgentIdentity) -> str:
+    def sign(self, identity: AgentIdentity, hybrid: Any = None) -> str:
         """Sign with *identity* and populate ``jws`` + ``receipt_hash``.
+
+        With *hybrid* (a :class:`raucle.pq.HybridSigner`), the receipt is
+        signed under the ``raucle/pq1`` profile instead: the header pins
+        the PQ profile in ``crit``, and the signature slot carries the
+        Ed25519 and ML-DSA-65 signatures joined by ``.``. Both must
+        verify; there is no downgrade path (see docs/spec/provenance/
+        v1/pq1-hybrid.md).
 
         Returns the compact JWS string for convenience.
         """
@@ -707,13 +732,20 @@ class ProvenanceReceipt:
             "crit": [_RAUCLE_V1],
             "raucle/v1": "provenance",
         }
+        if hybrid is not None:
+            from raucle.pq import pq1_header
+
+            header = pq1_header(header, hybrid.pq_key_id)
         signing_input = (
             _b64url_encode(_canonical_json(header))
             + "."
             + _b64url_encode(_canonical_json(self.payload()))
         ).encode("ascii")
-        sig = identity.sign(signing_input)
-        self.jws = signing_input.decode("ascii") + "." + _b64url_encode(sig)
+        if hybrid is not None:
+            sig = hybrid.sign_both(signing_input)
+        else:
+            sig = _b64url_encode(identity.sign(signing_input))
+        self.jws = signing_input.decode("ascii") + "." + sig
         self.receipt_hash = _SHA256_PREFIX + _sha256_hex(self.jws.encode("ascii"))
         return self.jws
 
@@ -782,9 +814,24 @@ class ProvenanceReceipt:
         if len(jws) > cls.MAX_JWS_BYTES:
             raise ValueError(f"JWS too large: {len(jws)} bytes > {cls.MAX_JWS_BYTES} cap")
         try:
-            header_b64, payload_b64, _sig_b64 = jws.split(".")
-        except ValueError as exc:
-            raise ValueError("malformed JWS — expected three dot-separated segments") from exc
+            parts = jws.split(".")
+        except ValueError as exc:  # pragma: no cover - split does not raise
+            raise ValueError("malformed JWS — expected dot-separated segments") from exc
+        # v1 receipts: header.payload.sig (3 segments). pq1 hybrid receipts:
+        # header.payload.<ed25519>.<ml-dsa-65> (4 segments; the signature slot
+        # itself carries a joining dot — see raucle/pq.py).
+        if len(parts) == 3:
+            header_b64, payload_b64, _sig_b64 = parts
+        elif len(parts) == 4:
+            header_b64, payload_b64, _sig_b64 = (
+                parts[0],
+                parts[1],
+                parts[2] + "." + parts[3],
+            )
+        else:
+            raise ValueError(
+                f"malformed JWS — expected three or four dot-separated segments, got {len(parts)}"
+            )
 
         payload_bytes = _b64url_decode(payload_b64)
         if len(payload_bytes) > cls.MAX_PAYLOAD_BYTES:
@@ -851,6 +898,11 @@ class ProvenanceReceipt:
 
         cls._enforce_crit(header)
 
+        if header.get(_PQ1_PROFILE) == _PQ1_ALG:
+            pqk = header.get("pqk")
+            if not isinstance(pqk, str) or len(pqk) != 16:
+                raise ValueError("pq1 receipts must pin a 16-hex-char 'pqk' (ML-DSA-65 key id)")
+
         if expected_kid is not None:
             kid = header.get("kid")
             if kid != expected_kid:
@@ -876,6 +928,11 @@ class ProvenanceReceipt:
         # extension is only permitted if it is ALSO listed in crit (and crit must
         # be exactly ['raucle/v1'] here, so in practice no extras are allowed).
         allowed_header_keys = {"alg", "typ", "kid", "crit"} | set(header.get("crit") or [])
+        # pq1 hybrid receipts pin their ML-DSA key id in the header; the key
+        # is part of the profile, so it is allowed when the profile is
+        # declared (docs/spec/provenance/v1/pq1-hybrid.md).
+        if header.get(_PQ1_PROFILE) == _PQ1_ALG:
+            allowed_header_keys |= {_PQ1_PROFILE, "pqk"}
         extra = set(header) - allowed_header_keys
         if extra:
             raise ValueError(f"unexpected JOSE header key(s): {sorted(extra)}")
@@ -893,7 +950,10 @@ class ProvenanceReceipt:
             raise ValueError("JOSE header missing required 'crit' parameter")
         if not isinstance(crit, list) or not all(isinstance(c, str) for c in crit):
             raise ValueError("JOSE header 'crit' must be a list of strings")
-        unknown = set(crit) - _UNDERSTOOD_CRIT
+        understood = set(_UNDERSTOOD_CRIT)
+        if header.get(_PQ1_PROFILE) == _PQ1_ALG:
+            understood |= {_PQ1_PROFILE}
+        unknown = set(crit) - understood
         if unknown:
             raise ValueError(f"unknown critical header parameter(s): {sorted(unknown)}")
         if not _UNDERSTOOD_CRIT.issubset(crit):
@@ -940,11 +1000,25 @@ class ProvenanceLogger:
         sink_path: str | Path | None = None,
         sink_file: Any | None = None,
         tenant: str | None = None,
+        quantum_mode: str = "off",
     ) -> None:
         if (sink_path is None) == (sink_file is None):
             raise ValueError("exactly one of sink_path or sink_file must be provided")
+        if quantum_mode not in ("off", "strict"):
+            raise ValueError(f"quantum_mode must be 'off' or 'strict', got {quantum_mode!r}")
         self._agent = agent
         self._tenant = tenant
+        self._hybrid: Any = None
+        if quantum_mode == "strict":
+            from raucle.pq import HybridSigner, PQUnavailable
+
+            try:
+                self._hybrid = HybridSigner.from_ed25519(agent._private_key)
+            except PQUnavailable as exc:
+                raise RuntimeError(
+                    "quantum_mode='strict' requires ML-DSA-65 support; "
+                    "this runtime's cryptography build has none"
+                ) from exc
         if sink_path is not None:
             sink_path = Path(sink_path)
             # Pre-load any existing receipts so taint inheritance keeps working
@@ -1214,7 +1288,7 @@ class ProvenanceLogger:
         )
 
     def _emit(self, receipt: ProvenanceReceipt) -> str:
-        receipt.sign(self._agent)
+        receipt.sign(self._agent, hybrid=self._hybrid)
         # §8.1 minimal envelope: write ONLY {receipt_hash, jws}. The JWS already
         # carries the canonical, signed payload — mirroring payload fields into
         # the envelope (the old to_dict() format) created unsigned, unvalidated
@@ -1331,6 +1405,7 @@ class ProvenanceVerifier:
         self,
         public_keys: dict[str, bytes],
         capabilities: dict[str, CapabilityStatement] | None = None,
+        pq_public_keys: dict[str, bytes | str] | None = None,
     ) -> None:
         from cryptography.hazmat.primitives import serialization
 
@@ -1338,6 +1413,22 @@ class ProvenanceVerifier:
             kid: serialization.load_pem_public_key(pem) for kid, pem in public_keys.items()
         }
         self._caps: dict[str, CapabilityStatement] = dict(capabilities or {})
+        # ML-DSA-65 keys for pq1 hybrid receipts: pq_key_id -> PEM bytes.
+        # A pq1 receipt whose pqk is not in this mapping fails closed.
+        self._pq_keys: dict[str, Any] = {}
+        for kid, pem in (pq_public_keys or {}).items():
+            try:
+                from raucle.pq import pq_public_key_from_pem
+
+                self._pq_keys[kid] = pq_public_key_from_pem(
+                    pem.decode("ascii") if isinstance(pem, bytes) else pem
+                )
+            except Exception:
+                # ML-DSA unavailable in this runtime: remember the id as
+                # known-but-unloadable so pq1 receipts fail with a clear
+                # PQUnavailable error at verify time rather than silently
+                # downgrading.
+                self._pq_keys[kid] = None
 
     @staticmethod
     def _parse_chain_line(
@@ -1554,14 +1645,72 @@ class ProvenanceVerifier:
     def _verify_signature(self, receipt: ProvenanceReceipt) -> bool:
         from cryptography.exceptions import InvalidSignature
 
+        from raucle.pq import (
+            HybridVerificationError,
+            PQUnavailable,
+            header_is_pq1,
+            parse_hybrid_signature,
+            verify_hybrid,
+        )
+
         key = self._keys.get(receipt.agent_key_id)
         if key is None:
             return False
         try:
-            header_b64, payload_b64, sig_b64 = receipt.jws.split(".")
-            signing_input = (header_b64 + "." + payload_b64).encode("ascii")
-            key.verify(_b64url_decode(sig_b64), signing_input)
-            return True
+            parts = receipt.jws.split(".")
+            if len(parts) == 4:
+                # pq1 hybrid receipt: fail-closed dual verification. No
+                # downgrade — both components must verify.
+                header = json.loads(
+                    _b64url_decode(parts[0]), object_pairs_hook=_reject_duplicate_keys
+                )
+                if not header_is_pq1(header):
+                    return False
+                pqk = header.get("pqk")
+                pq_key = self._pq_keys.get(pqk)
+                if pq_key is None:
+                    # Unknown PQ key: fail closed. If ML-DSA is entirely
+                    # unavailable, say so distinctly.
+                    if not _has_mldsa():
+                        raise PQUnavailable(
+                            "pq1 receipt requires ML-DSA-65 verification but "
+                            "this runtime has no ML-DSA support"
+                        )
+                    return False
+                if pq_key is None:
+                    raise PQUnavailable(
+                        "pq1 receipt's ML-DSA key could not be loaded in this runtime"
+                    )
+                signing_input = (parts[0] + "." + parts[1]).encode("ascii")
+                signature_slot = parts[2] + "." + parts[3]
+                # Shape-checked before crypto (segment sizes) for the same
+                # reason as the v1 path: fail on structure before verifying.
+                parse_hybrid_signature(signature_slot)
+                verify_hybrid(signing_input, signature_slot, key, pq_key)
+                return True
+            if len(parts) == 3:
+                header_b64, payload_b64, sig_b64 = parts
+                # Downgrade closure (pq1 §Verification): a receipt whose header
+                # declares the pq1 profile must never verify via the v1 path,
+                # even though its Ed25519 component is valid on its own. An
+                # attacker who strips the ML-DSA segment otherwise presents a
+                # fully "valid" v1 receipt - exactly the downgrade the hybrid
+                # profile exists to prevent.
+                header = json.loads(
+                    _b64url_decode(header_b64), object_pairs_hook=_reject_duplicate_keys
+                )
+                if header.get(_PQ1_PROFILE) == _PQ1_ALG:
+                    return False
+                signing_input = (header_b64 + "." + payload_b64).encode("ascii")
+                key.verify(_b64url_decode(sig_b64), signing_input)
+                return True
+            # 1, 2, 5+ segments never reach here (from_jws rejects them);
+            # but keep the verifier total: any other shape fails closed.
+            return False
+        except PQUnavailable:
+            raise
+        except HybridVerificationError:
+            return False
         except InvalidSignature:
             return False
         except (ValueError, TypeError, KeyError):

@@ -445,6 +445,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="One or more capability-statement JSON files OR public-key PEM files",
     )
     prov_verify.add_argument(
+        "--pq-pubkeys",
+        nargs="*",
+        default=None,
+        metavar="PEM",
+        help=(
+            "ML-DSA-65 public key PEM files for raucle/pq1 hybrid receipts. "
+            "Filenames are keyed by their pqk (16-hex key id derived from the key)"
+        ),
+    )
+    prov_verify.add_argument(
+        "--require-pq",
+        action="store_true",
+        help=(
+            "Fail unless every receipt in the chain carries a valid "
+            "raucle/pq1 hybrid signature (Ed25519 AND ML-DSA-65). Receipts "
+            "that are plain v1 fail the requirement"
+        ),
+    )
+    prov_verify.add_argument(
         "--format", choices=["table", "json"], default="table", help=_HELP_OUTPUT_FORMAT
     )
 
@@ -1546,9 +1565,21 @@ def _cmd_provenance_verify(args: argparse.Namespace) -> int:
 
     public_keys, capabilities = _load_provenance_pubkeys(args.pubkeys)
 
+    pq_public_keys = {}
+    for pem_path in getattr(args, "pq_pubkeys", None) or []:
+        from raucle.pq import pq_key_id_from_public_key, pq_public_key_from_pem
+
+        key = pq_public_key_from_pem(Path(pem_path).read_text(encoding="ascii"))
+        pq_public_keys[pq_key_id_from_public_key(key)] = Path(pem_path).read_text(encoding="ascii")
+
     report = ProvenanceVerifier(
-        public_keys=public_keys, capabilities=capabilities or None
+        public_keys=public_keys,
+        capabilities=capabilities or None,
+        pq_public_keys=pq_public_keys or None,
     ).verify_chain(args.path)
+
+    if getattr(args, "require_pq", False):
+        _enforce_require_pq(args.path, report)
 
     if args.format == "json":
         print(json.dumps(report.to_dict(), indent=2))
@@ -1556,6 +1587,38 @@ def _cmd_provenance_verify(args: argparse.Namespace) -> int:
         _print_provenance_report(report)
 
     return 0 if report.valid else 2
+
+
+def _enforce_require_pq(path: str, report: Any) -> None:
+    """--require-pq: every receipt must be a pq1 hybrid receipt.
+
+    Fail-closed requirement: a chain of perfectly valid v1 receipts does
+    not satisfy --require-pq, because the point of the flag is asserting
+    quantum-safe emission. Marks the report invalid with a clear error
+    per non-pq1 receipt.
+    """
+    from raucle.provenance import ProvenanceReceipt
+
+    pq1_count = 0
+    with open(path, encoding="utf-8") as fh:
+        for line_no, line in enumerate(fh, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                envelope = json.loads(line)
+                receipt = ProvenanceReceipt.from_jws(envelope["jws"], strict=True)
+            except Exception:
+                continue
+            parts = receipt.jws.split(".")
+            if len(parts) == 4:
+                pq1_count += 1
+            else:
+                report.errors.append(
+                    f"line {line_no}: --require-pq failed: receipt is not a "
+                    "raucle/pq1 hybrid receipt (no ML-DSA-65 component)"
+                )
+                report.valid = False
 
 
 def _receipt_detail(r) -> str:
