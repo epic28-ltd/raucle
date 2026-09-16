@@ -86,6 +86,39 @@ boundary is the out-of-process gate plus credential isolation: agents hold
 tokens, never raw tool secrets; tool execution verifies the gate's
 signature before running anything.
 
+## Signed gate receipts
+
+Every `/gate` decision, allow, deny or escalate, is emitted as a signed
+provenance receipt (operation `guardrail_scan` with an `x_gate` extension
+binding decision, reason, tool, agent, policy and trace id), written as a
+minimal `{receipt_hash, jws}` envelope. The response's `receipt_id` is the
+receipt's content hash: hand it to `raucle provenance verify` or the MCP
+`verify_receipt` tool and it verifies offline like any other raucle receipt.
+
+- Emission is on by default; `RAUCLE_EMIT_RECEIPTS=0` restores pre-PR-B
+  behaviour (no receipts, `receipt_id: null`) for compatibility.
+- `X-Trace-Id` threads a caller-supplied trace through every receipt
+  (`x_gate.trace_id`); absent header generates one and the response echoes
+  it so callers can correlate.
+- Fail-closed accountability: if a receipt cannot be written, the decision
+  is downgraded to deny. An action without its receipt is unauthorised.
+- Receipts are signed by the persistent gateway identity (`agent:gate`),
+  so decisions verify across restarts.
+
+### Segmented receipt storage
+
+Set `RAUCLE_RECEIPT_STORE_DIR` and receipts flow into size-based segments
+(`seg-NNNNNN.jsonl`, `RAUCLE_RECEIPT_SEGMENT_MAX_BYTES`, default 64 MiB).
+On rollover the segment is sealed read-only with a `.meta` sidecar (receipt
+count, last hash, sealed_at) and the next segment begins. A sealed segment
+is a pure receipt chain: it verifies with `ProvenanceVerifier` and builds
+into an audit pack byte-for-byte, no special casing. Retention becomes a
+file operation: archive or delete segments older than your policy, export
+any segment as the regulator bundle. Query helpers (`recent`,
+`find_by_hash`) read newest-first across segments in bounded memory; they
+are conveniences, never a trust decision - verification always reads the
+chain.
+
 ## Gateway signing key persistence
 
 Local-signer deployments persist the Ed25519 key to

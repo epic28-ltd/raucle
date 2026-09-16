@@ -125,6 +125,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         req: GateRequest,
         x_api_key: str | None = Header(None, alias="X-Api-Key"),
         x_capability_token: str | None = Header(None, alias="X-Capability-Token"),
+        x_trace_id: str | None = Header(None, alias="X-Trace-Id"),
     ) -> dict[str, Any]:
         """Gate a tool call. Returns allow/deny/escalate decision.
 
@@ -155,6 +156,9 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
                     "latency_us": 0,
                     "timestamp": "",
                 }
+        import uuid as _uuid
+
+        trace_id = x_trace_id or _uuid.uuid4().hex
         agent_id, auth_reason = gateway.authenticate_caller(
             api_key=x_api_key,
             capability_token=token_dict,
@@ -176,7 +180,13 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
                 "latency_us": 0,
                 "timestamp": "",
             }
-        return gateway.check_tool_call(req.tool, req.args, agent_id, req.source, req.destination)
+        response = gateway.check_tool_call(
+            req.tool, req.args, agent_id, req.source, req.destination, trace_id=trace_id
+        )
+        # Internal bookkeeping fields never leave the process boundary
+        response.pop("_trace_id", None)
+        response.pop("_args", None)
+        return response
 
     @app.get("/health")
     def health(authorization: str | None = Header(None)) -> dict[str, str]:
