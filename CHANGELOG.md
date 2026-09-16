@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added — receipt query index, ancestry API and bulk egress (PR-C)
+- ReceiptIndex: SQLite (WAL) projection over the segmented store; rebuild
+  from chain at any time; never a trust decision.
+- /api/receipts upgraded to real query: agent/tool/decision/trace/time
+  filters with keyset pagination (tie-safe composite cursor).
+- /api/receipts/{hash}/ancestors: parents-DAG walk, nodes+edges JSON,
+  cycle-safe, depth-capped.
+- /api/receipts/export: JSONL streaming egress for the caller's data
+  platform.
+- Admin panel Receipts tab: filter bar, paginated table, ancestry
+  drill-down.
+
 ### Added — signed gate receipts and segmented storage (PR-B, production readiness)
 - Every /gate decision (allow, deny, escalate) emits a signed provenance
   receipt (guardrail_scan + x_gate extension) written as a minimal envelope;

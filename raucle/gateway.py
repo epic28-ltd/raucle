@@ -95,6 +95,10 @@ class GatewayConfig:
     # receipt_store file. Empty = legacy flat file.
     receipt_store_dir: str = ""
     receipt_segment_max_bytes: int = 67108864  # 64 MiB
+    # Receipt index (PR-C): SQLite projection for query + ancestry. Empty =
+    # no index (panel falls back to store.recent()). Default lives beside
+    # the data.
+    receipt_index_path: str = ""
 
     # SIEM
     siem_enabled: bool = False
@@ -149,6 +153,7 @@ class GatewayConfig:
             receipt_segment_max_bytes=int(
                 os.environ.get("RAUCLE_RECEIPT_SEGMENT_MAX_BYTES", "67108864")
             ),
+            receipt_index_path=os.environ.get("RAUCLE_RECEIPT_INDEX_PATH", ""),
         )
 
     @classmethod
@@ -639,6 +644,25 @@ class RaucleGateway:
                 base_dir=config.receipt_store_dir,
                 max_segment_bytes=config.receipt_segment_max_bytes,
             )
+        # Receipt index (PR-C): query projection. Beside the data when the
+        # segmented store is on; explicit path overrides. When the flat
+        # legacy store is in use (no store dir), the index stays off unless
+        # an explicit path is given (the flat file has no segments to
+        # rebuild from, so the index must be fed live only).
+        self._receipt_index = None
+        idx_path = config.receipt_index_path or (
+            str(Path(config.receipt_store_dir) / "index.sqlite") if config.receipt_store_dir else ""
+        )
+        if idx_path:
+            from raucle.receipt_index import ReceiptIndex
+
+            self._receipt_index = ReceiptIndex(sqlite_path=idx_path)
+            # Feed any pre-existing chain into a fresh index
+            try:
+                if self._receipt_store is not None and self._receipt_index.count() == 0:
+                    self._receipt_index.rebuild_from_store(self._receipt_store)
+            except Exception:
+                logger.exception("receipt index rebuild failed; queries degraded, chain unaffected")
         if self._gate_auth_mode == "off":
             logger.warning(
                 "gate auth mode is 'off': declared agent_id is TRUSTED. "
@@ -902,6 +926,14 @@ class RaucleGateway:
         line = json.dumps({"receipt_hash": receipt_hash, "jws": jws}, ensure_ascii=False)
         if self._receipt_store is not None:
             self._receipt_store.append_line(line)
+            if self._receipt_index is not None:
+                import json as _json
+
+                try:
+                    self._receipt_index.index_receipt(_json.loads(line))
+                except Exception:
+                    # Index failure degrades queries, never the chain
+                    logger.exception("receipt index insert failed (query degraded)")
             return receipt_hash
         if self._receipt_writer is None:
             path = Path(self.config.receipt_store)

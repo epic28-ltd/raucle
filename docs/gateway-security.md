@@ -105,6 +105,28 @@ receipt's content hash: hand it to `raucle provenance verify` or the MCP
 - Receipts are signed by the persistent gateway identity (`agent:gate`),
   so decisions verify across restarts.
 
+### Receipt query, ancestry and egress
+
+With the segmented store on, a SQLite index (WAL mode) projects every
+receipt for query. The contract is deliberately one-sided: the index is a
+query cache, never a trust decision. It can be dropped and rebuilt from
+the segments at any time; verification always reads the chain.
+
+- `GET /api/receipts` with filters: `agent_id`, `tool`, `decision`,
+  `trace_id`, `since`/`until` (epoch seconds, inclusive), `limit` and
+  keyset `cursor` (composite `iat:receipt_hash`, survives burst ties).
+- `GET /api/receipts/{hash}/ancestors` walks the parents DAG: nodes and
+  edges, cycle-safe, depth-capped (default 50). The incident question -
+  everything upstream of this decision - answered from the panel.
+- `GET /api/receipts/export?since=&until=` streams JSONL for the caller's
+  own data platform; the chain of record stays yours, the copy is theirs.
+  The audit pack remains the regulator path.
+- Admin panel Receipts tab: filter, paginate, and per-receipt ancestry
+  drill-down.
+
+`RAUCLE_RECEIPT_INDEX_PATH` overrides the index location (default:
+`<store-dir>/index.sqlite`).
+
 ### Segmented receipt storage
 
 Set `RAUCLE_RECEIPT_STORE_DIR` and receipts flow into size-based segments

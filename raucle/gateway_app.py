@@ -559,6 +559,23 @@ def _register_policy_routes(
         return _validate_policy_content(req.content)
 
 
+def _line_iat(line: str) -> int | None:
+    """Extract the receipt iat from a JSONL envelope line (None if absent)."""
+    import base64 as _b64
+    import json as _json
+
+    try:
+        rec = _json.loads(line)
+        parts = rec.get("jws", "").split(".")
+        if len(parts) < 2:
+            return None
+        padded = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
+        payload = _json.loads(_b64.urlsafe_b64decode(padded))
+        return int(payload.get("iat", 0))
+    except Exception:
+        return None
+
+
 def _register_receipt_routes(
     app: FastAPI, gateway: RaucleGateway, check_auth: Any, check_access: Any
 ) -> None:
@@ -571,23 +588,161 @@ def _register_receipt_routes(
             "403": {"description": "Invalid API key or insufficient role"},
         },
     )
-    def get_receipts(limit: int = 50, authorization: str | None = Header(None)) -> dict[str, Any]:
+    def get_receipts(
+        limit: int = 50,
+        agent_id: str | None = None,
+        tool: str | None = None,
+        decision: str | None = None,
+        trace_id: str | None = None,
+        since: int | None = None,
+        until: int | None = None,
+        cursor: str | None = None,
+        authorization: str | None = Header(None),
+    ) -> dict[str, Any]:
+        """Query receipts newest-first with filters + cursor pagination.
+
+        Backed by the receipt index when configured (PR-C); falls back to
+        the segmented store's bounded-memory recent() when not. No params =
+        newest-first, same shape as before.
+        """
         user = check_auth(authorization)
         check_access(user, "receipts")
+        if gateway._receipt_index is not None:
+            rows = gateway._receipt_index.query(
+                agent_id=agent_id,
+                tool=tool,
+                decision=decision,
+                trace_id=trace_id,
+                since=since,
+                until=until,
+                limit=limit,
+                cursor=cursor,
+            )
+            full_page = len(rows) == max(1, min(limit, 1000))
+            return {
+                "receipts": rows,
+                "count": len(rows),
+                "total": gateway._receipt_index.count(),
+                "next_cursor": gateway._receipt_index.cursor_for(rows[-1])
+                if full_page and rows
+                else None,
+            }
+        if gateway._receipt_store is not None:
+            recent = gateway._receipt_store.recent(limit=limit)
+            return {
+                "receipts": recent,
+                "count": len(recent),
+                "total": gateway._receipt_store.total_receipt_count(),
+                "next_cursor": None,
+            }
+        # legacy flat file
         from raucle._paths import validate_path
 
         path = validate_path(gateway.config.receipt_store, must_exist=False)
         if not path.exists():
-            return {"receipts": [], "count": 0}
+            return {"receipts": [], "count": 0, "total": 0, "next_cursor": None}
         lines = path.read_text(encoding="utf-8").strip().splitlines()
-        recent = lines[-limit:] if len(lines) > limit else lines
+        recent_lines = lines[-limit:] if len(lines) > limit else lines
         receipts = []
         import contextlib
 
-        for line in recent:
+        for line in recent_lines:
             with contextlib.suppress(json.JSONDecodeError):
                 receipts.append(json.loads(line))
-        return {"receipts": receipts, "count": len(receipts), "total": len(lines)}
+        return {
+            "receipts": receipts,
+            "count": len(receipts),
+            "total": len(lines),
+            "next_cursor": None,
+        }
+
+    @app.get(
+        "/api/receipts/{receipt_hash}/ancestors",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+        },
+    )
+    def get_receipt_ancestors(
+        receipt_hash: str,
+        max_depth: int = 50,
+        authorization: str | None = Header(None),
+    ) -> dict[str, Any]:
+        """Walk a receipt's full causal ancestry (parents DAG).
+
+        The incident-responder question: everything upstream of this
+        decision. Index-backed; cycle-safe; depth-capped.
+        """
+        user = check_auth(authorization)
+        check_access(user, "receipts")
+        if gateway._receipt_index is None:
+            raise HTTPException(
+                status_code=501,
+                detail="ancestry requires the receipt index (set RAUCLE_RECEIPT_STORE_DIR)",
+            )
+        return gateway._receipt_index.ancestry(receipt_hash, max_depth=max_depth)
+
+    @app.get(
+        "/api/receipts/export",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+        },
+    )
+    def export_receipts(
+        since: int | None = None,
+        until: int | None = None,
+        authorization: str | None = Header(None),
+    ) -> Any:
+        """Bulk egress: stream receipts as JSONL for the caller's own data
+        platform (C4). The chain of record stays ours; the copy is theirs.
+
+        Streams from the segmented store's segments (bounded memory), or
+        the legacy flat file. Bounded to a time range to keep responses
+        finite; the audit pack remains the regulator path.
+        """
+        user = check_auth(authorization)
+        check_access(user, "receipts")
+        import io
+
+        from fastapi.responses import StreamingResponse
+
+        buf = io.StringIO()
+        if gateway._receipt_store is not None:
+            for seg in gateway._receipt_store.segments():
+                with open(seg, encoding="utf-8") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            json.loads(line)
+                        except Exception:
+                            continue
+                        iat = _line_iat(line)
+                        if since is not None and iat is not None and iat < since:
+                            continue
+                        if until is not None and iat is not None and iat > until:
+                            continue
+                        buf.write(line + "\n")
+        else:
+            from raucle._paths import validate_path
+
+            path = validate_path(gateway.config.receipt_store, must_exist=False)
+            if path.exists():
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        iat = _line_iat(line)
+                        if since is not None and iat is not None and iat < since:
+                            continue
+                        if until is not None and iat is not None and iat > until:
+                            continue
+                        buf.write(line.strip() + "\n")
+        return StreamingResponse(
+            iter([buf.getvalue().encode("utf-8")]),
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": 'attachment; filename="receipts.jsonl"'},
+        )
 
 
 def _register_siem_routes(
@@ -1215,7 +1370,43 @@ body.demo .btn-primary{display:none}
         <pre id="learnDraft" style="margin-top:10px;max-height:420px;overflow:auto;background:#f8f9fb;border:1px solid #e5e7ec;border-radius:10px;padding:14px;font-size:0.78rem">No observations yet.</pre>
       </div>
     </div>
-    <div id="tab-receipts" class="hidden"><div class="card"><div class="card-title">Recent Receipts</div><pre id="receiptsView">Loading...</pre></div></div>
+    <div id="tab-receipts" class="hidden">
+      <div class="card"><div class="card-title">Receipts</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+          <input id="rcpt-filter-tool" class="input" style="width:150px" placeholder="tool">
+          <input id="rcpt-filter-agent" class="input" style="width:150px" placeholder="agent_id">
+          <select id="rcpt-filter-decision" class="input" style="width:110px">
+            <option value="">any decision</option><option>allow</option><option>deny</option><option>escalate</option>
+          </select>
+          <input id="rcpt-filter-trace" class="input" style="width:150px" placeholder="trace_id">
+          <button class="btn" onclick="loadReceipts()">Filter</button>
+          <button class="btn" onclick="clearRcptFilters()">Clear</button>
+          <button class="btn" onclick="exportReceipts()">Export JSONL</button>
+        </div>
+        <div style="overflow-x:auto">
+          <table id="rcptTable" style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr>
+              <th style="text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7ec">time</th>
+              <th style="text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7ec">tool</th>
+              <th style="text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7ec">agent</th>
+              <th style="text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7ec">decision</th>
+              <th style="text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7ec">trace</th>
+              <th style="text-align:left;padding:6px 10px;border-bottom:1px solid #e5e7ec"></th>
+            </tr></thead>
+            <tbody id="rcptRows"></tbody>
+          </table>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:12px;align-items:center">
+          <button class="btn" id="rcpt-prev" onclick="rcptPage(false)">Newer</button>
+          <button class="btn" id="rcpt-next" onclick="rcptPage(true)">Older</button>
+          <span id="rcpt-count" style="font-size:12px;color:#737373"></span>
+        </div>
+      </div>
+      <div id="rcpt-ancestry" class="card" style="display:none;margin-top:14px">
+        <div class="card-title">Ancestry</div>
+        <pre id="ancestryView" style="font-size:11px;max-height:260px;overflow:auto"></pre>
+      </div>
+    </div>
     <div id="tab-siem" class="hidden"><div class="card"><div class="card-title">SIEM Forwarding</div>
       <label class="toggle" style="margin-bottom:16px"><input type="checkbox" id="siemEnabled"> Enabled</label>
       <div style="display:flex;flex-direction:column;gap:8px;max-width:400px">
@@ -1500,7 +1691,53 @@ function loadPolicyFile(path){api('/api/policies?file='+encodeURIComponent(path)
 function validatePolicy(){api('/api/policies/validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:document.getElementById('policyEditor').value})}).then(r=>r.json()).then(d=>alert(d.valid?'Valid':'Invalid: '+d.error));}
 function savePolicy(){api('/api/policies',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:document.getElementById('policyEditor').value})}).then(r=>r.json()).then(d=>alert('Saved: '+JSON.stringify(d)));}
 function reloadPolicy(){api('/api/policies/reload',{method:'POST'}).then(r=>r.json()).then(d=>alert('Reloaded: '+JSON.stringify(d)));}
-function loadReceipts(){api('/api/receipts?limit=20').then(r=>r.json()).then(d=>{document.getElementById('receiptsView').textContent=JSON.stringify(d.receipts,null,2);});}
+let rcptCursor=null, rcptCursors=[];
+function rcptQueryParams(){
+  const p=new URLSearchParams(); p.set('limit',20);
+  const t=document.getElementById('rcpt-filter-tool').value.trim(); if(t)p.set('tool',t);
+  const a=document.getElementById('rcpt-filter-agent').value.trim(); if(a)p.set('agent_id',a);
+  const d=document.getElementById('rcpt-filter-decision').value; if(d)p.set('decision',d);
+  const tr=document.getElementById('rcpt-filter-trace').value.trim(); if(tr)p.set('trace_id',tr);
+  if(rcptCursor)p.set('cursor',rcptCursor);
+  return p.toString();
+}
+function loadReceipts(){
+  api('/api/receipts?'+rcptQueryParams()).then(r=>r.json()).then(d=>{
+    const rows=document.getElementById('rcptRows'); rows.innerHTML='';
+    (d.receipts||[]).forEach(r=>{
+      const tr=document.createElement('tr');
+      tr.style.borderBottom='1px solid #f0f1f4';
+      const dec=r.decision; const color=dec==='allow'?'#16a34a':(dec==='deny'?'#dd2f45':'#d97706');
+      tr.innerHTML='<td style="padding:6px 10px">'+new Date((r.iat||0)*1000).toISOString().replace('T',' ').slice(0,19)+'</td>'
+        +'<td style="padding:6px 10px">'+(r.tool||'')+'</td>'
+        +'<td style="padding:6px 10px">'+(r.agent_id||'')+'</td>'
+        +'<td style="padding:6px 10px;color:'+color+';font-weight:600">'+dec+'</td>'
+        +'<td style="padding:6px 10px;font-family:monospace;font-size:11px">'+(r.trace_id?(r.trace_id.slice(0,12)+'…'):'')+'</td>'
+        +'<td style="padding:6px 10px"><a href="javascript:void(0)" style="color:#3a3f4b" onclick="showAncestry(\''+r.receipt_hash+'\')">trace</a></td>';
+      rows.appendChild(tr);
+    });
+    rcptCursor=d.next_cursor||null;
+    document.getElementById('rcpt-count').textContent=(d.total??0)+' total · '+(d.count||0)+' shown';
+  });
+}
+function clearRcptFilters(){['rcpt-filter-tool','rcpt-filter-agent','rcpt-filter-decision','rcpt-filter-trace'].forEach(i=>document.getElementById(i).value=''); rcptCursor=null; loadReceipts();}
+function rcptPage(older){
+  if(older && rcptCursor){rcptCursors.push(rcptCursor); loadReceipts();}
+  else if(!older && rcptCursors.length){rcptCursor=rcptCursors.pop(); loadReceipts();}
+}
+function showAncestry(hash){
+  const panel=document.getElementById('rcpt-ancestry'); panel.style.display='block';
+  document.getElementById('ancestryView').textContent='Walking ancestry…';
+  api('/api/receipts/'+encodeURIComponent(hash)+'/ancestors').then(r=>r.ok?r.json():{nodes:[],edges:[]}).then(d=>{
+    if(!d.nodes||!d.nodes.length){document.getElementById('ancestryView').textContent='No ancestry found (gate receipts are trace-roots; agent-side provenance chains attach as parents).'; return;}
+    const lines=d.nodes.map(n=>(n.decision==='deny'?'✗ ':'✓ ')+new Date((n.iat||0)*1000).toISOString().slice(11,19)+'  '+(n.tool||'')+'  '+(n.agent_id||'')+'  ['+(n.receipt_hash||'').slice(7,19)+']');
+    document.getElementById('ancestryView').textContent=lines.join('\n')+((d.edges&&d.edges.length)?'\n\nedges: '+d.edges.length:'');
+  });
+}
+function exportReceipts(){
+  const key=getApiKey(); if(!key){alert('Sign in first');return;}
+  window.open('/api/receipts/export','_blank');
+}
 function loadSIEM(){api('/api/siem').then(r=>r.json()).then(d=>{document.getElementById('siemEnabled').checked=d.enabled;document.getElementById('siemBackend').value=d.backend||'';document.getElementById('siemUrl').value=d.url||'';});}
 function saveSIEM(){api('/api/siem',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:document.getElementById('siemEnabled').checked,backend:document.getElementById('siemBackend').value,url:document.getElementById('siemUrl').value,token:document.getElementById('siemToken').value})}).then(r=>r.json()).then(d=>alert('Saved'));}
 function loadUsers(){api('/api/users').then(r=>r.json()).then(d=>{let tb=document.getElementById('userTableBody');tb.innerHTML='';d.users.forEach(u=>{tb.innerHTML+=`<tr><td>${esc(u.api_key)}</td><td>${esc(u.role)}</td><td>${esc(u.name||'')}</td><td>${u.mfa_enabled?'<span style="color:#22c55e;font-size:12px">Enabled</span>':'<span style="color:#a3a3a3;font-size:12px">Off</span>'}</td><td><button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" onclick="setupMfa('${esc(u.api_key)}')">Setup MFA</button>${u.mfa_enabled?` <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" onclick="disableMfa('${esc(u.api_key)}')">Disable</button>`:''}</td></tr>`;});});}
