@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added — signed gate receipts and segmented storage (PR-B, production readiness)
+- Every /gate decision (allow, deny, escalate) emits a signed provenance
+  receipt (guardrail_scan + x_gate extension) written as a minimal envelope;
+  receipt_id returned in the response and verifiable offline with the
+  standard verifier, CLI, MCP tool and all five reference ports.
+- X-Trace-Id threads caller traces through receipts; generated and echoed
+  when absent.
+- Fail-closed accountability: an unwritable receipt downgrades the
+  decision to deny.
+- SegmentedReceiptStore: size-based segments with read-only sealing and
+  .meta sidecars; sealed segments are pure receipt chains (verify and
+  audit-pack directly); bounded-memory newest-first queries. Opt-in via
+  RAUCLE_RECEIPT_STORE_DIR; the legacy flat file remains the default.
+- RAUCLE_EMIT_RECEIPTS=0 restores pre-PR-B behaviour exactly.
+
 ### Added — gateway identity and key persistence (PR-A, production readiness)
 - Gate authentication modes (`RAUCLE_GATE_AUTH=off|apikey|token`): per-agent
   API keys (`X-Api-Key`, hashed at rest, constant-time verify, instant

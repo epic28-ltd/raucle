@@ -85,6 +85,17 @@ class GatewayConfig:
     agent_credentials_file: str = "/data/agent-credentials.jsonl"
     signer_key_path: str = ""  # empty = <data-dir>/gateway-signing-key.pem
 
+    # Signed gate receipts (PR-B): every /gate decision is emitted as a
+    # provenance receipt (GUARDRAIL_SCAN-shaped, x_gate extension) signed
+    # by the persistent gateway identity.
+    emit_receipts: bool = True
+    trace_header: str = "X-Trace-Id"
+    # Segmented store (B2): directory of seg-NNNNNN.jsonl files. When set,
+    # receipts go through SegmentedReceiptStore instead of the flat
+    # receipt_store file. Empty = legacy flat file.
+    receipt_store_dir: str = ""
+    receipt_segment_max_bytes: int = 67108864  # 64 MiB
+
     # SIEM
     siem_enabled: bool = False
     siem_backend: str = ""  # splunk, elastic, sentinel, kafka
@@ -132,6 +143,8 @@ class GatewayConfig:
                 "RAUCLE_AGENT_CREDENTIALS", "/data/agent-credentials.jsonl"
             ),
             signer_key_path=os.environ.get("RAUCLE_SIGNER_KEY_PATH", ""),
+            emit_receipts=os.environ.get("RAUCLE_EMIT_RECEIPTS", "1") not in ("0", "false", "no"),
+            trace_header=os.environ.get("RAUCLE_TRACE_HEADER", "X-Trace-Id"),
         )
 
     @classmethod
@@ -553,6 +566,30 @@ class UserManager:
 # ---------------------------------------------------------------------------
 
 
+class _KmsGateIdentity:
+    """AgentIdentity-compatible signing shim for KMS-backed gate identities.
+
+    Provides agent_id/key_id/public_key_pem for statement handling and
+    delegates sign() to the KMS signer. Receipts verify against the KMS
+    public key offline.
+    """
+
+    def __init__(self, agent_id: str, statement: Any, signer: Any) -> None:
+        self.agent_id = agent_id
+        self.statement = statement
+        self._signer = signer
+
+    @property
+    def key_id(self) -> str:
+        return self.statement.key_id
+
+    def public_key_pem(self) -> bytes:
+        return self.statement.public_key_pem.encode("ascii")
+
+    def sign(self, data: bytes) -> bytes:
+        return self._signer.sign(data)
+
+
 class RaucleGateway:
     """The gateway core: policy engine + gate + receipt store + stats.
 
@@ -587,6 +624,17 @@ class RaucleGateway:
             )
         self._agent_creds = None
         self._caller_gate = None
+        # Segmented receipt store (B2). Legacy flat file remains the default
+        # for backwards compatibility; setting receipt_store_dir switches the
+        # emitter to segmented storage.
+        self._receipt_store = None
+        if config.receipt_store_dir:
+            from raucle.receipt_store import SegmentedReceiptStore
+
+            self._receipt_store = SegmentedReceiptStore(
+                base_dir=config.receipt_store_dir,
+                max_segment_bytes=config.receipt_segment_max_bytes,
+            )
         if self._gate_auth_mode == "off":
             logger.warning(
                 "gate auth mode is 'off': declared agent_id is TRUSTED. "
@@ -607,7 +655,78 @@ class RaucleGateway:
 
         # Bootstrap from config
         self._init_signer()
+        self._init_gate_identity()
         self._load_policies()
+
+    def _init_gate_identity(self) -> None:
+        """Derive the gate's provenance identity (agent:gate) from the
+        persistent signer key (PR-B).
+
+        The identity self-signs its capability statement (OSS mode) and its
+        key material IS the persistent signing key, so gate receipts verify
+        across restarts. KMS signers sign via the KMS backend; the identity
+        statement still pins the public key for offline verification.
+        """
+        import base64 as _base64
+        import hashlib as _hashlib
+
+        from cryptography.hazmat.primitives import serialization
+
+        from raucle.provenance import (
+            AgentIdentity,
+            CapabilityStatement,
+            _canonical_json,
+        )
+
+        if self.config.signer_backend == "local":
+            priv = self._signer._private_key
+            pub_pem = priv.public_key().public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            key_id = _hashlib.sha256(pub_pem).hexdigest()[:16]
+            now = int(time.time())
+            stmt = CapabilityStatement(
+                agent_id="agent:gate",
+                key_id=key_id,
+                public_key_pem=pub_pem.decode("ascii"),
+                allowed_models=[],
+                allowed_tools=[],
+                data_classifications=[],
+                issuer="raucle-gateway",
+                issued_at=now,
+                expires_at=None,
+            )
+            sig = priv.sign(_canonical_json(stmt.body()))
+            stmt.signature = _base64.b64encode(sig).decode("ascii")
+            self._gate_identity = AgentIdentity(
+                agent_id="agent:gate", private_key=priv, statement=stmt
+            )
+        else:
+            # KMS signers: the KMS public key backs the identity
+            pub_pem_bytes = self._signer.public_key_pem()
+            pub_pem = (
+                pub_pem_bytes.decode("ascii") if isinstance(pub_pem_bytes, bytes) else pub_pem_bytes
+            )
+            key_id = _hashlib.sha256(pub_pem.encode("ascii")).hexdigest()[:16]
+            now = int(time.time())
+            stmt = CapabilityStatement(
+                agent_id="agent:gate",
+                key_id=key_id,
+                public_key_pem=pub_pem,
+                allowed_models=[],
+                allowed_tools=[],
+                data_classifications=[],
+                issuer="raucle-gateway",
+                issued_at=now,
+                expires_at=None,
+            )
+            # KMS-signed statement: sign the canonical body through the signer
+            body_sig = self._signer.sign(_canonical_json(stmt.body()))
+            stmt.signature = _base64.b64encode(body_sig).decode("ascii")
+            self._gate_identity = _KmsGateIdentity(
+                agent_id="agent:gate", statement=stmt, signer=self._signer
+            )
 
     def _signer_key_path(self) -> Path:
         """Where the local signing key persists (A2)."""
@@ -707,6 +826,111 @@ class RaucleGateway:
         signer = Ed25519Signer(private_key)
         logger.info("generated new gateway signing key %s (key_id=%s)", key_path, signer.key_id())
         return signer
+
+    def _emit_gate_receipt(
+        self,
+        *,
+        decision: str,
+        reason: str,
+        tool: str,
+        agent_id: str,
+        args: dict,
+        policy: str | None,
+        latency_us: int,
+        source: str,
+        destination: str,
+        trace_id: str,
+    ) -> str | None:
+        """Emit a signed provenance receipt for a gate decision (PR-B).
+
+        Shape: GUARDRAIL_SCAN operation (rootable, carries verdict +
+        ruleset hash - the closest spec-v1 operation to a policy decision
+        point) with an ``x_gate`` extension binding the full decision
+        context. Written as a minimal envelope {receipt_hash, jws} to the
+        receipt store. Returns the receipt hash, or None when emission is
+        disabled.
+        """
+        if not self.config.emit_receipts:
+            return None
+        from raucle.provenance import (
+            _b64url_encode,
+            _canonical_json,
+            _sha256_hex,
+        )
+
+        payload: dict[str, Any] = {
+            "iss": "raucle-gateway",
+            "typ": "provenance-receipt/v1",
+            "iat": int(time.time()),
+            "agent_id": self._gate_identity.agent_id,
+            "agent_key_id": self._gate_identity.key_id,
+            "operation": "guardrail_scan",
+            "parents": [],
+            "taint": ["gate:observed"],
+            "input_hash": _sha256_hex(_canonical_json(args)),
+            "ruleset_hash": self._policy_ruleset_hash(tool),
+            "guardrail_verdict": decision,
+            "x_gate": {
+                "decision": decision,
+                "reason": reason,
+                "tool": tool,
+                "agent_id": agent_id,
+                "source": source,
+                "destination": destination,
+                "policy": policy,
+                "latency_us": latency_us,
+                "trace_id": trace_id,
+            },
+        }
+        header = {
+            "alg": "EdDSA",
+            "typ": "provenance-receipt/v1",
+            "kid": self._gate_identity.key_id,
+            "crit": ["raucle/v1"],
+            "raucle/v1": "provenance",
+        }
+        signing_input = (
+            _b64url_encode(_canonical_json(header)) + "." + _b64url_encode(_canonical_json(payload))
+        ).encode("ascii")
+        sig = self._gate_identity.sign(signing_input)
+        jws = signing_input.decode("ascii") + "." + _b64url_encode(sig)
+        receipt_hash = "sha256:" + _sha256_hex(jws.encode("ascii"))
+        line = json.dumps({"receipt_hash": receipt_hash, "jws": jws}, ensure_ascii=False)
+        if self._receipt_store is not None:
+            self._receipt_store.append_line(line)
+            return receipt_hash
+        if self._receipt_writer is None:
+            path = Path(self.config.receipt_store)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Long-lived append sink (same lifetime as the process); noqa:
+            # closing per write would break the chain-of-record's ordering.
+            self._receipt_writer = open(  # noqa: SIM115
+                path, "a", encoding="utf-8"
+            )
+        self._receipt_writer.write(line + "\n")
+        self._receipt_writer.flush()
+        return receipt_hash
+
+    def _policy_ruleset_hash(self, tool: str) -> str:
+        """Hash of the policy rule in force for *tool* (binds the decision
+        to the exact policy content)."""
+        import hashlib as _hl
+
+        from raucle.provenance import _canonical_json
+
+        rule = self._policy_rules.get(tool)
+        if rule is None:
+            return _hl.sha256(b"no-policy").hexdigest()
+        try:
+            rule_dict = rule.to_dict()
+        except Exception:
+            rule_dict = {"repr": repr(rule)}
+        return _hl.sha256(_canonical_json(rule_dict)).hexdigest()
+
+    @property
+    def gate_identity(self):
+        """The gate's provenance identity (public for verification wiring)."""
+        return self._gate_identity
 
     def _policy_files(self) -> list[Path]:
         """Enumerate policy files from the configured file or directory."""
@@ -812,6 +1036,24 @@ class RaucleGateway:
         result["reason"] = reason
         result["latency_us"] = int((time.perf_counter() - start) * 1e6)
         self.stats.record(result["tool"], "deny", result["latency_us"])
+        try:
+            result["receipt_id"] = self._emit_gate_receipt(
+                decision="deny",
+                reason=reason,
+                tool=result["tool"],
+                agent_id=result.get("agent_id", ""),
+                args=result.get("_args", {}),
+                policy=result.get("policy"),
+                latency_us=result["latency_us"],
+                source=result.get("source", ""),
+                destination=result.get("destination", ""),
+                trace_id=result.get("_trace_id", ""),
+            )
+        except Exception:
+            # Fail-closed accountability: if the receipt cannot be written,
+            # the decision itself is downgraded to deny (already deny) but the
+            # failure is surfaced.
+            logger.exception("receipt emission failed on deny path")
         if siem:
             self.siem.forward(
                 {
@@ -923,6 +1165,7 @@ class RaucleGateway:
         agent_id: str = "",
         source: str = "",
         destination: str = "",
+        trace_id: str = "",
     ) -> dict[str, Any]:
         """Gate a tool call. Returns decision dict.
 
@@ -942,8 +1185,12 @@ class RaucleGateway:
             }
         """
         start = time.perf_counter()
+        trace_id = trace_id or ""
 
         result: dict[str, Any] = {
+            "_trace_id": trace_id,
+            "_args": args,
+            "trace_id": trace_id,
             "tool": tool,
             "decision": "deny",
             "reason": "unknown tool",
@@ -1012,6 +1259,22 @@ class RaucleGateway:
 
         result["latency_us"] = latency_us
         result["agent_id"] = actual_agent_id
+        try:
+            result["receipt_id"] = self._emit_gate_receipt(
+                decision=result["decision"],
+                reason=result["reason"],
+                tool=tool,
+                agent_id=actual_agent_id,
+                args=args,
+                policy=result.get("policy"),
+                latency_us=latency_us,
+                source=result.get("source", ""),
+                destination=result.get("destination", ""),
+                trace_id=result.get("_trace_id", ""),
+            )
+        except Exception:
+            logger.exception("receipt emission failed; downgrading to deny")
+            return self._deny_result(result, "receipt emission failed", start, siem=False)
         self._log_connection(result)
         return result
 
