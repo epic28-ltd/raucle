@@ -33,6 +33,15 @@ post-quantum position to the standard migration frameworks.
   `ProvenanceLogger(..., quantum_mode='strict')`, verification via
   `ProvenanceVerifier(pq_public_keys=...)`, CLI enforcement via
   `raucle provenance verify --require-pq`.
+- **Audit chains**: `HashChainSink(signer=HybridRecordSigner(...))` signs
+  checkpoints AND the chain header with both keys; `AuditVerifier` verifies
+  both, with `require_pq=True` for strict deployments (answers field-stripping).
+- **Trust registries**: `publish_pq_key()` registers an issuer's ML-DSA-65 key;
+  hybrid operator signatures on every entry; classical and PQ keys of one
+  issuer coexist (per-algorithm uniqueness).
+- **Capability tokens**: `CapabilityIssuer(..., pq_private=...)` +
+  `mint(quantum=True)`; `CapabilityGate(pq_public_keys=...)` verifies both
+  components fail-closed.
 - **Hashes**: SHA-256 throughout. Quantum collision/preimage bounds
   (2^128) remain infeasible; no hash migration needed.
 - **Downgrade resistance**: a hybrid receipt stripped of its ML-DSA
@@ -45,9 +54,9 @@ post-quantum position to the standard migration frameworks.
 | Surface | Status | Target |
 |---|---|---|
 | Provenance receipts | **Hybrid shipped (pq1)** | Default-on in a future release as ML-DSA support matures |
-| Trust registry entries | Dual-key support in the registry format | Next release |
-| Registry/audit checkpoints | Single-key today | Hybrid checkpoint signatures |
-| Capability tokens | Ed25519 today | Hybrid minting behind a flag |
+| Audit checkpoints + chain headers | **Hybrid shipped** (HybridRecordSigner; both signatures verified; require_pq strict mode) | Operator tooling |
+| Trust registry | **Hybrid shipped** (dual-key publish/resolve; hybrid operator signatures; issuer PQ keys coexist with classical by design) | Registry sync protocols |
+| Capability tokens | **Hybrid shipped** (issuer pq_private; mint(quantum=True); gate verifies both, fail-closed) | Policy DSL emission |
 | KMS/HSM signers | Local ML-DSA keys | AWS KMS/Azure Key Vault as providers ship ML-DSA |
 | Cross-language ports | Python authoritative | TS/Go/Rust/C# via their PQ libraries against the published reference vectors |
 

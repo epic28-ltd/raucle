@@ -252,11 +252,29 @@ class TrustRegistry:
         entry["prev_hash"] = self._tail_hash
         entry.setdefault("ts", _now())  # signed freshness anchor (codex r7)
         # Hash covers everything except the hash field and the operator signature.
-        body = {k: v for k, v in entry.items() if k not in ("hash", "operator_sig")}
+        body = {
+            k: v
+            for k, v in entry.items()
+            if k not in ("hash", "operator_sig", "operator_pq_key_id", "operator_pq_sig")
+        }
         entry_hash = _sha256_hex(_canonical_json(body))
         entry["hash"] = entry_hash
         if self._signer is not None:
-            entry["operator_sig"] = _b64(self._signer.sign(entry_hash.encode("ascii")))
+            # Quantum-ready registries: a HybridRecordSigner signs each entry
+            # with BOTH keys (Ed25519 + ML-DSA-65) over the entry hash. The
+            # PQ component travels as operator_pq_key_id + operator_pq_sig.
+            try:
+                from raucle.pq import HybridRecordSigner
+
+                if isinstance(self._signer, HybridRecordSigner):
+                    sigs = self._signer.sign_record(entry_hash.encode("ascii"))
+                    entry["operator_sig"] = sigs["signature"]
+                    entry["operator_pq_key_id"] = sigs["pq_key_id"]
+                    entry["operator_pq_sig"] = sigs["pq_signature"]
+                else:
+                    entry["operator_sig"] = _b64(self._signer.sign(entry_hash.encode("ascii")))
+            except ImportError:
+                entry["operator_sig"] = _b64(self._signer.sign(entry_hash.encode("ascii")))
         self._entries.append(entry)
         self._tail_hash = entry_hash
         if self._path is not None:
@@ -287,7 +305,11 @@ class TrustRegistry:
         if not canon:
             raise ValueError("issuer name must be non-empty")
         for kid, rec in self._fold().items():
-            if not rec.revoked and _canon_issuer(rec.issuer) == canon and kid != key_id:
+            if rec.revoked:
+                continue
+            if (rec.metadata or {}).get("algorithm"):
+                continue  # PQ keys may share their issuer's name (hybrid design)
+            if _canon_issuer(rec.issuer) == canon and kid != key_id:
                 raise ValueError(
                     f"issuer name {issuer!r} collides with an active key ({kid}, "
                     f"issuer {rec.issuer!r}); revoke it first, or use a distinct issuer identity"
@@ -304,6 +326,56 @@ class TrustRegistry:
         )
         return key_id
 
+    def publish_pq_key(
+        self,
+        pq_public_key_pem: bytes | str,
+        *,
+        issuer: str,
+        created_at: int = 0,
+    ) -> str:
+        """Register an issuer's ML-DSA-65 public key (raucle/pq1).
+
+        The PQ key is published under its own ``pq_key_id`` and linked to
+        the issuer identity, so a verifier resolving an issuer can obtain
+        BOTH keys needed to verify hybrid receipts from the registry alone.
+        The classical publish() owns the Ed25519 half; this owns the PQ half.
+        """
+        from raucle.pq import pq_key_id_from_public_key, pq_public_key_from_pem
+
+        key = pq_public_key_from_pem(
+            pq_public_key_pem.decode()
+            if isinstance(pq_public_key_pem, bytes)
+            else pq_public_key_pem
+        )
+        pq_key_id = pq_key_id_from_public_key(key)
+        canonical_pem = (
+            pq_public_key_pem.decode()
+            if isinstance(pq_public_key_pem, bytes)
+            else pq_public_key_pem
+        )
+        self._write_entry(
+            {
+                "type": "register_pq",
+                "pq_key_id": pq_key_id,
+                "issuer": issuer,
+                "public_key_pem": canonical_pem,
+                "algorithm": "ml-dsa-65",
+                "created_at": int(created_at),
+            }
+        )
+        return pq_key_id
+
+    def resolve_pq_key(self, pq_key_id: str) -> str | None:
+        """Resolve a pq_key_id to its ML-DSA-65 public-key PEM, fail-closed.
+
+        Uses the folded registry state, so revocation (revoke(pq_key_id))
+        is honoured identically to classical keys.
+        """
+        rec = self._fold().get(pq_key_id)
+        if rec is None or rec.revoked:
+            return None
+        return rec.public_key_pem
+
     def revoke(self, key_id: str, *, reason: str = "") -> None:
         """Revoke an issuer key. Append-only; history is preserved."""
         self._write_entry({"type": "revoke", "key_id": key_id, "reason": reason})
@@ -315,7 +387,17 @@ class TrustRegistry:
         state: dict[str, TrustRecord] = {}
         for e in self._entries:
             t = e.get("type")
-            if t == "register":
+            if t == "register_pq":
+                # PQ keys fold into the same registry state under their own id.
+                state[e["pq_key_id"]] = TrustRecord(
+                    key_id=e["pq_key_id"],
+                    public_key_pem=e.get("public_key_pem", ""),
+                    issuer=e.get("issuer", ""),
+                    created_at=int(e.get("created_at", 0)),
+                    revoked=False,
+                    metadata={"algorithm": e.get("algorithm", "ml-dsa-65")},
+                )
+            elif t == "register":
                 state[e["key_id"]] = TrustRecord(
                     key_id=e["key_id"],
                     public_key_pem=e["public_key_pem"],
@@ -377,7 +459,11 @@ class TrustRegistry:
                 raise RegistryIntegrityError(f"entry {i}: index mismatch")
             if e.get("prev_hash") != prev:
                 raise RegistryIntegrityError(f"entry {i}: broken chain")
-            body = {k: v for k, v in e.items() if k not in ("hash", "operator_sig")}
+            body = {
+                k: v
+                for k, v in e.items()
+                if k not in ("hash", "operator_sig", "operator_pq_key_id", "operator_pq_sig")
+            }
             expect = _sha256_hex(_canonical_json(body))
             if e.get("hash") != expect:
                 raise RegistryIntegrityError(f"entry {i}: hash mismatch (tampered)")
@@ -393,8 +479,18 @@ class TrustRegistry:
             prev = e["hash"]
 
     def _check_issuer_uniqueness(self) -> None:
-        """Enforce active issuer-name uniqueness on load (codex r3 #1)."""
-        seen_names: dict[str, str] = {}
+        """Enforce active issuer-name uniqueness on load (codex r3 #1).
+
+        Classical keys compete on the issuer name (two different Ed25519
+        keys under one active name is confusable-name impersonation). PQ
+        keys (raucle/pq1 register_pq entries) share their issuer's name
+        BY DESIGN - the classical and ML-DSA keys are the two halves of
+        one hybrid identity - so uniqueness is enforced per algorithm
+        namespace: one active classical key AND one active key per PQ
+        algorithm may hold the same issuer name.
+        """
+        seen_classical: dict[str, str] = {}
+        seen_pq: dict[str, str] = {}
         for kid, rec in self._fold().items():
             if rec.revoked:
                 continue
@@ -403,18 +499,53 @@ class TrustRegistry:
                 raise RegistryIntegrityError(
                     f"active register entry for key {kid} has a blank issuer name"
                 )
-            if canon in seen_names and seen_names[canon] != kid:
-                raise RegistryIntegrityError(
-                    f"duplicate active issuer name {rec.issuer!r} "
-                    f"(keys {seen_names[canon]} and {kid})"
-                )
-            seen_names[canon] = kid
+            algorithm = (rec.metadata or {}).get("algorithm", "")
+            if algorithm:
+                per_algo = f"{canon}|{algorithm}"
+                if per_algo in seen_pq and seen_pq[per_algo] != kid:
+                    raise RegistryIntegrityError(
+                        f"duplicate active issuer name {rec.issuer!r} for "
+                        f"{algorithm} (keys {seen_pq[per_algo]} and {kid})"
+                    )
+                seen_pq[per_algo] = kid
+            else:
+                if canon in seen_classical and seen_classical[canon] != kid:
+                    raise RegistryIntegrityError(
+                        f"duplicate active issuer name {rec.issuer!r} "
+                        f"(keys {seen_classical[canon]} and {kid})"
+                    )
+                seen_classical[canon] = kid
 
-    def _verify_operator_signatures(self, operator_public_pem: bytes | None) -> None:
+    def _verify_operator_signatures(
+        self,
+        operator_public_pem: bytes | None,
+        operator_pq_public_pem: bytes | str | None = None,
+    ) -> None:
         """Verify operator signatures on each entry if the chain is signed."""
         from cryptography.exceptions import InvalidSignature
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        # The operator's ML-DSA-65 key, when the registry is hybrid-signed.
+        # Pinned out-of-band (parameter or the signer itself) exactly like
+        # the classical operator key - never trusted from the entries.
+        operator_pq_key: Any = None
+        if operator_pq_public_pem is not None:
+            from raucle.pq import pq_public_key_from_pem
+
+            operator_pq_key = pq_public_key_from_pem(
+                operator_pq_public_pem.decode()
+                if isinstance(operator_pq_public_pem, bytes)
+                else operator_pq_public_pem
+            )
+        elif self._signer is not None:
+            try:
+                from raucle.pq import HybridRecordSigner
+
+                if isinstance(self._signer, HybridRecordSigner):
+                    operator_pq_key = self._signer._pq_private.public_key()
+            except ImportError:
+                pass
 
         pem = operator_public_pem
         if pem is None and self._signer is not None:
@@ -433,6 +564,7 @@ class TrustRegistry:
         loaded = serialization.load_pem_public_key(pem)
         if not isinstance(loaded, Ed25519PublicKey):
             raise RegistryIntegrityError("operator key is not Ed25519")
+        pq_loaded: dict[str, Any] = {}
         for i, e in enumerate(self._entries):
             sig = e.get("operator_sig")
             if not sig:
@@ -441,6 +573,41 @@ class TrustRegistry:
                 loaded.verify(_b64d(sig), e["hash"].encode("ascii"))
             except (InvalidSignature, ValueError) as exc:
                 raise RegistryIntegrityError(f"entry {i}: operator signature invalid") from exc
+            # Quantum-ready entries: operator_pq_key_id declared -> the
+            # ML-DSA-65 component MUST verify too (fail-closed, no
+            # classical-only acceptance of a hybrid entry).
+            pq_kid = e.get("operator_pq_key_id")
+            if pq_kid:
+                from raucle.pq import pq_public_key_from_pem, verify_record_hybrid
+
+                if pq_kid not in pq_loaded:
+                    if operator_pq_key is None:
+                        raise RegistryIntegrityError(
+                            f"entry {i}: hybrid entry carries operator_pq_key_id "
+                            "but no operator ML-DSA-65 key was supplied to verify "
+                            "against (pass operator_pq_public_pem)"
+                        )
+                    from raucle.pq import pq_key_id_from_public_key
+
+                    if pq_key_id_from_public_key(operator_pq_key) != pq_kid:
+                        raise RegistryIntegrityError(
+                            f"entry {i}: operator_pq_key_id {pq_kid} does not "
+                            "match the supplied operator PQ key"
+                        )
+                    pq_loaded[pq_kid] = operator_pq_key
+                if not verify_record_hybrid(
+                    {
+                        "signature": sig,
+                        "pq_key_id": pq_kid,
+                        "pq_signature": e.get("operator_pq_sig", ""),
+                    },
+                    e["hash"].encode("ascii"),
+                    lambda r: True,
+                    pq_public_keys=pq_loaded,
+                ):
+                    raise RegistryIntegrityError(
+                        f"entry {i}: hybrid operator ML-DSA-65 component invalid"
+                    )
 
     def _check_freshness(
         self,
@@ -486,6 +653,7 @@ class TrustRegistry:
         self,
         *,
         operator_public_pem: bytes | None = None,
+        operator_pq_public_pem: bytes | str | None = None,
         min_index: int | None = None,
         expected_head_hash: str | None = None,
         max_age_seconds: int | None = None,
@@ -501,7 +669,7 @@ class TrustRegistry:
         self._check_issuer_uniqueness()
         header = self._entries[0] if self._entries else {}
         if header.get("signed"):
-            self._verify_operator_signatures(operator_public_pem)
+            self._verify_operator_signatures(operator_public_pem, operator_pq_public_pem)
         self._check_freshness(min_index, expected_head_hash, max_age_seconds, now)
         return True
 
