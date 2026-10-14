@@ -89,6 +89,10 @@ class AgentCredentialStore:
         """Active agent ids (sorted for determinism)."""
         return sorted(self._by_agent.keys())
 
+    def has(self, agent_id: str) -> bool:
+        """True when *agent_id* holds an active credential."""
+        return agent_id in self._by_agent
+
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------

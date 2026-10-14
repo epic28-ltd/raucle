@@ -198,3 +198,58 @@ Gate decisions are forwarded to SIEM in real-time. Supported backends:
 - Azure Sentinel (Log Analytics)
 
 Failed SIEM forwards are buffered in memory and retried.
+
+## Authority attribution endpoints (PR-E)
+
+The admin panel exposes the human leg of the authority chain. Every
+endpoint either records a human decision as a signed receipt or serves
+verifiable evidence; none of them bypass the receipt chain.
+
+### Human approval workflow
+
+When a policy rule carries `require_approval_when`, the gate escalates
+the call and creates an approval request:
+
+1. `POST /gate` returns `escalate` with an `approval_request_id`; a
+   receipt with the `x_approval` extension (request_id, tool, agent,
+   args hash, expiry) is written to the chain.
+2. An operator lists pending requests with `GET /api/approvals` and
+   decides with `POST /api/approvals/{request_id}/decision`
+   (`{"approved": true}`). The decision is receipted with the named
+   approver - the human grant is evidence, not a helpdesk ticket.
+3. The agent re-submits the identical call with the `X-Approval-Id`
+   header. The approval binds to the exact tool, agent and canonical
+   arguments hash; it is consumed by one action and expires
+   (`RAUCLE_APPROVAL_TTL`, default 300s). The action receipt cites the
+   approval, so the ancestry chain reads request → decision → action.
+
+Approvals live in memory; the receipts are the durable record. A restart
+drops the pending list (in-flight escalations are re-requested) but no
+evidence is lost.
+
+### Policy change ledger
+
+Set `RAUCLE_POLICY_LEDGER` to a file path. Every policy write through
+the admin panel appends a hash-chained entry: sequence, timestamp,
+actor, action, content sha256 and the previous entry's hash.
+`GET /api/policy-ledger` returns the entries plus an integrity verdict
+computed by walking the chain. Gate receipts already bind the ruleset
+hash in force at decision time; the ledger answers the question above
+them: who changed the rules, and when.
+
+### Authority envelope
+
+`GET /api/agents/{agent_id}/authority` returns a signed statement of
+what the agent could use: its policies (tool, constraints, TTL) and
+credential status. The JWS (`raucle/authority-envelope/v1`) is signed
+by the gate identity and verifies offline - hand it to an auditor or a
+partner organisation as a self-contained answer to "what authority did
+this agent hold?".
+
+### Kill switch
+
+`POST /api/agents/{agent_id}/suspend` (admin role only) revokes the
+agent's gateway credential and writes an `x_stop` receipt recording
+who stopped the agent, when, and why. Revocation propagates to
+enforcement on the next call; the receipt means the containment
+itself is attributable evidence in the incident review.

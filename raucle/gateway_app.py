@@ -8,6 +8,7 @@ This module provides:
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,19 @@ class PolicyUpdateRequest(BaseModel):
     """A policy file update from the admin panel."""
 
     content: str = Field(..., description="YAML policy content")
+
+
+class ApprovalDecisionRequest(BaseModel):
+    """A human decision on an escalated call (PR-E approval workflow)."""
+
+    approved: bool = Field(..., description="Approve or deny the request")
+    note: str = Field(default="", description="Optional decision note")
+
+
+class SuspendRequest(BaseModel):
+    """Kill-switch request body: why an agent is being suspended."""
+
+    reason: str = Field(..., description="Why the agent is being suspended")
 
 
 class UserCreateRequest(BaseModel):
@@ -126,6 +140,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         x_api_key: str | None = Header(None, alias="X-Api-Key"),
         x_capability_token: str | None = Header(None, alias="X-Capability-Token"),
         x_trace_id: str | None = Header(None, alias="X-Trace-Id"),
+        x_approval_id: str | None = Header(None, alias="X-Approval-Id"),
     ) -> dict[str, Any]:
         """Gate a tool call. Returns allow/deny/escalate decision.
 
@@ -181,7 +196,13 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
                 "timestamp": "",
             }
         response = gateway.check_tool_call(
-            req.tool, req.args, agent_id, req.source, req.destination, trace_id=trace_id
+            req.tool,
+            req.args,
+            agent_id,
+            req.source,
+            req.destination,
+            trace_id=trace_id,
+            approval_id=x_approval_id or "",
         )
         # Internal bookkeeping fields never leave the process boundary
         response.pop("_trace_id", None)
@@ -287,6 +308,7 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     _register_stats_routes(app, gateway, check_auth, check_access)
     _register_learn_routes(app, gateway, check_auth, check_access)
     _register_policy_routes(app, gateway, check_auth, check_access)
+    _register_authority_routes(app, gateway, check_auth, check_access)
     _register_receipt_routes(app, gateway, check_auth, check_access)
     _register_siem_routes(app, gateway, check_auth, check_access)
     _register_user_routes(app, gateway, users, check_auth, check_access)
@@ -529,6 +551,19 @@ def _register_policy_routes(
 
         policy_path = validate_path(gateway.config.policy_file, must_exist=False)
         policy_path.write_text(safe_content, encoding="utf-8")
+        # Policy change ledger (PR-E): every admin panel write is
+        # hash-chained with actor + content hash. Failure to ledger
+        # degrades attribution, not the write itself.
+        try:
+            gateway._append_policy_ledger(
+                action="policy_updated",
+                file=str(policy_path),
+                content=safe_content,
+                actor=user.name or user.role,
+            )
+        except Exception:
+            logger = logging.getLogger(__name__)
+            logger.warning("policy ledger append failed", exc_info=True)
         result = gateway.reload_policies()
         return result
 
@@ -557,6 +592,106 @@ def _register_policy_routes(
         user = check_auth(authorization)
         check_access(user, "policies")
         return _validate_policy_content(req.content)
+
+
+def _register_authority_routes(
+    app: FastAPI,
+    gateway: RaucleGateway,
+    check_auth: Any,
+    check_access: Any,
+) -> None:
+    """Authority attribution endpoints (PR-E): human approval workflow,
+    policy change ledger, authority envelopes and the kill switch.
+
+    These are the admin-facing legs of "the authority it held and what
+    it could use": every endpoint either records a human decision as a
+    signed receipt or serves verifiable evidence.
+    """
+
+    @app.get(
+        "/api/approvals",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+        },
+    )
+    def list_approvals(authorization: str | None = Header(None)) -> dict[str, Any]:
+        user = check_auth(authorization)
+        check_access(user, "receipts")
+        approvals = gateway._approvals.pending()
+        return {"count": len(approvals), "approvals": approvals}
+
+    @app.post(
+        "/api/approvals/{request_id}/decision",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+            "404": {"description": "Unknown or expired request"},
+            "409": {"description": "Request is not pending"},
+        },
+    )
+    def decide_approval(
+        request_id: str,
+        req: ApprovalDecisionRequest,
+        authorization: str | None = Header(None),
+    ) -> dict[str, Any]:
+        user = check_auth(authorization)
+        check_access(user, "policies")
+        from raucle.approvals import ApprovalError
+
+        try:
+            result = gateway.decide_approval(
+                request_id,
+                approved=req.approved,
+                approver=user.name or user.role,
+            )
+        except ApprovalError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        return result
+
+    @app.get(
+        "/api/policy-ledger",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+        },
+    )
+    def policy_ledger(authorization: str | None = Header(None)) -> dict[str, Any]:
+        user = check_auth(authorization)
+        check_access(user, "receipts")
+        entries = gateway.get_policy_ledger()
+        integrity = gateway.verify_policy_ledger()
+        return {"count": len(entries), "entries": entries, "integrity": integrity}
+
+    @app.get(
+        "/api/agents/{agent_id}/authority",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+        },
+    )
+    def authority_envelope(
+        agent_id: str, authorization: str | None = Header(None)
+    ) -> dict[str, Any]:
+        user = check_auth(authorization)
+        check_access(user, "receipts")
+        envelope, jws = gateway.build_authority_envelope(agent_id)
+        return {"envelope": envelope, "jws": jws}
+
+    @app.post(
+        "/api/agents/{agent_id}/suspend",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+        },
+    )
+    def suspend_agent(
+        agent_id: str, req: SuspendRequest, authorization: str | None = Header(None)
+    ) -> dict[str, Any]:
+        user = check_auth(authorization)
+        # Admin only: suspending an agent is the kill switch
+        check_access(user, "users")
+        return gateway.suspend_agent(agent_id, reason=req.reason, actor=user.name or user.role)
 
 
 def _line_iat(line: str) -> int | None:
