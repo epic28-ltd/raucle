@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Added — authority attribution: approval receipts, policy ledger, envelope, kill switch (PR-E)
+- raucle/approvals.py: ApprovalManager. Escalated calls now create a
+  receipted human approval request (x_approval); decisions through the
+  admin API are receipted with the named approver; the approval binds to
+  the exact tool, agent and canonical args hash and is consumed once.
+  Re-submitted call with X-Approval-Id allows through the threshold and
+  the action receipt cites the approval (full authority chain:
+  request → human decision → action).
+- Policy change ledger: every admin panel policy write appends a
+  hash-chained entry (seq, actor, action, content sha256, prev_hash) to
+  RAUCLE_POLICY_LEDGER; GET /api/policy-ledger returns entries and
+  recomputed-chain integrity. Receipts already bind ruleset hashes; the
+  ledger closes the loop upward: who changed the rules, and when.
+- Authority envelope: GET /api/agents/{id}/authority returns a signed
+  statement (raucle/authority-envelope/v1) of what the agent could use:
+  policies (tools, constraints, TTL) and credential status, verifiable
+  offline with the gate identity's public key.
+- Kill switch: POST /api/agents/{id}/suspend (admin-only) revokes the
+  agent's credential and writes an x_stop receipt (agent, reason, actor,
+  revoked). The stop itself is evidence: who stopped the agent, when, why.
+- GatewayConfig: approval_ttl_seconds (RAUCLE_APPROVAL_TTL, default 300),
+  policy_ledger_path (RAUCLE_POLICY_LEDGER, empty = disabled).
+- tests/test_authority_attribution.py: 16 tests across all four features
+  (full approval flow, args binding, single consumption, expiry, denial,
+  tamper detection, envelope signature, suspend RBAC).
+
+
 ### Added — key operations, deployment topologies, Helm chart (PR-D)
 - docs/security/key-operations.md: rotation (versioned-issuer zero-downtime
   procedure; the registry's one-active-key-per-issuer impersonation control

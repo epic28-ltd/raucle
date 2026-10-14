@@ -115,6 +115,9 @@ class GatewayConfig:
 
     # Registry
     registry_path: str = "/data/registry.jsonl"
+    # Authority attribution (PR-E): human approvals, policy change ledger
+    approval_ttl_seconds: int = 300
+    policy_ledger_path: str = ""  # empty = disabled
 
     @classmethod
     def from_env(cls) -> GatewayConfig:
@@ -142,6 +145,8 @@ class GatewayConfig:
             audit_log_file=os.environ.get("RAUCLE_AUDIT_LOG", "/data/gateway-audit.jsonl"),
             compliance_framework=os.environ.get("RAUCLE_COMPLIANCE_FRAMEWORK", "eu-ai-act"),
             registry_path=os.environ.get("RAUCLE_REGISTRY_PATH", "/data/registry.jsonl"),
+            approval_ttl_seconds=int(os.environ.get("RAUCLE_APPROVAL_TTL", "300")),
+            policy_ledger_path=os.environ.get("RAUCLE_POLICY_LEDGER", ""),
             gate_auth=os.environ.get("RAUCLE_GATE_AUTH", "off"),
             agent_credentials_file=os.environ.get(
                 "RAUCLE_AGENT_CREDENTIALS", "/data/agent-credentials.jsonl"
@@ -686,6 +691,14 @@ class RaucleGateway:
         self._init_gate_identity()
         self._load_policies()
 
+        # Authority attribution (PR-E): human approval workflow + policy
+        # change ledger. Approvals live in memory (receipts are the durable
+        # record); the ledger is append-only hash-chained JSONL.
+        from raucle.approvals import ApprovalManager
+
+        self._approvals = ApprovalManager(ttl_seconds=config.approval_ttl_seconds)
+        self._policy_ledger_head = "sha256:" + "0" * 64
+
     def _init_gate_identity(self) -> None:
         """Derive the gate's provenance identity (agent:gate) from the
         persistent signer key (PR-B).
@@ -855,6 +868,75 @@ class RaucleGateway:
         logger.info("generated new gateway signing key %s (key_id=%s)", key_path, signer.key_id())
         return signer
 
+    def _sign_and_store_receipt(self, payload: dict[str, Any]) -> str:
+        """Sign a receipt payload with the gate identity and append it to
+        the receipt store. Shared core for gate, approval, stop and
+        authority-envelope receipts (PR-B, PR-E)."""
+        from raucle.provenance import _b64url_encode, _canonical_json, _sha256_hex
+
+        header = {
+            "alg": "EdDSA",
+            "typ": "provenance-receipt/v1",
+            "kid": self._gate_identity.key_id,
+            "crit": ["raucle/v1"],
+            "raucle/v1": "provenance",
+        }
+        signing_input = (
+            _b64url_encode(_canonical_json(header)) + "." + _b64url_encode(_canonical_json(payload))
+        ).encode("ascii")
+        sig = self._gate_identity.sign(signing_input)
+        jws = signing_input.decode("ascii") + "." + _b64url_encode(sig)
+        receipt_hash = "sha256:" + _sha256_hex(jws.encode("ascii"))
+        line = json.dumps({"receipt_hash": receipt_hash, "jws": jws}, ensure_ascii=False)
+        if self._receipt_store is not None:
+            self._receipt_store.append_line(line)
+            if self._receipt_index is not None:
+                import json as _json
+
+                try:
+                    self._receipt_index.index_receipt(_json.loads(line))
+                except Exception:
+                    # Index failure degrades queries, never the chain
+                    logger.exception("receipt index insert failed (query degraded)")
+            return receipt_hash
+        if self._receipt_writer is None:
+            path = Path(self.config.receipt_store)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Long-lived append sink (same lifetime as the process); noqa:
+            # closing per write would break the chain-of-record's ordering.
+            self._receipt_writer = open(  # noqa: SIM115
+                path, "a", encoding="utf-8"
+            )
+        self._receipt_writer.write(line + "\n")
+        self._receipt_writer.flush()
+        return receipt_hash
+
+    def _emit_authority_receipt(
+        self, *, verdict: str, extension_key: str, extension: dict[str, Any]
+    ) -> str | None:
+        """Emit a signed authority-attribution receipt (PR-E): approval
+        requests/decisions, agent suspensions. Same GUARDRAIL_SCAN shape
+        as gate receipts; the extension carries the specifics."""
+        if not self.config.emit_receipts:
+            return None
+        from raucle.provenance import _canonical_json, _sha256_hex
+
+        payload: dict[str, Any] = {
+            "iss": "raucle-gateway",
+            "typ": "provenance-receipt/v1",
+            "iat": int(time.time()),
+            "agent_id": self._gate_identity.agent_id,
+            "agent_key_id": self._gate_identity.key_id,
+            "operation": "guardrail_scan",
+            "parents": [],
+            "taint": ["gate:observed"],
+            "input_hash": _sha256_hex(_canonical_json(extension)),
+            "ruleset_hash": "",
+            "guardrail_verdict": verdict,
+            extension_key: extension,
+        }
+        return self._sign_and_store_receipt(payload)
+
     def _emit_gate_receipt(
         self,
         *,
@@ -868,6 +950,7 @@ class RaucleGateway:
         source: str,
         destination: str,
         trace_id: str,
+        approval_id: str = "",
     ) -> str | None:
         """Emit a signed provenance receipt for a gate decision (PR-B).
 
@@ -908,6 +991,7 @@ class RaucleGateway:
                 "policy": policy,
                 "latency_us": latency_us,
                 "trace_id": trace_id,
+                "approval_id": approval_id,
             },
         }
         header = {
@@ -1202,6 +1286,7 @@ class RaucleGateway:
         source: str = "",
         destination: str = "",
         trace_id: str = "",
+        approval_id: str = "",
     ) -> dict[str, Any]:
         """Gate a tool call. Returns decision dict.
 
@@ -1216,6 +1301,7 @@ class RaucleGateway:
                 "policy": str | None,
                 "args_hash": str,
                 "receipt_id": str | None,
+                "approval_request_id": str | None,
                 "latency_us": int,
                 "timestamp": str,
             }
@@ -1236,6 +1322,7 @@ class RaucleGateway:
             "policy": None,
             "args_hash": "",
             "receipt_id": None,
+            "approval_request_id": None,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -1275,7 +1362,59 @@ class RaucleGateway:
             agent_id=actual_agent_id,
             args=args,
         )
-        result["decision"], result["reason"] = self._apply_decision(decision, matched_rule, args)
+        # Approval reference presented (PR-E): honour it only if it binds
+        # to this exact tool, agent and arguments. Any failure is deny.
+        consumed_approval = None
+        if approval_id:
+            from raucle.approvals import ApprovalError
+
+            try:
+                consumed_approval = self._approvals.consume(
+                    approval_id, tool=tool, agent_id=actual_agent_id, args=args
+                )
+            except ApprovalError as exc:
+                return self._deny_result(result, f"approval refused: {exc}", start, siem=False)
+        result["decision"], result["reason"] = self._apply_decision(
+            decision, matched_rule, args, approval_satisfied=consumed_approval is not None
+        )
+        if consumed_approval is not None:
+            result["reason"] = (
+                f"approved by {consumed_approval.approver} via {consumed_approval.request_id}"
+            )
+            result["approval_id"] = consumed_approval.request_id
+
+        # Escalation creates a human approval request (PR-E): receipted so
+        # the request itself is evidence in the chain, surfaced to the
+        # operator via the admin API and the panel.
+        if result["decision"] == "escalate":
+            request = self._approvals.create_request(
+                tool=tool,
+                agent_id=actual_agent_id,
+                args=args,
+                reason=result["reason"],
+                trace_id=trace_id,
+            )
+            result["approval_request_id"] = request.request_id
+            try:
+                self._emit_authority_receipt(
+                    verdict="approval_requested",
+                    extension_key="x_approval",
+                    extension={
+                        "request_id": request.request_id,
+                        "tool": tool,
+                        "agent_id": actual_agent_id,
+                        "args_hash": request.args_hash,
+                        "reason": request.reason,
+                        # integer epoch: the strict envelope contract bans
+                        # floats in signed material
+                        "expires_at": int(request.expires_at),
+                        "trace_id": trace_id,
+                    },
+                )
+            except Exception:
+                # The escalate decision itself is receipted fail-closed by
+                # the gate path below; this auxiliary record is best-effort.
+                logger.exception("approval-request receipt emission failed")
 
         latency_us = int((time.perf_counter() - start) * 1e6)
         self.stats.record(tool, result["decision"], latency_us)
@@ -1307,6 +1446,7 @@ class RaucleGateway:
                 source=result.get("source", ""),
                 destination=result.get("destination", ""),
                 trace_id=result.get("_trace_id", ""),
+                approval_id=result.get("approval_id", ""),
             )
         except Exception:
             logger.exception("receipt emission failed; downgrading to deny")
@@ -1476,6 +1616,7 @@ class RaucleGateway:
         decision: Any,
         rule: Any,
         args: dict[str, Any],
+        approval_satisfied: bool = False,
     ) -> tuple[str, str]:
         """Map a gate decision + approval threshold to (decision, reason)."""
         if not decision.allowed:
@@ -1483,8 +1624,194 @@ class RaucleGateway:
         from raucle.policy import check_approval_needed
 
         if rule is not None and check_approval_needed(rule, args):
+            if approval_satisfied:
+                return "allow", "approved"
             return "escalate", "requires human approval"
         return "allow", decision.reason
+
+    # ------------------------------------------------------------------
+    # Authority attribution (PR-E): policy ledger, envelope, kill switch
+    # ------------------------------------------------------------------
+
+    def _append_policy_ledger(
+        self, *, action: str, file: str, content: str, actor: str
+    ) -> dict[str, Any]:
+        """Append a hash-chained entry to the policy change ledger.
+
+        Each entry: {seq, ts, actor, action, file, sha256, prev_hash,
+        entry_hash} where entry_hash = sha256(canonical(entry sans
+        entry_hash)). Integrity is verified by recomputing the chain.
+        Disabled when policy_ledger_path is empty.
+        """
+        from raucle.provenance import _canonical_json, _sha256_hex
+
+        path = Path(self.config.policy_ledger_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entry: dict[str, Any] = {
+            "seq": self._policy_ledger_seq() + 1,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "actor": actor,
+            "action": action,
+            "file": file,
+            "sha256": _sha256_hex(content.encode("utf-8")),
+            "prev_hash": self._policy_ledger_head,
+        }
+        entry["entry_hash"] = "sha256:" + _sha256_hex(_canonical_json(entry))
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        self._policy_ledger_head = entry["entry_hash"]
+        return entry
+
+    def _policy_ledger_seq(self) -> int:
+        if not self.config.policy_ledger_path or not Path(self.config.policy_ledger_path).exists():
+            return 0
+        count = 0
+        with open(self.config.policy_ledger_path, encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    count += 1
+        return count
+
+    def verify_policy_ledger(self) -> dict[str, Any]:
+        """Walk the policy ledger and recompute the hash chain."""
+        from raucle.provenance import _canonical_json, _sha256_hex
+
+        path = Path(self.config.policy_ledger_path)
+        if not self.config.policy_ledger_path or not path.exists():
+            return {"valid": True, "count": 0, "errors": []}
+        entries: list[dict[str, Any]] = []
+        errors: list[str] = []
+        prev = "sha256:" + "0" * 64
+        with open(path, encoding="utf-8") as fh:
+            for i, line in enumerate(fh):
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    errors.append(f"line {i + 1}: invalid JSON")
+                    continue
+                entry_hash = entry.pop("entry_hash", "")
+                recomputed = "sha256:" + _sha256_hex(_canonical_json(entry))
+                if recomputed != entry_hash:
+                    errors.append(f"entry {entry.get('seq', i)}: hash mismatch")
+                if entry.get("prev_hash") != prev:
+                    errors.append(f"entry {entry.get('seq', i)}: chain break")
+                prev = entry_hash
+                entry["entry_hash"] = entry_hash
+                entries.append(entry)
+        return {"valid": not errors, "count": len(entries), "errors": errors}
+
+    def get_policy_ledger(self) -> list[dict[str, Any]]:
+        path = Path(self.config.policy_ledger_path)
+        if not self.config.policy_ledger_path or not path.exists():
+            return []
+        with open(path, encoding="utf-8") as fh:
+            return [json.loads(line) for line in fh if line.strip()]
+
+    def build_authority_envelope(self, agent_id: str) -> tuple[dict[str, Any], str]:
+        """Build a signed authority envelope: what this agent could use.
+
+        The envelope states the agent's registered policies (tools,
+        constraints, TTL), credential status, generated_at. Returned as
+        (envelope, jws) where the JWS signs the canonical envelope with
+        the gate identity - verifiable offline like every other receipt.
+        """
+        policies = []
+        for rule in self._all_rules:
+            if rule.agent_id == agent_id:
+                policies.append(
+                    {
+                        "tool": rule.tool,
+                        "ttl_seconds": getattr(rule, "ttl_seconds", 0),
+                        "constraints": getattr(rule, "constraints", {}) or {},
+                        "source_file": Path(rule.source_file).name if rule.source_file else None,
+                    }
+                )
+        credential = {"apikey_active": False}
+        if self._gate_auth_mode == "apikey" and self._agent_creds is not None:
+            credential["apikey_active"] = self._agent_creds.has(agent_id)
+        envelope = {
+            "iss": "raucle-gateway",
+            "typ": "raucle/authority-envelope/v1",
+            "agent_id": agent_id,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "policies": policies,
+            "credential": credential,
+        }
+        from raucle.provenance import _b64url_encode, _canonical_json
+
+        header = {
+            "alg": "EdDSA",
+            "typ": "raucle/authority-envelope/v1",
+            "kid": self._gate_identity.key_id,
+            "crit": ["raucle/v1"],
+            "raucle/v1": "authority",
+        }
+        signing_input = (
+            _b64url_encode(_canonical_json(header))
+            + "."
+            + _b64url_encode(_canonical_json(envelope))
+        ).encode("ascii")
+        sig = self._gate_identity.sign(signing_input)
+        jws = signing_input.decode("ascii") + "." + _b64url_encode(sig)
+        return envelope, jws
+
+    def decide_approval(self, request_id: str, *, approved: bool, approver: str) -> dict[str, Any]:
+        """Record a human approval decision: update the request and emit
+        the decision receipt so the human grant is evidence in the chain."""
+        request = self._approvals.decide(request_id, approved=approved, approver=approver)
+        receipt_id = None
+        try:
+            receipt_id = self._emit_authority_receipt(
+                verdict="approval_granted" if approved else "approval_denied",
+                extension_key="x_approval",
+                extension={
+                    "request_id": request.request_id,
+                    "tool": request.tool,
+                    "agent_id": request.agent_id,
+                    "args_hash": request.args_hash,
+                    "approver": approver,
+                    "trace_id": request.trace_id,
+                },
+            )
+        except Exception:
+            logger.exception("approval-decision receipt emission failed")
+        return {
+            "request_id": request.request_id,
+            "status": request.status,
+            "approver": approver,
+            "receipt_id": receipt_id,
+        }
+
+    def suspend_agent(self, agent_id: str, *, reason: str, actor: str) -> dict[str, Any]:
+        """Kill switch (PR-E): revoke the agent's credential and receipt
+        the suspension. Registry-based agents are suspended by revoking
+        their issuer key (existing registry flow); this covers apikey mode
+        and records the stop as evidence either way."""
+        revoked: list[str] = []
+        if (
+            self._gate_auth_mode == "apikey"
+            and self._agent_creds is not None
+            and self._agent_creds.has(agent_id)
+        ):
+            self._agent_creds.revoke(agent_id)
+            revoked.append("apikey")
+        receipt_id = None
+        try:
+            receipt_id = self._emit_authority_receipt(
+                verdict="agent_suspended",
+                extension_key="x_stop",
+                extension={
+                    "agent_id": agent_id,
+                    "reason": reason,
+                    "actor": actor,
+                    "revoked": revoked,
+                },
+            )
+        except Exception:
+            logger.exception("suspend receipt emission failed")
+        return {"suspended": True, "revoked": revoked, "receipt_id": receipt_id}
 
     def get_stats(self) -> dict[str, Any]:
         return self.stats.summary()
