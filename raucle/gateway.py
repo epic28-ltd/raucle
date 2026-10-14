@@ -963,11 +963,7 @@ class RaucleGateway:
         """
         if not self.config.emit_receipts:
             return None
-        from raucle.provenance import (
-            _b64url_encode,
-            _canonical_json,
-            _sha256_hex,
-        )
+        from raucle.provenance import _canonical_json, _sha256_hex
 
         payload: dict[str, Any] = {
             "iss": "raucle-gateway",
@@ -994,42 +990,9 @@ class RaucleGateway:
                 "approval_id": approval_id,
             },
         }
-        header = {
-            "alg": "EdDSA",
-            "typ": "provenance-receipt/v1",
-            "kid": self._gate_identity.key_id,
-            "crit": ["raucle/v1"],
-            "raucle/v1": "provenance",
-        }
-        signing_input = (
-            _b64url_encode(_canonical_json(header)) + "." + _b64url_encode(_canonical_json(payload))
-        ).encode("ascii")
-        sig = self._gate_identity.sign(signing_input)
-        jws = signing_input.decode("ascii") + "." + _b64url_encode(sig)
-        receipt_hash = "sha256:" + _sha256_hex(jws.encode("ascii"))
-        line = json.dumps({"receipt_hash": receipt_hash, "jws": jws}, ensure_ascii=False)
-        if self._receipt_store is not None:
-            self._receipt_store.append_line(line)
-            if self._receipt_index is not None:
-                import json as _json
-
-                try:
-                    self._receipt_index.index_receipt(_json.loads(line))
-                except Exception:
-                    # Index failure degrades queries, never the chain
-                    logger.exception("receipt index insert failed (query degraded)")
-            return receipt_hash
-        if self._receipt_writer is None:
-            path = Path(self.config.receipt_store)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            # Long-lived append sink (same lifetime as the process); noqa:
-            # closing per write would break the chain-of-record's ordering.
-            self._receipt_writer = open(  # noqa: SIM115
-                path, "a", encoding="utf-8"
-            )
-        self._receipt_writer.write(line + "\n")
-        self._receipt_writer.flush()
-        return receipt_hash
+        # Header + JWS signing + store append are shared with the other
+        # authority receipt emitters (PR-E extraction).
+        return self._sign_and_store_receipt(payload)
 
     def _policy_ruleset_hash(self, tool: str) -> str:
         """Hash of the policy rule in force for *tool* (binds the decision
