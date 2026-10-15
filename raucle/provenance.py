@@ -1564,6 +1564,62 @@ class ProvenanceVerifier:
                     report.valid = False
             self._check_taint(receipt, receipts_by_hash, report)
 
+    def _validate_chain_record(
+        self, raw: dict[str, Any], line_no: int, report: VerificationReport
+    ) -> ProvenanceReceipt | None:
+        """Parse + validate one chain record: JWS parse, stored-hash
+        tamper check, signature, require_pq strict mode, structural
+        rules. Appends errors to the report; returns the receipt or
+        None when the record cannot be used."""
+        try:
+            # With validate_structure disabled: the chain verifier reports each
+            # structural error per-line below (via _structural_errors)
+            # rather than raising on the first, so callers see the full
+            # set of problems in one report.
+            receipt = ProvenanceReceipt.from_jws(raw["jws"], strict=True, validate_structure=False)
+        except (ValueError, KeyError) as exc:
+            report.errors.append(f"line {line_no}: malformed record: {exc}")
+            report.valid = False
+            return None
+
+        # Tampering: recomputed hash must match the stored one
+        if raw.get("receipt_hash") != receipt.receipt_hash:
+            report.tampered_receipts.append(receipt.receipt_hash)
+            report.errors.append(f"line {line_no}: receipt_hash mismatch — record tampered")
+            report.valid = False
+
+        # Signature verify
+        if not self._verify_signature(receipt):
+            report.signature_failures += 1
+            report.errors.append(
+                f"line {line_no}: signature verification failed for "
+                f"agent_key_id={receipt.agent_key_id}"
+            )
+            report.valid = False
+
+        # require_pq strict mode: every receipt must be pq1 hybrid
+        # (4-segment JWS). A classical-only receipt in a chain that
+        # declares quantum-safe emission fails closed - this is the
+        # ProvenanceVerifier mirror of AuditVerifier's strict mode
+        # and closes the field-stripping downgrade for pack
+        # verification: stripping the PQ segment leaves a fully
+        # valid-looking v1 receipt, and only strict mode catches it.
+        if self._require_pq and receipt.jws.count(".") != 3:
+            report.errors.append(
+                f"line {line_no}: require_pq: receipt is not a "
+                "raucle/pq1 hybrid receipt (no ML-DSA-65 component)"
+            )
+            report.valid = False
+
+        # Structural validity per operation (spec v1 §4.2/§6): required
+        # fields, root rule, merge arity. A tool_call with no parents and
+        # no output_hash, etc., is malformed and must be rejected.
+        for serr in _structural_errors(receipt):
+            report.errors.append(f"line {line_no}: {serr}")
+            report.valid = False
+
+        return receipt
+
     def verify_chain(self, path: str | Path) -> VerificationReport:
         """Verify a JSONL chain file."""
         receipts_by_hash: dict[str, ProvenanceReceipt] = {}
@@ -1579,54 +1635,9 @@ class ProvenanceVerifier:
                 if raw is None:
                     continue
 
-                try:
-                    # With validate_structure disabled: the chain verifier reports each
-                    # structural error per-line below (via _structural_errors)
-                    # rather than raising on the first, so callers see the full
-                    # set of problems in one report.
-                    receipt = ProvenanceReceipt.from_jws(
-                        raw["jws"], strict=True, validate_structure=False
-                    )
-                except (ValueError, KeyError) as exc:
-                    report.errors.append(f"line {line_no}: malformed record: {exc}")
-                    report.valid = False
+                receipt = self._validate_chain_record(raw, line_no, report)
+                if receipt is None:
                     continue
-
-                # Tampering: recomputed hash must match the stored one
-                if raw.get("receipt_hash") != receipt.receipt_hash:
-                    report.tampered_receipts.append(receipt.receipt_hash)
-                    report.errors.append(f"line {line_no}: receipt_hash mismatch — record tampered")
-                    report.valid = False
-
-                # Signature verify
-                if not self._verify_signature(receipt):
-                    report.signature_failures += 1
-                    report.errors.append(
-                        f"line {line_no}: signature verification failed for "
-                        f"agent_key_id={receipt.agent_key_id}"
-                    )
-                    report.valid = False
-
-                # require_pq strict mode: every receipt must be pq1 hybrid
-                # (4-segment JWS). A classical-only receipt in a chain that
-                # declares quantum-safe emission fails closed - this is the
-                # ProvenanceVerifier mirror of AuditVerifier's strict mode
-                # and closes the field-stripping downgrade for pack
-                # verification: stripping the PQ segment leaves a fully
-                # valid-looking v1 receipt, and only strict mode catches it.
-                if self._require_pq and receipt.jws.count(".") != 3:
-                    report.errors.append(
-                        f"line {line_no}: require_pq: receipt is not a "
-                        "raucle/pq1 hybrid receipt (no ML-DSA-65 component)"
-                    )
-                    report.valid = False
-
-                # Structural validity per operation (spec v1 §4.2/§6): required
-                # fields, root rule, merge arity. A tool_call with no parents and
-                # no output_hash, etc., is malformed and must be rejected.
-                for serr in _structural_errors(receipt):
-                    report.errors.append(f"line {line_no}: {serr}")
-                    report.valid = False
 
                 # Capability conformance (verifier-side, when statements supplied)
                 self._verify_capability_conformance(receipt, line_no, report)

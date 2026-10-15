@@ -884,7 +884,7 @@ class RaucleGateway:
             "typ": _RECEIPT_TYP,
             "kid": self._gate_identity.key_id,
             "crit": [_RECEIPT_CRIT],
-            "raucle/v1": "provenance",
+            _RECEIPT_CRIT: "provenance",
         }
         signing_input = (
             _b64url_encode(_canonical_json(header)) + "." + _b64url_encode(_canonical_json(payload))
@@ -1753,7 +1753,7 @@ class RaucleGateway:
             "typ": "raucle/authority-envelope/v1",
             "kid": self._gate_identity.key_id,
             "crit": [_RECEIPT_CRIT],
-            "raucle/v1": "authority",
+            _RECEIPT_CRIT: "authority",
         }
         signing_input = (
             _b64url_encode(_canonical_json(header))

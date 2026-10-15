@@ -896,17 +896,7 @@ def _collect_export_receipts(
     buf = io.StringIO()
     if gateway._receipt_store is not None:
         for seg in gateway._receipt_store.segments():
-            with open(seg, encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        json.loads(line)
-                    except Exception:
-                        continue
-                    if _line_in_range(line, since, until):
-                        buf.write(line + "\n")
+            _append_export_lines(seg, buf, since=since, until=until)
         return buf
     from raucle._paths import validate_path
 
@@ -916,6 +906,24 @@ def _collect_export_receipts(
             if line.strip() and _line_in_range(line, since, until):
                 buf.write(line.strip() + "\n")
     return buf
+
+
+def _append_export_lines(
+    path: Path, buf: io.StringIO, *, since: int | None, until: int | None
+) -> None:
+    """Stream one segment's valid, in-range envelope lines into *buf*.
+    Malformed lines are skipped: egress carries verifiable records only."""
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                json.loads(line)
+            except Exception:
+                continue
+            if _line_in_range(line, since, until):
+                buf.write(line + "\n")
 
 
 def _line_in_range(line: str, since: int | None, until: int | None) -> bool:
