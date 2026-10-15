@@ -753,68 +753,71 @@ class AuditVerifier:
         report.signed_mode = "signed" if is_signed else "unsigned"
 
         if is_signed:
-            kid = rec.get("key_id") or ""
-            report.chain_key_id = kid
-            sig_b64 = rec.get("signature")
-            if not sig_b64:
-                report.errors.append(
-                    f"line {line_no}: chain_meta declares signed=true but has no signature"
-                )
-                report.valid = False
-                return
-            if not self._public_key:
-                # We cannot verify a signed chain without a public key, so we
-                # must not report it as valid: a consumer trusting
-                # (valid=True, signed_mode="signed") would be deceived by a
-                # fully forged chain (round-3 #9). Fail closed and stop
-                # claiming the chain is "signed" — it is unverifiable here.
-                report.signed_mode = "unverifiable"
-                report.errors.append(
-                    f"line {line_no}: chain_meta declares signed=true but no public key "
-                    f"was supplied — cannot verify; chain is not trusted"
-                )
-                report.valid = False
-                return
-            body = {
-                k: v for k, v in rec.items() if k not in ("signature", "pq_key_id", "pq_signature")
-            }
-            try:
-                self._public_key.verify(base64.b64decode(sig_b64), _canonical_json(body))
-            except Exception as exc:
-                report.invalid_signatures += 1
-                report.errors.append(
-                    f"line {line_no}: chain_meta signature verification failed: {exc}"
-                )
-                report.valid = False
-                return
-            # Quantum-ready chain headers: pq_key_id declared -> the ML-DSA-65
-            # component must verify too (same fail-closed rule as checkpoints).
-            pq_key_id = rec.get("pq_key_id")
-            if self._require_pq and not pq_key_id:
-                report.errors.append(
-                    f"line {line_no}: require_pq: chain_meta carries no ML-DSA-65 "
-                    "component (field-stripped hybrid chain, or a classical chain "
-                    "presented to a quantum-strict verifier)"
-                )
-                report.valid = False
-                return
-            if pq_key_id:
-                from raucle.pq import verify_record_hybrid
+            self._verify_signed_chain_header(rec, line_no, report)
 
-                if not verify_record_hybrid(
-                    {
-                        "signature": sig_b64,
-                        "pq_key_id": pq_key_id,
-                        "pq_signature": rec.get("pq_signature", ""),
-                    },
-                    _canonical_json(body),
-                    lambda r: True,
-                    pq_public_keys=self._pq_public_keys,
-                ):
-                    report.errors.append(
-                        f"line {line_no}: chain_meta hybrid ML-DSA-65 component failed verification"
-                    )
-                    report.valid = False
+    def _verify_signed_chain_header(
+        self, rec: dict[str, Any], line_no: int, report: VerificationReport
+    ) -> None:
+        """Classical + (when declared) hybrid verification of a signed
+        chain_meta header. Fail-closed on every path."""
+        kid = rec.get("key_id") or ""
+        report.chain_key_id = kid
+        sig_b64 = rec.get("signature")
+        if not sig_b64:
+            report.errors.append(
+                f"line {line_no}: chain_meta declares signed=true but has no signature"
+            )
+            report.valid = False
+            return
+        if not self._public_key:
+            # We cannot verify a signed chain without a public key, so we
+            # must not report it as valid: a consumer trusting
+            # (valid=True, signed_mode="signed") would be deceived by a
+            # fully forged chain (round-3 #9). Fail closed and stop
+            # claiming the chain is "signed" — it is unverifiable here.
+            report.signed_mode = "unverifiable"
+            report.errors.append(
+                f"line {line_no}: chain_meta declares signed=true but no public key "
+                f"was supplied — cannot verify; chain is not trusted"
+            )
+            report.valid = False
+            return
+        body = {k: v for k, v in rec.items() if k not in ("signature", "pq_key_id", "pq_signature")}
+        try:
+            self._public_key.verify(base64.b64decode(sig_b64), _canonical_json(body))
+        except Exception as exc:
+            report.invalid_signatures += 1
+            report.errors.append(f"line {line_no}: chain_meta signature verification failed: {exc}")
+            report.valid = False
+            return
+        # Quantum-ready chain headers: pq_key_id declared -> the ML-DSA-65
+        # component must verify too (same fail-closed rule as checkpoints).
+        pq_key_id = rec.get("pq_key_id")
+        if self._require_pq and not pq_key_id:
+            report.errors.append(
+                f"line {line_no}: require_pq: chain_meta carries no ML-DSA-65 "
+                "component (field-stripped hybrid chain, or a classical chain "
+                "presented to a quantum-strict verifier)"
+            )
+            report.valid = False
+            return
+        if pq_key_id:
+            from raucle.pq import verify_record_hybrid
+
+            if not verify_record_hybrid(
+                {
+                    "signature": sig_b64,
+                    "pq_key_id": pq_key_id,
+                    "pq_signature": rec.get("pq_signature", ""),
+                },
+                _canonical_json(body),
+                lambda r: True,
+                pq_public_keys=self._pq_public_keys,
+            ):
+                report.errors.append(
+                    f"line {line_no}: chain_meta hybrid ML-DSA-65 component failed verification"
+                )
+                report.valid = False
 
     def _verify_checkpoint(
         self,

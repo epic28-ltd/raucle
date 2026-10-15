@@ -342,13 +342,19 @@ def _verify_pack_chain(
     if chain_member is not None and public_keys:
         try:
             verdict = ProvenanceVerifier(
-                public_keys=public_keys, pq_public_keys=pq_public_keys or None
+                public_keys=public_keys,
+                pq_public_keys=pq_public_keys or None,
+                require_pq=require_pq,
             ).verify_chain(chain_member)
         except PQUnavailable as exc:
             reasons.append(f"pack declares PQ-signed receipts but ML-DSA is unavailable: {exc}")
             return False, 0
         if not verdict.valid:
             reasons.append("receipt chain did not verify against bundled keys")
+            # Surface the verifier's specific errors (bounded) so the
+            # verdict says WHY: require_pq strict mode, signature failures,
+            # structural problems - not just the generic verdict.
+            reasons.extend(verdict.errors[:5])
         return verdict.valid, verdict.receipt_count
     reasons.append("missing/untrusted chain.jsonl or bundled public keys")
     return False, 0

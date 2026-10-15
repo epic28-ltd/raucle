@@ -94,6 +94,38 @@ class TestAuditPackPQ:
         assert not verdict.ok
         assert not verdict.chain_valid
 
+    def test_declared_require_pq_with_classical_chain_fails(self, tmp, hybrid_chain, audit_key):
+        """The field-stripping downgrade (SonarCloud S1172 find, real bug).
+
+        A pack whose index declares require_pq=True but whose receipts
+        carry only classical (Ed25519) signatures must FAIL verification.
+        Before the fix, _verify_pack_chain accepted the require_pq
+        parameter but never enforced it, so stripping the ML-DSA
+        component from every receipt left a fully 'valid' pack.
+        """
+        ident = AgentIdentity.generate(agent_id="agent:stripped")
+        chain = tmp / "classical-only.jsonl"
+        log = ProvenanceLogger(agent=ident, sink_path=str(chain))
+        log.record_user_input(text="stripped pq")
+        log.close()
+        _, pq_pub, pq_kid, _ = hybrid_chain
+        out = tmp / "pack-stripped"
+        build_pack(
+            chain_path=str(chain),
+            public_keys={ident.key_id: ident.public_key_pem()},
+            audit_key_pem=(tmp / "audit.pem").read_bytes(),
+            out_dir=str(out),
+            generated_at=1758000000,
+            # PQ keys bundled and declaration set - but the chain is
+            # classical-only (as after a stripping attack)
+            pq_public_keys={pq_kid: pq_public_key_pem(pq_pub)},
+            require_pq=True,
+        )
+        verdict = verify_pack(out)
+        assert not verdict.ok
+        assert not verdict.chain_valid
+        assert any("require_pq" in r for r in verdict.reasons)
+
     def test_classical_pack_still_verifies(self, tmp, audit_key):
         ident = AgentIdentity.generate(agent_id="agent:classic")
         chain = tmp / "classic.jsonl"

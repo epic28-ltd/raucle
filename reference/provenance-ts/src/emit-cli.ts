@@ -14,7 +14,7 @@ const subtle = webcrypto.subtle
 const canonMode = process.argv[2] === '--canon'
 const verifyMode = process.argv[2] === '--verify'
 
-async function importSeedKey(seedHex: string): Promise<webcrypto.CryptoKey> {
+function importSeedKey(seedHex: string): Promise<webcrypto.CryptoKey> {
   const seed = Buffer.from(seedHex, 'hex')
   const prefix = Buffer.from('302e020100300506032b657004220420', 'hex')
   const pkcs8 = Buffer.concat([prefix, seed])
@@ -23,7 +23,7 @@ async function importSeedKey(seedHex: string): Promise<webcrypto.CryptoKey> {
 
 // Import the raw 32-byte Ed25519 public key (hex) by wrapping it in the standard
 // SubjectPublicKeyInfo DER prefix — the verify-rejection conformance key format.
-async function importPubKey(hex: string): Promise<webcrypto.CryptoKey> {
+function importPubKey(hex: string): Promise<webcrypto.CryptoKey> {
   // Exactly 64 hex chars (32 bytes). Buffer.from(.,'hex') silently truncates on
   // odd length / trailing non-hex, so guard first to match Go's strict decode.
   if (!/^[0-9a-fA-F]{64}$/.test(hex)) throw new Error('bad public_key_hex')

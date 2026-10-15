@@ -48,6 +48,11 @@ from raucle.scanner import Scanner, ScanResult
 
 logger = logging.getLogger(__name__)
 
+# Fuzzing PRNG: produces adversarial TEST INPUTS for scanner mutations.
+# No security decision draws from it; seeded runs are reproducible by
+# design. This is a deliberate stdlib PRNG, not a cryptographic use.
+_FUZZ_RNG: random.Random = random.Random()
+
 # ---------------------------------------------------------------------------
 # Mutation strategies
 # ---------------------------------------------------------------------------
@@ -113,7 +118,7 @@ def _mutate_spaces(text: str) -> str:
     result: list[str] = []
     i = 0
     while i < len(text):
-        chunk_size = random.randint(3, 5)
+        chunk_size = _FUZZ_RNG.randint(3, 5)
         result.append(text[i : i + chunk_size])
         if i + chunk_size < len(text):
             result.append(" ")
@@ -127,7 +132,7 @@ def _mutate_zero_width(text: str) -> str:
     for ch in text:
         result.append(ch)
         if ch.isalpha():
-            result.append(random.choice(_ZW_CHARS))
+            result.append(_FUZZ_RNG.choice(_ZW_CHARS))
     return "".join(result)
 
 
@@ -148,7 +153,7 @@ def _mutate_reverse(text: str) -> str:
 
 
 def _mutate_case_flip(text: str) -> str:
-    return "".join(ch.upper() if random.random() > 0.5 else ch.lower() for ch in text)
+    return "".join(ch.upper() if _FUZZ_RNG.random() > 0.5 else ch.lower() for ch in text)
 
 
 _MUTATORS: dict[MutationStrategy, Any] = {
@@ -301,7 +306,7 @@ class RuleFuzzer:
         self._samples_per_seed = samples_per_seed
         self._seed_map = seed_map or _SEED_PHRASES
         if random_seed is not None:
-            random.seed(random_seed)
+            _FUZZ_RNG.seed(random_seed)
 
     def fuzz(self) -> FuzzReport:
         """Run all mutations and return a coverage report."""

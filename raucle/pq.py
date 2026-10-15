@@ -39,7 +39,6 @@ ML-DSA, so callers can distinguish "not built for PQ" from "bad receipt".
 from __future__ import annotations
 
 import base64
-import binascii
 import hashlib
 from dataclasses import dataclass
 from typing import Any
@@ -462,7 +461,8 @@ def verify_record_hybrid(
         return False
     try:
         pq_sig = base64.b64decode(pq_sig_b64, validate=True)
-    except (ValueError, binascii.Error):
+    except ValueError:
+        # binascii.Error subclasses ValueError: one catch covers both
         return False
     if len(pq_sig) != 3309:
         return False

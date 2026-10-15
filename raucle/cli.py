@@ -23,6 +23,8 @@ from raucle import __version__
 from raucle._paths import validate_path
 from raucle.scanner import MAX_INPUT_BYTES, Scanner
 
+_DEFAULT_AGENT_STORE = "/data/agent-credentials.jsonl"
+
 logger = logging.getLogger(__name__)
 
 _REGISTRY_DESC = "Registry JSONL file"
@@ -131,14 +133,14 @@ def _build_parser() -> argparse.ArgumentParser:
     agents_issue.add_argument("--agent-id", required=True, help="Agent id, e.g. agent:pay")
     agents_issue.add_argument(
         "--store",
-        default="/data/agent-credentials.jsonl",
-        help="Credential store path (default: /data/agent-credentials.jsonl)",
+        default=_DEFAULT_AGENT_STORE,
+        help=f"Credential store path (default: {_DEFAULT_AGENT_STORE})",
     )
     agents_revoke = agents_sub.add_parser("revoke-key", help="Revoke an agent's API key")
     agents_revoke.add_argument("--agent-id", required=True)
-    agents_revoke.add_argument("--store", default="/data/agent-credentials.jsonl")
+    agents_revoke.add_argument("--store", default=_DEFAULT_AGENT_STORE)
     agents_list = agents_sub.add_parser("list", help="List agents with active keys")
-    agents_list.add_argument("--store", default="/data/agent-credentials.jsonl")
+    agents_list.add_argument("--store", default=_DEFAULT_AGENT_STORE)
 
     serve_p = subparsers.add_parser("serve", help="Start the REST API server")
     serve_p.add_argument(
@@ -858,9 +860,11 @@ def _cmd_agents_list(args: argparse.Namespace) -> int:
     agents = store.list_agents()
     if not agents:
         print("(no agents with active keys)", file=sys.stderr)
-        return 0
-    for agent_id in agents:
-        print(agent_id)
+    else:
+        for agent_id in agents:
+            print(agent_id)
+    # Listing is informational on every path: a non-empty AND an empty
+    # store are both healthy states, so the exit code is 0 either way.
     return 0
 
 
@@ -1675,7 +1679,6 @@ def _enforce_require_pq(path: str, report: Any) -> None:
     """
     from raucle.provenance import ProvenanceReceipt
 
-    pq1_count = 0
     with open(path, encoding="utf-8") as fh:
         for line_no, line in enumerate(fh, start=1):
             line = line.strip()
@@ -1687,9 +1690,7 @@ def _enforce_require_pq(path: str, report: Any) -> None:
             except Exception:
                 continue
             parts = receipt.jws.split(".")
-            if len(parts) == 4:
-                pq1_count += 1
-            else:
+            if len(parts) != 4:
                 report.errors.append(
                     f"line {line_no}: --require-pq failed: receipt is not a "
                     "raucle/pq1 hybrid receipt (no ML-DSA-65 component)"
@@ -1892,7 +1893,8 @@ def _cmd_scan_image(args: argparse.Namespace) -> int:
     except ImportError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
-    except (FileNotFoundError, OSError) as exc:
+    except OSError as exc:
+        # FileNotFoundError subclasses OSError: one catch covers both
         print(f"Error reading image: {exc}", file=sys.stderr)
         return 1
 

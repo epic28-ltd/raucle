@@ -135,7 +135,6 @@ def accept_call(
     registry: TrustRegistry,
     responder_signer: Ed25519Signer,
     responder_id: str,
-    require_unrevoked: bool = True,
     seen: set[str] | None = None,
 ) -> HandshakeResult:
     """Responder side (org B): resolve the initiator's key from the **registry**,

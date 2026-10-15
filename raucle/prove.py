@@ -645,7 +645,8 @@ def _host_matches(host: str, pattern: str) -> bool:
         return True
     if pattern.startswith("*."):
         suffix = pattern[1:]  # ".example.com" — requires at least one label before it
-        return host.endswith(suffix) and host != suffix[1:]
+        apex = pattern[2:]  # "example.com" — the bare domain
+        return host.endswith(suffix) and host != apex
     return False
 
 

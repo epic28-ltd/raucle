@@ -7,6 +7,7 @@ This module provides:
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 from pathlib import Path
@@ -39,6 +40,26 @@ class GateRequest(BaseModel):
     destination: str = Field(
         default="", description="Outbound destination (API endpoint, service, or tool target)"
     )
+
+
+def _gate_deny_response(req: GateRequest, reason: str) -> dict[str, Any]:
+    """Pre-gate deny: the static response shape for failures that occur
+    before the receipted gate path (bad token JSON, unauthenticated
+    caller). The gateway receipt trail starts at check_tool_call; these
+    early failures deny with the caller-declared context echoed back."""
+    return {
+        "decision": "deny",
+        "reason": reason,
+        "tool": req.tool,
+        "agent_id": req.agent_id,
+        "source": req.source,
+        "destination": req.destination,
+        "policy": None,
+        "args_hash": "",
+        "receipt_id": None,
+        "latency_us": 0,
+        "timestamp": "",
+    }
 
 
 class PolicyUpdateRequest(BaseModel):
@@ -158,19 +179,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
             try:
                 token_dict = _json.loads(x_capability_token)
             except _json.JSONDecodeError:
-                return {
-                    "decision": "deny",
-                    "reason": "X-Capability-Token is not valid JSON",
-                    "tool": req.tool,
-                    "agent_id": req.agent_id,
-                    "source": req.source,
-                    "destination": req.destination,
-                    "policy": None,
-                    "args_hash": "",
-                    "receipt_id": None,
-                    "latency_us": 0,
-                    "timestamp": "",
-                }
+                return _gate_deny_response(req, "X-Capability-Token is not valid JSON")
         import uuid as _uuid
 
         trace_id = x_trace_id or _uuid.uuid4().hex
@@ -182,19 +191,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
             declared_agent_id=req.agent_id,
         )
         if agent_id is None:
-            return {
-                "decision": "deny",
-                "reason": f"unauthenticated: {auth_reason}",
-                "tool": req.tool,
-                "agent_id": req.agent_id,
-                "source": req.source,
-                "destination": req.destination,
-                "policy": None,
-                "args_hash": "",
-                "receipt_id": None,
-                "latency_us": 0,
-                "timestamp": "",
-            }
+            return _gate_deny_response(req, f"unauthenticated: {auth_reason}")
         response = gateway.check_tool_call(
             req.tool,
             req.args,
@@ -209,7 +206,10 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         response.pop("_args", None)
         return response
 
-    @app.get("/health")
+    @app.get(
+        "/health",
+        responses={"401": {"description": "Health token required but missing/incorrect"}},
+    )
     def health(authorization: str | None = Header(None)) -> dict[str, str]:
         if gateway.config.health_check_token:
             key = authorization or ""
@@ -311,7 +311,7 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     _register_authority_routes(app, gateway, check_auth, check_access)
     _register_receipt_routes(app, gateway, check_auth, check_access)
     _register_siem_routes(app, gateway, check_auth, check_access)
-    _register_user_routes(app, gateway, users, check_auth, check_access)
+    _register_user_routes(app, users, check_auth, check_access)
     _register_config_routes(app, gateway, check_auth, check_access)
     _register_ui_routes(app)
 
@@ -321,7 +321,10 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
 def _register_health_routes(app: FastAPI, gateway: RaucleGateway) -> None:
     """Health endpoint (optional auth via health_check_token)."""
 
-    @app.get("/health")
+    @app.get(
+        "/health",
+        responses={"401": {"description": "Health token required but missing/incorrect"}},
+    )
     def admin_health(authorization: str | None = Header(None)) -> dict[str, str]:
         if gateway.config.health_check_token:
             key = authorization or ""
@@ -524,6 +527,7 @@ def _register_policy_routes(
     @app.put(
         "/api/policies",
         responses={
+            "400": {"description": "Invalid policy YAML content"},
             "401": {"description": "MFA required or missing Authorization header"},
             "403": {"description": "Invalid API key or insufficient role"},
         },
@@ -711,6 +715,72 @@ def _line_iat(line: str) -> int | None:
         return None
 
 
+def _receipt_page_via_index(
+    gateway: RaucleGateway,
+    *,
+    agent_id: str | None,
+    tool: str | None,
+    decision: str | None,
+    trace_id: str | None,
+    since: int | None,
+    until: int | None,
+    limit: int,
+    cursor: str | None,
+) -> dict[str, Any]:
+    """Receipt query page from the SQLite index (PR-C path)."""
+    rows = gateway._receipt_index.query(
+        agent_id=agent_id,
+        tool=tool,
+        decision=decision,
+        trace_id=trace_id,
+        since=since,
+        until=until,
+        limit=limit,
+        cursor=cursor,
+    )
+    full_page = len(rows) == max(1, min(limit, 1000))
+    return {
+        "receipts": rows,
+        "count": len(rows),
+        "total": gateway._receipt_index.count(),
+        "next_cursor": gateway._receipt_index.cursor_for(rows[-1]) if full_page and rows else None,
+    }
+
+
+def _receipt_page_via_store(gateway: RaucleGateway, *, limit: int) -> dict[str, Any]:
+    """Receipt query page from the segmented store (no index configured)."""
+    recent = gateway._receipt_store.recent(limit=limit)
+    return {
+        "receipts": recent,
+        "count": len(recent),
+        "total": gateway._receipt_store.total_receipt_count(),
+        "next_cursor": None,
+    }
+
+
+def _receipt_page_via_flat_file(gateway: RaucleGateway, *, limit: int) -> dict[str, Any]:
+    """Receipt query page from the legacy flat JSONL file."""
+    from raucle._paths import validate_path
+
+    path = validate_path(gateway.config.receipt_store, must_exist=False)
+    if not path.exists():
+        return {"receipts": [], "count": 0, "total": 0, "next_cursor": None}
+    lines = path.read_text(encoding="utf-8").strip().splitlines()
+    recent_lines = lines[-limit:] if len(lines) > limit else lines
+    receipts = []
+    import contextlib
+
+    for line in recent_lines:
+        with contextlib.suppress(json.JSONDecodeError):
+            receipts.append(json.loads(line))
+    return {
+        "receipts": receipts,
+        "count": len(receipts),
+        "total": len(lines),
+        "next_cursor": None,
+    }
+
+
 def _register_receipt_routes(
     app: FastAPI, gateway: RaucleGateway, check_auth: Any, check_access: Any
 ) -> None:
@@ -743,7 +813,8 @@ def _register_receipt_routes(
         user = check_auth(authorization)
         check_access(user, "receipts")
         if gateway._receipt_index is not None:
-            rows = gateway._receipt_index.query(
+            return _receipt_page_via_index(
+                gateway,
                 agent_id=agent_id,
                 tool=tool,
                 decision=decision,
@@ -753,49 +824,16 @@ def _register_receipt_routes(
                 limit=limit,
                 cursor=cursor,
             )
-            full_page = len(rows) == max(1, min(limit, 1000))
-            return {
-                "receipts": rows,
-                "count": len(rows),
-                "total": gateway._receipt_index.count(),
-                "next_cursor": gateway._receipt_index.cursor_for(rows[-1])
-                if full_page and rows
-                else None,
-            }
         if gateway._receipt_store is not None:
-            recent = gateway._receipt_store.recent(limit=limit)
-            return {
-                "receipts": recent,
-                "count": len(recent),
-                "total": gateway._receipt_store.total_receipt_count(),
-                "next_cursor": None,
-            }
-        # legacy flat file
-        from raucle._paths import validate_path
-
-        path = validate_path(gateway.config.receipt_store, must_exist=False)
-        if not path.exists():
-            return {"receipts": [], "count": 0, "total": 0, "next_cursor": None}
-        lines = path.read_text(encoding="utf-8").strip().splitlines()
-        recent_lines = lines[-limit:] if len(lines) > limit else lines
-        receipts = []
-        import contextlib
-
-        for line in recent_lines:
-            with contextlib.suppress(json.JSONDecodeError):
-                receipts.append(json.loads(line))
-        return {
-            "receipts": receipts,
-            "count": len(receipts),
-            "total": len(lines),
-            "next_cursor": None,
-        }
+            return _receipt_page_via_store(gateway, limit=limit)
+        return _receipt_page_via_flat_file(gateway, limit=limit)
 
     @app.get(
         "/api/receipts/{receipt_hash}/ancestors",
         responses={
             "401": {"description": "MFA required or missing Authorization header"},
             "403": {"description": "Invalid API key or insufficient role"},
+            "501": {"description": "Receipt index not configured"},
         },
     )
     def get_receipt_ancestors(
@@ -838,46 +876,63 @@ def _register_receipt_routes(
         """
         user = check_auth(authorization)
         check_access(user, "receipts")
-        import io
 
         from fastapi.responses import StreamingResponse
 
-        buf = io.StringIO()
-        if gateway._receipt_store is not None:
-            for seg in gateway._receipt_store.segments():
-                with open(seg, encoding="utf-8") as fh:
-                    for line in fh:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            json.loads(line)
-                        except Exception:
-                            continue
-                        iat = _line_iat(line)
-                        if since is not None and iat is not None and iat < since:
-                            continue
-                        if until is not None and iat is not None and iat > until:
-                            continue
-                        buf.write(line + "\n")
-        else:
-            from raucle._paths import validate_path
-
-            path = validate_path(gateway.config.receipt_store, must_exist=False)
-            if path.exists():
-                for line in path.read_text(encoding="utf-8").splitlines():
-                    if line.strip():
-                        iat = _line_iat(line)
-                        if since is not None and iat is not None and iat < since:
-                            continue
-                        if until is not None and iat is not None and iat > until:
-                            continue
-                        buf.write(line.strip() + "\n")
+        buf = _collect_export_receipts(gateway, since=since, until=until)
         return StreamingResponse(
             iter([buf.getvalue().encode("utf-8")]),
             media_type="application/x-ndjson",
             headers={"Content-Disposition": 'attachment; filename="receipts.jsonl"'},
         )
+
+
+def _collect_export_receipts(
+    gateway: RaucleGateway, *, since: int | None, until: int | None
+) -> io.StringIO:
+    """Collect the time-bounded JSONL export from the segmented store (or
+    the legacy flat file). Bounded to a time range so responses stay
+    finite; the audit pack remains the regulator path."""
+    buf = io.StringIO()
+    if gateway._receipt_store is not None:
+        for seg in gateway._receipt_store.segments():
+            _append_export_lines(seg, buf, since=since, until=until)
+        return buf
+    from raucle._paths import validate_path
+
+    path = validate_path(gateway.config.receipt_store, must_exist=False)
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip() and _line_in_range(line, since, until):
+                buf.write(line.strip() + "\n")
+    return buf
+
+
+def _append_export_lines(
+    path: Path, buf: io.StringIO, *, since: int | None, until: int | None
+) -> None:
+    """Stream one segment's valid, in-range envelope lines into *buf*.
+    Malformed lines are skipped: egress carries verifiable records only."""
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                json.loads(line)
+            except Exception:
+                continue
+            if _line_in_range(line, since, until):
+                buf.write(line + "\n")
+
+
+def _line_in_range(line: str, since: int | None, until: int | None) -> bool:
+    """True when the envelope line's iat falls inside [since, until].
+    Unparseable iat passes the filter (the line stays exportable)."""
+    iat = _line_iat(line)
+    if since is not None and iat is not None and iat < since:
+        return False
+    return not (until is not None and iat is not None and iat > until)
 
 
 def _register_siem_routes(
@@ -927,7 +982,7 @@ def _register_siem_routes(
 
 
 def _register_user_routes(
-    app: FastAPI, gateway: RaucleGateway, users: UserManager, check_auth: Any, check_access: Any
+    app: FastAPI, users: UserManager, check_auth: Any, check_access: Any
 ) -> None:
     """User management and TOTP MFA administration."""
 

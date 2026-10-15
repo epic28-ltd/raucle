@@ -474,7 +474,8 @@ def verify_manifest(manifest: dict[str, Any]) -> bool:
     except Exception:
         return False
     # The displayed key id must match the key that actually verified.
-    return manifest.get("signer_key_id") == _sha256_hex(pem)[:16]
+    expected_key_id = _sha256_hex(pem)[:16]
+    return manifest.get("signer_key_id") == expected_key_id
 
 
 # ---------------------------------------------------------------------------
