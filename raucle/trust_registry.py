@@ -494,27 +494,37 @@ class TrustRegistry:
         for kid, rec in self._fold().items():
             if rec.revoked:
                 continue
-            canon = _canon_issuer(rec.issuer)
-            if not canon:
+            self._assert_issuer_unique(kid, rec, seen_classical, seen_pq)
+
+    @staticmethod
+    def _assert_issuer_unique(
+        kid: str,
+        rec: Any,
+        seen_classical: dict[str, str],
+        seen_pq: dict[str, str],
+    ) -> None:
+        """One entry of the per-algorithm issuer-uniqueness rule."""
+        canon = _canon_issuer(rec.issuer)
+        if not canon:
+            raise RegistryIntegrityError(
+                f"active register entry for key {kid} has a blank issuer name"
+            )
+        algorithm = (rec.metadata or {}).get("algorithm", "")
+        if algorithm:
+            per_algo = f"{canon}|{algorithm}"
+            if per_algo in seen_pq and seen_pq[per_algo] != kid:
                 raise RegistryIntegrityError(
-                    f"active register entry for key {kid} has a blank issuer name"
+                    f"duplicate active issuer name {rec.issuer!r} for "
+                    f"{algorithm} (keys {seen_pq[per_algo]} and {kid})"
                 )
-            algorithm = (rec.metadata or {}).get("algorithm", "")
-            if algorithm:
-                per_algo = f"{canon}|{algorithm}"
-                if per_algo in seen_pq and seen_pq[per_algo] != kid:
-                    raise RegistryIntegrityError(
-                        f"duplicate active issuer name {rec.issuer!r} for "
-                        f"{algorithm} (keys {seen_pq[per_algo]} and {kid})"
-                    )
-                seen_pq[per_algo] = kid
-            else:
-                if canon in seen_classical and seen_classical[canon] != kid:
-                    raise RegistryIntegrityError(
-                        f"duplicate active issuer name {rec.issuer!r} "
-                        f"(keys {seen_classical[canon]} and {kid})"
-                    )
-                seen_classical[canon] = kid
+            seen_pq[per_algo] = kid
+        else:
+            if canon in seen_classical and seen_classical[canon] != kid:
+                raise RegistryIntegrityError(
+                    f"duplicate active issuer name {rec.issuer!r} "
+                    f"(keys {seen_classical[canon]} and {kid})"
+                )
+            seen_classical[canon] = kid
 
     def _verify_operator_signatures(
         self,
@@ -578,36 +588,57 @@ class TrustRegistry:
             # classical-only acceptance of a hybrid entry).
             pq_kid = e.get("operator_pq_key_id")
             if pq_kid:
-                from raucle.pq import pq_public_key_from_pem, verify_record_hybrid
+                self._verify_entry_hybrid_operator_sig(
+                    index=i,
+                    entry=e,
+                    sig=sig,
+                    pq_kid=pq_kid,
+                    operator_pq_key=operator_pq_key,
+                    pq_loaded=pq_loaded,
+                )
 
-                if pq_kid not in pq_loaded:
-                    if operator_pq_key is None:
-                        raise RegistryIntegrityError(
-                            f"entry {i}: hybrid entry carries operator_pq_key_id "
-                            "but no operator ML-DSA-65 key was supplied to verify "
-                            "against (pass operator_pq_public_pem)"
-                        )
-                    from raucle.pq import pq_key_id_from_public_key
+    @staticmethod
+    def _verify_entry_hybrid_operator_sig(
+        *,
+        index: int,
+        entry: dict[str, Any],
+        sig: str,
+        pq_kid: str,
+        operator_pq_key: Any,
+        pq_loaded: dict[str, Any],
+    ) -> None:
+        """Fail-closed verification of one hybrid entry's ML-DSA-65
+        operator signature component."""
+        from raucle.pq import verify_record_hybrid
 
-                    if pq_key_id_from_public_key(operator_pq_key) != pq_kid:
-                        raise RegistryIntegrityError(
-                            f"entry {i}: operator_pq_key_id {pq_kid} does not "
-                            "match the supplied operator PQ key"
-                        )
-                    pq_loaded[pq_kid] = operator_pq_key
-                if not verify_record_hybrid(
-                    {
-                        "signature": sig,
-                        "pq_key_id": pq_kid,
-                        "pq_signature": e.get("operator_pq_sig", ""),
-                    },
-                    e["hash"].encode("ascii"),
-                    lambda r: True,
-                    pq_public_keys=pq_loaded,
-                ):
-                    raise RegistryIntegrityError(
-                        f"entry {i}: hybrid operator ML-DSA-65 component invalid"
-                    )
+        if pq_kid not in pq_loaded:
+            if operator_pq_key is None:
+                raise RegistryIntegrityError(
+                    f"entry {index}: hybrid entry carries operator_pq_key_id "
+                    "but no operator ML-DSA-65 key was supplied to verify "
+                    "against (pass operator_pq_public_pem)"
+                )
+            from raucle.pq import pq_key_id_from_public_key
+
+            if pq_key_id_from_public_key(operator_pq_key) != pq_kid:
+                raise RegistryIntegrityError(
+                    f"entry {index}: operator_pq_key_id {pq_kid} does not "
+                    "match the supplied operator PQ key"
+                )
+            pq_loaded[pq_kid] = operator_pq_key
+        if not verify_record_hybrid(
+            {
+                "signature": sig,
+                "pq_key_id": pq_kid,
+                "pq_signature": entry.get("operator_pq_sig", ""),
+            },
+            entry["hash"].encode("ascii"),
+            lambda r: True,
+            pq_public_keys=pq_loaded,
+        ):
+            raise RegistryIntegrityError(
+                f"entry {index}: hybrid operator ML-DSA-65 component invalid"
+            )
 
     def _check_freshness(
         self,

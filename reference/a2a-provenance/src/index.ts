@@ -121,7 +121,8 @@ export async function emitHandoff(opts: HandoffInput): Promise<Receipt> {
 /** Attach a hand-off receipt to an outgoing A2A Message. */
 export function attachToMessage<M extends Record<string, unknown>>(message: M, receipt: Receipt): M {
   const exts = new Set([...(((message.extensions as string[]) ?? [])), RAUCLE_A2A_EXTENSION_URI]);
-  const metadata = { ...(message.metadata ?? {}) };
+  // Spreading undefined is a no-op; no `?? {}` fallback needed.
+  const metadata = { ...message.metadata };
   metadata[RAUCLE_A2A_EXTENSION_URI] = { receipt: receipt.jws };
   return { ...message, extensions: [...exts], metadata };
 }
@@ -141,7 +142,7 @@ interface AgentCardLike {
   metadata?: Record<string, unknown>;
 }
 
-async function importPub(b64: string): Promise<webcrypto.CryptoKey> {
+function importPub(b64: string): Promise<webcrypto.CryptoKey> {
   const raw = new Uint8Array(Buffer.from(b64, "base64"));
   return subtle.importKey("raw", raw, { name: "Ed25519" }, false, ["verify"]);
 }

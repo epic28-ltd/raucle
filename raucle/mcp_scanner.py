@@ -138,10 +138,11 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("openai_key", re.compile(r"sk-[A-Za-z0-9]{20,}")),
     ("aws_access_key", re.compile(r"AKIA[A-Z0-9]{16}")),
     ("private_key", re.compile(r"-----BEGIN\s+(?:RSA\s+|EC\s+)?PRIVATE\s+KEY-----")),
-    ("bearer_token", re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]{20,}")),
+    ("bearer_token", re.compile(r"(?i)bearer\s+[a-z0-9._\-]{20,}")),
     (
         "api_key_assignment",
-        re.compile(r"(?i)(?:api[_-]?key|password)\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{16,}"),
+        # (?i) makes A-Z redundant beside a-z: one range covers both cases
+        re.compile(r"(?i)(?:api[_-]?key|password)\s*[:=]\s*['\"]?[a-z0-9_\-]{16,}"),
     ),
 ]
 

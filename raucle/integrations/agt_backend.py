@@ -188,13 +188,13 @@ class RauclePolicyBackend:
         proof_artefact: str | None = None,
         verification_pointers: dict[str, str] | None = None,
     ):
-        kwargs: dict[str, Any] = dict(
-            allowed=allowed,
-            action=action,
-            reason=reason,
-            backend=self.name,
-            evaluation_ms=evaluation_ms,
-        )
+        kwargs: dict[str, Any] = {
+            "allowed": allowed,
+            "action": action,
+            "reason": reason,
+            "backend": self.name,
+            "evaluation_ms": evaluation_ms,
+        }
         if self._supports_assurance_fields:
             kwargs["proof_artefact"] = proof_artefact
             kwargs["verification_pointers"] = verification_pointers or {}

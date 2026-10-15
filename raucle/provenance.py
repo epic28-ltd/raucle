@@ -1429,6 +1429,7 @@ class ProvenanceVerifier:
         public_keys: dict[str, bytes],
         capabilities: dict[str, CapabilityStatement] | None = None,
         pq_public_keys: dict[str, bytes | str] | None = None,
+        require_pq: bool = False,
     ) -> None:
         from cryptography.hazmat.primitives import serialization
 
@@ -1452,6 +1453,14 @@ class ProvenanceVerifier:
                 # PQUnavailable error at verify time rather than silently
                 # downgrading.
                 self._pq_keys[kid] = None
+        # Quantum-strict mode (mirrors AuditVerifier): every receipt in
+        # the chain MUST be a pq1 hybrid (4-segment JWS). A chain whose
+        # PQ fields were stripped verifies classically otherwise - the
+        # field-stripping downgrade this closes leaves no in-band trace,
+        # so strict mode is the only complete answer. Packs declare
+        # require_pq in their index; verification enforces the pack's
+        # own statement about itself.
+        self._require_pq = bool(require_pq)
 
     @staticmethod
     def _parse_chain_line(
@@ -1598,6 +1607,20 @@ class ProvenanceVerifier:
                     )
                     report.valid = False
 
+                # require_pq strict mode: every receipt must be pq1 hybrid
+                # (4-segment JWS). A classical-only receipt in a chain that
+                # declares quantum-safe emission fails closed - this is the
+                # ProvenanceVerifier mirror of AuditVerifier's strict mode
+                # and closes the field-stripping downgrade for pack
+                # verification: stripping the PQ segment leaves a fully
+                # valid-looking v1 receipt, and only strict mode catches it.
+                if self._require_pq and receipt.jws.count(".") != 3:
+                    report.errors.append(
+                        f"line {line_no}: require_pq: receipt is not a "
+                        "raucle/pq1 hybrid receipt (no ML-DSA-65 component)"
+                    )
+                    report.valid = False
+
                 # Structural validity per operation (spec v1 §4.2/§6): required
                 # fields, root rule, merge arity. A tool_call with no parents and
                 # no output_hash, etc., is malformed and must be rejected.
@@ -1668,13 +1691,7 @@ class ProvenanceVerifier:
     def _verify_signature(self, receipt: ProvenanceReceipt) -> bool:
         from cryptography.exceptions import InvalidSignature
 
-        from raucle.pq import (
-            HybridVerificationError,
-            PQUnavailable,
-            header_is_pq1,
-            parse_hybrid_signature,
-            verify_hybrid,
-        )
+        from raucle.pq import HybridVerificationError, PQUnavailable
 
         key = self._keys.get(receipt.agent_key_id)
         if key is None:
@@ -1682,51 +1699,9 @@ class ProvenanceVerifier:
         try:
             parts = receipt.jws.split(".")
             if len(parts) == 4:
-                # pq1 hybrid receipt: fail-closed dual verification. No
-                # downgrade — both components must verify.
-                header = json.loads(
-                    _b64url_decode(parts[0]), object_pairs_hook=_reject_duplicate_keys
-                )
-                if not header_is_pq1(header):
-                    return False
-                pqk = header.get("pqk")
-                pq_key = self._pq_keys.get(pqk)
-                if pq_key is None:
-                    # Unknown PQ key: fail closed. If ML-DSA is entirely
-                    # unavailable, say so distinctly.
-                    if not _has_mldsa():
-                        raise PQUnavailable(
-                            "pq1 receipt requires ML-DSA-65 verification but "
-                            "this runtime has no ML-DSA support"
-                        )
-                    return False
-                if pq_key is None:
-                    raise PQUnavailable(
-                        "pq1 receipt's ML-DSA key could not be loaded in this runtime"
-                    )
-                signing_input = (parts[0] + "." + parts[1]).encode("ascii")
-                signature_slot = parts[2] + "." + parts[3]
-                # Shape-checked before crypto (segment sizes) for the same
-                # reason as the v1 path: fail on structure before verifying.
-                parse_hybrid_signature(signature_slot)
-                verify_hybrid(signing_input, signature_slot, key, pq_key)
-                return True
+                return self._verify_signature_hybrid(parts, key)
             if len(parts) == 3:
-                header_b64, payload_b64, sig_b64 = parts
-                # Downgrade closure (pq1 §Verification): a receipt whose header
-                # declares the pq1 profile must never verify via the v1 path,
-                # even though its Ed25519 component is valid on its own. An
-                # attacker who strips the ML-DSA segment otherwise presents a
-                # fully "valid" v1 receipt - exactly the downgrade the hybrid
-                # profile exists to prevent.
-                header = json.loads(
-                    _b64url_decode(header_b64), object_pairs_hook=_reject_duplicate_keys
-                )
-                if header.get(_PQ1_PROFILE) == _PQ1_ALG:
-                    return False
-                signing_input = (header_b64 + "." + payload_b64).encode("ascii")
-                key.verify(_b64url_decode(sig_b64), signing_input)
-                return True
+                return self._verify_signature_v1(parts, key)
             # 1, 2, 5+ segments never reach here (from_jws rejects them);
             # but keep the verifier total: any other shape fails closed.
             return False
@@ -1741,6 +1716,54 @@ class ProvenanceVerifier:
             # — fail closed. Unexpected exceptions propagate as bugs rather
             # than silent verification failures.
             return False
+
+    def _verify_signature_hybrid(self, parts: list[str], key: Any) -> bool:
+        """pq1 hybrid receipt: fail-closed dual verification. No downgrade
+        — both components must verify. Raises PQUnavailable when the
+        runtime cannot do ML-DSA at all."""
+        from raucle.pq import (
+            PQUnavailable,
+            header_is_pq1,
+            parse_hybrid_signature,
+            verify_hybrid,
+        )
+
+        header = json.loads(_b64url_decode(parts[0]), object_pairs_hook=_reject_duplicate_keys)
+        if not header_is_pq1(header):
+            return False
+        pqk = header.get("pqk")
+        pq_key = self._pq_keys.get(pqk)
+        if pq_key is None:
+            # Unknown PQ key: fail closed. If ML-DSA is entirely
+            # unavailable, say so distinctly.
+            if not _has_mldsa():
+                raise PQUnavailable(
+                    "pq1 receipt requires ML-DSA-65 verification but "
+                    "this runtime has no ML-DSA support"
+                )
+            return False
+        signing_input = (parts[0] + "." + parts[1]).encode("ascii")
+        signature_slot = parts[2] + "." + parts[3]
+        # Shape-checked before crypto (segment sizes) for the same
+        # reason as the v1 path: fail on structure before verifying.
+        parse_hybrid_signature(signature_slot)
+        verify_hybrid(signing_input, signature_slot, key, pq_key)
+        return True
+
+    def _verify_signature_v1(self, parts: list[str], key: Any) -> bool:
+        """Classical v1 verification, with the pq1 downgrade closure: a
+        receipt whose header declares the pq1 profile must never verify
+        via the v1 path, even though its Ed25519 component is valid on
+        its own. An attacker who strips the ML-DSA segment otherwise
+        presents a fully "valid" v1 receipt - exactly the downgrade the
+        hybrid profile exists to prevent."""
+        header_b64, payload_b64, sig_b64 = parts
+        header = json.loads(_b64url_decode(header_b64), object_pairs_hook=_reject_duplicate_keys)
+        if header.get(_PQ1_PROFILE) == _PQ1_ALG:
+            return False
+        signing_input = (header_b64 + "." + payload_b64).encode("ascii")
+        key.verify(_b64url_decode(sig_b64), signing_input)
+        return True
 
     def _verify_statement(self, stmt: CapabilityStatement, agent_key_id: str) -> bool:
         """Authenticate a supplied capability statement before trusting it.

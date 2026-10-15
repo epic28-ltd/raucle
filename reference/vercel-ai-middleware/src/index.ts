@@ -139,7 +139,7 @@ function checkForbiddenCombos(
 export interface VercelTool {
   description?: string;
   parameters?: unknown;
-  execute?: (args: any, options?: any) => unknown | Promise<unknown>;
+  execute?: (args: any, options?: any) => unknown;
 }
 
 export class RauclePolicyDenied extends Error {

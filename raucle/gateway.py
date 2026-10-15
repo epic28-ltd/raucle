@@ -38,6 +38,12 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+# Receipt/evidence vocabulary constants (single source of truth):
+_HASH_PREFIX = "sha256:"
+_GATE_AGENT_ID = "agent:gate"
+_RECEIPT_TYP = "provenance-receipt/v1"
+_RECEIPT_CRIT = "raucle/v1"
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -117,7 +123,7 @@ class GatewayConfig:
     registry_path: str = "/data/registry.jsonl"
     # Authority attribution (PR-E): human approvals, policy change ledger
     approval_ttl_seconds: int = 300
-    policy_ledger_path: str = ""  # empty = disabled
+    policy_ledger_path: str = ""  # when unset, no ledger is written
 
     @classmethod
     def from_env(cls) -> GatewayConfig:
@@ -697,7 +703,7 @@ class RaucleGateway:
         from raucle.approvals import ApprovalManager
 
         self._approvals = ApprovalManager(ttl_seconds=config.approval_ttl_seconds)
-        self._policy_ledger_head = "sha256:" + "0" * 64
+        self._policy_ledger_head = _HASH_PREFIX + "0" * 64
 
     def _init_gate_identity(self) -> None:
         """Derive the gate's provenance identity (agent:gate) from the
@@ -728,7 +734,7 @@ class RaucleGateway:
             key_id = _hashlib.sha256(pub_pem).hexdigest()[:16]
             now = int(time.time())
             stmt = CapabilityStatement(
-                agent_id="agent:gate",
+                agent_id=_GATE_AGENT_ID,
                 key_id=key_id,
                 public_key_pem=pub_pem.decode("ascii"),
                 allowed_models=[],
@@ -741,7 +747,7 @@ class RaucleGateway:
             sig = priv.sign(_canonical_json(stmt.body()))
             stmt.signature = _base64.b64encode(sig).decode("ascii")
             self._gate_identity = AgentIdentity(
-                agent_id="agent:gate", private_key=priv, statement=stmt
+                agent_id=_GATE_AGENT_ID, private_key=priv, statement=stmt
             )
         else:
             # KMS signers: the KMS public key backs the identity
@@ -752,7 +758,7 @@ class RaucleGateway:
             key_id = _hashlib.sha256(pub_pem.encode("ascii")).hexdigest()[:16]
             now = int(time.time())
             stmt = CapabilityStatement(
-                agent_id="agent:gate",
+                agent_id=_GATE_AGENT_ID,
                 key_id=key_id,
                 public_key_pem=pub_pem,
                 allowed_models=[],
@@ -766,7 +772,7 @@ class RaucleGateway:
             body_sig = self._signer.sign(_canonical_json(stmt.body()))
             stmt.signature = _base64.b64encode(body_sig).decode("ascii")
             self._gate_identity = _KmsGateIdentity(
-                agent_id="agent:gate", statement=stmt, signer=self._signer
+                agent_id=_GATE_AGENT_ID, statement=stmt, signer=self._signer
             )
 
     def _signer_key_path(self) -> Path:
@@ -835,16 +841,15 @@ class RaucleGateway:
             data = key_path.read_bytes()
             try:
                 private_key = serialization.load_pem_private_key(data, password=None)
-            except Exception as exc:
-                logger.error(
-                    "gateway signing key %s is corrupt (%s); refusing to "
+            except Exception:
+                logger.exception(
+                    "gateway signing key %s is corrupt; refusing to "
                     "regenerate - restore the key file or, if the key is "
                     "lost, archive all prior receipts and delete the file "
                     "to start a fresh key",
                     key_path,
-                    exc,
                 )
-                raise ValueError(f"corrupt gateway signing key {key_path}: {exc}") from exc
+                raise ValueError(f"corrupt gateway signing key {key_path}") from None
             if not isinstance(private_key, Ed25519PrivateKey):
                 raise ValueError(f"gateway signing key {key_path} is not an Ed25519 key")
             signer = Ed25519Signer(private_key)
@@ -876,9 +881,9 @@ class RaucleGateway:
 
         header = {
             "alg": "EdDSA",
-            "typ": "provenance-receipt/v1",
+            "typ": _RECEIPT_TYP,
             "kid": self._gate_identity.key_id,
-            "crit": ["raucle/v1"],
+            "crit": [_RECEIPT_CRIT],
             "raucle/v1": "provenance",
         }
         signing_input = (
@@ -886,7 +891,7 @@ class RaucleGateway:
         ).encode("ascii")
         sig = self._gate_identity.sign(signing_input)
         jws = signing_input.decode("ascii") + "." + _b64url_encode(sig)
-        receipt_hash = "sha256:" + _sha256_hex(jws.encode("ascii"))
+        receipt_hash = _HASH_PREFIX + _sha256_hex(jws.encode("ascii"))
         line = json.dumps({"receipt_hash": receipt_hash, "jws": jws}, ensure_ascii=False)
         if self._receipt_store is not None:
             self._receipt_store.append_line(line)
@@ -898,17 +903,17 @@ class RaucleGateway:
                 except Exception:
                     # Index failure degrades queries, never the chain
                     logger.exception("receipt index insert failed (query degraded)")
-            return receipt_hash
-        if self._receipt_writer is None:
-            path = Path(self.config.receipt_store)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            # Long-lived append sink (same lifetime as the process); noqa:
-            # closing per write would break the chain-of-record's ordering.
-            self._receipt_writer = open(  # noqa: SIM115
-                path, "a", encoding="utf-8"
-            )
-        self._receipt_writer.write(line + "\n")
-        self._receipt_writer.flush()
+        else:
+            if self._receipt_writer is None:
+                path = Path(self.config.receipt_store)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                # Long-lived append sink (same lifetime as the process); noqa:
+                # closing per write would break the chain-of-record's ordering.
+                self._receipt_writer = open(  # noqa: SIM115
+                    path, "a", encoding="utf-8"
+                )
+            self._receipt_writer.write(line + "\n")
+            self._receipt_writer.flush()
         return receipt_hash
 
     def _emit_authority_receipt(
@@ -923,7 +928,7 @@ class RaucleGateway:
 
         payload: dict[str, Any] = {
             "iss": "raucle-gateway",
-            "typ": "provenance-receipt/v1",
+            "typ": _RECEIPT_TYP,
             "iat": int(time.time()),
             "agent_id": self._gate_identity.agent_id,
             "agent_key_id": self._gate_identity.key_id,
@@ -967,7 +972,7 @@ class RaucleGateway:
 
         payload: dict[str, Any] = {
             "iss": "raucle-gateway",
-            "typ": "provenance-receipt/v1",
+            "typ": _RECEIPT_TYP,
             "iat": int(time.time()),
             "agent_id": self._gate_identity.agent_id,
             "agent_key_id": self._gate_identity.key_id,
@@ -1327,16 +1332,13 @@ class RaucleGateway:
         )
         # Approval reference presented (PR-E): honour it only if it binds
         # to this exact tool, agent and arguments. Any failure is deny.
-        consumed_approval = None
-        if approval_id:
-            from raucle.approvals import ApprovalError
-
-            try:
-                consumed_approval = self._approvals.consume(
-                    approval_id, tool=tool, agent_id=actual_agent_id, args=args
-                )
-            except ApprovalError as exc:
-                return self._deny_result(result, f"approval refused: {exc}", start, siem=False)
+        consumed_approval, approval_error = self._consume_call_approval(
+            approval_id, tool=tool, agent_id=actual_agent_id, args=args
+        )
+        if approval_error:
+            return self._deny_result(
+                result, f"approval refused: {approval_error}", start, siem=False
+            )
         result["decision"], result["reason"] = self._apply_decision(
             decision, matched_rule, args, approval_satisfied=consumed_approval is not None
         )
@@ -1350,34 +1352,9 @@ class RaucleGateway:
         # the request itself is evidence in the chain, surfaced to the
         # operator via the admin API and the panel.
         if result["decision"] == "escalate":
-            request = self._approvals.create_request(
-                tool=tool,
-                agent_id=actual_agent_id,
-                args=args,
-                reason=result["reason"],
-                trace_id=trace_id,
+            self._open_approval_request(
+                result, tool=tool, agent_id=actual_agent_id, args=args, trace_id=trace_id
             )
-            result["approval_request_id"] = request.request_id
-            try:
-                self._emit_authority_receipt(
-                    verdict="approval_requested",
-                    extension_key="x_approval",
-                    extension={
-                        "request_id": request.request_id,
-                        "tool": tool,
-                        "agent_id": actual_agent_id,
-                        "args_hash": request.args_hash,
-                        "reason": request.reason,
-                        # integer epoch: the strict envelope contract bans
-                        # floats in signed material
-                        "expires_at": int(request.expires_at),
-                        "trace_id": trace_id,
-                    },
-                )
-            except Exception:
-                # The escalate decision itself is receipted fail-closed by
-                # the gate path below; this auxiliary record is best-effort.
-                logger.exception("approval-request receipt emission failed")
 
         latency_us = int((time.perf_counter() - start) * 1e6)
         self.stats.record(tool, result["decision"], latency_us)
@@ -1416,6 +1393,69 @@ class RaucleGateway:
             return self._deny_result(result, "receipt emission failed", start, siem=False)
         self._log_connection(result)
         return result
+
+    # ------------------------------------------------------------------
+    # Approval workflow internals (PR-E, extracted from check_tool_call)
+    # ------------------------------------------------------------------
+
+    def _consume_call_approval(
+        self, approval_id: str, *, tool: str, agent_id: str, args: dict[str, Any]
+    ) -> tuple[Any, str]:
+        """Validate an approval reference against a re-submitted call.
+
+        Returns (approval, "") on success or (None, reason) when the
+        reference cannot authorise this call. The gate turns the failure
+        into a deny.
+        """
+        if not approval_id:
+            return None, ""
+        from raucle.approvals import ApprovalError
+
+        try:
+            approval = self._approvals.consume(approval_id, tool=tool, agent_id=agent_id, args=args)
+        except ApprovalError as exc:
+            return None, str(exc)
+        return approval, ""
+
+    def _open_approval_request(
+        self,
+        result: dict[str, Any],
+        *,
+        tool: str,
+        agent_id: str,
+        args: dict[str, Any],
+        trace_id: str,
+    ) -> None:
+        """Create + receipt the human approval request for an escalated
+        call. Mutates *result* to carry approval_request_id."""
+        request = self._approvals.create_request(
+            tool=tool,
+            agent_id=agent_id,
+            args=args,
+            reason=result["reason"],
+            trace_id=trace_id,
+        )
+        result["approval_request_id"] = request.request_id
+        try:
+            self._emit_authority_receipt(
+                verdict="approval_requested",
+                extension_key="x_approval",
+                extension={
+                    "request_id": request.request_id,
+                    "tool": tool,
+                    "agent_id": agent_id,
+                    "args_hash": request.args_hash,
+                    "reason": request.reason,
+                    # integer epoch: the strict envelope contract bans
+                    # floats in signed material
+                    "expires_at": int(request.expires_at),
+                    "trace_id": trace_id,
+                },
+            )
+        except Exception:
+            # The escalate decision itself is receipted fail-closed by
+            # the gate path; this auxiliary record is best-effort.
+            logger.exception("approval-request receipt emission failed")
 
     # ------------------------------------------------------------------
     # Learn mode: observe unmatched calls, draft policies from traffic
@@ -1527,11 +1567,15 @@ class RaucleGateway:
             agent_id = agents[0] if agents else f"agent:{tool}"
             src = sources[0] if sources else "*"
             dst = dests[0] if dests else "*"
-            lines.append(f"  - tool: {tool}")
-            lines.append(f"    agent_id: {agent_id}")
-            lines.append("    ttl_seconds: 300")
-            lines.append(f'    source: "{src}"')
-            lines.append(f'    destination: "{dst}"')
+            lines.extend(
+                [
+                    f"  - tool: {tool}",
+                    f"    agent_id: {agent_id}",
+                    "    ttl_seconds: 300",
+                    f'    source: "{src}"',
+                    f'    destination: "{dst}"',
+                ]
+            )
             cons: list[str] = []
             allow_map: dict[str, list[str]] = {}
             max_map: dict[str, int] = {}
@@ -1619,7 +1663,7 @@ class RaucleGateway:
             "sha256": _sha256_hex(content.encode("utf-8")),
             "prev_hash": self._policy_ledger_head,
         }
-        entry["entry_hash"] = "sha256:" + _sha256_hex(_canonical_json(entry))
+        entry["entry_hash"] = _HASH_PREFIX + _sha256_hex(_canonical_json(entry))
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
         self._policy_ledger_head = entry["entry_hash"]
@@ -1644,7 +1688,7 @@ class RaucleGateway:
             return {"valid": True, "count": 0, "errors": []}
         entries: list[dict[str, Any]] = []
         errors: list[str] = []
-        prev = "sha256:" + "0" * 64
+        prev = _HASH_PREFIX + "0" * 64
         with open(path, encoding="utf-8") as fh:
             for i, line in enumerate(fh):
                 if not line.strip():
@@ -1655,7 +1699,7 @@ class RaucleGateway:
                     errors.append(f"line {i + 1}: invalid JSON")
                     continue
                 entry_hash = entry.pop("entry_hash", "")
-                recomputed = "sha256:" + _sha256_hex(_canonical_json(entry))
+                recomputed = _HASH_PREFIX + _sha256_hex(_canonical_json(entry))
                 if recomputed != entry_hash:
                     errors.append(f"entry {entry.get('seq', i)}: hash mismatch")
                 if entry.get("prev_hash") != prev:
@@ -1708,7 +1752,7 @@ class RaucleGateway:
             "alg": "EdDSA",
             "typ": "raucle/authority-envelope/v1",
             "kid": self._gate_identity.key_id,
-            "crit": ["raucle/v1"],
+            "crit": [_RECEIPT_CRIT],
             "raucle/v1": "authority",
         }
         signing_input = (
