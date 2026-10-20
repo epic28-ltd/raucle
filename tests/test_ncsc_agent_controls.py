@@ -1,3 +1,4 @@
+# ruff: noqa: F811
 """NCSC agent-control matrix: controls from the NCSC agentic AI deployment
 guidance mapped to receipted evidence in the running product.
 
@@ -14,11 +15,8 @@ any change to those flows fails here too.
 
 import json
 
-import pytest
-from fastapi.testclient import TestClient
-
 from raucle.provenance import ProvenanceVerifier
-from tests.test_authority_attribution import (  # noqa: F401 (fixtures)
+from tests.test_authority_attribution import (
     AUTH,
     OP_AUTH,
     POLICY,
@@ -26,10 +24,10 @@ from tests.test_authority_attribution import (  # noqa: F401 (fixtures)
     _decode_payload,
     _pay_key,
     _svc_key,
-    admin,
-    config,
-    gate,
-    gw,
+    admin,  # noqa: F401  imported for its fixture registration
+    config,  # noqa: F401  imported for its fixture registration
+    gate,  # noqa: F401  imported for its fixture registration
+    gw,  # noqa: F401  imported for its fixture registration
 )
 
 GATE_CALL_SVC_BALANCE = {
@@ -37,10 +35,6 @@ GATE_CALL_SVC_BALANCE = {
     "args": {"account": "ACC-001"},
     "agent_id": "agent:svc",
 }
-
-
-def _pay_key_for(gw):
-    return _pay_key(gw)
 
 
 def _receipt_hashes(gw):
@@ -64,7 +58,8 @@ def _evidence_no_standing_authority(gw, gate):
     # identity; the acting agent is bound inside x_gate.
     assert payload["x_gate"]["agent_id"] == "agent:svc"
     assert payload["x_gate"]["tool"] == "lookup_balance"
-    return {"receipt_id": body["receipt_id"], "bound": (payload["x_gate"]["agent_id"], payload["x_gate"]["tool"])}
+    bound = (payload["x_gate"]["agent_id"], payload["x_gate"]["tool"])
+    return {"receipt_id": body["receipt_id"], "bound": bound}
 
 
 # --------------------------------------------------------------------------
@@ -150,7 +145,7 @@ def _evidence_named_stop(gw, gate, admin):
 # args and the action receipt cites the approval
 # --------------------------------------------------------------------------
 def _evidence_human_approval(gw, gate, admin):
-    key = _pay_key_for(gw)
+    key = _pay_key(gw)
     call = {
         "tool": "transfer_money",
         "args": {"from_account": "ACC-001", "amount": 500},
