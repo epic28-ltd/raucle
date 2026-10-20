@@ -79,7 +79,8 @@ def _evidence_scoped_denial(gw, gate):
     assert deny_receipt.startswith("sha256:")
     # also: an unknown tool is denied, not hallucinated into existence
     resp2 = gate.post(
-        "/gate", json={"tool": "no_such_tool", "args": {}, "agent_id": "agent:svc"},
+        "/gate",
+        json={"tool": "no_such_tool", "args": {}, "agent_id": "agent:svc"},
         headers={"X-Api-Key": key},
     )
     assert resp2.json()["decision"] == "deny"
@@ -155,9 +156,7 @@ def _evidence_human_approval(gw, gate, admin):
     body = r1.json()
     assert body["decision"] == "escalate"
     approval_id = body["approval_request_id"]
-    r2 = admin.post(
-        f"/api/approvals/{approval_id}/decision", json={"approved": True}, headers=AUTH
-    )
+    r2 = admin.post(f"/api/approvals/{approval_id}/decision", json={"approved": True}, headers=AUTH)
     assert r2.status_code == 200
     # the approval bound the exact args: a different amount cannot ride it
     r_ride = gate.post(
