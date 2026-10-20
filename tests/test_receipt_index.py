@@ -120,6 +120,55 @@ class TestReceiptIndex:
         hashes = {r["receipt_hash"] for r in page1} | {r["receipt_hash"] for r in page2}
         assert len(hashes) == 20  # ties survive pagination
 
+    def test_identical_attempts_projected_twice(self, index):
+        """Two byte-identical same-second attempts are distinct events.
+
+        The signed payload of two identical gate calls can be fully
+        identical (second-granularity iat and equal measured latency), but
+        each attempt is a separate event in the chain of record; the
+        disposable index must project both, not collapse them.
+        Regression: INSERT OR REPLACE keyed on receipt_hash silently
+        dropped the second attempt and degraded trace queries to 1.
+        """
+        rec = _make_receipt(1, trace="t-dup")
+        index.index_receipt(rec)
+        index.index_receipt(rec)
+        assert index.count() == 2
+        rows = index.query(trace_id="t-dup")
+        assert len(rows) == 2
+
+    def test_cursor_survives_identical_hash_page_boundary(self, index):
+        """Duplicate hashes across a page boundary survive keyset pagination."""
+        rec = _make_receipt(7, trace="t-page")
+        index.index_receipt(rec)
+        index.index_receipt(rec)  # same iat, same hash, two rows
+        page1 = index.query(limit=1)
+        assert len(page1) == 1
+        page2 = index.query(limit=1, cursor=index.cursor_for(page1[-1]))
+        assert len(page2) == 1
+        assert page2[0]["rowid"] != page1[0]["rowid"]
+        page3 = index.query(limit=1, cursor=index.cursor_for(page2[-1]))
+        assert page3 == []
+
+    def test_schema_migration_preserves_rows(self, tmp_path):
+        """An index built by the old (PK-dedup) schema survives the upgrade."""
+        import sqlite3 as _s
+
+        db = tmp_path / "old.sqlite"
+        conn = _s.connect(str(db))
+        conn.execute(
+            "CREATE TABLE receipts (receipt_hash TEXT PRIMARY KEY, iat INTEGER NOT NULL,"
+            " agent_id TEXT NOT NULL, tool TEXT NOT NULL, decision TEXT NOT NULL)"
+        )
+        conn.execute(
+            "INSERT INTO receipts VALUES ('sha256:abc', 1758000001, 'agent:svc', 't', 'allow')"
+        )
+        conn.commit()
+        conn.close()
+        index = ReceiptIndex(sqlite_path=db)
+        assert index.count() == 1  # copied across, not dropped
+        assert index._conn.execute("PRAGMA user_version").fetchone()[0] == 2
+
     def test_rebuild_from_store(self, tmp_path):
         """The projection contract: drop the index, rebuild from segments."""
         store = SegmentedReceiptStore(base_dir=tmp_path / "segs", max_segment_bytes=2048)

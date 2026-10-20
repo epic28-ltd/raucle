@@ -52,11 +52,67 @@ class ReceiptIndex:
     # Schema
     # ------------------------------------------------------------------
 
+    SCHEMA_VERSION = 2
+
+    # The old (pre-versioned) schema made receipt_hash the PRIMARY KEY and
+    # wrote with INSERT OR REPLACE: two byte-identical same-second attempts
+    # (identical payload, hence identical hash) collapsed to one projection
+    # row, so trace/attempts queries undercounted. The chain of record keeps
+    # every attempt; this version-2 schema projects all of them.
     def _init_schema(self) -> None:
+        version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+        has_table = (
+            self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'receipts'"
+            ).fetchone()
+            is not None
+        )
+        if has_table and version < self.SCHEMA_VERSION:
+            self._migrate_dedupe_schema()
+        else:
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS receipts (
+                    receipt_hash TEXT NOT NULL,
+                    iat          INTEGER NOT NULL,
+                agent_id     TEXT NOT NULL,
+                tool         TEXT NOT NULL,
+                decision     TEXT NOT NULL,
+                reason       TEXT NOT NULL DEFAULT '',
+                policy       TEXT,
+                latency_us   INTEGER NOT NULL DEFAULT 0,
+                trace_id     TEXT,
+                source       TEXT NOT NULL DEFAULT '',
+                destination  TEXT NOT NULL DEFAULT '',
+                parents_json TEXT NOT NULL DEFAULT '[]',
+                segment      TEXT,
+                line_no      INTEGER
+            )
+            """
+            )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_iat ON receipts (iat)")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_receipts_agent ON receipts (agent_id, iat)"
+        )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_tool ON receipts (tool, iat)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_trace ON receipts (trace_id)")
+        self._conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+        self._conn.commit()
+
+    def _migrate_dedupe_schema(self) -> None:
+        """Copy the legacy PRIMARY-KEY table across without losing rows.
+
+        The legacy table holds at most one row per (identical) receipt id,
+        so SELECT * preserves every row it has; future duplicates are kept
+        too because inserts no longer replace on the key. The index is a
+        disposable projection: any operator preferring a hard-rebuild path
+        has ``rebuild_from_store``.
+        """
+        self._conn.execute("ALTER TABLE receipts RENAME TO receipts_v1_backup")
         self._conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS receipts (
-                receipt_hash TEXT PRIMARY KEY,
+            CREATE TABLE receipts (
+                receipt_hash TEXT NOT NULL,
                 iat          INTEGER NOT NULL,
                 agent_id     TEXT NOT NULL,
                 tool         TEXT NOT NULL,
@@ -73,13 +129,35 @@ class ReceiptIndex:
             )
             """
         )
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_iat ON receipts (iat)")
+        old_cols = [
+            row[1] for row in self._conn.execute("PRAGMA table_info(receipts_v1_backup)").fetchall()
+        ]
+        shared = [
+            c
+            for c in (
+                "receipt_hash",
+                "iat",
+                "agent_id",
+                "tool",
+                "decision",
+                "reason",
+                "policy",
+                "latency_us",
+                "trace_id",
+                "source",
+                "destination",
+                "parents_json",
+                "segment",
+                "line_no",
+            )
+            if c in old_cols
+        ]
+        cols_csv = ", ".join(shared)
+        # defaults cover the rest of the v2 shape
         self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_receipts_agent ON receipts (agent_id, iat)"
+            f"INSERT INTO receipts ({cols_csv}) SELECT {cols_csv} FROM receipts_v1_backup"
         )
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_tool ON receipts (tool, iat)")
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_trace ON receipts (trace_id)")
-        self._conn.commit()
+        self._conn.execute("DROP TABLE receipts_v1_backup")
 
     # ------------------------------------------------------------------
     # Write path
@@ -102,7 +180,7 @@ class ReceiptIndex:
         with self._lock:
             self._conn.execute(
                 """
-                INSERT OR REPLACE INTO receipts
+                INSERT INTO receipts
                     (receipt_hash, iat, agent_id, tool, decision, reason,
                      policy, latency_us, trace_id, source, destination,
                      parents_json, segment, line_no)
@@ -177,7 +255,7 @@ class ReceiptIndex:
         position are returned. Handles ties on identical ``iat`` (burst
         traffic) that naive offset/iat cursors would drop.
         """
-        sql = "SELECT * FROM receipts WHERE 1=1"
+        sql = "SELECT rowid AS rowid, receipts.* FROM receipts WHERE 1=1"
         params: list[Any] = []
         if agent_id is not None:
             sql += " AND agent_id = ?"
@@ -198,23 +276,46 @@ class ReceiptIndex:
             sql += " AND iat <= ?"
             params.append(until)
         if cursor is not None:
-            cur_iat, _, cur_hash = cursor.partition(":")
+            # The receipt_hash field itself contains a colon ("sha256:..."),
+            # so positional splits are forbidden: the rowid, when present,
+            # is the LAST part (it is the only numeric one), and everything
+            # between iat and rowid is the hash, colons included.
+            parts = cursor.split(":")
             try:
-                cur_iat_int = int(cur_iat)
-            except ValueError:
+                cur_iat_int = int(parts[0])
+            except (ValueError, IndexError):
                 cur_iat_int = 0
+            tail = parts[1:]
+            if tail and tail[-1].lstrip("-").isdigit():
+                cur_rid = int(tail[-1])
+                cur_hash = ":".join(tail[:-1])
+            else:
+                # schema v1 cursor: no rowid. It only advances on different
+                # hash/iat, so identical-hash rows after it are skipped;
+                # a v1 index holds at most one row per hash anyway.
+                cur_rid = -1
+                cur_hash = ":".join(tail)
             # DESC sort: "after the cursor" means older iat, or equal iat
-            # with a smaller receipt_hash (the DESC tiebreak).
-            sql += " AND (iat < ? OR (iat = ? AND receipt_hash < ?))"
-            params.extend([cur_iat_int, cur_iat_int, cur_hash])
-        sql += " ORDER BY iat DESC, receipt_hash DESC LIMIT ?"
+            # with a smaller receipt_hash, or the same hash earlier in
+            # insert order (rowid tiebreak, the DESC tiebreak of last resort).
+            sql += (
+                " AND (iat < ? OR (iat = ? AND (receipt_hash < ?"
+                " OR (receipt_hash = ? AND rowid < ?))))"
+            )
+            params.extend([cur_iat_int, cur_iat_int, cur_hash, cur_hash, cur_rid])
+        sql += " ORDER BY iat DESC, receipt_hash DESC, rowid DESC LIMIT ?"
         params.append(max(1, min(int(limit), 1000)))
         rows = self._conn.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
 
     def cursor_for(self, row: dict[str, Any]) -> str:
-        """The next-page cursor for the last row of a query result."""
-        return f"{row.get('iat', 0)}:{row.get('receipt_hash', '')}"
+        """The next-page cursor for the last row of a query result.
+
+        v2 format is ``<iat>:<receipt_hash>:<rowid>``; the rowid is the
+        final tiebreak that lets identical-hash duplicates (two same-second
+        attempts of the same call) survive pagination.
+        """
+        return f"{row.get('iat', 0)}:{row.get('receipt_hash', '')}:{row.get('rowid', -1)}"
 
     def count(self) -> int:
         return int(self._conn.execute("SELECT COUNT(*) FROM receipts").fetchone()[0])
