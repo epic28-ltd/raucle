@@ -1344,10 +1344,10 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
   box-shadow:0 2px 10px rgba(17,18,24,0.06);
   cursor:pointer;transition:opacity .25s,box-shadow .2s,border-color .2s,transform .2s;
 }
-.topo-node:hover{border-color:#111218;transform:translateY(-1px);box-shadow:0 6px 18px rgba(17,18,24,0.10)}
+.topo-node:hover{border-color:#171717;transform:translateY(-1px);box-shadow:0 6px 18px rgba(17,18,24,0.10)}
 .topo-node.selected{border-color:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,0.18),0 4px 14px rgba(17,18,24,0.10)}
 .topo-node.dimmed{opacity:0.18}
-.topo-node-src{border-left:3px solid #111218}
+.topo-node-src{border-left:3px solid #171717}
 .topo-node-dst{border-left:3px solid #22c55e}
 .topo-node-hdr{display:flex;align-items:center;gap:7px;margin-bottom:2px}
 .topo-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;animation:topo-pulse 2s infinite}
@@ -1355,7 +1355,7 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
 .topo-dot.deny{background:#dd6b78;box-shadow:0 0 6px rgba(221,107,120,0.7)}
 .topo-dot.escalate{background:#e5b85c;box-shadow:0 0 6px rgba(229,184,92,0.7)}
 @keyframes topo-pulse{0%,100%{opacity:1}50%{opacity:0.45}}
-.topo-name{font-size:12px;font-weight:600;color:#111218;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topo-name{font-size:12px;font-weight:600;color:#171717;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .topo-sub{font-size:10px;color:#8b919e;margin-top:1px;font-family:ui-monospace,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .topo-badge{display:inline-block;font-size:9px;padding:1px 7px;border-radius:4px;background:#f1f2f4;color:#3a3f4b;margin-top:3px}
 /* Hero-style glow loops: drawn around hovered/selected nodes and deny-view nodes */
@@ -1368,7 +1368,7 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
 #topoCanvas:fullscreen{height:100vh;border-radius:0;background-color:#f8f9fb}
 /* Scenario picker buttons */
 .scenario-btn{padding:6px 14px;border-radius:999px;border:1px solid #e5e7ec;background:#fff;font-size:0.78rem;font-weight:600;color:#3a3f4b;cursor:pointer}
-.scenario-btn.active{background:#111218;color:#fff;border-color:#111218}
+.scenario-btn.active{background:#171717;color:#fff;border-color:#171717}
 /* Demo mode: hide privileged tabs + disable every edit affordance */
 body.demo [data-tab-id="policies"], body.demo [data-tab-id="siem"], body.demo [data-tab-id="users"], body.demo [data-tab-id="config"], body.demo [data-tab-id="topo-link"]{display:none}
 body.demo .btn-primary{display:none}
@@ -1390,9 +1390,15 @@ body.demo .btn-primary{display:none}
 .tour-replay{background:none;border:1px solid var(--border);color:#8b919e;font-size:0.72rem;padding:4px 12px;border-radius:999px;cursor:pointer;font-family:inherit;margin-left:auto}
 .tour-replay:hover{border-color:#171717;color:#171717}
 
+
+  #field { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+  .header, .tabs, #login, #main, #tourHost { position: relative; z-index: 10; }
+  body { overflow-x: hidden; }
+  .login .card { border-color: #e5e5e5; box-shadow: 0 22px 60px rgba(10,10,10,.10); }
+  @media (prefers-reduced-motion: reduce) { #field { display: none; } }
 </style>
 </head>
-<body>
+<body><canvas id="field" aria-hidden="true" tabindex="-1"></canvas>
 <div class="header">
   <div class="header-left">
     <div class="logo">Raucle</div>
@@ -1409,9 +1415,9 @@ body.demo .btn-primary{display:none}
       <button class="btn" style="width:100%;margin-top:8px" onclick="loginWithTotp()">Verify & Sign In</button>
     </div>
     <button class="btn" style="width:100%;margin-top:12px" onclick="login()">Sign In</button>
-    <div style="text-align:center;margin:16px 0 8px;color:var(--text-muted,#8b919e);font-size:0.8rem">or</div>
-    <button class="btn" style="width:100%;background:#111218;color:#fff" onclick="enterDemo()">View Demo</button>
-    <div style="margin-top:10px;font-size:0.75rem;color:var(--text-muted,#8b919e);text-align:center">
+    <div style="text-align:center;margin:16px 0 8px;color:#737373;font-size:0.8rem">or</div>
+    <button class="btn" style="width:100%;background:#171717;color:#fff" onclick="enterDemo()">View Demo</button>
+    <div style="margin-top:10px;font-size:0.75rem;color:#737373;text-align:center">
       Read-only demonstration across banking, government and health scenarios.
     </div>
   </div>
@@ -1882,6 +1888,70 @@ function validatePolicy(){api('/api/policies/validate',{method:'POST',headers:{'
 function savePolicy(){api('/api/policies',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:document.getElementById('policyEditor').value})}).then(r=>r.json()).then(d=>alert('Saved: '+JSON.stringify(d)));}
 function reloadPolicy(){api('/api/policies/reload',{method:'POST'}).then(r=>r.json()).then(d=>alert('Reloaded: '+JSON.stringify(d)));}
 let rcptCursor=null, rcptCursors=[];
+/* --- ambient ledger field: synthetic, login screen only, muted state tints --- */
+(function(){
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const field = document.getElementById('field');
+  if(!field || reduced) return;
+  const ctx = field.getContext('2d');
+  let W=0,H=0,dpr=1, chips=[];
+  function fit(){ dpr=Math.min(2,devicePixelRatio||1); W=innerWidth; H=innerHeight; field.width=W*dpr; field.height=H*dpr; }
+  fit(); addEventListener('resize', fit);
+  const LANES=7;
+  function spawn(){
+    const r=Math.random(), kind = r<.10?'esc':r<.34?'no':'ok';
+    chips.push({lane:Math.floor(Math.random()*LANES), x:-30-Math.random()*320,
+      v:.045+Math.random()*.05, s:9+Math.random()*7, kind, done:false, seed:Math.random(), dy:0, trail:null});
+  }
+  for(let i=0;i<90;i++){ spawn(); chips[chips.length-1].x = Math.random()*innerWidth*.8; }
+  function step(dt,t){
+    const lh=H/(LANES+1);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,W,H);
+    for(let l=1;l<=LANES;l++){
+      ctx.strokeStyle='rgba(10,10,10,.07)'; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(0,lh*l+.5); ctx.lineTo(W,lh*l+.5); ctx.stroke();
+    }
+    for(const c of chips){
+      if(c.x===undefined){ continue; }
+      c.x+=c.v*dt*72;
+      if(!c.done && c.x>W*.22 && Math.random()<.008) c.done=true;
+      if(c.done && c.kind==='no') c.dy=Math.min(30,c.dy+24*dt);
+      const y=lh*(c.lane+1)+c.dy+(c.kind==='esc'?Math.sin(t*2+c.seed*9)*2:0), h=c.s, q=h/2;
+      if(c.kind==='no'&&c.done){
+        ctx.strokeStyle='rgba(221,47,69,.55)'; ctx.lineWidth=1.5;
+        ctx.strokeRect(c.x-q,y-q,h,h);
+        ctx.beginPath(); ctx.moveTo(c.x-q+2,y-q+2); ctx.lineTo(c.x+q-2,y+q-2);
+        ctx.moveTo(c.x+q-2,y-q+2); ctx.lineTo(c.x-q+2,y+q-2); ctx.stroke();
+      } else if(c.kind==='esc'){
+        ctx.strokeStyle='rgba(217,119,6,.55)'; ctx.lineWidth=1.5;
+        ctx.beginPath(); ctx.moveTo(c.x,y-q); ctx.lineTo(c.x+q,y); ctx.lineTo(c.x,y+q); ctx.lineTo(c.x-q,y); ctx.closePath(); ctx.stroke();
+      } else if(c.done){
+        ctx.fillStyle='rgba(22,163,74,.40)'; ctx.fillRect(c.x-q,y-q,h,h);
+        if(c.trail==null) c.trail=c.x;
+        ctx.strokeStyle='rgba(139,145,158,.35)'; ctx.lineWidth=1; ctx.setLineDash([2,3]);
+        ctx.beginPath(); ctx.moveTo(c.trail,y); ctx.lineTo(c.x-q-5,y); ctx.stroke(); ctx.setLineDash([]);
+      } else {
+        ctx.strokeStyle='rgba(10,10,10,.32)'; ctx.lineWidth=1.5;
+        ctx.strokeRect(c.x-q,y-q,h,h);
+        if(c.seed>.8){ ctx.fillStyle='rgba(10,10,10,.32)'; ctx.fillRect(c.x-1,y-1,3,3); }
+      }
+    }
+    chips = chips.filter(c=>c.x<W+50 && c.dy<H*.6);
+    while(chips.length<LANES*14) spawn();
+    if(chips.length>LANES*14+40) chips.length=LANES*14;
+  }
+  let last=performance.now();
+  function frame(now){ const dt=Math.min(.05,(now-last)/1000); last=now;
+    if(!document.hidden) step(dt, now/1000);
+    requestAnimationFrame(frame); }
+  requestAnimationFrame(frame);
+  // login screen only: the field disappears as soon as the login card does
+  const loginEl = document.getElementById('login');
+  new MutationObserver(()=>{
+    field.classList.toggle('hidden', loginEl.classList.contains('hidden'));
+  }).observe(loginEl, {attributes:true, attributeFilter:['class']});
+})();
 function rcptQueryParams(){
   const p=new URLSearchParams(); p.set('limit',20);
   const t=document.getElementById('rcpt-filter-tool').value.trim(); if(t)p.set('tool',t);
@@ -2120,7 +2190,7 @@ function tourMaybeStart(){
 function tourRestart(){try{localStorage.removeItem(TOUR_SEEN_KEY);}catch(e){}tourStep=0;tourShow();}
 
 // ================= EMBEDDED LIVE TOPOLOGY =================
-// Hero palette: ink #111218, green #22c55e, deny red #dd6b78, warn #e5b85c,
+// Hero palette: ink #171717, green #22c55e, deny red #dd6b78, warn #e5b85c,
 // neutral #8b919e. Glow loops (hero-style) appear on node hover and around
 // deny sources when deny filtering is active.
 const TOPO_COL_X = { source: 40, policy: 400, destination: 760 };
@@ -2130,7 +2200,7 @@ function topoEdgeColor(decision) {
   if (decision === 'allow') return '#22c55e';
   if (decision === 'deny') return '#dd6b78';
   if (decision === 'escalate') return '#e5b85c';
-  return '#111218';
+  return '#171717';
 }
 
 function topoFilterConns(conns) {
@@ -2297,7 +2367,7 @@ function topoRender() {
       renderFlow(); renderConnTable();
     });
     el.addEventListener('mouseenter', () => {
-      topoHoverLoop = topoGlowLoop(svg, p.x, p.y, TOPO_W, TOPO_NODE_H, '#111218');
+      topoHoverLoop = topoGlowLoop(svg, p.x, p.y, TOPO_W, TOPO_NODE_H, '#171717');
     });
     el.addEventListener('mouseleave', () => {
       if (topoHoverLoop) { topoHoverLoop.remove(); topoHoverLoop = null; }

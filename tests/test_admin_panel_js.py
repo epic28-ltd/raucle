@@ -39,6 +39,19 @@ def test_row_click_delegation_is_registered_once() -> None:
     assert ADMIN_PANEL_HTML.count("rcptRowClick") == 2  # listener fn + attach
 
 
+def test_login_field_canvas_present_and_reduced_motion_safe() -> None:
+    assert 'id="field"' in ADMIN_PANEL_HTML
+    assert "pointer-events: none" in ADMIN_PANEL_HTML
+    assert "prefers-reduced-motion: reduce" in ADMIN_PANEL_HTML
+    assert "document.hidden" in ADMIN_PANEL_HTML
+
+
+def test_field_is_login_screen_only() -> None:
+    assert "field.classList.toggle" in ADMIN_PANEL_HTML
+    # the observer watches the login card visibility, with no legend/hud
+    assert "getElem'+'entById" not in ADMIN_PANEL_HTML
+
+
 def _extract_script_blocks(html: str) -> list[str]:
     return [b for b in re.findall(r"<script[^>]*>(.*?)</script>", html, re.S) if b.strip()]
 
