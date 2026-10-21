@@ -52,12 +52,14 @@ def test_field_is_login_screen_only() -> None:
     assert "getElem'+'entById" not in ADMIN_PANEL_HTML
 
 
-def test_connections_view_is_example_first_and_click_to_path() -> None:
-    # the connections page must NOT stream: live default off, small default load
+def test_connections_view_is_live_tail_with_decision_pills() -> None:
+    assert "updatePathTail()" in ADMIN_PANEL_HTML
+    assert "setDecisionFilter('deny'" in ADMIN_PANEL_HTML
+    assert "setDecisionFilter('allow'" in ADMIN_PANEL_HTML
+    assert "setDecisionFilter('all'" in ADMIN_PANEL_HTML
     assert 'id="liveMode" checked' not in ADMIN_PANEL_HTML
-    assert "loadConnections(1)" in ADMIN_PANEL_HTML
-    assert "loadConnections(200)" in ADMIN_PANEL_HTML
-    assert "showPath(0)" in ADMIN_PANEL_HTML
+    # the tail poll only runs while the connections tab is visible
+    assert "pathPollId" in ADMIN_PANEL_HTML
 
 
 def test_login_field_does_not_pop_in_mid_screen() -> None:

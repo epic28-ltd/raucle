@@ -1569,9 +1569,15 @@ body.demo .btn-primary{display:none}
           <button class="btn btn-secondary" onclick="loadRecent()">Load recent</button>
           <label class="toggle"><input type="checkbox" id="liveMode" onchange="loadConnections(lastLimit)"> Live (off by default)</label>
         </div>
-        <div class="card hidden" id="connPathCard" style="margin:14px 0 0">
-          <div class="card-title">Connection path (click any row for its path)</div>
-          <div id="connPath" style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px"></div>
+        <div class="card" id="connPathCard" style="margin:14px 0 0">
+          <div class="card-title">Request path &middot; live <span class="count" id="pathCount"></span></div>
+          <div id="pathPills" style="display:flex;gap:6px;margin:10px 0;flex-wrap:wrap">
+            <button class="btn btn-secondary active" onclick="setDecisionFilter('all',this)">All</button>
+            <button class="btn btn-secondary" onclick="setDecisionFilter('allow',this)">Approved</button>
+            <button class="btn btn-secondary" onclick="setDecisionFilter('deny',this)">Denied</button>
+            <button class="btn btn-secondary" onclick="setDecisionFilter('escalate',this)">Escalated</button>
+          </div>
+          <div id="connPath"></div>
         </div>
         <div class="flow-graph" id="flowGraph">
           <svg class="flow-svg" id="flowSvg"></svg>
@@ -1775,7 +1781,7 @@ function showTab(t,el) {
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('[id^=tab-]').forEach(x=>x.classList.add('hidden'));
   el.classList.add('active'); document.getElementById('tab-'+t).classList.remove('hidden');
-  if(t==='dashboard')loadStats(); if(t==='connections'){demoExample();startConnPolling();} else stopConnPolling();
+  if(t==='dashboard')loadStats(); if(t==='connections'){demoExample();updatePathTail();if(!pathPollId)pathPollId=setInterval(updatePathTail,3000);startConnPolling();}else if(pathPollId){clearInterval(pathPollId);pathPollId=null;} else stopConnPolling();
   if(t==='policies')loadPolicy(); if(t==='learn')loadLearn(); if(t==='receipts')loadReceipts(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
 }
 function api(p,o){const h={'Authorization':key,...((o||{}).headers||{})};if(totpCode)h['X-TOTP']=totpCode;return fetch(p,{...(o||{}),headers:h});}
@@ -1959,6 +1965,50 @@ function showPath(i){
     '<div style="color:#a3a3a3;font-size:12px">'+esc(c.policy||'default')+' &middot; '+(c.latency_us||0)+'&micro;s'+((c.receipt_id)?' &middot; receipt '+esc(String(c.receipt_id).slice(0,30))+'&hellip;':'')+'</div></div>'+
     '<div><div class="card-title">Outbound</div><div style="font-size:13px;font-weight:500">'+esc(c.destination||'unknown')+'</div>'+
     '<div style="color:#a3a3a3;font-size:12px">policy-checked destination</div></div>';
+}
+let pathFilter='all', pathOpen=-1, latestConns=[], pathPollId=null;
+function setDecisionFilter(f, el){
+  pathFilter=f; pathOpen=-1;
+  document.querySelectorAll('#pathPills button').forEach(b=>b.classList.toggle('active', b===el));
+  const fd=document.getElementById('filterDecision'); if(fd) fd.value=(f==='all'?'':f);
+  if(allConns.length) loadConnections(lastLimit||200);
+  renderPathTail();
+}
+function updatePathTail(){
+  const p=new URLSearchParams({limit:12});
+  api('/api/connections?'+p.toString()).then(r=>r.json()).then(d=>{
+    latestConns=(d.connections||[]);
+    renderPathTail();
+  }).catch(()=>{});
+}
+function pathRowClick(i){ pathOpen=(pathOpen===i? -1:i); renderPathTail(); }
+function renderPathTail(){
+  const body=document.getElementById('connPath'); if(!body) return;
+  const shown=latestConns.filter(c=>pathFilter==='all'||c.decision===pathFilter);
+  const cnt=document.getElementById('pathCount'); if(cnt) cnt.textContent=latestConns.length+' in last 12s';
+  if(!shown.length){ body.innerHTML='<div class="flow-empty">No recent requests'+(pathFilter!=='all'?' with this decision':'')+'</div>'; return; }
+  body.innerHTML=shown.slice(0,8).map((c,i)=>{
+    const gi=latestConns.indexOf(c);
+    const badge=c.decision==='allow'?'badge-allow':c.decision==='deny'?'badge-deny':'badge-escalate';
+    const t=String(c.timestamp||'').slice(11,19);
+    let row='<div class="path-row" style="display:flex;gap:10px;align-items:center;padding:8px 4px;border-bottom:1px solid #f0f0f0;cursor:pointer" onclick="pathRowClick('+gi+')">'+
+      '<span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#a3a3a3">'+esc(t)+'</span>'+
+      '<span style="font-size:12px;font-weight:500;min-width:150px">'+esc(c.agent_id||c.source||'')+'</span>'+
+      '<span style="font-size:12px;color:#737373">&rarr; '+esc(c.tool||'')+'</span>'+
+      '<span style="font-size:12px;color:#737373">&rarr; '+esc(c.destination||'')+'</span>'+
+      '<span class="'+badge+'">'+esc(c.decision)+'</span>'+
+      '<span style="font-size:11px;color:#a3a3a3">'+(c.latency_us||0)+'&micro;s'+((c.receipt_id)?' &middot; '+esc(String(c.receipt_id).slice(0,16))+'&hellip;':'')+'</span></div>';
+    if(pathOpen===gi){
+      row+='<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;padding:12px 4px 14px;border-bottom:1px solid #f0f0f0;background:#fafafa">'+
+        '<div><div class="card-title">Inbound</div><div style="font-size:13px;font-weight:500">'+esc(c.agent_id||c.source||'unknown')+'</div>'+
+        '<div style="color:#a3a3a3;font-size:12px">'+esc(c.tool||'')+' &middot; '+esc(String(c.timestamp||'').replace('T',' ').slice(0,19))+'</div></div>'+
+        '<div><div class="card-title">Gate processing</div><div style="font-size:13px;font-weight:600">'+esc((c.decision||'').toUpperCase())+((c.reason)?' &middot; '+esc(c.reason):'')+'</div>'+
+        '<div style="color:#a3a3a3;font-size:12px">'+esc(c.policy||'default')+' &middot; '+(c.latency_us||0)+'&micro;s'+((c.receipt_id)?' &middot; receipt '+esc(String(c.receipt_id).slice(0,30))+'&hellip;':'')+'</div></div>'+
+        '<div><div class="card-title">Outbound</div><div style="font-size:13px;font-weight:500">'+esc(c.destination||'unknown')+'</div>'+
+        '<div style="color:#a3a3a3;font-size:12px">policy-checked destination</div></div></div>';
+    }
+    return row;
+  }).join('');
 }
 
 function startConnPolling(){stopConnPolling();connPollId=setInterval(()=>{if(document.getElementById('liveMode')?.checked&&!document.getElementById('tab-connections').classList.contains('hidden'))loadConnections();},5000);}
@@ -2621,7 +2671,7 @@ function topoRefresh() {
     const fresh = d.connections || [];
     const head = fresh[0] || {};
     const sig = [fresh.length, head.timestamp || '', head.tool || '', (fresh[fresh.length-1]||{}).timestamp || ''].join('|');
-    if (sig === topoSig) return;  // nothing moved: keep the running animation intact
+    if (sig === topoSig) { applyTopoView(); return; }  // keep animation, still settle the fit
     topoSig = sig;
     topoConns = fresh;
     topoBuild(); topoRender();
