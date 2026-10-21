@@ -53,9 +53,10 @@ def test_field_is_login_screen_only() -> None:
 
 
 def test_topology_defaults_to_top_five_framing() -> None:
-    assert "frameTopActive(5)" in ADMIN_PANEL_HTML
-    assert "frameTopActive(6)" not in ADMIN_PANEL_HTML
+    assert "frameTopChains" in ADMIN_PANEL_HTML
+    assert "frameTopActive" not in ADMIN_PANEL_HTML
     assert "topoFitAllPending" in ADMIN_PANEL_HTML
+    assert "topoLayoutCache = null" in ADMIN_PANEL_HTML
 
 
 def test_connections_view_is_live_tail_with_decision_pills() -> None:

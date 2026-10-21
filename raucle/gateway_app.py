@@ -1386,7 +1386,7 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
 
 /* ===== Embedded live topology (hero-styled, light) ===== */
 .topo-canvas{
-  position:relative;width:100%;height:420px;border-radius:10px;overflow:hidden;
+  position:relative;width:100%;height:620px;border-radius:10px;overflow:hidden;
   background-color:#f8f9fb;
   background-image:radial-gradient(rgba(17,18,24,0.10) 1px,transparent 1px);
   background-size:24px 24px;
@@ -2367,6 +2367,7 @@ function topoFilterConns(conns) {
 }
 
 function topoBuild() {
+  topoLayoutCache = null;
   const conns = topoFilterConns(topoConns);
   if (!conns.length) { topoNodes = []; topoEdges = []; return; }
   const bySrc = {}, byTool = {}, byDst = {};
@@ -2400,18 +2401,51 @@ function topoEdgePath(sp, dp) {
   return `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
 }
 
-function topoLayout() {
-  const cols = {source:[], policy:[], destination:[]};
-  topoNodes.forEach(n => (cols[n.type] || []).push(n));
-  const pos = {};
-  ['source','policy','destination'].forEach(t => {
-    const list = cols[t];
-    list.sort((a,b) => a.label.localeCompare(b.label));
-    const totalH = list.length * (TOPO_NODE_H + TOPO_NODE_GAP) - TOPO_NODE_GAP;
-    let y = Math.max(24, (600 - totalH) / 2);
-    list.forEach(n => { pos[n.id] = {x: TOPO_COL_X[t], y}; y += TOPO_NODE_H + TOPO_NODE_GAP; });
+let topoLayoutCache = null;
+function topoChainRank() {
+  const conns = topoFilterConns(topoConns);
+  const chains = {};
+  conns.forEach(c => {
+    const s = 'src-'+(c.source||'unknown'), t = 'tool-'+(c.tool||'unknown'), d = 'dst-'+(c.destination||'unknown');
+    const k = s+'|'+t+'|'+d;
+    (chains[k] = chains[k] || {n:0, parts:[s,t,d]}).n++;
   });
-  return pos;
+  return Object.values(chains).sort((a,b) => b.n-a.n);
+}
+function topoLayout() {
+  if (topoLayoutCache) return topoLayoutCache;
+  const ranked = topoChainRank();
+  const rowOf = new Map(), pos = {};
+  ranked.forEach((ch, idx) => ch.parts.forEach(id => { if(!rowOf.has(id)) rowOf.set(id, idx); }));
+  const pitch = TOPO_NODE_H + 88;  // aligned rows: the five busiest chains sit on rows 0-4
+  rowOf.forEach((row, id) => {
+    const type = id.startsWith('src-') ? 'source' : id.startsWith('tool-') ? 'policy' : 'destination';
+    pos[id] = {x: TOPO_COL_X[type], y: 40 + row*pitch};
+  });
+  topoLayoutCache = {pos, rows: ranked.length};
+  return topoLayoutCache;
+}
+function frameTopChains() {
+  const canvas = document.getElementById('topoCanvas');
+  if (!canvas || !topoConns.length) { topoFitPending = true; return; }
+  const cw = canvas.clientWidth || 1000, ch = canvas.clientHeight || 620;
+  const ranked = topoChainRank();
+  const ids = new Set();
+  ranked.slice(0,5).forEach(ch => ch.parts.forEach(id => ids.add(id)));
+  const pos = topoLayout();
+  let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+  ids.forEach(id => {
+    const pt = pos[id]; if(!pt) return;
+    minX = Math.min(minX, pt.x); minY = Math.min(minY, pt.y);
+    maxX = Math.max(maxX, pt.x + TOPO_W); maxY = Math.max(maxY, pt.y + TOPO_NODE_H);
+  });
+  if (!isFinite(minX)) { topoFitPending = true; return; }
+  const pad = 26;
+  const bw = (maxX - minX) + pad*2, bh = (maxY - minY) + pad*2;
+  const scale = Math.min((cw - 20)/bw, (ch - 20)/bh, 2.4);
+  topoScale = Math.max(0.4, scale);
+  topoPanX = (cw - (minX + maxX)*topoScale)/2;
+  topoPanY = (ch - (minY + maxY)*topoScale)/2;
 }
 
 function topoGlowLoop(svg, x, y, w, h, colour) {
@@ -2538,9 +2572,9 @@ function applyTopoView() {
   if (!svg || !content || !canvas) return;
   if (topoInitPending) {
     topoInitPending = false;
-    frameTopActive(5);
+    frameTopChains();
   } else if (topoFitAllPending) {
-    const cw = canvas.clientWidth || 1000, ch = canvas.clientHeight || 420;
+    const cw = canvas.clientWidth || 1000, ch = canvas.clientHeight || 620;
     const contentW = TOPO_COL_X.destination + TOPO_W + 60;
     let maxY = 0;
     const pos2 = topoLayout();
@@ -2553,7 +2587,7 @@ function applyTopoView() {
     topoPanY = Math.max(20, (ch - contentH * topoScale) / 2);
     topoFitAllPending = false;
   } else if (topoFitPending) {
-    frameTopActive(5);
+    frameTopChains();
     topoFitPending = false;
   }
   const t = `translate(${topoPanX}px,${topoPanY}px) scale(${topoScale})`;
@@ -2563,41 +2597,13 @@ function applyTopoView() {
   content.style.transformOrigin = '0 0';
 }
 
-// Initial view: zoom in on the k most active nodes (by observed calls).
-// The rest of the graph stays reachable by panning or zooming out; this
-// only runs once, on the first render that has nodes.
-function frameTopActive(k) {
-  const canvas = document.getElementById('topoCanvas');
-  if (!canvas || !topoNodes.length) { topoFitPending = true; return; }
-  const cw = canvas.clientWidth || 1000, ch = canvas.clientHeight || 420;
-  const pos = topoLayout();
-  const ranked = topoNodes.slice().sort(
-    (a, b) => (((b.meta || {}).n) || 0) - (((a.meta || {}).n) || 0)
-  );
-  const focus = ranked.slice(0, k);
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  focus.forEach(n => {
-    const p = pos[n.id];
-    if (!p) return;
-    minX = Math.min(minX, p.x);
-    minY = Math.min(minY, p.y);
-    maxX = Math.max(maxX, p.x + TOPO_W);
-    maxY = Math.max(maxY, p.y + TOPO_NODE_H);
-  });
-  if (!isFinite(minX)) { topoFitPending = true; return; }
-  const pad = 24;
-  const bw = (maxX - minX) + pad * 2, bh = (maxY - minY) + pad * 2;
-  let scale = Math.min((cw - 20) / bw, (ch - 20) / bh, 2.4);
-  topoScale = Math.max(0.4, scale);
-  topoPanX = (cw - (minX + maxX) * topoScale) / 2;
-  topoPanY = (ch - (minY + maxY) * topoScale) / 2;
-}
+// The default view frames the five busiest chains (frameTopChains).
 
 function topoZoomIn() { topoZoomBy(1.25); }
 function topoZoomOut() { topoZoomBy(0.8); }
 function topoZoomBy(f) {
   const canvas = document.getElementById('topoCanvas');
-  const cw = canvas.clientWidth || 1000, ch = canvas.clientHeight || 420;
+  const cw = canvas.clientWidth || 1000, ch = canvas.clientHeight || 620;
   const cx = cw / 2, cy = ch / 2;
   topoPanX = cx - (cx - topoPanX) * f;
   topoPanY = cy - (cy - topoPanY) * f;
