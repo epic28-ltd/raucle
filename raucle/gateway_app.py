@@ -1559,13 +1559,19 @@ body.demo .btn-primary{display:none}
             <button onclick="setDirFilter('inbound',this)">Inbound</button>
             <button onclick="setDirFilter('outbound',this)">Outbound</button>
           </div>
-          <select class="input" id="filterDecision" onchange="loadConnections()">
+          <select class="input" id="filterDecision" onchange="loadConnections(lastLimit||200)">
             <option value="">All Decisions</option>
             <option value="allow">Allow</option>
             <option value="deny">Deny</option>
             <option value="escalate">Escalate</option>
           </select>
-          <label class="toggle"><input type="checkbox" id="liveMode" checked onchange="loadConnections()"> Live</label>
+          <button class="btn btn-secondary" onclick="demoExample()">Show example</button>
+          <button class="btn btn-secondary" onclick="loadRecent()">Load recent</button>
+          <label class="toggle"><input type="checkbox" id="liveMode" onchange="loadConnections(lastLimit)"> Live (off by default)</label>
+        </div>
+        <div class="card hidden" id="connPathCard" style="margin:14px 0 0">
+          <div class="card-title">Connection path (click any row for its path)</div>
+          <div id="connPath" style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px"></div>
         </div>
         <div class="flow-graph" id="flowGraph">
           <svg class="flow-svg" id="flowSvg"></svg>
@@ -1769,7 +1775,7 @@ function showTab(t,el) {
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('[id^=tab-]').forEach(x=>x.classList.add('hidden'));
   el.classList.add('active'); document.getElementById('tab-'+t).classList.remove('hidden');
-  if(t==='dashboard')loadStats(); if(t==='connections'){loadConnections();startConnPolling();} else stopConnPolling();
+  if(t==='dashboard')loadStats(); if(t==='connections'){demoExample();startConnPolling();} else stopConnPolling();
   if(t==='policies')loadPolicy(); if(t==='learn')loadLearn(); if(t==='receipts')loadReceipts(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
 }
 function api(p,o){const h={'Authorization':key,...((o||{}).headers||{})};if(totpCode)h['X-TOTP']=totpCode;return fetch(p,{...(o||{}),headers:h});}
@@ -1779,11 +1785,14 @@ function loadStats(){api('/api/stats').then(r=>r.json()).then(d=>{
   let tb=document.getElementById('toolTableBody');tb.innerHTML='';Object.entries(d.tools||{}).forEach(([t,s])=>tb.innerHTML+=`<tr><td>${esc(t)}</td><td>${s.allow||0}</td><td>${s.deny||0}</td><td>${s.escalate||0}</td></tr>`);
 });}
 function esc(s){return s?s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])):'--';}
-function setDirFilter(d,el){dirFilter=d;document.querySelectorAll('.dir-toggle button').forEach(b=>b.classList.remove('active'));el.classList.add('active');loadConnections();}
+function setDirFilter(d,el){dirFilter=d;document.querySelectorAll('.dir-toggle button').forEach(b=>b.classList.remove('active'));el.classList.add('active');loadConnections(lastLimit||200);}
 
 // === Netbird-style flow graph ===
-function loadConnections() {
-  let p=new URLSearchParams({limit:500});
+let lastLimit=1;
+function loadConnections(limit) {
+  lastLimit = limit || 1;
+  if(limit===undefined) limit=lastLimit;
+  let p=new URLSearchParams({limit:limit});
   let fd=document.getElementById('filterDecision').value;
   if(fd)p.set('decision',fd);
   api('/api/connections?'+p.toString()).then(r=>r.json()).then(d=>{
@@ -1794,6 +1803,7 @@ function loadConnections() {
       allConns=allConns.filter(c=>(tools[sc]||[]).includes(c.tool)||(c.policy||'').toLowerCase().includes({banking:'banking',government:'government',health:'healthcare'}[sc]));
     }
     renderFlow();renderConnTable();
+    if(lastLimit===1&&allConns.length){selectConn(0);showPath(0);}
   }).catch(()=>{});
 }
 
@@ -1931,12 +1941,27 @@ function renderConnTable() {
     let badge=c.decision==='allow'?'badge-allow':c.decision==='deny'?'badge-deny':'badge-escalate';
     let time=c.timestamp?c.timestamp.substring(11,19):'--:--:--';
     let policy=c.policy?c.policy.split('/').pop():'--';
-    tb.innerHTML+=`<tr class="conn-row" onclick="selectConn(${i})" data-idx="${i}"><td>${esc(time)}</td><td>${esc(c.source)}</td><td>${esc(c.tool)}</td><td>${esc(policy)}</td><td><span class="${badge}">${esc(c.decision)}</span></td><td>${esc(c.destination)}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${esc(c.reason)}</td><td>${c.latency_us||0}us</td></tr>`;
+    tb.innerHTML+=`<tr class="conn-row" onclick="selectConn(${i});showPath(${i})" data-idx="${i}"><td>${esc(time)}</td><td>${esc(c.source)}</td><td>${esc(c.tool)}</td><td>${esc(policy)}</td><td><span class="${badge}">${esc(c.decision)}</span></td><td>${esc(c.destination)}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${esc(c.reason)}</td><td>${c.latency_us||0}us</td></tr>`;
   });
 }
 function selectConn(i){document.querySelectorAll('.conn-row').forEach(r=>r.classList.remove('selected'));let row=document.querySelector(`.conn-row[data-idx="${i}"]`);if(row)row.classList.add('selected');}
+function demoExample(){loadConnections(1);}
+function loadRecent(){loadConnections(200);}
+function showPath(i){
+  let c=allConns[i]; if(!c) return;
+  let card=document.getElementById('connPathCard'); let body=document.getElementById('connPath');
+  card.classList.remove('hidden');
+  let dt=c.timestamp?String(c.timestamp).replace('T',' ').slice(0,19):'';
+  body.innerHTML=
+    '<div><div class="card-title">Inbound</div><div style="font-size:13px;font-weight:500">'+esc(c.agent_id||c.source||'unknown')+'</div>'+
+    '<div style="color:#a3a3a3;font-size:12px">'+esc(c.tool||'')+' &middot; '+esc(dt)+'</div></div>'+
+    '<div><div class="card-title">Gate processing</div><div style="font-size:13px;font-weight:600">'+esc((c.decision||'').toUpperCase())+((c.reason)?' &middot; '+esc(c.reason):'')+'</div>'+
+    '<div style="color:#a3a3a3;font-size:12px">'+esc(c.policy||'default')+' &middot; '+(c.latency_us||0)+'&micro;s'+((c.receipt_id)?' &middot; receipt '+esc(String(c.receipt_id).slice(0,30))+'&hellip;':'')+'</div></div>'+
+    '<div><div class="card-title">Outbound</div><div style="font-size:13px;font-weight:500">'+esc(c.destination||'unknown')+'</div>'+
+    '<div style="color:#a3a3a3;font-size:12px">policy-checked destination</div></div>';
+}
 
-function startConnPolling(){stopConnPolling();connPollId=setInterval(()=>{if(document.getElementById('liveMode')?.checked&&!document.getElementById('tab-connections').classList.contains('hidden'))loadConnections();},3000);}
+function startConnPolling(){stopConnPolling();connPollId=setInterval(()=>{if(document.getElementById('liveMode')?.checked&&!document.getElementById('tab-connections').classList.contains('hidden'))loadConnections();},5000);}
 function stopConnPolling(){if(connPollId){clearInterval(connPollId);connPollId=null;}}
 
 let currentFile='';

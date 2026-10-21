@@ -52,6 +52,14 @@ def test_field_is_login_screen_only() -> None:
     assert "getElem'+'entById" not in ADMIN_PANEL_HTML
 
 
+def test_connections_view_is_example_first_and_click_to_path() -> None:
+    # the connections page must NOT stream: live default off, small default load
+    assert 'id="liveMode" checked' not in ADMIN_PANEL_HTML
+    assert "loadConnections(1)" in ADMIN_PANEL_HTML
+    assert "loadConnections(200)" in ADMIN_PANEL_HTML
+    assert "showPath(0)" in ADMIN_PANEL_HTML
+
+
 def test_field_is_pure_greyscale() -> None:
     i = ADMIN_PANEL_HTML.find("/* --- ambient ledger field")
     j = ADMIN_PANEL_HTML.find("})();", i)

@@ -1836,6 +1836,9 @@ class RaucleGateway:
             "reason": result.get("reason", ""),
             "latency_us": result.get("latency_us", 0),
         }
+        receipt_id = result.get("receipt_id")
+        if receipt_id:
+            entry["receipt_id"] = receipt_id
         self._connection_log.append(entry)
         if len(self._connection_log) > self._max_log_size:
             self._connection_log.pop(0)
