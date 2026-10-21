@@ -1903,13 +1903,14 @@ function loadReceipts(){
         +'<td style="padding:6px 10px">'+(r.agent_id||'')+'</td>'
         +'<td style="padding:6px 10px;color:'+color+';font-weight:600">'+dec+'</td>'
         +'<td style="padding:6px 10px;font-family:monospace;font-size:11px">'+(r.trace_id?(r.trace_id.slice(0,12)+'…'):'')+'</td>'
-        +'<td style="padding:6px 10px"><a href="javascript:void(0)" style="color:#3a3f4b" onclick="showAncestry(\''+r.receipt_hash+'\')">trace</a></td>';
+        +'<td style="padding:6px 10px"><a href="javascript:void(0)" style="color:#3a3f4b" data-hash="'+r.receipt_hash+'" onclick="rcptRowClick(event)">trace</a></td>';
       rows.appendChild(tr);
     });
     rcptCursor=d.next_cursor||null;
     document.getElementById('rcpt-count').textContent=(d.total??0)+' total · '+(d.count||0)+' shown';
   });
 }
+function rcptRowClick(e){const a=e.target.closest('a[data-hash]'); if(a) showAncestry(a.getAttribute('data-hash'));}
 function clearRcptFilters(){['rcpt-filter-tool','rcpt-filter-agent','rcpt-filter-decision','rcpt-filter-trace'].forEach(i=>document.getElementById(i).value=''); rcptCursor=null; loadReceipts();}
 function rcptPage(older){
   if(older && rcptCursor){rcptCursors.push(rcptCursor); loadReceipts();}
@@ -1921,7 +1922,7 @@ function showAncestry(hash){
   api('/api/receipts/'+encodeURIComponent(hash)+'/ancestors').then(r=>r.ok?r.json():{nodes:[],edges:[]}).then(d=>{
     if(!d.nodes||!d.nodes.length){document.getElementById('ancestryView').textContent='No ancestry found (gate receipts are trace-roots; agent-side provenance chains attach as parents).'; return;}
     const lines=d.nodes.map(n=>(n.decision==='deny'?'✗ ':'✓ ')+new Date((n.iat||0)*1000).toISOString().slice(11,19)+'  '+(n.tool||'')+'  '+(n.agent_id||'')+'  ['+(n.receipt_hash||'').slice(7,19)+']');
-    document.getElementById('ancestryView').textContent=lines.join('\n')+((d.edges&&d.edges.length)?'\n\nedges: '+d.edges.length:'');
+    document.getElementById('ancestryView').textContent=lines.join('\\n')+((d.edges&&d.edges.length)?'\\n\\nedges: '+d.edges.length:'');
   });
 }
 function exportReceipts(){
