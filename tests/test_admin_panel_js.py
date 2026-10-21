@@ -52,6 +52,12 @@ def test_field_is_login_screen_only() -> None:
     assert "getElem'+'entById" not in ADMIN_PANEL_HTML
 
 
+def test_topology_scroll_pans_and_pan_is_clamped() -> None:
+    assert "topoPanY -= ev.deltaY" in ADMIN_PANEL_HTML
+    assert "deltaY < 0 ? 1.1 : 0.9" not in ADMIN_PANEL_HTML
+    assert "topoExtents()" in ADMIN_PANEL_HTML
+
+
 def test_topology_defaults_to_top_five_framing() -> None:
     assert "frameTopChains" in ADMIN_PANEL_HTML
     assert "frameTopActive" not in ADMIN_PANEL_HTML

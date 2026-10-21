@@ -1386,7 +1386,7 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
 
 /* ===== Embedded live topology (hero-styled, light) ===== */
 .topo-canvas{
-  position:relative;width:100%;height:620px;border-radius:10px;overflow:hidden;
+  position:relative;width:100%;height:720px;border-radius:10px;overflow:hidden;
   background-color:#f8f9fb;
   background-image:radial-gradient(rgba(17,18,24,0.10) 1px,transparent 1px);
   background-size:24px 24px;
@@ -2428,7 +2428,7 @@ function topoLayout() {
 function frameTopChains() {
   const canvas = document.getElementById('topoCanvas');
   if (!canvas || !topoConns.length) { topoFitPending = true; return; }
-  const cw = canvas.clientWidth || 1000, ch = canvas.clientHeight || 620;
+  const cw = canvas.clientWidth || 1000, ch = canvas.clientHeight || 720;
   const ranked = topoChainRank();
   const ids = new Set();
   ranked.slice(0,5).forEach(ch => ch.parts.forEach(id => ids.add(id)));
@@ -2565,6 +2565,19 @@ function topoRender() {
 // ===== topology view model: zoom + pan =====
 let topoScale = 1, topoPanX = 0, topoPanY = 0, topoFitPending = false, topoInitPending = true, topoUserZoomed = false, topoFitAllPending = false;
 
+function topoExtents() {
+  if (!topoNodes.length) return null;
+  const pos = topoLayout();
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  topoNodes.forEach(n => {
+    const pt = pos[n.id]; if (!pt) return;
+    minX = Math.min(minX, pt.x); minY = Math.min(minY, pt.y);
+    maxX = Math.max(maxX, pt.x + TOPO_W); maxY = Math.max(maxY, pt.y + TOPO_NODE_H);
+  });
+  if (!isFinite(minX)) return null;
+  return {x: minX, y: minY, w: maxX - minX, h: maxY - minY};
+}
+
 function applyTopoView() {
   const svg = document.getElementById('topoSvg');
   const content = document.getElementById('topoContent');
@@ -2574,7 +2587,7 @@ function applyTopoView() {
     topoInitPending = false;
     frameTopChains();
   } else if (topoFitAllPending) {
-    const cw = canvas.clientWidth || 1000, ch = canvas.clientHeight || 620;
+    const cw = canvas.clientWidth || 1000, ch = canvas.clientHeight || 720;
     const contentW = TOPO_COL_X.destination + TOPO_W + 60;
     let maxY = 0;
     const pos2 = topoLayout();
@@ -2590,6 +2603,16 @@ function applyTopoView() {
     frameTopChains();
     topoFitPending = false;
   }
+  // clamp the pan so the graph can never be lost outside the canvas
+  const extents = topoExtents();
+  const cw = canvas.clientWidth || 1000, ch = canvas.clientHeight || 720;
+  if (extents) {
+    const maxX = extents.x + extents.w, maxY = extents.y + extents.h;
+    topoPanX = Math.min(topoPanX, cw - 20);
+    topoPanX = Math.max(topoPanX, cw - maxX * topoScale - 20);
+    topoPanY = Math.min(topoPanY, ch - 30);
+    topoPanY = Math.max(topoPanY, ch - maxY * topoScale - 30);
+  }
   const t = `translate(${topoPanX}px,${topoPanY}px) scale(${topoScale})`;
   content.style.transform = t;
   svg.style.transform = t;
@@ -2603,7 +2626,7 @@ function topoZoomIn() { topoZoomBy(1.25); }
 function topoZoomOut() { topoZoomBy(0.8); }
 function topoZoomBy(f) {
   const canvas = document.getElementById('topoCanvas');
-  const cw = canvas.clientWidth || 1000, ch = canvas.clientHeight || 620;
+  const cw = canvas.clientWidth || 1000, ch = canvas.clientHeight || 720;
   const cx = cw / 2, cy = ch / 2;
   topoPanX = cx - (cx - topoPanX) * f;
   topoPanY = cy - (cy - topoPanY) * f;
@@ -2658,13 +2681,11 @@ function initTopoPan() {
     canvas.classList.remove('panning');
   });
   canvas.addEventListener('wheel', (ev) => {
+    // scrolling the topology pans the view instead of zooming: the chains
+    // above and below the framed rows stay reachable and fully visible
     ev.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-    const cx = ev.clientX - rect.left, cy = ev.clientY - rect.top;
-    const f = ev.deltaY < 0 ? 1.1 : 0.9;
-    topoPanX = cx - (cx - topoPanX) * f;
-    topoPanY = cy - (cy - topoPanY) * f;
-    topoScale = Math.min(3, Math.max(0.15, topoScale * f));
+    topoPanY -= ev.deltaY;
+    topoPanX -= ev.deltaX;
     topoFitPending = false;
     topoUserZoomed = true;
     applyTopoView();
