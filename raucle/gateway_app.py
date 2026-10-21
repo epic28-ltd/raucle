@@ -2423,7 +2423,7 @@ function topoLayout() {
     pos[id] = {x: TOPO_COL_X[type], y: 40 + row*pitch};
   });
   topoLayoutCache = {pos, rows: ranked.length};
-  return topoLayoutCache;
+  return pos;
 }
 function frameTopChains() {
   const canvas = document.getElementById('topoCanvas');

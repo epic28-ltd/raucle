@@ -57,6 +57,8 @@ def test_topology_defaults_to_top_five_framing() -> None:
     assert "frameTopActive" not in ADMIN_PANEL_HTML
     assert "topoFitAllPending" in ADMIN_PANEL_HTML
     assert "topoLayoutCache = null" in ADMIN_PANEL_HTML
+    # the layout helper hands back the position map itself, not the cache wrapper
+    assert "return pos;" in ADMIN_PANEL_HTML
 
 
 def test_connections_view_is_live_tail_with_decision_pills() -> None:
