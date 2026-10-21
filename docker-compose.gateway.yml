@@ -25,6 +25,7 @@ services:
     - RAUCLE_SIEM_TOKEN=${RAUCLE_SIEM_TOKEN:-}
     - RAUCLE_POLICY_DIR=/etc/raucle/policies-demo
     - RATE_LIMIT=${RATE_LIMIT:-6000}
+    - RAUCLE_GATE_RATE_LIMIT=${RAUCLE_GATE_RATE_LIMIT:-60000/minute}
     volumes:
     - ./policies:/etc/raucle/policies:ro
     - ./policies/examples:/etc/raucle/policies-demo:ro

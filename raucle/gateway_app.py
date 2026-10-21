@@ -141,7 +141,10 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         from slowapi.middleware import SlowAPIMiddleware
         from slowapi.util import get_remote_address
 
-        _limiter = Limiter(key_func=get_remote_address, default_limits=["1000/minute"])
+        import os
+
+        _limit_default = os.environ.get("RAUCLE_GATE_RATE_LIMIT", "1000/minute")
+        _limiter = Limiter(key_func=get_remote_address, default_limits=[_limit_default])
         app.state.limiter = _limiter
         app.add_exception_handler(
             RateLimitExceeded,
