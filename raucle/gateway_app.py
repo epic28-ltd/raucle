@@ -1986,7 +1986,6 @@ let rcptCursor=null, rcptCursors=[];
     chips.push({lane:Math.floor(Math.random()*LANES), x:-30-Math.random()*320,
       v:.045+Math.random()*.05, s:9+Math.random()*7, kind, done:false, seed:Math.random(), dy:0, trail:null});
   }
-  for(let i=0;i<90;i++){ spawn(); chips[chips.length-1].x = Math.random()*innerWidth*.8; }
   function step(dt,t){
     const lh=H/(LANES+1);
     ctx.setTransform(dpr,0,0,dpr,0,0);
@@ -2480,7 +2479,7 @@ function topoRender() {
 }
 
 // ===== topology view model: zoom + pan =====
-let topoScale = 1, topoPanX = 0, topoPanY = 0, topoFitPending = false, topoInitPending = true;
+let topoScale = 1, topoPanX = 0, topoPanY = 0, topoFitPending = false, topoInitPending = true, topoUserZoomed = false;
 
 function applyTopoView() {
   const svg = document.getElementById('topoSvg');
@@ -2499,6 +2498,7 @@ function applyTopoView() {
     const contentH = Math.max(maxY + 40, 100);
     const scale = Math.min((cw - 40) / contentW, (ch - 40) / contentH, 1.4);
     topoScale = Math.max(0.15, scale);
+    topoUserZoomed = false;
     topoPanX = (cw - contentW * topoScale) / 2;
     topoPanY = Math.max(20, (ch - contentH * topoScale) / 2);
     topoFitPending = false;
@@ -2589,6 +2589,7 @@ function initTopoPan() {
     if (!panning) return;
     topoPanX += ev.clientX - lastX;
     topoPanY += ev.clientY - lastY;
+    topoUserZoomed = true;
     lastX = ev.clientX; lastY = ev.clientY;
     topoFitPending = false;
     applyTopoView();
@@ -2606,16 +2607,23 @@ function initTopoPan() {
     topoPanY = cy - (cy - topoPanY) * f;
     topoScale = Math.min(3, Math.max(0.15, topoScale * f));
     topoFitPending = false;
+    topoUserZoomed = true;
     applyTopoView();
   }, { passive: false });
 }
 
 let topoPollId = null;
+let topoSig = '';
 function topoRefresh() {
   initTopoPan();
-  const p = new URLSearchParams({limit: 500});
+  const p = new URLSearchParams({limit: 120});
   api('/api/connections?' + p.toString()).then(r => r.json()).then(d => {
-    topoConns = d.connections || [];
+    const fresh = d.connections || [];
+    const head = fresh[0] || {};
+    const sig = [fresh.length, head.timestamp || '', head.tool || '', (fresh[fresh.length-1]||{}).timestamp || ''].join('|');
+    if (sig === topoSig) return;  // nothing moved: keep the running animation intact
+    topoSig = sig;
+    topoConns = fresh;
     topoBuild(); topoRender();
   }).catch(() => {});
 }
@@ -2625,6 +2633,7 @@ const origShowTab = showTab;
 showTab = function(t, el) {
   origShowTab(t, el);
   if (t === 'connections') {
+    if (!topoUserZoomed) topoFitPending = true;   // first visible render: the canvas has real dimensions now
     topoRefresh();
     if (!topoPollId) topoPollId = setInterval(() => {
       if (!document.hidden && !document.getElementById('tab-connections').classList.contains('hidden')) topoRefresh();

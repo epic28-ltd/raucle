@@ -60,6 +60,12 @@ def test_connections_view_is_example_first_and_click_to_path() -> None:
     assert "showPath(0)" in ADMIN_PANEL_HTML
 
 
+def test_login_field_does_not_pop_in_mid_screen() -> None:
+    assert "chips[chips.length-1].x = Math.random()" not in ADMIN_PANEL_HTML
+    assert "topoSig" in ADMIN_PANEL_HTML
+    assert "topoUserZoomed" in ADMIN_PANEL_HTML
+
+
 def test_field_is_pure_greyscale() -> None:
     i = ADMIN_PANEL_HTML.find("/* --- ambient ledger field")
     j = ADMIN_PANEL_HTML.find("})();", i)
