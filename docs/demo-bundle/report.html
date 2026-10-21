@@ -1,0 +1,51 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>raucle audit export</title>
+<style>
+ body{font:14px/1.5 system-ui,sans-serif;max-width:900px;margin:2rem auto;color:#1a1a1a}
+ table{border-collapse:collapse;width:100%;margin:1rem 0}
+ th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;vertical-align:top}
+ code{font-size:12px;word-break:break-all}
+ .sum{font-size:16px}
+ .box{background:#f6f8fa;border:1px solid #e1e4e8;padding:12px;border-radius:6px}
+</style></head><body>
+<h1>raucle audit export</h1>
+<p class="sum">Chain: <strong>VALID</strong> ·
+ 3 receipts · ✅ 2 green · ⚠️ 0 amber · ⛔ 0 red</p>
+<p>Generated at 1760890000 · tool v0.22.0 ·
+ signed by <code>603db302b076c824</code></p>
+
+<h2>Agents &amp; tools</h2>
+<table><tr><th>Node</th><th>Status</th><th>Evidence</th></tr><tr><td>agent:raucle-aws-egress-broker · guardrail_scan</td><td>✅ GREEN</td><td>chain verified clean for this node&#x27;s receipts</td></tr><tr><td>agent:raucle-aws-egress-broker → dynamodb.GetItem</td><td>✅ GREEN</td><td>chain verified clean for this node&#x27;s receipts</td></tr></table>
+
+<h2>Proof obligations</h2>
+<table><tr><th>Obligation</th><th>Status</th><th>Certificate</th><th>Detail</th></tr><tr><td colspan=4>none supplied</td></tr></table>
+
+<div class="box">
+<h3>What this report does and does not claim</h3>
+<p>This is a <strong>reproducible attestation</strong>, not a certification.
+ Every status is recomputable offline from the inputs below. GREEN proof
+ obligations rest on an explicit prover-soundness axiom (the SMT solver is a
+ trusted oracle). The binding from a cited proof to a tool's (schema, policy) is
+ enforced operationally by the gate's strict proof mode, not mechanised in Lean.
+ See the v0.17.0 CHANGELOG "Scope &amp; claims" note.</p>
+</div>
+
+<h2>Inputs (SHA-256)</h2>
+<p>Chain: <code>sha256:9e20b842ddbe6cd82ec53e9ba4c9006fa37ff7d53eaef8f76af0d1344ec27436</code></p>
+<p>Public keys:</p><ul><li><code>3ce4806a4718eb85</code>: <code>sha256:3ce4806a4718eb85ea6f0b07bddd2fcd817f0031bbebb217185fb89ce6b49d32</code></li></ul>
+<p>Capability statements (gate allowed-tools / models — they affect node
+ status):</p><ul><li>none (no per-agent tool/model enforcement applied)</li></ul>
+<p>Proof certificates: none</p>
+
+<h2>Verify this report yourself</h2>
+<ol>
+ <li>Recompute the chain SHA-256 and confirm it matches above.</li>
+ <li>Run <code>raucle provenance verify &lt;chain&gt; --pubkeys &lt;the same
+  capability-statement files&gt;</code> — pass the capability statements, not bare
+  PEM keys, so the agents' allowed-tools/models are enforced; confirm the verdict
+  matches "Chain" above. (A capability-violation status is only reproducible with
+  the statements listed above.)</li>
+ <li>Recompute each proof certificate hash and confirm it matches the obligations table.</li>
+ <li>Verify the manifest signature with the signer public key embedded in the manifest JSON.</li>
+</ol>
+</body></html>

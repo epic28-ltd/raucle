@@ -1,0 +1,72 @@
+{
+  "body": {
+    "kind": "raucle-audit-export/v1",
+    "generated_at": 1760890000,
+    "tool_version": "0.22.0",
+    "chain_verdict": {
+      "valid": true,
+      "receipt_count": 3,
+      "signature_failures": 0,
+      "parent_link_failures": 0,
+      "taint_monotonicity_failures": 0,
+      "capability_violations": 0,
+      "unauthorised_sanitisations": 0,
+      "tampered_receipts": [],
+      "errors": []
+    },
+    "nodes": [
+      {
+        "id": "agent:raucle-aws-egress-broker/guardrail_scan",
+        "label": "agent:raucle-aws-egress-broker · guardrail_scan",
+        "kind": "operation",
+        "status": "green",
+        "evidence": [
+          "chain verified clean for this node's receipts"
+        ],
+        "receipt_hashes": [
+          "sha256:a756062f318771199051e95907eb43930bcc8a7376e3d04fa0a784baac000858",
+          "sha256:3416ab070d0f5bda7dcfe6a8034affbc472fe59a07c2f84f1e27616ed550df64"
+        ],
+        "proof_certificate": "",
+        "proof_status": "",
+        "lean_theorem": ""
+      },
+      {
+        "id": "agent:raucle-aws-egress-broker/dynamodb.GetItem",
+        "label": "agent:raucle-aws-egress-broker → dynamodb.GetItem",
+        "kind": "tool",
+        "status": "green",
+        "evidence": [
+          "chain verified clean for this node's receipts"
+        ],
+        "receipt_hashes": [
+          "sha256:e0b7df2a1894235942b53d2d61a8b33ed56f36811df8df1f919a68ef7ca7a681"
+        ],
+        "proof_certificate": "",
+        "proof_status": "",
+        "lean_theorem": ""
+      }
+    ],
+    "obligations": [],
+    "global_findings": [],
+    "summary": {
+      "chain_valid": true,
+      "receipt_count": 3,
+      "global_findings": 0,
+      "green": 2,
+      "amber": 0,
+      "red": 0
+    },
+    "input_hashes": {
+      "chain_sha256": "sha256:9e20b842ddbe6cd82ec53e9ba4c9006fa37ff7d53eaef8f76af0d1344ec27436",
+      "public_keys": {
+        "3ce4806a4718eb85": "sha256:3ce4806a4718eb85ea6f0b07bddd2fcd817f0031bbebb217185fb89ce6b49d32"
+      },
+      "capability_statements": {},
+      "proofs": []
+    }
+  },
+  "signature": "ed25519:147f744101eddd93817c8481e305f0733eb4fdc169ae758053d7c7780c284ca4be65f46598e25f732bad202c1f85b14e788b8f935aeae5eb225f6e7b0293aa02",
+  "signer_key_id": "603db302b076c824",
+  "signer_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEADnKjP3CfgPsd39hAqHXXyg3bvCoATtodBmSpoLJkif4=\n-----END PUBLIC KEY-----\n"
+}
