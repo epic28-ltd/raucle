@@ -154,6 +154,49 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
     except ImportError:
         pass  # slowapi not installed, no rate limiting
 
+    @app.get("/api/live-pulse", response_class=None)
+    def live_pulse() -> "JSONResponse":  # type: ignore[name-defined]
+        """Public aggregate pulse for the login field: rates and totals only.
+
+        Deliberately holds no per-agent, per-tool or payload data:
+        the response is sized by the same information the demo
+        dashboard already publishes, minus its detail.
+        """
+        import math
+        import time as _time
+
+        now = _time.time()
+        stats = gateway.get_stats()
+        total = int(stats.get("total_requests", 0))
+        state = getattr(app.state, "_pulse_state", None)
+        if state is None or state["total"] > total:  # fresh process or stats reset
+            state = {"t": now, "total": total, "rpm": 0.0, "t0": now}
+            app.state._pulse_state = state
+        elapsed = now - state["t"]
+        if elapsed >= 1.0:
+            inst = (total - state["total"]) / elapsed * 60.0
+            alpha = 1.0 if state["rpm"] <= 0.5 else min(0.5, elapsed / 2.0)
+            state["rpm"] = max(0.0, state["rpm"] + alpha * (inst - state["rpm"]))
+            state["t"] = now
+            state["total"] = total
+        if math.isnan(state["rpm"]):
+            state["rpm"] = 0.0
+        payload = {
+            "live": state["rpm"] > 0.5,
+            "rpm_1m": int(round(state["rpm"])),
+            "uptime_s": int(now - state["t0"]),
+            "totals": {
+                "requests": total,
+                "allowed": int(stats.get("allowed", 0)),
+                "denied": int(stats.get("denied", 0)),
+                "escalated": int(stats.get("escalated", 0)),
+            },
+        }
+        avg = stats.get("avg_latency_us")
+        if avg is not None:
+            payload["avg_latency_us"] = avg
+        return JSONResponse(payload)  # type: ignore[name-defined]
+
     @app.post("/gate")
     def gate_tool_call(
         request: Request,
@@ -1399,6 +1442,7 @@ body.demo .btn-primary{display:none}
 </style>
 </head>
 <body><canvas id="field" aria-hidden="true" tabindex="-1"></canvas>
+<div id="pulseHud" class="hidden" style="position:fixed;top:18px;left:20px;z-index:5;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:10px;letter-spacing:.08em;color:#737373"><span id="pulseCount">--</span> GATED/MIN &middot; LIVE</div>
 <div class="header">
   <div class="header-left">
     <div class="logo">Raucle</div>
@@ -1938,8 +1982,8 @@ let rcptCursor=null, rcptCursors=[];
       }
     }
     chips = chips.filter(c=>c.x<W+50 && c.dy<H*.6);
-    while(chips.length<LANES*14) spawn();
-    if(chips.length>LANES*14+40) chips.length=LANES*14;
+    let added=0; while(chips.length<targetChips && added<24){spawn(); added++;}
+    if(chips.length>LANES*30+40) chips.length=LANES*30;
   }
   let last=performance.now();
   function frame(now){ const dt=Math.min(.05,(now-last)/1000); last=now;
@@ -1948,9 +1992,22 @@ let rcptCursor=null, rcptCursors=[];
   requestAnimationFrame(frame);
   // login screen only: the field disappears as soon as the login card does
   const loginEl = document.getElementById('login');
+  const hud = document.getElementById('pulseHud');
   new MutationObserver(()=>{
-    field.classList.toggle('hidden', loginEl.classList.contains('hidden'));
+    const gone = loginEl.classList.contains('hidden');
+    field.classList.toggle('hidden', gone);
+    if(hud) hud.classList.toggle('hidden', gone);
   }).observe(loginEl, {attributes:true, attributeFilter:['class']});
+  // real rate hook: the counter is the gateway's actual gate throughput
+  let targetChips = LANES*14;
+  const pulseEl = document.getElementById('pulseCount');
+  function refreshPulse(){
+    fetch('/api/live-pulse').then(r=>r.json()).then(d=>{
+      if(pulseEl && d.live){ pulseEl.textContent = String(d.rpm_1m); hud && hud.classList.remove('hidden'); }
+      targetChips = Math.min(LANES*30, Math.max(LANES*10, LANES + Math.round((d.rpm_1m||0)/60*LANES/4)));
+    }).catch(()=>{ if(hud) hud.classList.add('hidden'); });
+  }
+  setInterval(refreshPulse, 5000); refreshPulse();
 })();
 function rcptQueryParams(){
   const p=new URLSearchParams(); p.set('limit',20);

@@ -644,6 +644,18 @@ def main() -> None:
     )
     parser.add_argument("--interval", type=float, default=6.0, help="Seconds between calls")
     parser.add_argument("--max-cycles", type=int, default=0, help="0 = run forever")
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Number of parallel workers (each runs the full scenario cycle)",
+    )
+    parser.add_argument(
+        "--sleep-floor",
+        type=float,
+        default=0.1,
+        help="Lower bound on the inter-call sleep, in seconds",
+    )
     parser.add_argument("--quiet", action="store_true", help="Only log errors")
     args = parser.parse_args()
 
@@ -659,54 +671,78 @@ def main() -> None:
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
 
+    import threading
+
     cycle = 0
     stats = {"allow": 0, "deny": 0, "escalate": 0, "error": 0}
     scenario_totals: dict[str, dict[str, int]] = {}
     print(
-        f"demo agents -> {args.gateway} every {args.interval}s (scenario: {args.scenario})",
+        f"demo agents -> {args.gateway} every {args.interval}s x{args.concurrency} (scenario: {args.scenario})",
         flush=True,
     )
+    stats_lock = threading.Lock()
+    max_cycles = args.max_cycles
+    threads: list[threading.Thread] = []
 
-    while running and (args.max_cycles == 0 or cycle < args.max_cycles):
-        cycle += 1
-        scenario = active[cycle % len(active)]
-        spec = SCENARIOS[scenario]
-        agent = random.choice(spec["agents"])
+    def worker(tid: int) -> None:
+        nonlocal cycle
+        while running and (max_cycles == 0 or cycle < max_cycles):
+            with stats_lock:
+                if max_cycles and cycle >= max_cycles:
+                    return
+                cycle += 1
+                this_cycle = cycle
+            scenario = active[this_cycle % len(active)]
+            spec = SCENARIOS[scenario]
+            agent = random.choice(spec["agents"])
 
-        if random.random() < 0.14:
-            tool, task_args, destination = random.choice(spec["injections"])
-        else:
-            pool = agent["benign"] * 3 + agent.get("deny", [])
-            tool, task_args, destination = random.choice(pool)
+            if random.random() < 0.14:
+                tool, task_args, destination = random.choice(spec["injections"])
+            else:
+                pool = agent["benign"] * 3 + agent.get("deny", [])
+                tool, task_args, destination = random.choice(pool)
 
-        result = gate_call(
-            args.gateway,
-            tool,
-            task_args,
-            agent["agent_id"],
-            agent["source"],
-            destination,
-        )
-        decision = str(result.get("decision", "ERROR")).upper()
-        key = decision.lower()
-        if key not in stats:
-            key = "error"
-        stats[key] += 1
+            result = gate_call(
+                args.gateway,
+                tool,
+                task_args,
+                agent["agent_id"],
+                agent["source"],
+                destination,
+            )
+            decision = str(result.get("decision", "ERROR")).upper()
+            key = decision.lower()
+            if key not in stats:
+                key = "error"
 
-        s = scenario_totals.setdefault(scenario, {"allow": 0, "deny": 0, "error": 0})
-        s[key if key in s else "error"] += 1
+            with stats_lock:
+                stats[key] += 1
+                s = scenario_totals.setdefault(scenario, {"allow": 0, "deny": 0, "error": 0})
+                s[key if key in s else "error"] += 1
 
-        if not args.quiet:
-            reason = str(result.get("reason", ""))[:50]
-            print(
-                f"  [{scenario[:4]}] {agent['name'][:22]:22} "
-                f"{tool[:26]:26} -> {decision:8} {reason}",
-                flush=True,
+            if not args.quiet:
+                reason = str(result.get("reason", ""))[:50]
+                print(
+                    f"  [t{tid}][{scenario[:4]}] {agent['name'][:22]:22} "
+                    f"{tool[:26]:26} -> {decision:8} {reason}",
+                    flush=True,
+                )
+
+            time.sleep(
+                max(
+                    args.sleep_floor,
+                    args.interval + random.uniform(-args.interval * 0.3, args.interval * 0.3),
+                )
             )
 
-        time.sleep(
-            max(0.1, args.interval + random.uniform(-args.interval * 0.3, args.interval * 0.3))
-        )
+    for tid in range(max(1, args.concurrency)):
+        t = threading.Thread(target=worker, args=(tid,), daemon=True)
+        threads.append(t)
+        t.start()
+        if args.concurrency > 1 and tid < args.concurrency - 1:
+            time.sleep(random.uniform(0.05, 0.2))  # desynchronise the workers
+    for t in threads:
+        t.join()
 
     print(f"final: {stats} over {cycle} cycles", flush=True)
     for sc, tot in scenario_totals.items():

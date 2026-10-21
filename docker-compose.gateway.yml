@@ -24,6 +24,7 @@ services:
     - RAUCLE_SIEM_URL=${RAUCLE_SIEM_URL:-}
     - RAUCLE_SIEM_TOKEN=${RAUCLE_SIEM_TOKEN:-}
     - RAUCLE_POLICY_DIR=/etc/raucle/policies-demo
+    - RATE_LIMIT=${RATE_LIMIT:-6000}
     volumes:
     - ./policies:/etc/raucle/policies:ro
     - ./policies/examples:/etc/raucle/policies-demo:ro
@@ -57,7 +58,11 @@ services:
     - --gateway
     - http://raucle-gateway:8080
     - --interval
-    - '8'
+    - '0.3'
+    - --concurrency
+    - '5'
+    - --sleep-floor
+    - '0.05'
     - --quiet
     networks:
     - raucle-internal
