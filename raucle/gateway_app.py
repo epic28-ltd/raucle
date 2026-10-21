@@ -1897,7 +1897,7 @@ let rcptCursor=null, rcptCursors=[];
   let W=0,H=0,dpr=1, chips=[];
   function fit(){ dpr=Math.min(2,devicePixelRatio||1); W=innerWidth; H=innerHeight; field.width=W*dpr; field.height=H*dpr; }
   fit(); addEventListener('resize', fit);
-  const LANES=7;
+  const LANES=12;
   function spawn(){
     const r=Math.random(), kind = r<.10?'esc':r<.34?'no':'ok';
     chips.push({lane:Math.floor(Math.random()*LANES), x:-30-Math.random()*320,
@@ -1909,32 +1909,32 @@ let rcptCursor=null, rcptCursors=[];
     ctx.setTransform(dpr,0,0,dpr,0,0);
     ctx.clearRect(0,0,W,H);
     for(let l=1;l<=LANES;l++){
-      ctx.strokeStyle='rgba(10,10,10,.07)'; ctx.lineWidth=1;
+      ctx.strokeStyle='rgba(10,10,10,.08)'; ctx.lineWidth=1;
       ctx.beginPath(); ctx.moveTo(0,lh*l+.5); ctx.lineTo(W,lh*l+.5); ctx.stroke();
     }
     for(const c of chips){
       if(c.x===undefined){ continue; }
-      c.x+=c.v*dt*72;
+      c.x+=c.v*dt*150;
       if(!c.done && c.x>W*.22 && Math.random()<.008) c.done=true;
       if(c.done && c.kind==='no') c.dy=Math.min(30,c.dy+24*dt);
       const y=lh*(c.lane+1)+c.dy+(c.kind==='esc'?Math.sin(t*2+c.seed*9)*2:0), h=c.s, q=h/2;
       if(c.kind==='no'&&c.done){
-        ctx.strokeStyle='rgba(221,47,69,.55)'; ctx.lineWidth=1.5;
+        ctx.strokeStyle='rgba(10,10,10,.42)'; ctx.lineWidth=1.5;
         ctx.strokeRect(c.x-q,y-q,h,h);
         ctx.beginPath(); ctx.moveTo(c.x-q+2,y-q+2); ctx.lineTo(c.x+q-2,y+q-2);
         ctx.moveTo(c.x+q-2,y-q+2); ctx.lineTo(c.x-q+2,y+q-2); ctx.stroke();
       } else if(c.kind==='esc'){
-        ctx.strokeStyle='rgba(217,119,6,.55)'; ctx.lineWidth=1.5;
+        ctx.strokeStyle='rgba(10,10,10,.38)'; ctx.lineWidth=1.5;
         ctx.beginPath(); ctx.moveTo(c.x,y-q); ctx.lineTo(c.x+q,y); ctx.lineTo(c.x,y+q); ctx.lineTo(c.x-q,y); ctx.closePath(); ctx.stroke();
       } else if(c.done){
-        ctx.fillStyle='rgba(22,163,74,.40)'; ctx.fillRect(c.x-q,y-q,h,h);
+        ctx.fillStyle='rgba(10,10,10,.40)'; ctx.fillRect(c.x-q,y-q,h,h);
         if(c.trail==null) c.trail=c.x;
-        ctx.strokeStyle='rgba(139,145,158,.35)'; ctx.lineWidth=1; ctx.setLineDash([2,3]);
+        ctx.strokeStyle='rgba(10,10,10,.22)'; ctx.lineWidth=1; ctx.setLineDash([2,3]);
         ctx.beginPath(); ctx.moveTo(c.trail,y); ctx.lineTo(c.x-q-5,y); ctx.stroke(); ctx.setLineDash([]);
       } else {
-        ctx.strokeStyle='rgba(10,10,10,.32)'; ctx.lineWidth=1.5;
+        ctx.strokeStyle='rgba(10,10,10,.34)'; ctx.lineWidth=1.5;
         ctx.strokeRect(c.x-q,y-q,h,h);
-        if(c.seed>.8){ ctx.fillStyle='rgba(10,10,10,.32)'; ctx.fillRect(c.x-1,y-1,3,3); }
+        if(c.seed>.8){ ctx.fillStyle='rgba(10,10,10,.34)'; ctx.fillRect(c.x-1,y-1,3,3); }
       }
     }
     chips = chips.filter(c=>c.x<W+50 && c.dy<H*.6);

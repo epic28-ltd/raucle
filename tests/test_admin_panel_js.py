@@ -52,6 +52,14 @@ def test_field_is_login_screen_only() -> None:
     assert "getElem'+'entById" not in ADMIN_PANEL_HTML
 
 
+def test_field_is_pure_greyscale() -> None:
+    i = ADMIN_PANEL_HTML.find("/* --- ambient ledger field")
+    j = ADMIN_PANEL_HTML.find("})();", i)
+    field_js = ADMIN_PANEL_HTML[i:j]
+    for tone in ("#16a34a", "#dd2f45", "#d97706", "22,163,74", "221,47,69", "217,119,6"):
+        assert tone not in field_js
+
+
 def _extract_script_blocks(html: str) -> list[str]:
     return [b for b in re.findall(r"<script[^>]*>(.*?)</script>", html, re.S) if b.strip()]
 
