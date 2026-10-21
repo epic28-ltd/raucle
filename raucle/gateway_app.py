@@ -180,12 +180,12 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
     )
     _limiter = None
     try:
+        import os
+
         from slowapi import Limiter
         from slowapi.errors import RateLimitExceeded
         from slowapi.middleware import SlowAPIMiddleware
         from slowapi.util import get_remote_address
-
-        import os
 
         _limit_default = os.environ.get("RAUCLE_GATE_RATE_LIMIT", "1000/minute")
         _limiter = Limiter(key_func=get_remote_address, default_limits=[_limit_default])
@@ -202,7 +202,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         pass  # slowapi not installed, no rate limiting
 
     @app.get("/api/live-pulse", response_class=None)
-    def live_pulse() -> "JSONResponse":  # type: ignore[name-defined]
+    def live_pulse() -> JSONResponse:  # type: ignore[name-defined]
         """Public aggregate pulse for the login field (aggregates only)."""
         return JSONResponse(_live_pulse_payload(gateway))  # type: ignore[name-defined]
 
@@ -417,7 +417,7 @@ def _register_stats_routes(
     """Dashboard stats and the live connection log."""
 
     @app.get("/api/live-pulse", response_class=None)
-    def live_pulse_admin() -> "JSONResponse":  # type: ignore[name-defined]
+    def live_pulse_admin() -> JSONResponse:  # type: ignore[name-defined]
         """Public aggregate pulse for the login field (aggregates only)."""
         return JSONResponse(_live_pulse_payload(gateway))  # type: ignore[name-defined]
 
