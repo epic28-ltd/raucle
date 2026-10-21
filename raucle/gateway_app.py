@@ -2529,7 +2529,7 @@ function topoRender() {
 }
 
 // ===== topology view model: zoom + pan =====
-let topoScale = 1, topoPanX = 0, topoPanY = 0, topoFitPending = false, topoInitPending = true, topoUserZoomed = false;
+let topoScale = 1, topoPanX = 0, topoPanY = 0, topoFitPending = false, topoInitPending = true, topoUserZoomed = false, topoFitAllPending = false;
 
 function applyTopoView() {
   const svg = document.getElementById('topoSvg');
@@ -2538,8 +2538,8 @@ function applyTopoView() {
   if (!svg || !content || !canvas) return;
   if (topoInitPending) {
     topoInitPending = false;
-    frameTopActive(6);
-  } else if (topoFitPending) {
+    frameTopActive(5);
+  } else if (topoFitAllPending) {
     const cw = canvas.clientWidth || 1000, ch = canvas.clientHeight || 420;
     const contentW = TOPO_COL_X.destination + TOPO_W + 60;
     let maxY = 0;
@@ -2551,6 +2551,9 @@ function applyTopoView() {
     topoUserZoomed = false;
     topoPanX = (cw - contentW * topoScale) / 2;
     topoPanY = Math.max(20, (ch - contentH * topoScale) / 2);
+    topoFitAllPending = false;
+  } else if (topoFitPending) {
+    frameTopActive(5);
     topoFitPending = false;
   }
   const t = `translate(${topoPanX}px,${topoPanY}px) scale(${topoScale})`;
@@ -2582,10 +2585,10 @@ function frameTopActive(k) {
     maxY = Math.max(maxY, p.y + TOPO_NODE_H);
   });
   if (!isFinite(minX)) { topoFitPending = true; return; }
-  const pad = 30;
+  const pad = 24;
   const bw = (maxX - minX) + pad * 2, bh = (maxY - minY) + pad * 2;
-  let scale = Math.min((cw - 20) / bw, (ch - 20) / bh, 1.5);
-  topoScale = Math.max(0.3, scale);
+  let scale = Math.min((cw - 20) / bw, (ch - 20) / bh, 2.4);
+  topoScale = Math.max(0.4, scale);
   topoPanX = (cw - (minX + maxX) * topoScale) / 2;
   topoPanY = (ch - (minY + maxY) * topoScale) / 2;
 }
@@ -2602,7 +2605,7 @@ function topoZoomBy(f) {
   topoFitPending = false;
   applyTopoView();
 }
-function topoFit() { topoFitPending = true; applyTopoView(); }
+function topoFit() { topoFitAllPending = true; applyTopoView(); }
 
 function topoFullscreen() {
   const canvas = document.getElementById('topoCanvas');
