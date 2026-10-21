@@ -127,6 +127,50 @@ class SIEMConfigRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _live_pulse_payload(gateway: RaucleGateway) -> dict[str, Any]:
+    """Public aggregate pulse for the login field: rates and totals only.
+
+    Deliberately holds no per-agent, per-tool or payload data:
+    the response is sized by the same information the demo dashboard
+    already publishes, minus its detail. State lives on the shared
+    gateway object so both apps in the process report the gate traffic.
+    """
+    import math
+    import time as _time
+
+    now = _time.time()
+    stats = gateway.get_stats()
+    total = int(stats.get("total_requests", 0))
+    state = getattr(gateway, "_pulse_state", None)
+    if state is None or state["total"] > total:  # fresh process or stats reset
+        state = {"t": now, "total": total, "rpm": 0.0, "t0": now}
+        gateway._pulse_state = state  # noqa: SLF001 - deliberate shared state
+    elapsed = now - state["t"]
+    if elapsed >= 1.0:
+        inst = (total - state["total"]) / elapsed * 60.0
+        alpha = 1.0 if state["rpm"] <= 0.5 else min(0.5, elapsed / 2.0)
+        state["rpm"] = max(0.0, state["rpm"] + alpha * (inst - state["rpm"]))
+        state["t"] = now
+        state["total"] = total
+    if math.isnan(state["rpm"]):
+        state["rpm"] = 0.0
+    payload = {
+        "live": state["rpm"] > 0.5,
+        "rpm_1m": int(round(state["rpm"])),
+        "uptime_s": int(now - state["t0"]),
+        "totals": {
+            "requests": total,
+            "allowed": int(stats.get("allowed", 0)),
+            "denied": int(stats.get("denied", 0)),
+            "escalated": int(stats.get("escalated", 0)),
+        },
+    }
+    avg = stats.get("avg_latency_us")
+    if avg is not None:
+        payload["avg_latency_us"] = avg
+    return payload
+
+
 def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
     """Create the gateway API app (agent-facing)."""
     app = FastAPI(
@@ -159,46 +203,8 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
 
     @app.get("/api/live-pulse", response_class=None)
     def live_pulse() -> "JSONResponse":  # type: ignore[name-defined]
-        """Public aggregate pulse for the login field: rates and totals only.
-
-        Deliberately holds no per-agent, per-tool or payload data:
-        the response is sized by the same information the demo
-        dashboard already publishes, minus its detail.
-        """
-        import math
-        import time as _time
-
-        now = _time.time()
-        stats = gateway.get_stats()
-        total = int(stats.get("total_requests", 0))
-        state = getattr(app.state, "_pulse_state", None)
-        if state is None or state["total"] > total:  # fresh process or stats reset
-            state = {"t": now, "total": total, "rpm": 0.0, "t0": now}
-            app.state._pulse_state = state
-        elapsed = now - state["t"]
-        if elapsed >= 1.0:
-            inst = (total - state["total"]) / elapsed * 60.0
-            alpha = 1.0 if state["rpm"] <= 0.5 else min(0.5, elapsed / 2.0)
-            state["rpm"] = max(0.0, state["rpm"] + alpha * (inst - state["rpm"]))
-            state["t"] = now
-            state["total"] = total
-        if math.isnan(state["rpm"]):
-            state["rpm"] = 0.0
-        payload = {
-            "live": state["rpm"] > 0.5,
-            "rpm_1m": int(round(state["rpm"])),
-            "uptime_s": int(now - state["t0"]),
-            "totals": {
-                "requests": total,
-                "allowed": int(stats.get("allowed", 0)),
-                "denied": int(stats.get("denied", 0)),
-                "escalated": int(stats.get("escalated", 0)),
-            },
-        }
-        avg = stats.get("avg_latency_us")
-        if avg is not None:
-            payload["avg_latency_us"] = avg
-        return JSONResponse(payload)  # type: ignore[name-defined]
+        """Public aggregate pulse for the login field (aggregates only)."""
+        return JSONResponse(_live_pulse_payload(gateway))  # type: ignore[name-defined]
 
     @app.post("/gate")
     def gate_tool_call(
@@ -409,6 +415,11 @@ def _register_stats_routes(
     app: FastAPI, gateway: RaucleGateway, check_auth: Any, check_access: Any
 ) -> None:
     """Dashboard stats and the live connection log."""
+
+    @app.get("/api/live-pulse", response_class=None)
+    def live_pulse_admin() -> "JSONResponse":  # type: ignore[name-defined]
+        """Public aggregate pulse for the login field (aggregates only)."""
+        return JSONResponse(_live_pulse_payload(gateway))  # type: ignore[name-defined]
 
     @app.get(
         "/api/stats",
