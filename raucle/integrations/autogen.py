@@ -249,7 +249,15 @@ def _wrap_function_tool(
 
     async def gated(**kwargs: Any) -> Any:
         token = resolver(tool_name)
-        decision = _evaluate_gate(gate, token, tool_name, kwargs, agent_id)
+        # B2: an empty agent_id is not an identity - deny rather than mint
+        # a receipt attributed to "" (fail-closed attribution, same doctrine
+        # as the gateway, v0.23.2).
+        if not agent_id:
+            decision = GateDecision(
+                allowed=False, reason="no acting agent identity (agent_id empty)"
+            )
+        else:
+            decision = _evaluate_gate(gate, token, tool_name, kwargs, agent_id)
 
         _emit_receipt(
             sink,
@@ -270,8 +278,13 @@ def _wrap_function_tool(
             return await original_func(**kwargs)
         return original_func(**kwargs)
 
-    gated.__name__ = original_func.__name__
-    gated.__doc__ = original_func.__doc__
+    # B2 fix: preserve the original callable's signature (via __wrapped__)
+    # so autogen's FunctionTool builds the args model from the REAL tool
+    # signature - the bare **kwargs closure made every structured-arg call
+    # fail validation ("kwargs: Field required").
+    import functools
+
+    functools.wraps(original_func)(gated)
 
     return FunctionTool(gated, description=description, name=tool_name)
 

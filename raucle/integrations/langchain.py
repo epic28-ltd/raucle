@@ -227,7 +227,7 @@ class RaucleCallbackHandler(BaseCallbackHandler):
         token_resolver: TokenResolver | None = None,
         raise_on_deny: bool = True,
         lean_theorem_id: str = "vcd.gate_soundness",
-        require_agent_id: bool = False,
+        require_agent_id: bool = True,
     ) -> None:
         if not _HAS_LANGCHAIN:
             raise RuntimeError(
@@ -250,11 +250,12 @@ class RaucleCallbackHandler(BaseCallbackHandler):
         self._resolver = token_resolver or _default_resolver
         self._raise_on_deny = raise_on_deny
         self._lean_theorem_id = lean_theorem_id
-        # When True, deny if no independent caller agent_id is available in the
-        # call metadata (so the token's agent scope is always checked against a
-        # real caller). Default False is bearer-mode: with no caller id the
-        # holder of the in-force token is trusted and the agent scope check is
-        # skipped (the gate cannot check an identity it was not given).
+        # B2: default True - deny when no independent caller agent_id is
+        # available in the call metadata. An unattributed execution mints no
+        # placeholder identity; the attempt is denied with the reason
+        # recorded (the same fail-closed doctrine as the gateway, v0.23.2).
+        # Opt out explicitly with require_agent_id=False to restore the
+        # legacy bearer-mode trust.
         self._require_agent_id = require_agent_id
 
     # LangChain calls this BEFORE the tool executes. Raising blocks the call.
@@ -275,8 +276,11 @@ class RaucleCallbackHandler(BaseCallbackHandler):
         call_args: Any = inputs if inputs is not None else input_str
 
         token = self._resolver(serialized or {})
+        # B2: no placeholder identities in minted receipts - the acting
+        # agent id is the bound one or the attempt denies (receipt carries
+        # an honest null).
         bound_agent_id = (metadata or {}).get("agent_id")
-        agent_id = bound_agent_id or "<unbound>"
+        agent_id = bound_agent_id
 
         decision = self._make_decision(token, tool_name, call_args, bound_agent_id)
 

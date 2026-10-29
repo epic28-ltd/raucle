@@ -69,20 +69,32 @@ def test_deny_actually_blocks_tool_execution(env):
     langchain-core callback path, not just emit a receipt."""
     handler, *_ = env
     with pytest.raises(CapabilityDenied):
-        transfer_funds.run({"to": "acct:attacker", "amount": 9900}, callbacks=[handler])
+        transfer_funds.run(
+            {"to": "acct:attacker", "amount": 9900},
+            callbacks=[handler],
+            metadata={"agent_id": "agent:test"},
+        )
 
 
 def test_allowed_call_executes(env):
     handler, *_ = env
-    out = transfer_funds.run({"to": "acct:ok", "amount": 50}, callbacks=[handler])
+    out = transfer_funds.run(
+        {"to": "acct:ok", "amount": 50}, callbacks=[handler], metadata={"agent_id": "agent:test"}
+    )
     assert out == "TRANSFERRED 50 -> acct:ok"
 
 
 def test_both_decisions_land_in_verifiable_chain(env):
     handler, sink, signer, log = env
-    transfer_funds.run({"to": "acct:ok", "amount": 50}, callbacks=[handler])
+    transfer_funds.run(
+        {"to": "acct:ok", "amount": 50}, callbacks=[handler], metadata={"agent_id": "agent:test"}
+    )
     with pytest.raises(CapabilityDenied):
-        transfer_funds.run({"to": "acct:attacker", "amount": 9900}, callbacks=[handler])
+        transfer_funds.run(
+            {"to": "acct:attacker", "amount": 9900},
+            callbacks=[handler],
+            metadata={"agent_id": "agent:test"},
+        )
     sink.close()
     report = AuditVerifier(public_key_pem=signer.public_key_pem()).verify_chain(log)
     assert report.valid
@@ -113,7 +125,11 @@ async def test_async_deny_blocks_arun(env):
     propagate through `arun`, not only the sync dispatch."""
     handler, *_ = env
     with pytest.raises(CapabilityDenied):
-        await transfer_funds.arun({"to": "acct:attacker", "amount": 9900}, callbacks=[handler])
+        await transfer_funds.arun(
+            {"to": "acct:attacker", "amount": 9900},
+            callbacks=[handler],
+            metadata={"agent_id": "agent:test"},
+        )
 
 
 @pytest.mark.asyncio
@@ -122,12 +138,15 @@ async def test_async_deny_blocks_ainvoke_config_callbacks(env):
     handler, *_ = env
     with pytest.raises(CapabilityDenied):
         await transfer_funds.ainvoke(
-            {"to": "acct:attacker", "amount": 9900}, config={"callbacks": [handler]}
+            {"to": "acct:attacker", "amount": 9900},
+            config={"callbacks": [handler], "metadata": {"agent_id": "agent:test"}},
         )
 
 
 @pytest.mark.asyncio
 async def test_async_allow_executes(env):
     handler, *_ = env
-    out = await transfer_funds.arun({"to": "acct:ok", "amount": 50}, callbacks=[handler])
+    out = await transfer_funds.arun(
+        {"to": "acct:ok", "amount": 50}, callbacks=[handler], metadata={"agent_id": "agent:test"}
+    )
     assert out == "TRANSFERRED 50 -> acct:ok"

@@ -106,7 +106,11 @@ def main() -> int:
     for i, args in enumerate(AGENT_PLANNED_CALLS, 1):
         print(f"Scene {i} — agent calls transfer_funds({args})")
         try:
-            result = transfer_funds.run(args, callbacks=[handler])
+            # B2: bind the acting identity so the call is attributed
+            # (unattributed calls deny by default since the audit).
+            result = transfer_funds.run(
+                args, callbacks=[handler], metadata={"agent_id": "agent:demo.invoice-bot"}
+            )
             print(f"  ALLOWED by gate  -> {result}")
         except CapabilityDenied as exc:
             print(f"  DENIED by gate   -> {exc}")

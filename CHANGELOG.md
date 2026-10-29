@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Changed - B2 attribution audit: unattributed calls deny across all adapters
+- The invariant: every ALLOWED execution carries a real acting identity,
+  and no minted receipt carries a fabricated placeholder. The same
+  fail-closed doctrine as the gateway (v0.23.2), prerequisite for
+  agent+user pair permissioning (B1).
+- langchain: require_agent_id now defaults True (bearer-mode trust is an
+  explicit opt-out); the "<unbound>" placeholder is gone - unattributed
+  attempts deny with the reason recorded and receipts carry an honest null.
+- crewai: bearer mode (agent_id=None) is closed; unattributed attempts
+  deny with "no acting agent identity".
+- autogen: an empty agent_id denies. Found and fixed a latent adapter bug
+  surfaced by the audit: the gated wrapper's bare **kwargs signature made
+  autogen's FunctionTool build a broken args model ("kwargs: Field
+  required") - the wrapper now preserves the original signature via
+  functools.wraps.
+- agent_framework: accepted, documented - the caller id comes from the
+  framework context with a documented bearer fallback to the token's own
+  agent_id; B1 should surface the acting-for user so the fallback never
+  triggers.
+- a2a: audited clean (identity required by construction).
+
 
 ## 0.23.2 (2026-10-29) - attributable token denials are receipted, not pre-gate
 
