@@ -3,6 +3,24 @@
 ## Unreleased
 
 
+## 0.23.2 (2026-10-29) - attributable token denials are receipted, not pre-gate
+
+### Fixed - the evidence gap found by the QM live integration
+- A validly-signed token whose call exceeds its delegated authority (wrong
+  tool binding, agent mismatch, constraint violation, proof mismatch) was
+  rejected during authentication: deny with the reason echoed but no
+  receipt, no persisted evidence. Who tried what is exactly what an auditor
+  needs, so the denial is now receipted with the delegated-authority chain
+  bound (x_gate.authorization). Fail-closed semantics unchanged.
+- GateDecision.attributable distinguishes per-call authorization failures
+  (identity established, authority refuses) from identity-stage failures
+  (unknown key, bad signature, expiry, unverifiable chain), which stay
+  pre-gate denials: there is no trustworthy chain to bind.
+- _deny_result now threads the authorization block into the receipt, so
+  every denial where identity is known carries the chain.
+- Found by exercising the constraint-deny path against a real socket
+  through the QM deployment-directory gate tool (raucle-cloud Move 3).
+
 ## 0.23.1 (2026-10-29) - receipts v1.1: delegated-authority binding, delegation ledger, verifier digest check
 
 ### Added - receipts v1.1: delegated-authority binding in gate receipts
