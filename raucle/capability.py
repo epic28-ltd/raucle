@@ -1160,12 +1160,23 @@ def _attenuation_violation(child: Capability, parent: Capability) -> str | None:
 
 @dataclass
 class GateDecision:
-    """Outcome of :meth:`CapabilityGate.check`."""
+    """Outcome of :meth:`CapabilityGate.check`.
+
+    ``attributable`` marks decisions that failed AFTER the caller's
+    identity was established (tool binding, agent match, argument
+    constraints, proof binding): the token was validly signed and its
+    chain verified, the call simply exceeds the delegated authority.
+    These are attributable misuse - evidence of who tried what - and
+    callers receipt them as denied decisions instead of treating them
+    as authentication failures. Identity-stage failures (unknown key,
+    bad signature, expiry, unverifiable chain) stay unattributable.
+    """
 
     allowed: bool
     reason: str
     token_id: str | None = None
     chain: list[str] = field(default_factory=list)
+    attributable: bool = False
 
     @property
     def denied(self) -> bool:
@@ -1417,12 +1428,15 @@ class CapabilityGate:
     def _check_agent_id(self, token: Capability, agent_id: str) -> GateDecision | None:
         """Return a DENY decision if the caller agent_id is invalid."""
         if not _AGENT_ID_RE.match(agent_id):
-            return GateDecision(False, f"malformed caller agent_id {agent_id!r}", token.token_id)
+            return GateDecision(
+                False, f"malformed caller agent_id {agent_id!r}", token.token_id, attributable=True
+            )
         if agent_id != token.agent_id and not agent_id.startswith(token.agent_id + "."):
             return GateDecision(
                 False,
                 f"agent_id {agent_id!r} does not match token's {token.agent_id!r}",
                 token.token_id,
+                attributable=True,
             )
         return None
 
@@ -1495,10 +1509,14 @@ class CapabilityGate:
         if ts >= token.expires_at:
             return GateDecision(False, "token expired", token.token_id)
 
-        # 5) Tool match.
+        # 5) Tool match. Identity is established above; a binding failure is
+        # attributable misuse (receipted by callers as a denied decision).
         if token.tool != tool:
             return GateDecision(
-                False, f"token bound to tool {token.tool!r}, called {tool!r}", token.token_id
+                False,
+                f"token bound to tool {token.tool!r}, called {tool!r}",
+                token.token_id,
+                attributable=True,
             )
 
         # 6) Agent match (when supplied). A caller's agent_id must equal the
@@ -1519,9 +1537,13 @@ class CapabilityGate:
             # Full traceback goes to the server-side log only; the decision
             # reason is caller-visible and must not leak evaluation internals.
             logger.exception("constraint evaluation raised for token %s; denying", token.token_id)
-            return GateDecision(False, "constraint evaluation error (deny)", token.token_id)
+            return GateDecision(
+                False, "constraint evaluation error (deny)", token.token_id, attributable=True
+            )
         if why:
-            return GateDecision(False, f"constraint violated: {why}", token.token_id)
+            return GateDecision(
+                False, f"constraint violated: {why}", token.token_id, attributable=True
+            )
 
         # 7.5) Proof enforcement (defence-in-depth at gate time).
         # In "off" mode this is a no-op. In "lenient" / "strict" the
@@ -1632,6 +1654,7 @@ class CapabilityGate:
                     False,
                     "strict proof mode: token has no policy_proof_hash",
                     token.token_id,
+                    attributable=True,
                 )
             return None  # lenient: no proof to check
 
@@ -1639,7 +1662,9 @@ class CapabilityGate:
         if proof is None:
             msg = f"policy_proof_hash {token.policy_proof_hash!r} not in trusted_proofs cache"
             if strict:
-                return GateDecision(False, f"strict proof mode: {msg}", token.token_id)
+                return GateDecision(
+                    False, f"strict proof mode: {msg}", token.token_id, attributable=True
+                )
             logger.warning("lenient proof mode: %s", msg)
             return None
 
@@ -1652,6 +1677,7 @@ class CapabilityGate:
                 False,
                 "strict proof mode: token missing grammar_hash or policy_hash binding",
                 token.token_id,
+                attributable=True,
             )
         # Bind the PROOF to what the gate actually ENFORCES. Without this, a
         # token could cite a PROVEN proof over an unrelated policy while
@@ -1682,6 +1708,7 @@ class CapabilityGate:
                 False,
                 f"proof for {token.policy_proof_hash!r} is {proof.status!r}, not PROVEN",
                 token.token_id,
+                attributable=True,
             )
         if token.grammar_hash and token.grammar_hash != proof.grammar_hash:
             return GateDecision(
@@ -1689,6 +1716,7 @@ class CapabilityGate:
                 f"token grammar_hash {token.grammar_hash!r} does not match "
                 f"proof grammar_hash {proof.grammar_hash!r}",
                 token.token_id,
+                attributable=True,
             )
         if token.policy_hash and token.policy_hash != proof.policy_hash:
             return GateDecision(
@@ -1696,6 +1724,7 @@ class CapabilityGate:
                 f"token policy_hash {token.policy_hash!r} does not match "
                 f"proof policy_hash {proof.policy_hash!r}",
                 token.token_id,
+                attributable=True,
             )
         return None
 

@@ -252,3 +252,129 @@ def test_ledger_tampering_fails_resolution(tmp_path):
     # resolution survives (Capability.from_dict accepts it), but the record's OWN
     # digest no longer matches: ledger exposes hash check for that
     assert hasattr(led2, "resolver")
+
+
+def _delegated_setup(tmp_path):
+    """Shared arrange for the attributable-denial tests: gateway in token
+    mode with a registered issuer and a ledger-backed root/child chain."""
+    from raucle.capability import CapabilityIssuer, DelegationLedger
+
+    base_config = GatewayConfig(
+        host="127.0.0.1",
+        admin_api_key="test-admin-key",
+        signer_backend="local",
+        policy_file="",
+        receipt_store=str(tmp_path / "receipts.jsonl"),
+        audit_chain=str(tmp_path / "audit.jsonl"),
+        registry_path=str(tmp_path / "registry.jsonl"),
+        agent_credentials_file=str(tmp_path / "agent-credentials.jsonl"),
+    )
+    base_config.policy_file = tmp_path / "policies.yaml"
+    base_config.policy_file.write_text(POLICY)
+    base_config.gate_auth = "token"
+
+    issuer = CapabilityIssuer.generate(issuer="test-issuer")
+    ledger = DelegationLedger(tmp_path / "delegations.jsonl")
+    root = issuer.mint(
+        agent_id="agent:svc",
+        tool="lookup_balance",
+        constraints={"allowed_values": {"account": ["ACC-001"]}},
+        ttl_seconds=600,
+    )
+    child = issuer.attenuate(root, extra_constraints={"max_calls_per_hour": 5})
+    ledger.register(root, "agent:svc", verifying_key=issuer)
+    ledger.register(child, "agent:svc", verifying_key=issuer)
+
+    pem = (
+        issuer.public_key_pem.decode()
+        if isinstance(issuer.public_key_pem, bytes)
+        else issuer.public_key_pem
+    )
+    TrustRegistry(path=tmp_path / "registry.jsonl").publish(pem, issuer="test-issuer")
+    base_config.registry_path = str(tmp_path / "registry.jsonl")
+    base_config.delegations_file = str(tmp_path / "delegations.jsonl")
+
+    gw = RaucleGateway(base_config)
+    client = TestClient(create_gateway_app(gw))
+    return gw, client, issuer, root, child
+
+
+def test_constraint_violation_is_receipted_not_pregate(tmp_path):
+    """A validly-signed token whose args breach its narrowing is
+    attributable misuse: the identity is verified, the delegated
+    authority simply does not cover the call. The denial must be
+    RECEIPTED with the chain bound, not dropped as a pre-gate auth
+    failure - who tried what is precisely the evidence an auditor
+    needs. Fail-closed either way: the call never proceeds."""
+    _gw, client, _issuer, root, child = _delegated_setup(tmp_path)
+
+    resp = client.post(
+        "/gate",
+        json={
+            "tool": "lookup_balance",
+            "args": {"account": "ACC-999"},
+            "agent_id": "agent:svc",
+        },
+        headers={"X-Capability-Token": json.dumps(child.to_dict())},
+    )
+    body = resp.json()
+    assert body["decision"] == "deny", body
+    assert "constraint violated" in body["reason"], body
+    assert body.get("receipt_id"), body
+
+    payload = _last_receipt_payload(tmp_path)
+    assert payload["x_gate"]["decision"] == "deny"
+    auth = payload["x_gate"]["authorization"]
+    assert auth["capability_id"] == child.token_id
+    assert auth["parent_id"] == root.token_id
+    assert auth["attenuated"] is True
+
+
+def test_tool_mismatch_is_receipted_not_pregate(tmp_path):
+    """A validly-signed token used outside its tool binding is the same
+    class of attributable misuse: receipted deny with the chain bound."""
+    _gw, client, _issuer, root, child = _delegated_setup(tmp_path)
+
+    resp = client.post(
+        "/gate",
+        json={"tool": "transfer_funds", "args": {"account": "ACC-001"}, "agent_id": "agent:svc"},
+        headers={"X-Capability-Token": json.dumps(child.to_dict())},
+    )
+    body = resp.json()
+    assert body["decision"] == "deny", body
+    assert body.get("receipt_id"), body
+
+    payload = _last_receipt_payload(tmp_path)
+    auth = payload["x_gate"]["authorization"]
+    assert auth["capability_id"] == child.token_id
+
+
+def test_unverifiable_identity_stays_pregate(tmp_path):
+    """The complement: a token whose signature cannot be verified has no
+    attributable identity, so the denial stays pre-gate (decision +
+    reason echoed, receipt_id None). Nothing is persisted because there
+    is no trustworthy chain to bind."""
+    from raucle.capability import CapabilityIssuer
+
+    _gw, client, _issuer, _root, _child = _delegated_setup(tmp_path)
+    rogue_issuer = CapabilityIssuer.generate(issuer="rogue-issuer")
+    rogue_token = rogue_issuer.mint(
+        agent_id="agent:rogue",
+        tool="lookup_balance",
+        constraints={"allowed_values": {"account": ["ACC-999"]}},
+        ttl_seconds=600,
+    )
+
+    resp = client.post(
+        "/gate",
+        json={
+            "tool": "lookup_balance",
+            "args": {"account": "ACC-999"},
+            "agent_id": "agent:rogue",
+        },
+        headers={"X-Capability-Token": json.dumps(rogue_token.to_dict())},
+    )
+    body = resp.json()
+    assert body["decision"] == "deny", body
+    assert "unauthenticated" in body["reason"], body
+    assert body.get("receipt_id") is None, body

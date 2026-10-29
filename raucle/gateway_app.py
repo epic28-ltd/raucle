@@ -220,9 +220,15 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         Authentication (RAUCLE_GATE_AUTH): "off" trusts the declared
         agent_id (internal networks only); "apikey" requires X-Api-Key;
         "token" requires X-Capability-Token (verified against the trust
-        registry). On auth failure the decision is DENY with the reason
-        - a 401 would hide the denial from the receipt trail, and an
-        unauthenticated decision must still be receipted as denied.
+        registry).
+
+        Denial semantics: an UNAUTHENTICATED caller (no verifiable
+        identity) is denied pre-gate with the reason - decision + reason
+        echoed, no receipt, because there is no trustworthy chain to
+        bind. An ATTRIBUTABLE denial - a validly-signed token whose call
+        exceeds the delegated authority (wrong tool, constraint
+        violation) - is denied WITH a receipt binding the delegated-
+        authority chain: who tried what is evidence, not noise.
         """
         import json as _json
 
@@ -235,7 +241,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         import uuid as _uuid
 
         trace_id = x_trace_id or _uuid.uuid4().hex
-        agent_id, auth_reason = gateway.authenticate_caller(
+        agent_id, auth_reason, token_decision = gateway.authenticate_caller(
             api_key=x_api_key,
             capability_token=token_dict,
             tool=req.tool,
@@ -257,6 +263,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
             trace_id=trace_id,
             approval_id=x_approval_id or "",
             _authorization_hint=authorization,
+            _token_decision=token_decision,
         )
         # Internal bookkeeping fields never leave the process boundary
         response.pop("_trace_id", None)

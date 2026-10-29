@@ -1142,6 +1142,7 @@ class RaucleGateway:
                 source=result.get("source", ""),
                 destination=result.get("destination", ""),
                 trace_id=result.get("_trace_id", ""),
+                authorization=result.pop("_authorization_hint", None),
             )
         except Exception:
             # Fail-closed accountability: if the receipt cannot be written,
@@ -1176,36 +1177,44 @@ class RaucleGateway:
         tool: str = "",
         args: dict[str, Any] | None = None,
         declared_agent_id: str = "",
-    ) -> tuple[str | None, str]:
+    ) -> tuple[str | None, str, Any]:
         """Authenticate the caller of /gate under the configured auth mode.
 
-        Returns ``(agent_id, reason)``. On success ``agent_id`` is the
-        AUTHENTICATED identity (never the declared one) and ``reason`` is
-        empty. On failure ``agent_id`` is None and ``reason`` explains the
-        denial (the caller must deny with 401/reason).
+        Returns ``(agent_id, reason, token_decision)``. On success
+        ``agent_id`` is the AUTHENTICATED identity (never the declared
+        one), ``reason`` is empty and ``token_decision`` is None. On an
+        IDENTITY failure ``agent_id`` is None and ``reason`` explains the
+        denial (the caller must deny pre-gate). On an ATTRIBUTABLE
+        failure - the token's signature and chain verified but the call
+        exceeds the delegated authority (wrong tool, constraint
+        violation, proof mismatch) - ``agent_id`` is the authenticated
+        identity, ``reason`` is empty and ``token_decision`` is the
+        failing :class:`GateDecision`: the caller denies WITH a receipt
+        binding the chain, because who tried what is evidence, not noise.
 
         Modes:
         - off: declared identity passes through unchanged (compat).
-        - apikey: X-Api-Key looked up in the credential store.
+        - apikey: key looked up in the credential store.
         - token: X-Capability-Token verified (signature, issuer trust,
-          TTL, binding to this tool/args) and the token's agent_id used.
+          TTL) and the token's agent_id used. Binding/constraint failures
+          are returned as attributable decisions for receipted denies.
         """
         args = args or {}
         if self._gate_auth_mode == "off":
-            return declared_agent_id, ""
+            return declared_agent_id, "", None
 
         if self._gate_auth_mode == "apikey":
             if not api_key:
-                return None, "api key required (X-Api-Key)"
+                return None, "api key required (X-Api-Key)", None
             assert self._agent_creds is not None
             agent_id = self._agent_creds.verify(api_key)
             if agent_id is None:
-                return None, "invalid or revoked api key"
-            return agent_id, ""
+                return None, "invalid or revoked api key", None
+            return agent_id, "", None
 
         # token mode
         if not capability_token:
-            return None, "capability token required (X-Capability-Token)"
+            return None, "capability token required (X-Capability-Token)", None
         from raucle.capability import Capability
 
         gate = self._ensure_caller_gate()
@@ -1216,13 +1225,18 @@ class RaucleGateway:
                 else Capability.from_dict(capability_token)
             )
         except (ValueError, TypeError) as exc:
-            return None, f"malformed capability token: {exc}"
+            return None, f"malformed capability token: {exc}", None
         decision = gate.check(token, tool=tool, agent_id=token.agent_id, args=args)
         if not decision.allowed:
-            return None, f"token rejected: {decision.reason}"
+            if decision.attributable:
+                # Authenticated misuse: signature and chain verified; the
+                # delegated authority does not cover this call. Deny WITH
+                # evidence (receipted, chain bound) rather than pre-gate.
+                return token.agent_id, "", decision
+            return None, f"token rejected: {decision.reason}", None
         if declared_agent_id and declared_agent_id != token.agent_id:
-            return None, "agent_id/token mismatch"
-        return token.agent_id, ""
+            return None, "agent_id/token mismatch", None
+        return token.agent_id, "", None
 
     def _ensure_caller_gate(self):
         """Lazily build the caller-token verification gate.
@@ -1269,6 +1283,7 @@ class RaucleGateway:
         trace_id: str = "",
         approval_id: str = "",
         _authorization_hint: dict[str, Any] | None = None,
+        _token_decision: Any = None,
     ) -> dict[str, Any]:
         """Gate a tool call. Returns decision dict.
 
@@ -1308,6 +1323,16 @@ class RaucleGateway:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         result["_authorization_hint"] = _authorization_hint
+
+        if _token_decision is not None and not _token_decision.allowed:
+            # Attributable token denial (receipts v1.1): the caller is
+            # authenticated but the delegated authority refuses this call
+            # (wrong tool, constraint violation, proof mismatch). Receipted
+            # deny with the chain bound - the evidence an auditor needs.
+            # Policy evaluation is moot: the authority itself refuses.
+            return self._deny_result(
+                result, f"delegated authority: {_token_decision.reason}", start
+            )
 
         if tool not in self._policy_rules or tool not in self._tokens:
             self._learn_observe(tool, args, agent_id, source, destination)
