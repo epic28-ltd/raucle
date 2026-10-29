@@ -282,6 +282,10 @@ class Capability:
             "policy_hash": self.policy_hash,
         }
 
+    def _signed_material(self) -> bytes:
+        """The exact bytes the issuing issuer signs: canonical body JSON."""
+        return _canonical_json(self.body())
+
     def to_dict(self) -> dict[str, Any]:
         d = self.body()
         d["token_id"] = self.token_id
@@ -757,6 +761,15 @@ class CapabilityIssuer:
         finally:
             os.chmod(p, 0o600)
 
+    @property
+    def public_key_obj(self):
+        """Raw Ed25519 public key object for ledger registration/verification."""
+        pub = self._priv.public_key()
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        assert isinstance(pub, Ed25519PublicKey)
+        return pub
+
     def _sign(self, data: bytes) -> bytes:
         """Sign data with Ed25519, delegating to KMS/HSM if configured."""
         if self._remote_signer is not None:
@@ -1157,6 +1170,131 @@ class GateDecision:
     @property
     def denied(self) -> bool:
         return not self.allowed
+
+
+class DelegationLedger:
+    """Append-only ledger of delegated capability records (JSONL, receipts v1.1).
+
+    Every minted capability is registered here in canonical signed form so a
+    gate can resolve, re-verify and audit attenuation chains offline:
+
+    - ``record_hash``: SHA-256 of the canonical record JSON (self-describing).
+    - ``capability``: the full signed token dict (verify via ProvenanceVerifier
+      or the token's own Ed25519 signature).
+    - ``parent_id``: present when the record is an attenuation of a parent.
+
+    Resolver contract matches CapabilityGate's ``parent_resolver``: callable
+    ``(token_id) -> Capability | None``. Records are verified on registration
+    (the signature must verify against the issuer's own key) and on every
+    resolve; a tampered ledger row fails closed.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self._records: dict[str, dict[str, Any]] = {}
+        self._mtime: float | None = None
+        if self.path.exists():
+            self._load()
+
+    def _load(self) -> None:
+        import json as _json
+
+        self._records = {}
+        with open(self.path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = _json.loads(line)
+                cap_id = rec.get("capability", {}).get("token_id", "")
+                self._records[cap_id] = rec
+        self._mtime = self.path.stat().st_mtime
+
+    def _ensure_loaded(self) -> None:
+        mtime = self.path.stat().st_mtime if self.path.exists() else None
+        if mtime != self._mtime:
+            self._load()
+
+    def register(
+        self,
+        capability: Capability,
+        delegated_to_agent: str = "",
+        verifying_key: Any = None,
+    ) -> str:
+        """Append a signed capability record; returns its record hash.
+
+        ``verifying_key`` = an Ed25519 public key (or PEM bytes) that verifies
+        THIS token's signature; pass the issuing issuer's key unless the token
+        was minted by this process's own CapabilityIssuer (then the issuer's
+        own key is used). Unverifiable records are refused: the ledger only
+        ever holds tokens the issuing key actually signed.
+        """
+
+        token = capability.to_dict()
+        signature = token.get("signature", "")
+        if not signature:
+            raise ValueError("delegation ledger: refusing unsigned capability record")
+        key = verifying_key
+        if isinstance(key, CapabilityIssuer):  # the issuing instance itself
+            key = key.public_key_obj
+        if key is None:
+            key = getattr(self, "_own_pub", None)
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        if isinstance(key, bytes) and b"BEGIN PUBLIC KEY" in key:
+            from cryptography.hazmat.primitives import serialization as _ser
+
+            key = _ser.load_pem_public_key(key)
+        if isinstance(key, str):
+            from cryptography.hazmat.primitives import serialization as _ser
+
+            data = key.encode() if isinstance(key, str) else key
+            key = _ser.load_pem_public_key(
+                data if b"BEGIN" in data else base64.b64decode(data + "=" * (-len(data) % 4))
+            )
+        if key is None:
+            raise ValueError(
+                "delegation ledger: no verifying key for record; pass verifying_key "
+                "or register via the issuing CapabilityIssuer"
+            )
+        if not isinstance(key, Ed25519PublicKey):
+            raise ValueError("delegation ledger: verifying_key must be an Ed25519 public key")
+        try:
+            key.verify(
+                base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4)),
+                capability._signed_material(),
+            )
+        except Exception as exc:
+            raise ValueError(f"delegation ledger: capability signature failed: {exc}") from exc
+
+        record = {"capability": token, "delegated_to_agent": delegated_to_agent}
+        record_hash = hashlib.sha256(
+            json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        ).hexdigest()
+        record["record_hash"] = record_hash
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self._records[token.get("token_id", "")] = record
+        self._mtime = self.path.stat().st_mtime
+        return record_hash
+
+    def resolver(self):
+        """Parent resolver for CapabilityGate: callable (token_id) -> Capability | None."""
+
+        def _resolve(token_id: str) -> Capability | None:
+            rec = self._records.get(token_id)
+            if rec is None:
+                self._ensure_loaded()
+                rec = self._records.get(token_id)
+            if rec is None:
+                return None
+            try:
+                return Capability.from_dict(rec["capability"])
+            except Exception:
+                return None
+
+        return _resolve
 
 
 class CapabilityGate:

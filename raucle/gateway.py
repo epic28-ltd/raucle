@@ -89,6 +89,9 @@ class GatewayConfig:
     # boot log warns that declared identity is trusted.
     gate_auth: str = "off"
     agent_credentials_file: str = "/data/agent-credentials.jsonl"
+    # Receipts v1.1: append-only ledger of delegated capability records; when
+    # set, gate auth token mode resolves attenuated chains against it.
+    delegations_file: str = ""
     signer_key_path: str = ""  # empty = <data-dir>/gateway-signing-key.pem
 
     # Signed gate receipts (PR-B): every /gate decision is emitted as a
@@ -1229,7 +1232,7 @@ class RaucleGateway:
         (registry reloaded per call - cheap for realistic registry
         sizes, correct under revocation).
         """
-        from raucle.capability import CapabilityGate
+        from raucle.capability import CapabilityGate, DelegationLedger
         from raucle.trust_registry import TrustRegistry
 
         issuers: dict[str, str] = {}
@@ -1247,7 +1250,14 @@ class RaucleGateway:
             issuers = {self._issuer.key_id: self._issuer.public_key_pem}
         # Rebuilt per call so registry revocations propagate immediately.
         # as_issuer_map is a fold over the registry - cheap at realistic sizes.
-        return CapabilityGate(trusted_issuers=issuers)
+        return CapabilityGate(
+            trusted_issuers=issuers,
+            parent_resolver=(
+                DelegationLedger(self.config.delegations_file).resolver()
+                if self.config.delegations_file and Path(self.config.delegations_file).exists()
+                else None
+            ),
+        )
 
     def check_tool_call(
         self,
