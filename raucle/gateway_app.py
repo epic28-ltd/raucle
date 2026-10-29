@@ -244,6 +244,10 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         )
         if agent_id is None:
             return _gate_deny_response(req, f"unauthenticated: {auth_reason}")
+        # Receipts v1.1: bind the delegated-authority chain into the receipt
+        from raucle.provenance import authorization_block as _authorization_block
+
+        authorization = _authorization_block(token_dict) if token_dict else None
         response = gateway.check_tool_call(
             req.tool,
             req.args,
@@ -252,10 +256,12 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
             req.destination,
             trace_id=trace_id,
             approval_id=x_approval_id or "",
+            _authorization_hint=authorization,
         )
         # Internal bookkeeping fields never leave the process boundary
         response.pop("_trace_id", None)
         response.pop("_args", None)
+        response.pop("_authorization_hint", None)
         return response
 
     @app.get(

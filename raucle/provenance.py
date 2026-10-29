@@ -298,6 +298,28 @@ def _canonical_json(obj: Any) -> bytes:
     ).encode("utf-8")
 
 
+def authorization_block(cap: dict[str, Any]) -> dict[str, Any]:
+    """Receipts v1.1: the delegated-authority binding for a presented capability.
+
+    Builds the ``x_gate.authorization`` block: the presented capability id,
+    its parent id (nullable), the issuing issuer/key, whether the capability
+    is attenuated, and a SHA-256 ``chain_digest`` over the chain's canonical
+    form. Absent capability (a plain agent call) emits no block: those
+    receipts stay byte-identical to v1.
+    """
+    digest_material = {
+        "capability_id": str(cap.get("token_id", "")),
+        "issuer": str(cap.get("issuer", "")),
+        "key_id": str(cap.get("key_id", "")),
+        "parent_id": cap.get("parent_id"),
+    }
+    return {
+        **digest_material,
+        "attenuated": cap.get("parent_id") is not None,
+        "chain_digest": _sha256_hex(_canonical_json(digest_material)),
+    }
+
+
 def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -1641,6 +1663,19 @@ class ProvenanceVerifier:
 
                 # Capability conformance (verifier-side, when statements supplied)
                 self._verify_capability_conformance(receipt, line_no, report)
+
+                # Receipts v1.1: delegated-authority binding digest check.
+                # Fail closed: a present chain whose digest does not recompute
+                # is tampered or malformed evidence.
+                x_gate_payload = (raw.get("x_gate") if isinstance(raw, dict) else None) or {}
+                auth = x_gate_payload.get("authorization")
+                if auth:
+                    expected = authorization_block(auth)
+                    if auth.get("chain_digest") != expected["chain_digest"]:
+                        report.add_issue(
+                            f"line {line_no}: authorization chain_digest mismatch "
+                            f"(tampered or malformed delegated-authority binding)"
+                        )
 
                 receipts_by_hash[receipt.receipt_hash] = receipt
                 report.receipt_count += 1

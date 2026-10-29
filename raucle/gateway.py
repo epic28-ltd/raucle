@@ -956,6 +956,7 @@ class RaucleGateway:
         destination: str,
         trace_id: str,
         approval_id: str = "",
+        authorization: dict[str, Any] | None = None,
     ) -> str | None:
         """Emit a signed provenance receipt for a gate decision (PR-B).
 
@@ -995,6 +996,8 @@ class RaucleGateway:
                 "approval_id": approval_id,
             },
         }
+        if authorization is not None:  # receipts v1.1: delegated-authority binding
+            payload["x_gate"]["authorization"] = authorization
         # Header + JWS signing + store append are shared with the other
         # authority receipt emitters (PR-E extraction).
         return self._sign_and_store_receipt(payload)
@@ -1255,6 +1258,7 @@ class RaucleGateway:
         destination: str = "",
         trace_id: str = "",
         approval_id: str = "",
+        _authorization_hint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Gate a tool call. Returns decision dict.
 
@@ -1293,6 +1297,7 @@ class RaucleGateway:
             "approval_request_id": None,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        result["_authorization_hint"] = _authorization_hint
 
         if tool not in self._policy_rules or tool not in self._tokens:
             self._learn_observe(tool, args, agent_id, source, destination)
@@ -1387,6 +1392,7 @@ class RaucleGateway:
                 destination=result.get("destination", ""),
                 trace_id=result.get("_trace_id", ""),
                 approval_id=result.get("approval_id", ""),
+                authorization=result.pop("_authorization_hint", None),
             )
         except Exception:
             logger.exception("receipt emission failed; downgrading to deny")
