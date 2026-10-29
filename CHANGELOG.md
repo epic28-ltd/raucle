@@ -2,70 +2,47 @@
 
 ## Unreleased
 
-### Fixed — SonarCloud findings sweep: one real security gap, 49 hygiene items
-- REAL BUG (python:S1172 on audit_pack._verify_pack_chain): the pack's
-  require_pq declaration was accepted but never enforced. A pack whose
-  index declared require_pq=True but whose receipts carried only
-  classical signatures verified as valid - the exact field-stripping
-  downgrade the strict mode exists to close. ProvenanceVerifier gains
-  require_pq strict mode (mirror of AuditVerifier's): every receipt in
-  the chain must be a 4-segment pq1 hybrid. Regression test:
-  test_declared_require_pq_with_classical_chain_fails. Pack verdicts now
-  surface the verifier's specific errors (bounded) instead of only the
-  generic chain-invalid reason.
-- handshake.accept_call: removed the unused require_unrevoked parameter
-  (documented behaviour is fail-closed on revoked keys; nothing passed
-  the override).
-- Receipt-page and export collection logic extracted to module helpers
-  (cognitive complexity: _register_receipt_routes 74, check_tool_call,
-  gate_tool_call, _verify_chain_header, _check_issuer_uniqueness,
-  _verify_operator_signatures, _verify_signature all now under the 15
-  threshold; behaviour unchanged, 1003 tests pass).
-- Receipt vocabulary constants (sha256:/provenance-receipt/v1/raucle/v1/
-  agent:gate; CLI default store path) extracted (S1192).
-- Undocumented HTTPException status codes added to route "responses"
-  (health 401 x2, policies 400, ancestry 501) (S8415).
-- Redundant exception classes removed (binascii.Error subclasses
-  ValueError; FileNotFoundError subclasses OSError) (S5713).
-- Duplicate A-Z ranges removed from (?i) regexes in mcp_scanner (S5869);
-  fuzz PRNG made an explicit seeded random.Random instance with the
-  security rationale documented (S2245); slice-comparisons restructured
-  (S6659); dict() constructor -> literal (S7498); consecutive appends ->
-  extend (S9409); dead pq1_count removed (S1481); commented-out-code
-  false positive rephrased (S125); corrupt-key log now logger.exception
-  (S8572); unused gateway param removed from _register_user_routes
-  (S1172); single-return restructures (S3516 x2).
-- TypeScript reference ports (behaviour-neutral; conformance re-verified
-  in CI): async-without-await dropped from import helpers, redundant
-  `?? {}` spread removed, unknown-absorbing union simplified.
+
+## 0.23.1 (2026-10-29) - receipts v1.1: delegated-authority binding, delegation ledger, verifier digest check
+
+### Added - receipts v1.1: delegated-authority binding in gate receipts
+- Gate receipts carry an x_gate.authorization block (capability_id,
+  issuer, key_id, parent_id, attenuated, chain_digest) binding each
+  decision to the delegated-authority chain that authorised it. The
+  chain_digest is SHA-256 over the canonical chain; the verifier fails
+  closed on any mismatch.
+- raucle/capability.py: DelegationLedger, an append-only JSONL of signed
+  capability records. register() refuses any record its stated issuer did
+  not sign; resolver() satisfies CapabilityGate's parent_resolver.
+- GatewayConfig delegations_file: token-auth mode resolves attenuated
+  chains through the ledger when set. Fail-closed when unset: an
+  attenuated token without a resolvable parent denies.
+- Calls without any capability token remain byte-identical v1 receipts.
+- docs/spec/provenance/v1/delegation-extension.md specifies the format;
+  tests/test_delegated_receipts.py pins the semantics (attenuated child
+  allowed through the chain, ledger holds both hops, digest tamper
+  fails, no-resolver deny).
+
+### Fixed - admin panel and demo reliability
+- Demo entry button dead in production: an over-escaped quote pair in the
+  receipt-ancestry link broke the whole script block. Hashes moved to a
+  data-hash attribute with one shared click handler. CI now parses every
+  shipped script block with node --check, so parse breakage cannot ship
+  silently.
+- Live topology rendered empty: the layout helper returned a cache
+  wrapper instead of the position map, so every node drew at undefined
+  coordinates. Scroll now pans (clamped to the graph extents) instead of
+  silently zooming; first launch frames the five busiest chains as
+  aligned rows.
+- Connections page: live tailing off by default, one example connection
+  shown, click a row to reveal its path; connection-log entries carry
+  receipt_id.
+- Public aggregate /api/live-pulse endpoint served by both the
+  agent-facing and admin apps; RAUCLE_GATE_RATE_LIMIT knob (default
+  1000/minute per source) for load-test headroom.
 
 
-### Added — authority attribution: approval receipts, policy ledger, envelope, kill switch (PR-E)
-- raucle/approvals.py: ApprovalManager. Escalated calls now create a
-  receipted human approval request (x_approval); decisions through the
-  admin API are receipted with the named approver; the approval binds to
-  the exact tool, agent and canonical args hash and is consumed once.
-  Re-submitted call with X-Approval-Id allows through the threshold and
-  the action receipt cites the approval (full authority chain:
-  request → human decision → action).
-- Policy change ledger: every admin panel policy write appends a
-  hash-chained entry (seq, actor, action, content sha256, prev_hash) to
-  RAUCLE_POLICY_LEDGER; GET /api/policy-ledger returns entries and
-  recomputed-chain integrity. Receipts already bind ruleset hashes; the
-  ledger closes the loop upward: who changed the rules, and when.
-- Authority envelope: GET /api/agents/{id}/authority returns a signed
-  statement (raucle/authority-envelope/v1) of what the agent could use:
-  policies (tools, constraints, TTL) and credential status, verifiable
-  offline with the gate identity's public key.
-- Kill switch: POST /api/agents/{id}/suspend (admin-only) revokes the
-  agent's credential and writes an x_stop receipt (agent, reason, actor,
-  revoked). The stop itself is evidence: who stopped the agent, when, why.
-- GatewayConfig: approval_ttl_seconds (RAUCLE_APPROVAL_TTL, default 300),
-  policy_ledger_path (RAUCLE_POLICY_LEDGER, empty = disabled).
-- tests/test_authority_attribution.py: 16 tests across all four features
-  (full approval flow, args binding, single consumption, expiry, denial,
-  tamper detection, envelope signature, suspend RBAC).
-
+## 0.23.0 (2026-10-21) - receipt store, chain projections, authority attribution
 
 ### Fixed — SonarCloud findings sweep: one real security gap, 49 hygiene items
 - REAL BUG (python:S1172 on audit_pack._verify_pack_chain): the pack's
