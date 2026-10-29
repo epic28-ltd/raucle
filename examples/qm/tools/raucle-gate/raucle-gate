@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""raucle-gate: QM deployment tool that routes a tool call through the raucle gate.
+
+Installed by QM's deployment-layer sync per tools/raucle-gate/tool.json
+(install.files contract: UTF-8 text file, destination /usr/local/bin/raucle-gate,
+mode 0755). Standard library only; no third-party dependencies.
+
+Environment (set by the deployment's scope env or the calling skill):
+  RAUCLE_GATEWAY_URL       gate origin, e.g. http://raucle-gateway:8080
+  RAUCLE_CAPABILITY_TOKEN  the per-task capability token (the JSON minted by the
+                           raucle bridge), forwarded as X-Capability-Token
+
+Usage:
+  raucle-gate <tool> <args-json>
+
+Exit codes:
+  0  allow     the call was allowed; the response body (with receipt_id) is on stdout
+  1  deny      the call was denied; response body with the receipt id is on stdout
+  2  escalate  the call requires a human approval; response body on stdout
+  3  error     the gate was unreachable or the response was not understood.
+               Fail closed: the wrapped action must NOT proceed.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+_TIMEOUT_S = 15
+_EXIT = {"allow": 0, "deny": 1, "escalate": 2}
+
+
+def _fail_closed(message: str) -> int:
+    print(json.dumps({"decision": "deny", "reason": "gate_unreachable", "detail": message}))
+    print(message, file=sys.stderr)
+    return 3
+
+
+def main() -> int:
+    if len(sys.argv) != 3:
+        print("usage: raucle-gate <tool> <args-json>", file=sys.stderr)
+        return 3
+
+    tool, args_json = sys.argv[1], sys.argv[2]
+    try:
+        args = json.loads(args_json)
+        if not isinstance(args, dict):
+            raise ValueError("args must be a JSON object")
+    except ValueError as exc:
+        print(f"invalid args json: {exc}", file=sys.stderr)
+        return 3
+
+    url = os.environ.get("RAUCLE_GATEWAY_URL")
+    token = os.environ.get("RAUCLE_CAPABILITY_TOKEN")
+    if not url or not token:
+        print(
+            "RAUCLE_GATEWAY_URL and RAUCLE_CAPABILITY_TOKEN must both be set",
+            file=sys.stderr,
+        )
+        return 3
+
+    try:
+        agent_id = json.loads(token)["agent_id"]
+    except (ValueError, KeyError, TypeError):
+        print("RAUCLE_CAPABILITY_TOKEN is not a valid capability token", file=sys.stderr)
+        return 3
+
+    payload = json.dumps({"tool": tool, "args": args, "agent_id": agent_id}).encode()
+    req = urllib.request.Request(
+        url.rstrip("/") + "/gate",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-Capability-Token": token,
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resp:
+            body = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        # The gate answers auth/policy failures with a receipted DENY payload,
+        # so an HTTP error status still carries a decision body.
+        try:
+            body = json.loads(exc.read())
+        except (ValueError, OSError):
+            return _fail_closed(f"gate http {exc.code} without a decision body")
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return _fail_closed(f"gate unreachable: {exc}")
+
+    print(json.dumps(body))
+    return _EXIT.get(body.get("decision", ""), 3)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

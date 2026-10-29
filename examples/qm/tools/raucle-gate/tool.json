@@ -1,0 +1,15 @@
+{
+  "id": "raucle-gate",
+  "label": "Raucle gate: policy-enforced tool calls with signed receipts",
+  "hints": "Use raucle-gate to run account lookups. Every call is checked against policy by the raucle gateway and returns a signed receipt binding the delegated-authority chain; allowed calls exit 0, denied calls exit 1 with the receipt id, escalations exit 2. If the gate is unreachable the call fails closed (exit 3) and must not be retried without an operator.",
+  "install": {
+    "binary": "raucle-gate",
+    "files": [
+      {
+        "from": "raucle-gate",
+        "to": "/usr/local/bin/raucle-gate",
+        "mode": "0755"
+      }
+    ]
+  }
+}
