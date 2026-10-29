@@ -30,8 +30,8 @@ jobs:
         run: |
           if [[ -z "$TOKEN" ]]; then
             echo "::error::WEBSITE_SYNC_TOKEN secret is not configured."
-            echo "Add a fine-grained PAT with contents:write + pull-requests:write on craigamcw/raucle.com"
-            echo "at: https://github.com/craigamcw/raucle/settings/secrets/actions"
+            echo "Add a classic PAT with repo scope (or fine-grained PAT with contents:write) on epic28-ltd/raucle.com"
+            echo "at: https://github.com/epic28-ltd/raucle/settings/secrets/actions"
             exit 1
           fi
 
@@ -52,7 +52,7 @@ jobs:
       - name: Check out raucle.com
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
-          repository: craigamcw/raucle.com
+          repository: epic28-ltd/raucle.com
           token: ${{ secrets.WEBSITE_SYNC_TOKEN }}
           path: website
           ref: main
@@ -135,12 +135,12 @@ jobs:
             printf '  - Release badge bumped to v%s\n' "$VERSION"
             printf '  - Features list regenerated from CHANGELOG.md\n'
             printf "  - What's new callout updated\n\n"
-            printf 'Source: https://github.com/craigamcw/raucle/blob/v%s/CHANGELOG.md\n' "$VERSION"
-            printf 'Workflow run: https://github.com/craigamcw/raucle/actions/runs/%s\n' "$RUN_ID"
+            printf 'Source: https://github.com/epic28-ltd/raucle/blob/v%s/CHANGELOG.md\n' "$VERSION"
+            printf 'Workflow run: https://github.com/epic28-ltd/raucle/actions/runs/%s\n' "$RUN_ID"
           } > /tmp/commit-msg.txt
 
           git add index.html
           git commit -F /tmp/commit-msg.txt
           git push origin main
 
-          echo "Pushed to craigamcw/raucle.com:main — Cloudflare Pages will deploy in ~30s."
+          echo "Pushed to epic28-ltd/raucle.com:main — Cloudflare Pages will deploy in ~30s."
