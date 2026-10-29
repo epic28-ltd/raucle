@@ -960,6 +960,7 @@ class RaucleGateway:
         trace_id: str,
         approval_id: str = "",
         authorization: dict[str, Any] | None = None,
+        rule_id: str = "",
     ) -> str | None:
         """Emit a signed provenance receipt for a gate decision (PR-B).
 
@@ -994,6 +995,7 @@ class RaucleGateway:
                 "source": source,
                 "destination": destination,
                 "policy": policy,
+                "rule_id": rule_id or "",
                 "latency_us": latency_us,
                 "trace_id": trace_id,
                 "approval_id": approval_id,
@@ -1142,7 +1144,8 @@ class RaucleGateway:
                 source=result.get("source", ""),
                 destination=result.get("destination", ""),
                 trace_id=result.get("_trace_id", ""),
-                authorization=result.pop("_authorization_hint", None),
+                authorization=result.get("_authorization_hint"),
+                rule_id=result.get("rule_id", ""),
             )
         except Exception:
             # Fail-closed accountability: if the receipt cannot be written,
@@ -1160,6 +1163,7 @@ class RaucleGateway:
                 }
             )
         self._log_connection(result)
+        result.pop("_authorization_hint", None)
         return result
 
     def _find_rule(self, tool: str, source: str, destination: str) -> Any:
@@ -1363,6 +1367,9 @@ class RaucleGateway:
                 logger.exception("Re-mint failed for %s", tool)
                 return self._deny_result(result, "token expired and re-mint failed", start)
         result["policy"] = Path(matched_rule.source_file).name if matched_rule.source_file else tool
+        # A2: the rule id that produced the decision rides the result into
+        # the audit row (and never leaves the process boundary).
+        result["rule_id"] = getattr(matched_rule, "id", "") or ""
 
         decision = self._gate.check(
             token,
@@ -1427,12 +1434,17 @@ class RaucleGateway:
                 destination=result.get("destination", ""),
                 trace_id=result.get("_trace_id", ""),
                 approval_id=result.get("approval_id", ""),
-                authorization=result.pop("_authorization_hint", None),
+                authorization=result.get("_authorization_hint"),
+                rule_id=result.get("rule_id", ""),
             )
         except Exception:
             logger.exception("receipt emission failed; downgrading to deny")
             return self._deny_result(result, "receipt emission failed", start, siem=False)
         self._log_connection(result)
+        # Internal bookkeeping never leaves the process boundary (the HTTP
+        # route strips these too; this keeps direct callers clean). rule_id
+        # stays in the response: it is decision context, additive and useful.
+        result.pop("_authorization_hint", None)
         return result
 
     # ------------------------------------------------------------------
@@ -1865,7 +1877,12 @@ class RaucleGateway:
         return self.stats.summary()
 
     def _log_connection(self, result: dict[str, Any]) -> None:
-        """Add a connection record to the in-memory ringbuffer and optionally disk."""
+        """Add a connection record to the in-memory ringbuffer and optionally disk.
+
+        A2: rows carry the delegated-authority binding (when the call was
+        token-authenticated) and the rule id that produced the decision, so
+        the audit log answers who-did-what-under-which-authority without
+        joining the receipt store."""
         entry = {
             "timestamp": result.get("timestamp", ""),
             "source": result.get("source", ""),
@@ -1880,6 +1897,12 @@ class RaucleGateway:
         receipt_id = result.get("receipt_id")
         if receipt_id:
             entry["receipt_id"] = receipt_id
+        rule_id = result.get("rule_id")
+        if rule_id:
+            entry["rule_id"] = rule_id
+        authorization = result.get("_authorization_hint")
+        if authorization:
+            entry["authorization"] = authorization
         self._connection_log.append(entry)
         if len(self._connection_log) > self._max_log_size:
             self._connection_log.pop(0)

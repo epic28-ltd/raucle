@@ -987,6 +987,7 @@ class CapabilityIssuer:
                 )
 
         merged = _merge_narrowing(parent.constraints, extra_constraints or {})
+        _assert_narrowing(parent.constraints, merged)
 
         now = _now()
         ttl = (
@@ -1066,6 +1067,44 @@ def _merge_starts_with(out: dict[str, Any], fld: str, prefix: str) -> None:
             f"attenuation starts_with[{fld!r}] {prefix!r} is disjoint from "
             f"parent {existing!r} — no non-empty narrowing exists"
         )
+
+
+def _assert_narrowing(parent: dict[str, Any], child: dict[str, Any]) -> None:
+    """Runtime invariant: delegation narrows, never widens (A2).
+
+    The merge helpers construct narrowing by design; this assertion is
+    defence-in-depth so a future constraint type or merge bug can never mint
+    a child whose effective permission set exceeds its parent's. Raises
+    ``ValueError`` naming the widened dimension. Called from
+    :meth:`CapabilityIssuer.attenuate` after the merge.
+    """
+    _p_allowed = parent.get("allowed_values", {})
+    _c_allowed = child.get("allowed_values", {})
+    for fld, vals in _p_allowed.items():
+        cvals = _c_allowed.get(fld)
+        if cvals is None:
+            continue  # child leaves the parent's bound in force
+        if not set(_vid(v) for v in cvals) <= set(_vid(v) for v in vals):
+            raise ValueError(f"attenuation widened allowed_values.{fld}")
+
+    _p_forbidden = parent.get("forbidden_values", {})
+    _c_forbidden = child.get("forbidden_values", {})
+    for fld, vals in _p_forbidden.items():
+        cvals = _c_forbidden.get(fld)
+        if cvals is None:
+            continue
+        if not set(_vid(v) for v in vals) <= set(_vid(v) for v in cvals):
+            raise ValueError(f"attenuation narrowed forbidden_values.{fld}")
+
+    for fld, bound in parent.get("max_value", {}).items():
+        cbound = child.get("max_value", {}).get(fld)
+        if cbound is not None and cbound > bound:
+            raise ValueError(f"attenuation raised max_value.{fld}")
+
+    for fld, bound in parent.get("min_value", {}).items():
+        cbound = child.get("min_value", {}).get(fld)
+        if cbound is not None and cbound < bound:
+            raise ValueError(f"attenuation lowered min_value.{fld}")
 
 
 def _merge_narrowing(parent: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:

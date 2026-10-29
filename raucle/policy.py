@@ -56,6 +56,9 @@ class PolicyRule:
     ttl_seconds: int = 300
     constraints: dict[str, Any] = field(default_factory=dict)
     description: str = ""
+    # Stable rule identifier for audit rows (A2): explicit `id:` in the YAML
+    # wins; otherwise derived at load as "<tool>/<agent_id>/<index>".
+    id: str = ""
     require_approval_when: dict[str, Any] | None = None
     # Source/destination matching: the policy only applies when the
     # inbound source and outbound destination match these patterns.
@@ -174,10 +177,13 @@ class PolicyFile:
                 ttl_seconds=rule_data.get("ttl_seconds", 300),
                 constraints=rule_data.get("constraints", {}),
                 description=rule_data.get("description", ""),
+                id=rule_data.get("id") or "",
                 require_approval_when=rule_data.get("require_approval_when"),
                 source=rule_data.get("source", ""),
                 destination=rule_data.get("destination", ""),
             )
+            if not rule.id:
+                rule.id = f"{rule.tool}/{rule.agent_id}/{i}"
             if not rule.tool:
                 raise ValueError(f"Policy rule {i}: 'tool' is required")
             if not rule.agent_id:
