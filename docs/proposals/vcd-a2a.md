@@ -1,6 +1,9 @@
 # VCD-A2A: Capability Discipline for the Agent-to-Agent Protocol
 
-**Status:** Draft proposal, 2026-05-18.
+**Status:** Draft proposal, 2026-05-18; PROMOTED to programme 2026-10-29
+(ractive workstream in raucle-cloud; the receipt format the extension cites is
+now receipts v1.1 with delegated-authority binding: see
+docs/spec/provenance/v1/delegation-extension.md).
 **Authors:** Raucle.
 **Target:** A2A protocol extension submission, [a2a-protocol.org](https://a2a-protocol.org/).
 
@@ -168,3 +171,25 @@ Three reasons:
 1. **The standards slot exists right now and will not exist in 12 months.** Google or Microsoft will write a per-skill OAuth profile if no one else does. A first-mover capability-based proposal, with a reference implementation and an empirical benchmark, has a credible path to becoming the A2A authorisation profile.
 2. **The receipt artefact is raucle's strongest differentiator and A2A is the largest distribution channel for it.** Once an A2A agent emits VCD receipts, every downstream agent and tool that wants to verify them needs raucle (or a compatible implementation). The technique becomes infrastructure.
 3. **The work is incremental on top of the existing v0.10 capability primitive.** Receipts are already content-addressed and signed; the A2A binding is a serialisation format and a transport adapter, not new cryptography.
+
+---
+
+## Addendum: 29 October 2026 (promotion note)
+
+1. The receipt artefact this proposal depends on shipped on 29 October:
+   receipts v1.1 bind the full delegated-authority chain (capability id,
+   parent chain, issuer, attenuation, chain digest) into every gate receipt,
+   verifier-enforced. The A2A extension can now cite a public, offline-verifiable
+   format instead of a proposal promise.
+2. The coordination market validates the deployment surface: YC's QM (July
+   2026, harness-agnostic by design) and Pentagon ("org code") coordinate
+   agents without per-call verifiable authorisation; their harness adapters
+   (raucle-cloud) double as the A2A reference implementations.
+3. Credential-broker entrants (OneCLI, Alter, Agentic Fabriq, Clawvisor)
+   vault and inject secrets but produce no third-party-verifiable delegation
+   evidence: the credential-lease extension (lease receipts chained to
+   delegation hops) is raucle's differentiator in the same standards slot.
+4. Sequencing: (a) receipt-format alignment check against the live A2A
+   extension points this week; (b) a public discussion artefact only after
+   the LASR submission (5-6 Nov); (c) formal submission to a2a-protocol.org
+   = Craig's action, never agent-sent.
