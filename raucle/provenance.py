@@ -1742,34 +1742,50 @@ class ProvenanceVerifier:
             if action == "granted":
                 lease_grants[lid] = lease
             elif action == "redeemed":
-                grant = lease_grants.get(lid)
-                if grant is None:
-                    report.errors.append(
-                        f"line {line_no}: lease {lid!r} redeemed with no lease grant"
-                    )
-                    report.valid = False
-                else:
-                    redeemed_at = int(decoded.get("iat", 0))
-                    window_end = int(grant.get("granted_at", 0)) + int(grant.get("ttl_seconds", 0))
-                    if redeemed_at > window_end:
-                        report.errors.append(
-                            f"line {line_no}: lease {lid!r} redeemed after "
-                            f"lease expired (window ended {window_end})"
-                        )
-                        report.valid = False
-                    grant_scopes = grant.get("scopes") or {}
-                    redeem_scopes = lease.get("scopes") or {}
-                    if redeem_scopes and grant_scopes:
-                        from raucle.capability import _assert_narrowing
+                self._verify_lease_redemption(
+                    decoded, line_no, report, lease, lid, lease_grants.get(lid)
+                )
 
-                        try:
-                            _assert_narrowing(grant_scopes, redeem_scopes)
-                        except ValueError as exc:
-                            report.errors.append(
-                                f"line {line_no}: lease {lid!r} redeemed "
-                                f"beyond its granted scope ({exc})"
-                            )
-                            report.valid = False
+    def _verify_lease_redemption(
+        self,
+        decoded: Any,
+        line_no: int,
+        report: VerificationReport,
+        lease: dict[str, Any],
+        lid: str,
+        grant: dict[str, Any] | None,
+    ) -> None:
+        """Invariant (C1, redemption leg): a redemption must cite a grant
+        collected from an EARLIER line, fall inside that grant's TTL
+        window (the receipt's own iat is the redemption moment), and
+        never widen the granted scopes. Mutates *report* in place."""
+        if grant is None:
+            report.errors.append(
+                f"line {line_no}: lease {lid!r} redeemed with no lease grant"
+            )
+            report.valid = False
+            return
+        redeemed_at = int(decoded.get("iat", 0))
+        window_end = int(grant.get("granted_at", 0)) + int(grant.get("ttl_seconds", 0))
+        if redeemed_at > window_end:
+            report.errors.append(
+                f"line {line_no}: lease {lid!r} redeemed after "
+                f"lease expired (window ended {window_end})"
+            )
+            report.valid = False
+        grant_scopes = grant.get("scopes") or {}
+        redeem_scopes = lease.get("scopes") or {}
+        if redeem_scopes and grant_scopes:
+            from raucle.capability import _assert_narrowing
+
+            try:
+                _assert_narrowing(grant_scopes, redeem_scopes)
+            except ValueError as exc:
+                report.errors.append(
+                    f"line {line_no}: lease {lid!r} redeemed "
+                    f"beyond its granted scope ({exc})"
+                )
+                report.valid = False
 
     def _verify_cascade_revocation(
         self,
@@ -1895,65 +1911,99 @@ class ProvenanceVerifier:
         if isinstance(x_ts, dict):
             mode = x_ts.get("mode")
             digest = str(x_ts.get("digest", ""))
-            if digest != _SHA256_PREFIX + str(decoded.get("input_hash", "")):
-                report.errors.append(
-                    f"line {line_no}: x_timestamp digest does not bind the receipt input_hash"
-                )
-                report.valid = False
-            cited = str(x_ts.get("parent_receipt", ""))
-            if cited not in receipts_by_hash:
-                report.errors.append(
-                    f"line {line_no}: x_timestamp cites receipt {cited[:24]}... not in the chain"
-                )
-                report.valid = False
-            else:
-                raw_cited = raw_lines_by_hash.get(cited)
-                import hashlib as _hl
+            self._verify_time_digest_binding(
+                decoded, line_no, report, x_ts, digest, receipts_by_hash, raw_lines_by_hash
+            )
+            self._verify_time_source_mode(x_ts, line_no, report, mode, digest)
 
-                rederived = (
-                    _SHA256_PREFIX + _hl.sha256(raw_cited.encode("utf-8")).hexdigest()
-                    if raw_cited is not None
-                    else ""
-                )
-                if rederived != digest:
-                    report.errors.append(
-                        f"line {line_no}: x_timestamp digest does not "
-                        f"re-derive from the cited ledger line"
-                    )
-                    report.valid = False
-            if mode == "tsa":
-                from raucle.timestamp import verify_token
+    def _verify_time_digest_binding(
+        self,
+        decoded: Any,
+        line_no: int,
+        report: VerificationReport,
+        x_ts: dict[str, Any],
+        digest: str,
+        receipts_by_hash: dict[str, ProvenanceReceipt],
+        raw_lines_by_hash: dict[str, str],
+    ) -> None:
+        """Invariant (EPIC G, digest leg): the anchor's digest binds the
+        receipt's own input_hash, the cited parent exists EARLIER in this
+        chain, and the head-line digest re-derives from the cited raw
+        ledger line. Mutates *report* in place."""
+        if digest != _SHA256_PREFIX + str(decoded.get("input_hash", "")):
+            report.errors.append(
+                f"line {line_no}: x_timestamp digest does not bind the receipt input_hash"
+            )
+            report.valid = False
+        cited = str(x_ts.get("parent_receipt", ""))
+        if cited not in receipts_by_hash:
+            report.errors.append(
+                f"line {line_no}: x_timestamp cites receipt {cited[:24]}... not in the chain"
+            )
+            report.valid = False
+        else:
+            raw_cited = raw_lines_by_hash.get(cited)
+            import hashlib as _hl
 
-                token_report = verify_token(
-                    base64.b64decode(x_ts.get("token", "")),
-                    expected_digest=bytes.fromhex(digest.removeprefix(_SHA256_PREFIX)),
-                    expected_nonce=int(x_ts.get("nonce", 0)),
-                )
-                if not token_report["valid"]:
-                    report.errors.extend(
-                        f"line {line_no}: Time Stamp Token: {e}" for e in token_report["errors"]
-                    )
-                    report.valid = False
-                elif str(x_ts.get("gen_time")) != str(token_report["gen_time"]):
-                    report.errors.append(
-                        f"line {line_no}: recorded gen_time disagrees with the token's genTime"
-                    )
-                    report.valid = False
-            elif mode == "opentimestamps":
-                # Bounded claim: the receipt proves the anchoring EVENT
-                # was recorded and binds digest + cite; the .ots proof
-                # verifies against the Bitcoin chain externally. No
-                # eIDAS Art 41 presumption attaches to it (spec).
-                pass
-            elif mode == "internal":
+            rederived = (
+                _SHA256_PREFIX + _hl.sha256(raw_cited.encode("utf-8")).hexdigest()
+                if raw_cited is not None
+                else ""
+            )
+            if rederived != digest:
                 report.errors.append(
-                    f"line {line_no}: internal time-source mode does not "
-                    f"carry an x_timestamp extension (spec time-source-v1)"
+                    f"line {line_no}: x_timestamp digest does not "
+                    f"re-derive from the cited ledger line"
                 )
                 report.valid = False
-            else:
-                report.errors.append(f"line {line_no}: unsupported x_timestamp mode {mode!r}")
+
+    def _verify_time_source_mode(
+        self,
+        x_ts: dict[str, Any],
+        line_no: int,
+        report: VerificationReport,
+        mode: Any,
+        digest: str,
+    ) -> None:
+        """Invariant (EPIC G, mode leg): only tsa and opentimestamps modes
+        may carry an x_timestamp anchor, and a tsa anchor must verify
+        offline (imprint, nonce, genTime, TSA signature) with its recorded
+        gen_time agreeing with the token. Fail-closed: internal mode and
+        unknown modes never verify as attested. Mutates *report* in
+        place."""
+        if mode == "tsa":
+            from raucle.timestamp import verify_token
+
+            token_report = verify_token(
+                base64.b64decode(x_ts.get("token", "")),
+                expected_digest=bytes.fromhex(digest.removeprefix(_SHA256_PREFIX)),
+                expected_nonce=int(x_ts.get("nonce", 0)),
+            )
+            if not token_report["valid"]:
+                report.errors.extend(
+                    f"line {line_no}: Time Stamp Token: {e}" for e in token_report["errors"]
+                )
                 report.valid = False
+            elif str(x_ts.get("gen_time")) != str(token_report["gen_time"]):
+                report.errors.append(
+                    f"line {line_no}: recorded gen_time disagrees with the token's genTime"
+                )
+                report.valid = False
+        elif mode == "opentimestamps":
+            # Bounded claim: the receipt proves the anchoring EVENT
+            # was recorded and binds digest + cite; the .ots proof
+            # verifies against the Bitcoin chain externally. No
+            # eIDAS Art 41 presumption attaches to it (spec).
+            pass
+        elif mode == "internal":
+            report.errors.append(
+                f"line {line_no}: internal time-source mode does not "
+                f"carry an x_timestamp extension (spec time-source-v1)"
+            )
+            report.valid = False
+        else:
+            report.errors.append(f"line {line_no}: unsupported x_timestamp mode {mode!r}")
+            report.valid = False
 
     def verify_chain(self, path: str | Path) -> VerificationReport:
         """Verify a JSONL chain file."""
