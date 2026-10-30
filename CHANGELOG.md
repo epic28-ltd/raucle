@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.23.3 (2026-10-30) - intent binding, cascade revocation, pair permissioning
+
 ### Added - B1: agent+user pair permissioning (OSS evidence half)
 - The principal becomes the (agent, acting-for user) pair: a capability may
   bind to a user via acting_for (user:-prefixed principal grammar); tokens
