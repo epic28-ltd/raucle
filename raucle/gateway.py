@@ -1325,6 +1325,59 @@ class RaucleGateway:
             revoked_token_ids=self._load_revoked_ids(),
         )
 
+    def _fresh_check_result(
+        self,
+        tool: str,
+        args: dict[str, Any],
+        agent_id: str,
+        source: str,
+        destination: str,
+        trace_id: str,
+        _authorization_hint: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Invariant: every check starts from the fail-closed baseline -
+        decision "deny", reason "unknown tool" - so any early return
+        inherits a coherent result skeleton, and the internal
+        bookkeeping fields (_trace_id, _args, _authorization_hint) ride
+        the result from the first statement."""
+        result: dict[str, Any] = {
+            "_trace_id": trace_id,
+            "_args": args,
+            "trace_id": trace_id,
+            "tool": tool,
+            "decision": "deny",
+            "reason": "unknown tool",
+            "agent_id": agent_id,
+            "source": source or agent_id or "unknown",
+            "destination": destination or tool,
+            "policy": None,
+            "args_hash": "",
+            "receipt_id": None,
+            "approval_request_id": None,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        result["_authorization_hint"] = _authorization_hint
+        return result
+
+    def _ensure_fresh_token(self, tool: str, token: Any, matched_rule: Any, now_ts: float) -> Any:
+        """Invariant: the rule's capability token is live - a TTL lapse
+        re-mints under the SAME rule (same issuer key, same constraints)
+        so short policy TTLs do not brick a long-running gateway, and a
+        failed re-mint raises so the caller denies fail-closed, never
+        serving a stale token."""
+        if token.expires_at <= now_ts:
+            token = self._mint_for_rule(matched_rule)
+            self._tokens[tool] = token
+        return token
+
+    def _bind_rule_metadata(self, result: dict[str, Any], matched_rule: Any, tool: str) -> None:
+        """Invariant: the decision cites the exact rule that produced it -
+        the policy file name and the rule id (A2) ride the result into
+        the audit row so every receipt is traceable to the policy content
+        in force; the rule id never leaves the process boundary."""
+        result["policy"] = Path(matched_rule.source_file).name if matched_rule.source_file else tool
+        result["rule_id"] = getattr(matched_rule, "id", "") or ""
+
     def check_tool_call(
         self,
         tool: str,
@@ -1359,24 +1412,9 @@ class RaucleGateway:
         """
         start = time.perf_counter()
         trace_id = trace_id or ""
-
-        result: dict[str, Any] = {
-            "_trace_id": trace_id,
-            "_args": args,
-            "trace_id": trace_id,
-            "tool": tool,
-            "decision": "deny",
-            "reason": "unknown tool",
-            "agent_id": agent_id,
-            "source": source or agent_id or "unknown",
-            "destination": destination or tool,
-            "policy": None,
-            "args_hash": "",
-            "receipt_id": None,
-            "approval_request_id": None,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        result["_authorization_hint"] = _authorization_hint
+        result = self._fresh_check_result(
+            tool, args, agent_id, source, destination, trace_id, _authorization_hint
+        )
 
         if _token_decision is not None and not _token_decision.allowed:
             # Attributable token denial (receipts v1.1): the caller is
@@ -1409,21 +1447,15 @@ class RaucleGateway:
 
         token = self._tokens[tool]
         actual_agent_id = agent_id or matched_rule.agent_id
-        now_ts = time.time()
-        if token.expires_at <= now_ts:
-            # Token TTL elapsed; re-mint under the matched rule (same issuer
-            # key, same constraints) so short policy TTLs do not brick a
-            # long-running gateway. Fail-closed if re-minting fails.
-            try:
-                token = self._mint_for_rule(matched_rule)
-                self._tokens[tool] = token
-            except Exception:
-                logger.exception("Re-mint failed for %s", tool)
-                return self._deny_result(result, "token expired and re-mint failed", start)
-        result["policy"] = Path(matched_rule.source_file).name if matched_rule.source_file else tool
-        # A2: the rule id that produced the decision rides the result into
-        # the audit row (and never leaves the process boundary).
-        result["rule_id"] = getattr(matched_rule, "id", "") or ""
+        # Token TTL elapsed; re-mint under the matched rule (same issuer
+        # key, same constraints) so short policy TTLs do not brick a
+        # long-running gateway. Fail-closed if re-minting fails.
+        try:
+            token = self._ensure_fresh_token(tool, token, matched_rule, time.time())
+        except Exception:
+            logger.exception("Re-mint failed for %s", tool)
+            return self._deny_result(result, "token expired and re-mint failed", start)
+        self._bind_rule_metadata(result, matched_rule, tool)
 
         decision = self._gate.check(
             token,
