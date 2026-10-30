@@ -273,7 +273,7 @@ fn neutralise_lone_surrogate_escapes(raw: &str) -> String {
             }
         }
         // Copy one UTF-8 character (not byte) to stay on char boundaries.
-        let ch_len = raw[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        let ch_len = raw[i..].chars().next().map(char::len_utf8).unwrap_or(1);
         out.push_str(&raw[i..i + ch_len]);
         i += ch_len;
     }

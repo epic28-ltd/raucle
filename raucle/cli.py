@@ -1916,7 +1916,7 @@ def _cmd_scan_pdf(args: argparse.Namespace) -> int:
     except ImportError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
-    except (FileNotFoundError, OSError) as exc:
+    except OSError as exc:  # FileNotFoundError subclasses OSError (S5713)
         print(f"Error reading PDF: {exc}", file=sys.stderr)
         return 1
 

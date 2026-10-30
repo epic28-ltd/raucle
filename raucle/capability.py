@@ -1160,33 +1160,40 @@ def _assert_narrowing(parent: dict[str, Any], child: dict[str, Any]) -> None:
     ``ValueError`` naming the widened dimension. Called from
     :meth:`CapabilityIssuer.attenuate` after the merge.
     """
-    _p_allowed = parent.get("allowed_values", {})
-    _c_allowed = child.get("allowed_values", {})
-    for fld, vals in _p_allowed.items():
-        cvals = _c_allowed.get(fld)
+    _assert_allowed_narrows(parent.get("allowed_values", {}), child.get("allowed_values", {}))
+    _assert_forbidden_grows(parent.get("forbidden_values", {}), child.get("forbidden_values", {}))
+    _assert_bounds_tighten(parent.get("max_value", {}), child.get("max_value", {}), "max_value")
+    _assert_bounds_tighten(parent.get("min_value", {}), child.get("min_value", {}), "min_value")
+
+
+def _assert_allowed_narrows(p_allowed: dict[str, Any], c_allowed: dict[str, Any]) -> None:
+    for fld, vals in p_allowed.items():
+        cvals = c_allowed.get(fld)
         if cvals is None:
             continue  # child leaves the parent's bound in force
-        if not set(_vid(v) for v in cvals) <= set(_vid(v) for v in vals):
+        if not {_vid(v) for v in cvals} <= {_vid(v) for v in vals}:
             raise ValueError(f"attenuation widened allowed_values.{fld}")
 
-    _p_forbidden = parent.get("forbidden_values", {})
-    _c_forbidden = child.get("forbidden_values", {})
-    for fld, vals in _p_forbidden.items():
-        cvals = _c_forbidden.get(fld)
+
+def _assert_forbidden_grows(p_forbidden: dict[str, Any], c_forbidden: dict[str, Any]) -> None:
+    for fld, vals in p_forbidden.items():
+        cvals = c_forbidden.get(fld)
         if cvals is None:
             continue
-        if not set(_vid(v) for v in vals) <= set(_vid(v) for v in cvals):
+        if not {_vid(v) for v in vals} <= {_vid(v) for v in cvals}:
             raise ValueError(f"attenuation narrowed forbidden_values.{fld}")
 
-    for fld, bound in parent.get("max_value", {}).items():
-        cbound = child.get("max_value", {}).get(fld)
-        if cbound is not None and cbound > bound:
-            raise ValueError(f"attenuation raised max_value.{fld}")
 
-    for fld, bound in parent.get("min_value", {}).items():
-        cbound = child.get("min_value", {}).get(fld)
-        if cbound is not None and cbound < bound:
-            raise ValueError(f"attenuation lowered min_value.{fld}")
+def _assert_bounds_tighten(p_bounds: dict[str, Any], c_bounds: dict[str, Any], kind: str) -> None:
+    for fld, bound in p_bounds.items():
+        cbound = c_bounds.get(fld)
+        if cbound is None:
+            continue
+        widened = cbound > bound if kind == "max_value" else cbound < bound
+        if widened:
+            raise ValueError(
+                f"attenuation {'raised' if kind == 'max_value' else 'lowered'} {kind}.{fld}"
+            )
 
 
 def _merge_narrowing(parent: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:

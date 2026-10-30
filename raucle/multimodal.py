@@ -598,8 +598,7 @@ class MultimodalScanner:
             # OCR output also get caught.
             text_result = self.scan_text(combined_text)
             # Merge in any nested findings.
-            for finding in text_result.findings:
-                result.findings.append(finding)
+            result.findings.extend(text_result.findings)
             result.scan_result = text_result.scan_result
 
         return result
@@ -654,8 +653,7 @@ class MultimodalScanner:
         result.extracted_text = combined
         if combined:
             text_result = self.scan_text(combined)
-            for finding in text_result.findings:
-                result.findings.append(finding)
+            result.findings.extend(text_result.findings)
             result.scan_result = text_result.scan_result
 
         return result

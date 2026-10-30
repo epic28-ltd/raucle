@@ -1642,6 +1642,155 @@ class ProvenanceVerifier:
 
         return receipt
 
+    def _verify_receipt_extensions(
+        self,
+        raw: dict[str, Any],
+        line_no: int,
+        receipt: ProvenanceReceipt,
+        report: VerificationReport,
+        revoked_ids: set[str],
+        revocation_lines: dict[str, int],
+        lease_grants: dict[str, dict[str, Any]],
+    ) -> None:
+        """v1.1/v1.2 extension re-checks for one receipt (extracted from
+        verify_chain): the delegated-authority digest, cascade revocation
+        (temporal, single-pass), lease grant/redemption windows and
+        scopes, and the task-intent re-check. Mutates *report* and the
+        collector dicts in place."""
+        # Receipts v1.1/v1.2: decode the JWS payload for the x_gate
+        # extension checks. NB the envelope carries only
+        # {receipt_hash, jws}; x_gate lives INSIDE the signed payload
+        # (the previous `raw.get("x_gate")` was always empty - the
+        # v1.1 digest re-check never fired; found by the A1 tests).
+        x_gate_payload: dict[str, Any] = {}
+        jws_str = raw.get("jws") if isinstance(raw, dict) else None
+        if isinstance(jws_str, str) and jws_str.count(".") >= 2:
+            seg = jws_str.split(".")[1]
+            seg += "=" * (-len(seg) % 4)
+            try:
+                decoded = json.loads(base64.urlsafe_b64decode(seg))
+                if isinstance(decoded, dict):
+                    x_gate_payload = decoded.get("x_gate") or {}
+            except (ValueError, TypeError):
+                x_gate_payload = {}
+        auth = x_gate_payload.get("authorization")
+        if auth:
+            # Recompute the digest from the BLOCK's own fields (the
+            # emitted block stores capability_id; authorization_block()
+            # itself expects a token dict with token_id - reusing it
+            # here would recompute over empty material).
+            from raucle.provenance import _canonical_json, _sha256_hex
+
+            expected_digest = _sha256_hex(
+                _canonical_json(
+                    {
+                        "capability_id": auth.get("capability_id", ""),
+                        "issuer": auth.get("issuer", ""),
+                        "key_id": auth.get("key_id", ""),
+                        "parent_id": auth.get("parent_id"),
+                    }
+                )
+            )
+            if auth.get("chain_digest") != expected_digest:
+                report.errors.append(
+                    f"line {line_no}: authorization chain_digest mismatch "
+                    f"(tampered or malformed delegated-authority binding)"
+                )
+                report.valid = False
+
+        # C1: lease receipts. Grants collect by lease id; a redemption
+        # must cite a grant, fall inside its TTL window, and never
+        # widen its scopes. The receipt's own iat is the redemption
+        # moment. (x_lease rides the payload root, like x_revocation.)
+        lease = decoded.get("x_lease") if isinstance(decoded, dict) else None
+        if isinstance(lease, dict):
+            action = lease.get("action")
+            lid = str(lease.get("lease_id", ""))
+            if action == "granted":
+                lease_grants[lid] = lease
+            elif action == "redeemed":
+                grant = lease_grants.get(lid)
+                if grant is None:
+                    report.errors.append(
+                        f"line {line_no}: lease {lid!r} redeemed with no lease grant"
+                    )
+                    report.valid = False
+                else:
+                    redeemed_at = int(decoded.get("iat", 0))
+                    window_end = int(grant.get("granted_at", 0)) + int(grant.get("ttl_seconds", 0))
+                    if redeemed_at > window_end:
+                        report.errors.append(
+                            f"line {line_no}: lease {lid!r} redeemed after "
+                            f"lease expired (window ended {window_end})"
+                        )
+                        report.valid = False
+                    grant_scopes = grant.get("scopes") or {}
+                    redeem_scopes = lease.get("scopes") or {}
+                    if redeem_scopes and grant_scopes:
+                        from raucle.capability import _assert_narrowing
+
+                        try:
+                            _assert_narrowing(grant_scopes, redeem_scopes)
+                        except ValueError as exc:
+                            report.errors.append(
+                                f"line {line_no}: lease {lid!r} redeemed "
+                                f"beyond its granted scope ({exc})"
+                            )
+                            report.valid = False
+
+        # A3: cascade revocation. Collect revocation events as we walk
+        # (single pass preserves temporal order): a receipt minted
+        # AFTER a revocation of its cited authority is invalid; one
+        # minted BEFORE it remains valid evidence.
+        auth_block_now = x_gate_payload.get("authorization") or {}
+        cited_now = {
+            auth_block_now.get("capability_id"),
+            auth_block_now.get("parent_id"),
+        }
+        cited_now.discard(None)
+        hit = revoked_ids.intersection(cited_now)
+        if hit:
+            first = min(hit)
+            report.errors.append(
+                f"line {line_no}: cited authority {first} "
+                f"was revoked at line {revocation_lines[first]}"
+            )
+            report.valid = False
+        revocation = None
+        if isinstance(decoded, dict):
+            revocation = decoded.get("x_revocation")
+        if revocation and isinstance(revocation, dict):
+            for rid in revocation.get("revoked_ids") or []:
+                revoked_ids.add(rid)
+                revocation_lines[rid] = line_no
+
+        # Receipts v1.2: task-intent re-check (defence-in-depth). Only
+        # ALLOW receipts are re-checked - a DENY for an out-of-intent
+        # attempt is the enforcement working, not a violation. The
+        # re-check is deterministic, over the bounded disclosure.
+        intent = x_gate_payload.get("intent")
+        if intent is not None and x_gate_payload.get("decision") == "allow":
+            gate_tool = x_gate_payload.get("tool") or receipt.tool
+            intent_tools = intent.get("tools")
+            if intent_tools is not None and gate_tool not in intent_tools:
+                report.errors.append(
+                    f"line {line_no}: ALLOW receipt tool {gate_tool!r} "
+                    f"outside intent scope (approved tools: {intent_tools})"
+                )
+                report.valid = False
+            intent_constraints = intent.get("constraints")
+            check = x_gate_payload.get("intent_check") or {}
+            satisfied = check.get("satisfied_fields") or {}
+            if intent_constraints and satisfied:
+                from raucle.capability import _check_constraints as _icc
+
+                why = _icc(intent_constraints, satisfied)
+                if why:
+                    report.errors.append(
+                        f"line {line_no}: ALLOW receipt violates intent constraint ({why})"
+                    )
+                    report.valid = False
+
     def verify_chain(self, path: str | Path) -> VerificationReport:
         """Verify a JSONL chain file."""
         receipts_by_hash: dict[str, ProvenanceReceipt] = {}
@@ -1667,140 +1816,9 @@ class ProvenanceVerifier:
                 # Capability conformance (verifier-side, when statements supplied)
                 self._verify_capability_conformance(receipt, line_no, report)
 
-                # Receipts v1.1/v1.2: decode the JWS payload for the x_gate
-                # extension checks. NB the envelope carries only
-                # {receipt_hash, jws}; x_gate lives INSIDE the signed payload
-                # (the previous `raw.get("x_gate")` was always empty - the
-                # v1.1 digest re-check never fired; found by the A1 tests).
-                x_gate_payload: dict[str, Any] = {}
-                jws_str = raw.get("jws") if isinstance(raw, dict) else None
-                if isinstance(jws_str, str) and jws_str.count(".") >= 2:
-                    seg = jws_str.split(".")[1]
-                    seg += "=" * (-len(seg) % 4)
-                    try:
-                        decoded = json.loads(base64.urlsafe_b64decode(seg))
-                        if isinstance(decoded, dict):
-                            x_gate_payload = decoded.get("x_gate") or {}
-                    except (ValueError, TypeError):
-                        x_gate_payload = {}
-                auth = x_gate_payload.get("authorization")
-                if auth:
-                    # Recompute the digest from the BLOCK's own fields (the
-                    # emitted block stores capability_id; authorization_block()
-                    # itself expects a token dict with token_id - reusing it
-                    # here would recompute over empty material).
-                    from raucle.provenance import _canonical_json, _sha256_hex
-
-                    expected_digest = _sha256_hex(
-                        _canonical_json(
-                            {
-                                "capability_id": auth.get("capability_id", ""),
-                                "issuer": auth.get("issuer", ""),
-                                "key_id": auth.get("key_id", ""),
-                                "parent_id": auth.get("parent_id"),
-                            }
-                        )
-                    )
-                    if auth.get("chain_digest") != expected_digest:
-                        report.errors.append(
-                            f"line {line_no}: authorization chain_digest mismatch "
-                            f"(tampered or malformed delegated-authority binding)"
-                        )
-                        report.valid = False
-
-                # C1: lease receipts. Grants collect by lease id; a redemption
-                # must cite a grant, fall inside its TTL window, and never
-                # widen its scopes. The receipt's own iat is the redemption
-                # moment. (x_lease rides the payload root, like x_revocation.)
-                lease = decoded.get("x_lease") if isinstance(decoded, dict) else None
-                if isinstance(lease, dict):
-                    action = lease.get("action")
-                    lid = str(lease.get("lease_id", ""))
-                    if action == "granted":
-                        lease_grants[lid] = lease
-                    elif action == "redeemed":
-                        grant = lease_grants.get(lid)
-                        if grant is None:
-                            report.errors.append(
-                                f"line {line_no}: lease {lid!r} redeemed with no lease grant"
-                            )
-                            report.valid = False
-                        else:
-                            redeemed_at = int(decoded.get("iat", 0))
-                            window_end = int(grant.get("granted_at", 0)) + int(
-                                grant.get("ttl_seconds", 0)
-                            )
-                            if redeemed_at > window_end:
-                                report.errors.append(
-                                    f"line {line_no}: lease {lid!r} redeemed after "
-                                    f"lease expired (window ended {window_end})"
-                                )
-                                report.valid = False
-                            grant_scopes = grant.get("scopes") or {}
-                            redeem_scopes = lease.get("scopes") or {}
-                            if redeem_scopes and grant_scopes:
-                                from raucle.capability import _assert_narrowing
-
-                                try:
-                                    _assert_narrowing(grant_scopes, redeem_scopes)
-                                except ValueError as exc:
-                                    report.errors.append(
-                                        f"line {line_no}: lease {lid!r} redeemed "
-                                        f"beyond its granted scope ({exc})"
-                                    )
-                                    report.valid = False
-
-                # A3: cascade revocation. Collect revocation events as we walk
-                # (single pass preserves temporal order): a receipt minted
-                # AFTER a revocation of its cited authority is invalid; one
-                # minted BEFORE it remains valid evidence.
-                auth_block_now = x_gate_payload.get("authorization") or {}
-                cited_now = {
-                    auth_block_now.get("capability_id"),
-                    auth_block_now.get("parent_id"),
-                }
-                cited_now.discard(None)
-                hit = revoked_ids.intersection(cited_now)
-                if hit:
-                    report.errors.append(
-                        f"line {line_no}: cited authority {sorted(hit)[0]} "
-                        f"was revoked at line {revocation_lines[sorted(hit)[0]]}"
-                    )
-                    report.valid = False
-                revocation = None
-                if isinstance(decoded, dict):
-                    revocation = decoded.get("x_revocation")
-                if revocation and isinstance(revocation, dict):
-                    for rid in revocation.get("revoked_ids") or []:
-                        revoked_ids.add(rid)
-                        revocation_lines[rid] = line_no
-
-                # Receipts v1.2: task-intent re-check (defence-in-depth). Only
-                # ALLOW receipts are re-checked - a DENY for an out-of-intent
-                # attempt is the enforcement working, not a violation. The
-                # re-check is deterministic, over the bounded disclosure.
-                intent = x_gate_payload.get("intent")
-                if intent is not None and x_gate_payload.get("decision") == "allow":
-                    gate_tool = x_gate_payload.get("tool") or receipt.tool
-                    intent_tools = intent.get("tools")
-                    if intent_tools is not None and gate_tool not in intent_tools:
-                        report.errors.append(
-                            f"line {line_no}: ALLOW receipt tool {gate_tool!r} "
-                            f"outside intent scope (approved tools: {intent_tools})"
-                        )
-                        report.valid = False
-                    intent_constraints = intent.get("constraints")
-                    check = x_gate_payload.get("intent_check") or {}
-                    satisfied = check.get("satisfied_fields") or {}
-                    if intent_constraints and satisfied:
-                        from raucle.capability import _check_constraints as _icc
-
-                        why = _icc(intent_constraints, satisfied)
-                        if why:
-                            report.errors.append(
-                                f"line {line_no}: ALLOW receipt violates intent constraint ({why})"
-                            )
-                            report.valid = False
+                self._verify_receipt_extensions(
+                    raw, line_no, receipt, report, revoked_ids, revocation_lines, lease_grants
+                )
 
                 receipts_by_hash[receipt.receipt_hash] = receipt
                 report.receipt_count += 1

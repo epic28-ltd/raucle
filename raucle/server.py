@@ -265,9 +265,13 @@ def _metrics_text() -> str:
             if samples:
                 avg = sum(samples) / len(samples)
                 p99 = sorted(samples)[int(len(samples) * 0.99)]
-                lines.append(f'{key},quantile="avg"}} {avg:.2f}')
-                lines.append(f'{key},quantile="0.99"}} {p99:.2f}')
-                lines.append(f"{key}_count}} {len(samples)}")
+                lines.extend(
+                    [
+                        f'{key},quantile="avg"}} {avg:.2f}',
+                        f'{key},quantile="0.99"}} {p99:.2f}',
+                        f"{key}_count}} {len(samples)}",
+                    ]
+                )
 
     return "\n".join(lines) + "\n"
 

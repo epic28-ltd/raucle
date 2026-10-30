@@ -1924,19 +1924,28 @@ class RaucleGateway:
 
     def _revoke_ids(self, ids: list[str], *, reason: str, actor: str, root: str) -> dict[str, Any]:
         """A3 shared leg: persist the revocation records, emit ONE signed
-        revocation receipt naming the whole subtree."""
-        path = Path(self.config.revocations_file or "/tmp/raucle-revocations.jsonl")
-        if self.config.revocations_file:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            now = datetime.now(timezone.utc).isoformat()
-            with open(path, "a", encoding="utf-8") as fh:
-                for tid in ids:
-                    fh.write(
-                        json.dumps(
-                            {"token_id": tid, "reason": reason, "actor": actor, "timestamp": now}
-                        )
-                        + "\n"
+        revocation receipt naming the whole subtree.
+
+        Persistence requires a configured ``revocations_file``: revocation
+        records in a world-writable directory (/tmp) would be tamperable,
+        so an unset path is refused outright rather than defaulted (fail
+        closed, SonarCloud S5443)."""
+        if not self.config.revocations_file:
+            raise ValueError(
+                "revocations_file is not configured; cascade revocation cannot "
+                "persist (set RAUCLE_REVOCATIONS_FILE)"
+            )
+        path = Path(self.config.revocations_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc).isoformat()
+        with open(path, "a", encoding="utf-8") as fh:
+            for tid in ids:
+                fh.write(
+                    json.dumps(
+                        {"token_id": tid, "reason": reason, "actor": actor, "timestamp": now}
                     )
+                    + "\n"
+                )
         receipt_id = None
         try:
             receipt_id = self._emit_authority_receipt(
