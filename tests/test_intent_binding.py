@@ -20,7 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from raucle.capability import CapabilityGate, CapabilityIssuer
-from raucle.gateway import GatewayConfig, RaucleGateway
+from raucle.gateway import GateReceiptContext, GatewayConfig, RaucleGateway
 from raucle.gateway_app import create_gateway_app
 from raucle.provenance import ProvenanceVerifier
 from raucle.trust_registry import TrustRegistry
@@ -208,20 +208,22 @@ def test_verifier_rejects_allow_receipt_violating_intent(tmp_path):
     # Simulate enforcement failure: an ALLOW receipt for a 5-year export
     # under a "check today's calendar" intent.
     gw._emit_gate_receipt(
-        decision="allow",
-        reason="ok",
-        tool="archive_export",
-        agent_id="agent:svc",
-        args={"years": 5},
-        policy=None,
-        latency_us=100,
-        source="agent:svc",
-        destination="archive",
-        trace_id="trace-1",
-        intent_block={
-            "intent": CALENDAR_INTENT,
-            "intent_check": {"tool": "archive_export", "satisfied_fields": {}},
-        },
+        GateReceiptContext(
+            decision="allow",
+            reason="ok",
+            tool="archive_export",
+            agent_id="agent:svc",
+            args={"years": 5},
+            policy=None,
+            latency_us=100,
+            source="agent:svc",
+            destination="archive",
+            trace_id="trace-1",
+            intent_block={
+                "intent": CALENDAR_INTENT,
+                "intent_check": {"tool": "archive_export", "satisfied_fields": {}},
+            },
+        )
     )
 
     pem = gw._gate_identity.public_key_pem()
@@ -251,20 +253,25 @@ def test_verifier_rejects_allow_receipt_violating_intent_constraints(tmp_path):
         "constraints": {"allowed_values": {"to": ["alice@corp.example", "bob@corp.example"]}},
     }
     gw._emit_gate_receipt(
-        decision="allow",
-        reason="ok",
-        tool="send_email",
-        agent_id="agent:svc",
-        args={"to": "eve@evil.example"},
-        policy=None,
-        latency_us=100,
-        source="agent:svc",
-        destination="smtp",
-        trace_id="trace-2",
-        intent_block={
-            "intent": intent,
-            "intent_check": {"tool": "send_email", "satisfied_fields": {"to": "eve@evil.example"}},
-        },
+        GateReceiptContext(
+            decision="allow",
+            reason="ok",
+            tool="send_email",
+            agent_id="agent:svc",
+            args={"to": "eve@evil.example"},
+            policy=None,
+            latency_us=100,
+            source="agent:svc",
+            destination="smtp",
+            trace_id="trace-2",
+            intent_block={
+                "intent": intent,
+                "intent_check": {
+                    "tool": "send_email",
+                    "satisfied_fields": {"to": "eve@evil.example"},
+                },
+            },
+        )
     )
 
     pem = gw._gate_identity.public_key_pem()
@@ -293,34 +300,38 @@ def test_verifier_accepts_honest_intent_receipt(tmp_path):
         "intent_check": {"tool": "calendar_read", "satisfied_fields": {"window": "today"}},
     }
     gw._emit_gate_receipt(
-        decision="allow",
-        reason="ok",
-        tool="calendar_read",
-        agent_id="agent:svc",
-        args={"window": "today"},
-        policy=None,
-        latency_us=100,
-        source="agent:svc",
-        destination="calendar",
-        trace_id="t-ok",
-        intent_block=intent_block,
+        GateReceiptContext(
+            decision="allow",
+            reason="ok",
+            tool="calendar_read",
+            agent_id="agent:svc",
+            args={"window": "today"},
+            policy=None,
+            latency_us=100,
+            source="agent:svc",
+            destination="calendar",
+            trace_id="t-ok",
+            intent_block=intent_block,
+        )
     )
     # the DENY for the out-of-intent export: enforcement, not violation
     gw._emit_gate_receipt(
-        decision="deny",
-        reason="delegated authority: intent scope",
-        tool="archive_export",
-        agent_id="agent:svc",
-        args={"years": 5},
-        policy=None,
-        latency_us=100,
-        source="agent:svc",
-        destination="archive",
-        trace_id="t-deny",
-        intent_block={
-            "intent": CALENDAR_INTENT,
-            "intent_check": {"tool": "archive_export", "satisfied_fields": {}},
-        },
+        GateReceiptContext(
+            decision="deny",
+            reason="delegated authority: intent scope",
+            tool="archive_export",
+            agent_id="agent:svc",
+            args={"years": 5},
+            policy=None,
+            latency_us=100,
+            source="agent:svc",
+            destination="archive",
+            trace_id="t-deny",
+            intent_block={
+                "intent": CALENDAR_INTENT,
+                "intent_check": {"tool": "archive_export", "satisfied_fields": {}},
+            },
+        )
     )
 
     pem = gw._gate_identity.public_key_pem()

@@ -15,7 +15,7 @@ import json
 from fastapi.testclient import TestClient
 
 from raucle.capability import CapabilityIssuer, DelegationLedger
-from raucle.gateway import GatewayConfig, RaucleGateway
+from raucle.gateway import GateReceiptContext, GatewayConfig, RaucleGateway
 from raucle.gateway_app import create_gateway_app
 from raucle.provenance import ProvenanceVerifier
 from raucle.trust_registry import TrustRegistry
@@ -129,17 +129,19 @@ def test_verifier_marks_post_revocation_receipts(tmp_path):
     from raucle.provenance import authorization_block
 
     gw._emit_gate_receipt(
-        decision="allow",
-        reason="ok",
-        tool="lookup_balance",
-        agent_id="agent:svc",
-        args={"account": "ACC-001"},
-        policy=None,
-        latency_us=100,
-        source="agent:svc",
-        destination="lookup_balance",
-        trace_id="t-forged",
-        authorization=authorization_block(tokens["child0"].to_dict()),
+        GateReceiptContext(
+            decision="allow",
+            reason="ok",
+            tool="lookup_balance",
+            agent_id="agent:svc",
+            args={"account": "ACC-001"},
+            policy=None,
+            latency_us=100,
+            source="agent:svc",
+            destination="lookup_balance",
+            trace_id="t-forged",
+            authorization=authorization_block(tokens["child0"].to_dict()),
+        )
     )
 
     verifier = ProvenanceVerifier(

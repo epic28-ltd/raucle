@@ -622,6 +622,33 @@ class _KmsGateIdentity:
         return self._signer.sign(data)
 
 
+@dataclass(frozen=True)
+class GateReceiptContext:
+    """The full decision context a gate-decision receipt binds (PR-B).
+
+    Carrying the context as one frozen value keeps the receipt emitter
+    within the parameter budget (SonarCloud S107) and makes the
+    receipt's inputs inspectable at the call site. Field order and
+    defaults mirror the previous keyword parameters exactly.
+    """
+
+    decision: str
+    reason: str
+    tool: str
+    agent_id: str
+    args: dict
+    policy: str | None
+    latency_us: int
+    source: str
+    destination: str
+    trace_id: str
+    approval_id: str = ""
+    authorization: dict[str, Any] | None = None
+    rule_id: str = ""
+    intent_block: dict[str, Any] | None = None
+    acting_for: str = ""
+
+
 class RaucleGateway:
     """The gateway core: policy engine + gate + receipt store + stats.
 
@@ -959,25 +986,7 @@ class RaucleGateway:
         }
         return self._sign_and_store_receipt(payload)
 
-    def _emit_gate_receipt(
-        self,
-        *,
-        decision: str,
-        reason: str,
-        tool: str,
-        agent_id: str,
-        args: dict,
-        policy: str | None,
-        latency_us: int,
-        source: str,
-        destination: str,
-        trace_id: str,
-        approval_id: str = "",
-        authorization: dict[str, Any] | None = None,
-        rule_id: str = "",
-        intent_block: dict[str, Any] | None = None,
-        acting_for: str = "",
-    ) -> str | None:
+    def _emit_gate_receipt(self, ctx: GateReceiptContext) -> str | None:
         """Emit a signed provenance receipt for a gate decision (PR-B).
 
         Shape: GUARDRAIL_SCAN operation (rootable, carries verdict +
@@ -986,6 +995,10 @@ class RaucleGateway:
         context. Written as a minimal envelope {receipt_hash, jws} to the
         receipt store. Returns the receipt hash, or None when emission is
         disabled.
+
+        The decision context arrives as one frozen
+        :class:`GateReceiptContext` value (S107: the previous keyword
+        parameter list exceeded the authorised budget).
         """
         if not self.config.emit_receipts:
             return None
@@ -1000,22 +1013,22 @@ class RaucleGateway:
             "operation": "guardrail_scan",
             "parents": [],
             "taint": ["gate:observed"],
-            "input_hash": _sha256_hex(_canonical_json(args)),
-            "ruleset_hash": self._policy_ruleset_hash(tool),
-            "guardrail_verdict": decision,
+            "input_hash": _sha256_hex(_canonical_json(ctx.args)),
+            "ruleset_hash": self._policy_ruleset_hash(ctx.tool),
+            "guardrail_verdict": ctx.decision,
             "x_gate": {
-                "decision": decision,
-                "reason": reason,
-                "tool": tool,
-                "agent_id": agent_id,
-                "source": source,
-                "destination": destination,
-                "policy": policy,
-                "rule_id": rule_id or "",
-                "acting_for": acting_for,
-                "latency_us": latency_us,
-                "trace_id": trace_id,
-                "approval_id": approval_id,
+                "decision": ctx.decision,
+                "reason": ctx.reason,
+                "tool": ctx.tool,
+                "agent_id": ctx.agent_id,
+                "source": ctx.source,
+                "destination": ctx.destination,
+                "policy": ctx.policy,
+                "rule_id": ctx.rule_id or "",
+                "acting_for": ctx.acting_for,
+                "latency_us": ctx.latency_us,
+                "trace_id": ctx.trace_id,
+                "approval_id": ctx.approval_id,
                 "retention_until": (
                     int(time.time()) + self.config.retention_days * 86400
                     if self.config.retention_days
@@ -1023,11 +1036,11 @@ class RaucleGateway:
                 ),
             },
         }
-        if authorization is not None:  # receipts v1.1: delegated-authority binding
-            payload["x_gate"]["authorization"] = authorization
-        if intent_block is not None:  # receipts v1.2: task-intent binding
-            payload["x_gate"]["intent"] = intent_block["intent"]
-            payload["x_gate"]["intent_check"] = intent_block["intent_check"]
+        if ctx.authorization is not None:  # receipts v1.1: delegated-authority binding
+            payload["x_gate"]["authorization"] = ctx.authorization
+        if ctx.intent_block is not None:  # receipts v1.2: task-intent binding
+            payload["x_gate"]["intent"] = ctx.intent_block["intent"]
+            payload["x_gate"]["intent_check"] = ctx.intent_block["intent_check"]
         # Header + JWS signing + store append are shared with the other
         # authority receipt emitters (PR-E extraction).
         return self._sign_and_store_receipt(payload)
@@ -1161,20 +1174,22 @@ class RaucleGateway:
         self.stats.record(result["tool"], "deny", result["latency_us"])
         try:
             result["receipt_id"] = self._emit_gate_receipt(
-                decision="deny",
-                reason=reason,
-                tool=result["tool"],
-                agent_id=result.get("agent_id", ""),
-                args=result.get("_args", {}),
-                policy=result.get("policy"),
-                latency_us=result["latency_us"],
-                source=result.get("source", ""),
-                destination=result.get("destination", ""),
-                trace_id=result.get("_trace_id", ""),
-                authorization=result.get("_authorization_hint"),
-                rule_id=result.get("rule_id", ""),
-                intent_block=_intent_hint,
-                acting_for=_acting_for,
+                GateReceiptContext(
+                    decision="deny",
+                    reason=reason,
+                    tool=result["tool"],
+                    agent_id=result.get("agent_id", ""),
+                    args=result.get("_args", {}),
+                    policy=result.get("policy"),
+                    latency_us=result["latency_us"],
+                    source=result.get("source", ""),
+                    destination=result.get("destination", ""),
+                    trace_id=result.get("_trace_id", ""),
+                    authorization=result.get("_authorization_hint"),
+                    rule_id=result.get("rule_id", ""),
+                    intent_block=_intent_hint,
+                    acting_for=_acting_for,
+                )
             )
         except Exception:
             # Fail-closed accountability: if the receipt cannot be written,
@@ -1462,21 +1477,23 @@ class RaucleGateway:
         result["agent_id"] = actual_agent_id
         try:
             result["receipt_id"] = self._emit_gate_receipt(
-                decision=result["decision"],
-                reason=result["reason"],
-                tool=tool,
-                agent_id=actual_agent_id,
-                args=args,
-                policy=result.get("policy"),
-                latency_us=latency_us,
-                source=result.get("source", ""),
-                destination=result.get("destination", ""),
-                trace_id=result.get("_trace_id", ""),
-                approval_id=result.get("approval_id", ""),
-                authorization=result.get("_authorization_hint"),
-                rule_id=result.get("rule_id", ""),
-                intent_block=_intent_hint,
-                acting_for=_acting_for,
+                GateReceiptContext(
+                    decision=result["decision"],
+                    reason=result["reason"],
+                    tool=tool,
+                    agent_id=actual_agent_id,
+                    args=args,
+                    policy=result.get("policy"),
+                    latency_us=latency_us,
+                    source=result.get("source", ""),
+                    destination=result.get("destination", ""),
+                    trace_id=result.get("_trace_id", ""),
+                    approval_id=result.get("approval_id", ""),
+                    authorization=result.get("_authorization_hint"),
+                    rule_id=result.get("rule_id", ""),
+                    intent_block=_intent_hint,
+                    acting_for=_acting_for,
+                )
             )
         except Exception:
             logger.exception("receipt emission failed; downgrading to deny")
