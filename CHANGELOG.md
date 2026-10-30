@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added - I1: counterfactual replay (the incident-review question, answered deterministically)
+- `raucle counterfactual policy --chain ... --inputs ... --policy alt.yaml`:
+  re-run every recorded gate decision under an alternative policy and
+  answer, per action, whether the stricter policy would have denied it.
+  The verdict is replayed from the receipts and the input store, not
+  inferred: authority held constant, the question is a policy question.
+- Bounded disclosure holds in the report: no denial reasons, no arg
+  values; each row cites its receipt hash. Receipts without a stored
+  input are unreplayable, never guessed. The replay never writes to the
+  incident chain it examines (pinned by test).
+
 ### Added - G3: records lifecycle (retention stamps + tamper-evident disposal)
 - Gate receipts stamp `retention_until` when `retention_days` is configured
   (a records schedule on every decision; zero when unset).

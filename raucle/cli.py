@@ -291,6 +291,20 @@ def _build_parser() -> argparse.ArgumentParser:
     reg_verify.add_argument("path", help=_REGISTRY_DESC)
     reg_verify.add_argument("--operator-pubkey", help="Operator public-key PEM to authenticate")
 
+    # -- counterfactual (I1: would a stricter policy have prevented it?) ----
+    cf_p = subparsers.add_parser(
+        "counterfactual",
+        help="Counterfactual replay: re-run recorded gate decisions under an alternative policy",
+    )
+    cf_sub = cf_p.add_subparsers(dest="counterfactual_command")
+    cf_pol = cf_sub.add_parser(
+        "policy", help="Replay a receipt chain against an alternative policy"
+    )
+    cf_pol.add_argument("--chain", required=True, help="The receipt chain JSONL")
+    cf_pol.add_argument("--inputs", required=True, help="The input-store JSONL")
+    cf_pol.add_argument("--policy", required=True, help="The alternative policy YAML")
+    cf_pol.add_argument("--out", help="Write the JSON report here (else stdout)")
+
     # -- records (G3 lifecycle: retention + disposal evidence) -------------
     rec_p = subparsers.add_parser(
         "records", help="Records lifecycle: tamper-evident disposal evidence"
@@ -1132,6 +1146,36 @@ def _cmd_records(args: argparse.Namespace) -> int:
         return 0 if report["valid"] else 1
     print("error: records needs a subcommand (destroy | verify)", file=sys.stderr)
     return 2
+
+
+def _cmd_counterfactual(args: argparse.Namespace) -> int:
+    """I1: the incident-review question, answered deterministically."""
+    if getattr(args, "counterfactual_command", None) != "policy":
+        print("error: counterfactual needs the 'policy' subcommand", file=sys.stderr)
+        return 2
+    from raucle.counterfactual import replay_counterfactual
+
+    try:
+        report = replay_counterfactual(
+            args.chain, input_store_path=args.inputs, alternative_policy_path=args.policy
+        )
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    import json as _json
+
+    text = _json.dumps(report, indent=2)
+    if getattr(args, "out", None):
+        from pathlib import Path as _P
+
+        _P(args.out).write_text(text + "\n", encoding="utf-8")
+        print(f"counterfactual report written to {args.out}")
+    else:
+        print(text)
+    return 0
 
 
 def _cmd_compliance(args: argparse.Namespace) -> int:
@@ -2472,6 +2516,7 @@ def _dispatch(argv: list[str] | None = None) -> int:
         "registry": _cmd_registry,
         "compliance": _cmd_compliance,
         "records": _cmd_records,
+        "counterfactual": _cmd_counterfactual,
         "passport": _cmd_passport,
         "verify-receipt": _cmd_verify_receipt,
         "audit-export": _cmd_audit_export,
