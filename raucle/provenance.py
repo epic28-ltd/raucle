@@ -1651,12 +1651,14 @@ class ProvenanceVerifier:
         revoked_ids: set[str],
         revocation_lines: dict[str, int],
         lease_grants: dict[str, dict[str, Any]],
+        receipts_by_hash: dict[str, ProvenanceReceipt],
     ) -> None:
         """v1.1/v1.2 extension re-checks for one receipt (extracted from
         verify_chain): the delegated-authority digest, cascade revocation
         (temporal, single-pass), lease grant/redemption windows and
-        scopes, and the task-intent re-check. Mutates *report* and the
-        collector dicts in place."""
+        scopes, the task-intent re-check, and the harness-finding replay
+        check (EPIC D). Mutates *report* and the collector dicts in
+        place."""
         # Receipts v1.1/v1.2: decode the JWS payload for the x_gate
         # extension checks. NB the envelope carries only
         # {receipt_hash, jws}; x_gate lives INSIDE the signed payload
@@ -1791,6 +1793,33 @@ class ProvenanceVerifier:
                     )
                     report.valid = False
 
+        # EPIC D: harness findings (x_finding). The finding cites the gate
+        # receipt that covered the request; the verifier replays the claim
+        # offline: the cited receipt must exist in the chain, and the
+        # decision the harness reports must match the decision the cited
+        # receipt actually recorded. A finding that misreports the gate
+        # fails verification: the harness cannot lie and stay verifiable.
+        finding = decoded.get("x_finding") if isinstance(decoded, dict) else None
+        if isinstance(finding, dict):
+            cited = str(finding.get("cited_receipt", ""))
+            cited_obj = receipts_by_hash.get(cited)
+            if cited_obj is None:
+                report.errors.append(
+                    f"line {line_no}: finding {finding.get('finding_id', '')!r} "
+                    f"cites receipt {cited!r} not in the chain"
+                )
+                report.valid = False
+            else:
+                claimed = str((finding.get("repro") or {}).get("actual_decision", ""))
+                recorded = cited_obj.guardrail_verdict
+                if claimed and recorded and claimed != recorded:
+                    report.errors.append(
+                        f"line {line_no}: finding {finding.get('finding_id', '')!r} "
+                        f"misreports the cited receipt "
+                        f"(claimed {claimed!r}, recorded {recorded!r})"
+                    )
+                    report.valid = False
+
     def verify_chain(self, path: str | Path) -> VerificationReport:
         """Verify a JSONL chain file."""
         receipts_by_hash: dict[str, ProvenanceReceipt] = {}
@@ -1817,7 +1846,14 @@ class ProvenanceVerifier:
                 self._verify_capability_conformance(receipt, line_no, report)
 
                 self._verify_receipt_extensions(
-                    raw, line_no, receipt, report, revoked_ids, revocation_lines, lease_grants
+                    raw,
+                    line_no,
+                    receipt,
+                    report,
+                    revoked_ids,
+                    revocation_lines,
+                    lease_grants,
+                    receipts_by_hash,
                 )
 
                 receipts_by_hash[receipt.receipt_hash] = receipt

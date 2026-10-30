@@ -1922,6 +1922,66 @@ class RaucleGateway:
                     continue
         return {i for i in ids if i}
 
+    def emit_finding(
+        self,
+        *,
+        harness: str,
+        test_id: str,
+        verdict: str,
+        cited_receipt: str,
+        expected_decision: str,
+        actual_decision: str,
+        tool: str,
+        args_digest: str,
+        note: str = "",
+    ) -> str | None:
+        """EPIC D: emit a harness test finding as a signed receipt.
+
+        The finding cites the gate receipt that covered the request and
+        states what the harness expected and what it observed. Emission is
+        the harness's CLAIM: this method records what the harness says
+        without checking it, deliberately. The enforcement lives in the
+        offline verifier, which re-checks the claim against the cited
+        receipt in the chain: a finding citing a missing receipt or
+        misreporting the gate's decision fails verification. A harness
+        cannot lie about what happened and still produce verifiable
+        evidence.
+
+        The finding id is deterministic in (harness, test_id, cited
+        receipt): the same harness run over the same requests replays to
+        the same findings ledger.
+        """
+        if verdict not in {"confirmed", "refuted", "expected_pass"}:
+            raise ValueError(
+                f"unknown finding verdict {verdict!r}; use confirmed, refuted or expected_pass"
+            )
+        from raucle.provenance import _canonical_json, _sha256_hex
+
+        identity = _sha256_hex(
+            _canonical_json({"harness": harness, "test_id": test_id, "cited": cited_receipt})
+        )[:16]
+        finding_id = f"finding_{identity}"
+        return self._emit_authority_receipt(
+            verdict=f"finding_{verdict}",
+            extension_key="x_finding",
+            extension={
+                "action": "reported",
+                "finding_id": finding_id,
+                "harness": harness,
+                "test_id": test_id,
+                "verdict": verdict,
+                "cited_receipt": cited_receipt,
+                "repro": {
+                    "tool": tool,
+                    "args_digest": args_digest,
+                    "expected_decision": expected_decision,
+                    "actual_decision": actual_decision,
+                },
+                "detected_at": int(time.time()),
+                "note": note,
+            },
+        )
+
     def _revoke_ids(self, ids: list[str], *, reason: str, actor: str, root: str) -> dict[str, Any]:
         """A3 shared leg: persist the revocation records, emit ONE signed
         revocation receipt naming the whole subtree.
