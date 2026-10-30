@@ -1045,60 +1045,18 @@ class CapabilityIssuer:
         if parent.expires_at <= _now():
             raise ValueError("parent token has expired")
 
-        child_agent = narrower_agent_id or parent.agent_id
-        if narrower_agent_id and narrower_agent_id != parent.agent_id:
-            _validate_agent_id(narrower_agent_id)
-            # Narrowing is allowed only if the child agent_id is *more specific*,
-            # interpreted as a prefix-extension of the parent's id (e.g.
-            # agent:billing -> agent:billing.invoice).
-            if not (
-                narrower_agent_id == parent.agent_id
-                or narrower_agent_id.startswith(parent.agent_id + ".")
-            ):
-                raise ValueError(
-                    f"narrower_agent_id {narrower_agent_id!r} is not a sub-scope of "
-                    f"parent {parent.agent_id!r}"
-                )
-
+        child_agent = _narrow_agent_id(parent, narrower_agent_id)
         merged = _merge_narrowing(parent.constraints, extra_constraints or {})
         _assert_narrowing(parent.constraints, merged)
-
-        # Receipts v1.2: the child inherits the parent's intent unless a
-        # narrower one is supplied; a child intent may only NARROW the
-        # parent's (tools subset, constraints merged-tighter). Widening is
-        # refused: a delegated authority cannot expand the approved purpose.
         _validate_intent(intent)
-        child_intent = intent if intent is not None else parent.intent
-        # B1: the pair. A child may narrow an unpaired parent to a pair, but
-        # may never re-target: a pair-bound parent's child MUST act for the
-        # same user (re-targeting would move the authority to a different
-        # principal - a widening).
-        if parent.acting_for and acting_for and acting_for != parent.acting_for:
-            raise ValueError(
-                f"attenuation re-targeted the acting-for user: parent acts for "
-                f"{parent.acting_for!r}, child for {acting_for!r}"
-            )
-        child_acting_for = acting_for or parent.acting_for
-        if intent is not None and parent.intent is not None:
-            parent_tools = parent.intent.get("tools")
-            if (
-                parent_tools is not None
-                and intent.get("tools") is not None
-                and not set(intent["tools"]) <= set(parent_tools)
-            ):
-                raise ValueError("attenuation widened intent.tools beyond the parent's scope")
-            if parent.intent.get("constraints") and intent.get("constraints"):
-                narrowed = _merge_narrowing(parent.intent["constraints"], intent["constraints"])
-                _assert_narrowing(parent.intent["constraints"], narrowed)
-                child_intent = {**intent, "constraints": narrowed}
-
+        # Receipts v1.2 / B1: the task intent and the acting-for pair may
+        # only narrow on delegation; widening is refused (a delegated
+        # authority cannot expand the approved purpose or re-target the
+        # pair principal).
+        child_acting_for = _narrow_acting_for(parent, acting_for)
+        child_intent = _narrow_intent(parent, intent)
         now = _now()
-        ttl = (
-            narrower_ttl_seconds if narrower_ttl_seconds is not None else (parent.expires_at - now)
-        )
-        new_exp = now + ttl
-        if new_exp > parent.expires_at:
-            raise ValueError("child token cannot outlive its parent")
+        new_exp = _narrow_expiry(parent, now, narrower_ttl_seconds)
 
         child = Capability(
             token_id="",
@@ -1269,6 +1227,70 @@ def _merge_narrowing(parent: dict[str, Any], extra: dict[str, Any]) -> dict[str,
         out["forbidden_field_combinations"] = sorted(sorted(c) for c in merged)
 
     return _normalise_constraints(out)
+
+
+def _narrow_agent_id(parent: Capability, narrower_agent_id: str | None) -> str:
+    """Attenuation invariant: the child agent_id is the parent's own or a
+    dot-delimited sub-scope of it (prefix-extension only); any other id
+    would move or broaden the authority and is refused."""
+    child_agent = narrower_agent_id or parent.agent_id
+    if narrower_agent_id and narrower_agent_id != parent.agent_id:
+        _validate_agent_id(narrower_agent_id)
+        if not (
+            narrower_agent_id == parent.agent_id
+            or narrower_agent_id.startswith(parent.agent_id + ".")
+        ):
+            raise ValueError(
+                f"narrower_agent_id {narrower_agent_id!r} is not a sub-scope of "
+                f"parent {parent.agent_id!r}"
+            )
+    return child_agent
+
+
+def _narrow_acting_for(parent: Capability, acting_for: str) -> str:
+    """Attenuation invariant: a pair-bound child acts for the SAME user as
+    its parent (re-targeting would move the authority to a different
+    principal, a widening, and is refused). An unpaired parent may be
+    narrowed to a pair; the pair then sticks for all descendants."""
+    if parent.acting_for and acting_for and acting_for != parent.acting_for:
+        raise ValueError(
+            f"attenuation re-targeted the acting-for user: parent acts for "
+            f"{parent.acting_for!r}, child for {acting_for!r}"
+        )
+    return acting_for or parent.acting_for
+
+
+def _narrow_intent(parent: Capability, intent: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Attenuation invariant: the child's task intent is the parent's own
+    or a strict narrowing of it - inherited when not supplied, tools a
+    subset, constraints merged-tighter. A delegated authority can never
+    widen the approved purpose."""
+    child_intent = intent if intent is not None else parent.intent
+    if intent is None or parent.intent is None:
+        return child_intent
+    parent_tools = parent.intent.get("tools")
+    if (
+        parent_tools is not None
+        and intent.get("tools") is not None
+        and not set(intent["tools"]) <= set(parent_tools)
+    ):
+        raise ValueError("attenuation widened intent.tools beyond the parent's scope")
+    if parent.intent.get("constraints") and intent.get("constraints"):
+        narrowed = _merge_narrowing(parent.intent["constraints"], intent["constraints"])
+        _assert_narrowing(parent.intent["constraints"], narrowed)
+        child_intent = {**intent, "constraints": narrowed}
+    return child_intent
+
+
+def _narrow_expiry(parent: Capability, now: int, narrower_ttl_seconds: int | None) -> int:
+    """Attenuation invariant: the child expires at the requested narrower
+    TTL (bounded by the parent's own expiry); the child can never outlive
+    its parent, so the chain stays no broader than its root."""
+    ttl = narrower_ttl_seconds if narrower_ttl_seconds is not None else (parent.expires_at - now)
+    new_exp = now + ttl
+    if new_exp > parent.expires_at:
+        raise ValueError("child token cannot outlive its parent")
+    return new_exp
 
 
 def _attenuation_violation(child: Capability, parent: Capability) -> str | None:
