@@ -102,6 +102,10 @@ class GatewayConfig:
     # provenance receipt (GUARDRAIL_SCAN-shaped, x_gate extension) signed
     # by the persistent gateway identity.
     emit_receipts: bool = True
+    # G3 records lifecycle: when > 0, every gate receipt stamps
+    # retention_until = iat + retention_days (the record's retention
+    # schedule; disposal is receipted separately via raucle.records).
+    retention_days: int = 0
     trace_header: str = "X-Trace-Id"
     # Segmented store (B2): directory of seg-NNNNNN.jsonl files. When set,
     # receipts go through SegmentedReceiptStore instead of the flat
@@ -1012,6 +1016,11 @@ class RaucleGateway:
                 "latency_us": latency_us,
                 "trace_id": trace_id,
                 "approval_id": approval_id,
+                "retention_until": (
+                    int(time.time()) + self.config.retention_days * 86400
+                    if self.config.retention_days
+                    else 0
+                ),
             },
         }
         if authorization is not None:  # receipts v1.1: delegated-authority binding

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Added - G3: records lifecycle (retention stamps + tamper-evident disposal)
+- Gate receipts stamp `retention_until` when `retention_days` is configured
+  (a records schedule on every decision; zero when unset).
+- `raucle records destroy` writes a signed destruction receipt (x_destruction)
+  binding the span, count and digest of what left, an escrow copy of the
+  removed records, and the re-anchored surviving chain. `raucle records
+  verify` re-checks the signature offline, and re-checks the span digest
+  against the escrow when supplied - each escrow record's own hash is
+  recomputed first, so a payload edited after the fact fails before the
+  digest comparison. Disposal is evidence, like every other lifecycle event.
+
+### Added - I3 + H4: auditor exports over the pack, and SBOM per release
+- `raucle compliance export --pack DIR --format csv|json`: auditor-facing
+  coverage.csv, extracts.csv and a combined pack-export.json over an
+  existing pack bundle. The exports derive from the bundle; they carry
+  nothing the bundle does not.
+- .github/workflows/sbom.yml: a CycloneDX SBOM for every tagged release,
+  validated and uploaded as a workflow artefact. Isolated from the publish
+  pipeline so an SBOM failure can never block a release.
+
 ### Added - E1b: the compliance evidence pack (dora first, the x_compliance certificate)
 - `raucle compliance pack --chain ... --framework dora --pubkey ... 
   --operator-key ... --out DIR` builds the regime bundle: report.md,

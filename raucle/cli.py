@@ -291,6 +291,28 @@ def _build_parser() -> argparse.ArgumentParser:
     reg_verify.add_argument("path", help=_REGISTRY_DESC)
     reg_verify.add_argument("--operator-pubkey", help="Operator public-key PEM to authenticate")
 
+    # -- records (G3 lifecycle: retention + disposal evidence) -------------
+    rec_p = subparsers.add_parser(
+        "records", help="Records lifecycle: tamper-evident disposal evidence"
+    )
+    rec_sub = rec_p.add_subparsers(dest="records_command")
+    rec_destroy = rec_sub.add_parser(
+        "destroy", help="Destroy a time span: destruction receipt + escrow + re-anchored chain"
+    )
+    rec_destroy.add_argument("--chain", required=True, help="The audit chain JSONL")
+    rec_destroy.add_argument("--from", dest="from_ts", required=True, help="Span start (ISO)")
+    rec_destroy.add_argument("--to", dest="to_ts", required=True, help="Span end (ISO)")
+    rec_destroy.add_argument("--reason", required=True)
+    rec_destroy.add_argument("--actor", required=True)
+    rec_destroy.add_argument("--operator-key", required=True, help="Ed25519 private PEM")
+    rec_destroy.add_argument("--out-dir", required=True)
+    rec_verify = rec_sub.add_parser("verify", help="Verify a destruction receipt")
+    rec_verify.add_argument("--destruction", required=True, help="destruction.json")
+    rec_verify.add_argument("--escrow", help="removed-records.jsonl to re-check the digest")
+    rec_verify.add_argument(
+        "--pubkey", help="Operator public PEM (else the receipt's embedded key)"
+    )
+
     # -- compliance (evidence packs, P4) ------------------------------------
     comp_p = subparsers.add_parser(
         "compliance", help="Map a receipt chain to named-framework controls"
@@ -311,6 +333,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Operator Ed25519 private PEM to sign the verification certificate",
     )
     comp_pk.add_argument("--out", required=True, help="Output directory for the bundle")
+    comp_exp = comp_sub.add_parser(
+        "export", help="Auditor-facing exports (CSV/JSON) over an existing pack bundle"
+    )
+    comp_exp.add_argument("--pack", required=True, help="The pack bundle directory")
+    comp_exp.add_argument("--format", default="csv", choices=["csv", "json"])
     comp_rep = comp_sub.add_parser("report", help="Generate a compliance evidence map")
     comp_rep.add_argument("chain", help="Receipt chain JSONL file")
     comp_rep.add_argument(
@@ -1050,6 +1077,63 @@ def _passport_verify(args, agent_passport, verify_passport, trust_registry_cls) 
     return 1
 
 
+def _cmd_records(args: argparse.Namespace) -> int:
+    """G3: disposal evidence - destroy a span, or verify a destruction."""
+    cmd = getattr(args, "records_command", None)
+    if cmd == "destroy":
+        from raucle.records import build_destruction
+
+        try:
+            manifest = build_destruction(
+                args.chain,
+                from_ts=args.from_ts,
+                to_ts=args.to_ts,
+                reason=args.reason,
+                actor=args.actor,
+                operator_key_pem=validate_path(args.operator_key).read_bytes(),
+                out_dir=args.out_dir,
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        except FileNotFoundError:
+            print(f"error: no such chain file: {args.chain}", file=sys.stderr)
+            return 1
+        print(f"destruction receipt: {manifest['destruction']}")
+        print(f"  records destroyed:  {manifest['record_count']}")
+        print(f"  records retained:  {manifest['retained_count']}")
+        print(f"  span digest:        {manifest['span_digest']}")
+        print(f"  escrow copy:        {manifest['escrow']}")
+        print(f"  re-anchored chain:  {manifest['retained_chain']}")
+        return 0
+    if cmd == "verify":
+        from raucle.records import verify_destruction
+
+        escrow = validate_path(args.escrow) if getattr(args, "escrow", None) else None
+        pubkey = validate_path(args.pubkey).read_bytes() if getattr(args, "pubkey", None) else None
+        try:
+            report = verify_destruction(
+                args.destruction, escrow_path=escrow, operator_public_pem=pubkey
+            )
+        except FileNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"destruction receipt: {'VALID' if report['valid'] else 'INVALID'}")
+        print(f"  span:               {report['block'].get('from')} .. {report['block'].get('to')}")
+        print(f"  records destroyed: {report['block'].get('record_count')}")
+        print(f"  actor:              {report['block'].get('actor')}")
+        if report.get("span_digest_matches_escrow") is None:
+            print("  escrow digest:      not re-checked (no escrow supplied)")
+        else:
+            digest_state = "MATCHES" if report["span_digest_matches_escrow"] else "MISMATCH"
+            print(f"  escrow digest:      {digest_state}")
+        if report.get("escrow_error"):
+            print(f"  escrow error:       {report['escrow_error']}")
+        return 0 if report["valid"] else 1
+    print("error: records needs a subcommand (destroy | verify)", file=sys.stderr)
+    return 2
+
+
 def _cmd_compliance(args: argparse.Namespace) -> int:
     """Generate a compliance evidence map from a receipt chain."""
     import json as _json
@@ -1098,8 +1182,19 @@ def _cmd_compliance(args: argparse.Namespace) -> int:
             return 1
         return 0
 
+    if getattr(args, "compliance_command", None) == "export":
+        from raucle.compliance_pack import export_pack
+
+        try:
+            result = export_pack(args.pack, fmt=args.format)
+        except FileNotFoundError as exc:
+            print(f"error: pack bundle incomplete: {exc}", file=sys.stderr)
+            return 1
+        print(f"exports written to {args.pack}: {', '.join(result['files'])}")
+        return 0
+
     if getattr(args, "compliance_command", None) != "report":
-        print("error: compliance needs a subcommand (report | pack)", file=sys.stderr)
+        print("error: compliance needs a subcommand (report | pack | export)", file=sys.stderr)
         return 2
     pubkey = validate_path(args.pubkey).read_bytes() if getattr(args, "pubkey", None) else None
     try:
@@ -2376,6 +2471,7 @@ def _dispatch(argv: list[str] | None = None) -> int:
         "watch": _cmd_watch,
         "registry": _cmd_registry,
         "compliance": _cmd_compliance,
+        "records": _cmd_records,
         "passport": _cmd_passport,
         "verify-receipt": _cmd_verify_receipt,
         "audit-export": _cmd_audit_export,
