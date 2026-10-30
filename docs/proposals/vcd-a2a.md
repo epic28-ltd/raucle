@@ -193,3 +193,54 @@ Three reasons:
    extension points this week; (b) a public discussion artefact only after
    the LASR submission (5-6 Nov); (c) formal submission to a2a-protocol.org
    = Craig's action, never agent-sent.
+
+---
+
+## Addendum: 30 October 2026 (shipped capability: receipts v1.2, intent binding, chain verification)
+
+The proposal now ships with the receipts capability rather than ahead of it.
+Everything below is implemented, public (Apache-2.0, PyPI raucle 0.23.4) and
+verifiable offline through the public verifier, with test vectors under
+docs/spec/provenance/v1.2/.
+
+1. **Task-intent binding (the v1.2 intent extension).** A capability can
+   carry the approved task intent; every gate receipt binds an intent block
+   and the verifier re-checks each action against it offline. The calendar
+   case from the original design notes now has a shipped answer: an
+   approval to "check today's calendar" cannot mint a receipt for a
+   five-year archive export, and the verifier says so, by name, with no
+   raucle server involved. Spec: docs/spec/provenance/v1.2/intent-binding.md.
+2. **Chain verification as the audit answer.** Every decision row carries
+   the full delegation chain, the stable rule id that produced it, and the
+   acting identity, on allow and deny both. The one-call "why" query walks
+   from any receipt to the root grant, re-computing the chain digest at
+   each hop. This is a direct answer to the FSB's October 2026 Sound
+   Practices sentence: an institution can show "whether it acted within
+   its permissions throughout this chain of steps" from the receipts
+   alone, third-party verifiable.
+3. **The credential-lease extension (x_lease).** Referenced in the 29
+   October addendum as the differentiator against the vault-only cohort;
+   now shipped. Lease grants, redemptions, denials and revocations are
+   chained receipts binding the delegated-authority chain, and the
+   verifier re-checks redemptions offline: the cited grant must exist, the
+   redemption must fall inside the TTL window, and the scopes must never
+   be wider than the grant's. Spec:
+   docs/spec/provenance/v1.2/lease-extension.md.
+4. **Harness findings (x_finding).** A2A's red-team harnesses can now
+   report through the same evidence layer: a finding cites the gate
+   receipt covering the tested request, and the verifier replays the
+   claim, rejecting findings that cite missing receipts or misreport the
+   decision. The QM class of harnesses (MIT, free) gains verifiable
+   findings without adopting a new harness.
+   Spec: docs/spec/provenance/v1.2/harness-findings.md.
+5. **Milestone status against the reference implementation plan.** M1
+   (receipt format frozen, reference verifier) is complete at v1.2. The
+   narrowing invariant cited in Cross-agent attenuation is now enforced at
+   mint time AND re-verified offline on every chain replay, which closes
+   the strongest objection to the M4 draft extension PR: the format is
+   not merely specified but deployed, tested and independently
+   verifiable. M2 (the raucle.a2a adapter) is the next build.
+
+The public discussion artefact (a paste-ready working-group post) sits at
+docs/proposals/vcd-a2a-discussion-post.md. Per the 29 October sequencing,
+formal submission to a2a-protocol.org remains Craig's action alone.
