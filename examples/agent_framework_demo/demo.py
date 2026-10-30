@@ -22,6 +22,7 @@ Run sequence (when adapted into a real deployment)
     pip install 'raucle[agent-framework]'
     python examples/agent_framework_demo/demo.py
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -93,6 +94,7 @@ set_in_force_token(token)
 # RECEIPT_LOG. The audit chain is verifiable offline by any third party
 # holding the issuer's published public key.
 
+
 async def converse() -> None:
     response = await agent.run("Look up customer C-1042 and refund their last transfer.")
     print(response)
@@ -100,4 +102,5 @@ async def converse() -> None:
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(converse())

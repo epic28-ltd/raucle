@@ -1664,18 +1664,73 @@ class ProvenanceVerifier:
                 # Capability conformance (verifier-side, when statements supplied)
                 self._verify_capability_conformance(receipt, line_no, report)
 
-                # Receipts v1.1: delegated-authority binding digest check.
-                # Fail closed: a present chain whose digest does not recompute
-                # is tampered or malformed evidence.
-                x_gate_payload = (raw.get("x_gate") if isinstance(raw, dict) else None) or {}
+                # Receipts v1.1/v1.2: decode the JWS payload for the x_gate
+                # extension checks. NB the envelope carries only
+                # {receipt_hash, jws}; x_gate lives INSIDE the signed payload
+                # (the previous `raw.get("x_gate")` was always empty - the
+                # v1.1 digest re-check never fired; found by the A1 tests).
+                x_gate_payload: dict[str, Any] = {}
+                jws_str = raw.get("jws") if isinstance(raw, dict) else None
+                if isinstance(jws_str, str) and jws_str.count(".") >= 2:
+                    seg = jws_str.split(".")[1]
+                    seg += "=" * (-len(seg) % 4)
+                    try:
+                        decoded = json.loads(base64.urlsafe_b64decode(seg))
+                        if isinstance(decoded, dict):
+                            x_gate_payload = decoded.get("x_gate") or {}
+                    except (ValueError, TypeError):
+                        x_gate_payload = {}
                 auth = x_gate_payload.get("authorization")
                 if auth:
-                    expected = authorization_block(auth)
-                    if auth.get("chain_digest") != expected["chain_digest"]:
-                        report.add_issue(
+                    # Recompute the digest from the BLOCK's own fields (the
+                    # emitted block stores capability_id; authorization_block()
+                    # itself expects a token dict with token_id - reusing it
+                    # here would recompute over empty material).
+                    from raucle.provenance import _canonical_json, _sha256_hex
+
+                    expected_digest = _sha256_hex(
+                        _canonical_json(
+                            {
+                                "capability_id": auth.get("capability_id", ""),
+                                "issuer": auth.get("issuer", ""),
+                                "key_id": auth.get("key_id", ""),
+                                "parent_id": auth.get("parent_id"),
+                            }
+                        )
+                    )
+                    if auth.get("chain_digest") != expected_digest:
+                        report.errors.append(
                             f"line {line_no}: authorization chain_digest mismatch "
                             f"(tampered or malformed delegated-authority binding)"
                         )
+                        report.valid = False
+
+                # Receipts v1.2: task-intent re-check (defence-in-depth). Only
+                # ALLOW receipts are re-checked - a DENY for an out-of-intent
+                # attempt is the enforcement working, not a violation. The
+                # re-check is deterministic, over the bounded disclosure.
+                intent = x_gate_payload.get("intent")
+                if intent is not None and x_gate_payload.get("decision") == "allow":
+                    gate_tool = x_gate_payload.get("tool") or receipt.tool
+                    intent_tools = intent.get("tools")
+                    if intent_tools is not None and gate_tool not in intent_tools:
+                        report.errors.append(
+                            f"line {line_no}: ALLOW receipt tool {gate_tool!r} "
+                            f"outside intent scope (approved tools: {intent_tools})"
+                        )
+                        report.valid = False
+                    intent_constraints = intent.get("constraints")
+                    check = x_gate_payload.get("intent_check") or {}
+                    satisfied = check.get("satisfied_fields") or {}
+                    if intent_constraints and satisfied:
+                        from raucle.capability import _check_constraints as _icc
+
+                        why = _icc(intent_constraints, satisfied)
+                        if why:
+                            report.errors.append(
+                                f"line {line_no}: ALLOW receipt violates intent constraint ({why})"
+                            )
+                            report.valid = False
 
                 receipts_by_hash[receipt.receipt_hash] = receipt
                 report.receipt_count += 1

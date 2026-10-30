@@ -4,6 +4,7 @@ Both tools are deliberately simple — the demo's point is the middleware,
 not the tools. A production deployment would call real APIs from these
 functions; the raucle gate inspects the call args before the function runs.
 """
+
 from __future__ import annotations
 
 

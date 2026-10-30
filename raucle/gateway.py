@@ -961,6 +961,7 @@ class RaucleGateway:
         approval_id: str = "",
         authorization: dict[str, Any] | None = None,
         rule_id: str = "",
+        intent_block: dict[str, Any] | None = None,
     ) -> str | None:
         """Emit a signed provenance receipt for a gate decision (PR-B).
 
@@ -1003,6 +1004,9 @@ class RaucleGateway:
         }
         if authorization is not None:  # receipts v1.1: delegated-authority binding
             payload["x_gate"]["authorization"] = authorization
+        if intent_block is not None:  # receipts v1.2: task-intent binding
+            payload["x_gate"]["intent"] = intent_block["intent"]
+            payload["x_gate"]["intent_check"] = intent_block["intent_check"]
         # Header + JWS signing + store append are shared with the other
         # authority receipt emitters (PR-E extraction).
         return self._sign_and_store_receipt(payload)
@@ -1126,6 +1130,7 @@ class RaucleGateway:
         start: float,
         *,
         siem: bool = True,
+        _intent_hint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Finalise a denied result: stats, optional SIEM, connection log."""
         result["decision"] = "deny"
@@ -1146,6 +1151,7 @@ class RaucleGateway:
                 trace_id=result.get("_trace_id", ""),
                 authorization=result.get("_authorization_hint"),
                 rule_id=result.get("rule_id", ""),
+                intent_block=_intent_hint,
             )
         except Exception:
             # Fail-closed accountability: if the receipt cannot be written,
@@ -1288,6 +1294,7 @@ class RaucleGateway:
         approval_id: str = "",
         _authorization_hint: dict[str, Any] | None = None,
         _token_decision: Any = None,
+        _intent_hint: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Gate a tool call. Returns decision dict.
 
@@ -1335,7 +1342,10 @@ class RaucleGateway:
             # deny with the chain bound - the evidence an auditor needs.
             # Policy evaluation is moot: the authority itself refuses.
             return self._deny_result(
-                result, f"delegated authority: {_token_decision.reason}", start
+                result,
+                f"delegated authority: {_token_decision.reason}",
+                start,
+                _intent_hint=_intent_hint,
             )
 
         if tool not in self._policy_rules or tool not in self._tokens:
@@ -1436,6 +1446,7 @@ class RaucleGateway:
                 approval_id=result.get("approval_id", ""),
                 authorization=result.get("_authorization_hint"),
                 rule_id=result.get("rule_id", ""),
+                intent_block=_intent_hint,
             )
         except Exception:
             logger.exception("receipt emission failed; downgrading to deny")

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Added - receipts v1.2: task-intent binding (A1)
+- A capability token may carry an intent: the approved task statement plus
+  structured constraints (resource class via tools, data bound via the
+  standard constraint vocabulary). Tokens without an intent stay
+  byte-identical to v1.1.
+- The gate enforces the intent deterministically on every call (no model
+  involvement): the tool must sit inside the approved class and the
+  arguments must satisfy the intent constraints. Denials are attributable.
+- Receipts carry x_gate.intent (the approved purpose, signed) plus a
+  bounded x_gate.intent_check disclosure - only the constrained fields'
+  values, nothing else.
+- The verifier re-checks ALLOW receipts against their own intent and
+  rejects a chain-valid receipt whose action violates the approved
+  purpose, with a named reason. DENY receipts are exempt (a denial for an
+  out-of-intent attempt IS the enforcement).
+- A delegated child inherits its parent's intent and may only narrow it;
+  widening is refused (the same monotonicity as every other dimension).
+- Spec: docs/spec/provenance/v1.2/intent-binding.md. Fixtures: the
+  calendar-vs-archive and recipient-allowlist cases in
+  tests/test_intent_binding.py.
+- Found and fixed while landing this: the verifier's v1.1 chain-digest
+  re-check never fired (it read x_gate off the envelope, which only
+  carries {receipt_hash, jws}) and the recompute used the wrong field
+  names. Both now live: the verifier decodes the JWS payload and
+  recomputes the digest from the block's own fields.
+
 ### Changed - B2 attribution audit: unattributed calls deny across all adapters
 - The invariant: every ALLOWED execution carries a real acting identity,
   and no minted receipt carries a fabricated placeholder. The same

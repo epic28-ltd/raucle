@@ -247,6 +247,10 @@ class Capability:
     not_before: int
     expires_at: int
     parent_id: str | None = None
+    # Receipts v1.2: the approved task intent (statement + structured
+    # constraints), bound at mint and enforced per-call by the gate.
+    # None keeps the token body byte-identical to v1.1.
+    intent: dict[str, Any] | None = None
     policy_proof_hash: str | None = None
     # Structural binding of the cited proof. When set, downstream
     # verifiers can confirm the proof referenced by ``policy_proof_hash``
@@ -267,7 +271,7 @@ class Capability:
 
     def body(self) -> dict[str, Any]:
         # NB: token_id is derived from this body and is NOT a member of it.
-        return {
+        body = {
             "agent_id": self.agent_id,
             "tool": self.tool,
             "constraints": _normalise_constraints(self.constraints),
@@ -281,6 +285,11 @@ class Capability:
             "grammar_hash": self.grammar_hash,
             "policy_hash": self.policy_hash,
         }
+        if self.intent is not None:
+            # Receipts v1.2: only intent-bearing tokens include the field;
+            # intent=None keeps the body byte-identical to v1.1.
+            body["intent"] = self.intent
+        return body
 
     def _signed_material(self) -> bytes:
         """The exact bytes the issuing issuer signs: canonical body JSON."""
@@ -327,6 +336,25 @@ class Capability:
                 "capability token: constraints must be present and a JSON object "
                 "(Capability.body always signs a constraints object, possibly empty)"
             )
+        # Receipts v1.2: optional intent block {statement, tools?, constraints?}
+        intent = d.get("intent")
+        if intent is not None:
+            if not isinstance(intent, dict):
+                raise ValueError("capability token: intent must be a JSON object")
+            if not isinstance(intent.get("statement"), str) or not intent.get("statement"):
+                raise ValueError("capability token: intent.statement must be a non-empty string")
+            tools = intent.get("tools")
+            if tools is not None and (
+                not isinstance(tools, list)
+                or not all(isinstance(t, str) and t for t in tools)
+                or not tools
+            ):
+                raise ValueError(
+                    "capability token: intent.tools must be a non-empty list of strings"
+                )
+            iconstraints = intent.get("constraints")
+            if iconstraints is not None and not isinstance(iconstraints, dict):
+                raise ValueError("capability token: intent.constraints must be a JSON object")
         # parent_id is the chain link: it MUST be either absent/null (a root) or
         # a non-empty string token-id. A falsy-but-non-null value ("" / [] / {})
         # would otherwise slip past the gate's chain check (truthiness) and skip
@@ -369,6 +397,7 @@ class Capability:
             not_before=_ts("not_before"),
             expires_at=_ts("expires_at"),
             parent_id=d.get("parent_id"),
+            intent=d.get("intent"),
             policy_proof_hash=d.get("policy_proof_hash"),
             grammar_hash=d.get("grammar_hash"),
             policy_hash=d.get("policy_hash"),
@@ -789,6 +818,7 @@ class CapabilityIssuer:
         grammar_hash: str | None = None,
         policy_hash: str | None = None,
         quantum: bool = False,
+        intent: dict[str, Any] | None = None,
     ) -> Capability:
         """Mint a fresh capability token.
 
@@ -825,6 +855,7 @@ class CapabilityIssuer:
 
         _validate_agent_id(agent_id)
         _validate_tool(tool)
+        _validate_intent(intent)
 
         # ── TTL sanity guard (TTL-LOW) ──────────────────────────────
         # A token must live for a positive, bounded span. Zero/negative
@@ -872,6 +903,7 @@ class CapabilityIssuer:
             not_before=now + not_before_offset,
             expires_at=now + ttl_seconds,
             parent_id=None,
+            intent=intent,
             policy_proof_hash=policy_proof_hash,
             grammar_hash=grammar_hash,
             policy_hash=policy_hash,
@@ -941,6 +973,7 @@ class CapabilityIssuer:
         extra_constraints: dict[str, Any] | None = None,
         narrower_ttl_seconds: int | None = None,
         narrower_agent_id: str | None = None,
+        intent: dict[str, Any] | None = None,
     ) -> Capability:
         """Derive a more-restricted child token from ``parent``.
 
@@ -989,6 +1022,25 @@ class CapabilityIssuer:
         merged = _merge_narrowing(parent.constraints, extra_constraints or {})
         _assert_narrowing(parent.constraints, merged)
 
+        # Receipts v1.2: the child inherits the parent's intent unless a
+        # narrower one is supplied; a child intent may only NARROW the
+        # parent's (tools subset, constraints merged-tighter). Widening is
+        # refused: a delegated authority cannot expand the approved purpose.
+        _validate_intent(intent)
+        child_intent = intent if intent is not None else parent.intent
+        if intent is not None and parent.intent is not None:
+            parent_tools = parent.intent.get("tools")
+            if (
+                parent_tools is not None
+                and intent.get("tools") is not None
+                and not set(intent["tools"]) <= set(parent_tools)
+            ):
+                raise ValueError("attenuation widened intent.tools beyond the parent's scope")
+            if parent.intent.get("constraints") and intent.get("constraints"):
+                narrowed = _merge_narrowing(parent.intent["constraints"], intent["constraints"])
+                _assert_narrowing(parent.intent["constraints"], narrowed)
+                child_intent = {**intent, "constraints": narrowed}
+
         now = _now()
         ttl = (
             narrower_ttl_seconds if narrower_ttl_seconds is not None else (parent.expires_at - now)
@@ -1002,6 +1054,7 @@ class CapabilityIssuer:
             agent_id=child_agent,
             tool=parent.tool,
             constraints=merged,
+            intent=child_intent,
             issuer=self.issuer,
             key_id=self.key_id,
             issued_at=now,
@@ -1584,6 +1637,32 @@ class CapabilityGate:
                 False, f"constraint violated: {why}", token.token_id, attributable=True
             )
 
+        # 7.6) Receipts v1.2: task-intent enforcement. The intent is evaluated
+        # deterministically (no model involvement): the tool must sit inside the
+        # intent's resource class, and the call's arguments must satisfy the
+        # intent's constraints. Fail-closed and attributable: an intent-bearing
+        # authority that is used for anything else is misuse, and the denial
+        # is evidence.
+        if token.intent is not None:
+            intent_tools = token.intent.get("tools")
+            if intent_tools is not None and token.tool not in intent_tools:
+                return GateDecision(
+                    False,
+                    f"intent scope: tool {token.tool!r} is outside the approved task's tool set",
+                    token.token_id,
+                    attributable=True,
+                )
+            intent_constraints = token.intent.get("constraints")
+            if intent_constraints:
+                why = _check_constraints(intent_constraints, args)
+                if why:
+                    return GateDecision(
+                        False,
+                        f"intent constraint violated: {why}",
+                        token.token_id,
+                        attributable=True,
+                    )
+
         # 7.5) Proof enforcement (defence-in-depth at gate time).
         # In "off" mode this is a no-op. In "lenient" / "strict" the
         # gate consults the in-memory ``trusted_proofs`` cache and
@@ -1815,6 +1894,27 @@ def _flatten_scalars(val: Any) -> Any:
             yield from _flatten_scalars(v)
     else:
         yield val
+
+
+def _validate_intent(intent: dict[str, Any] | None) -> None:
+    """Receipts v1.2: validate the intent block shape. None is legal (v1.1
+    byte-compat); a present intent must carry a non-empty statement, and
+    tools/constraints, when present, must be a non-empty string list / an
+    object."""
+    if intent is None:
+        return
+    if not isinstance(intent, dict):
+        raise ValueError("intent must be a JSON object")
+    if not isinstance(intent.get("statement"), str) or not intent.get("statement"):
+        raise ValueError("intent.statement must be a non-empty string")
+    tools = intent.get("tools")
+    if tools is not None and (
+        not isinstance(tools, list) or not tools or not all(isinstance(t, str) and t for t in tools)
+    ):
+        raise ValueError("intent.tools must be a non-empty list of strings")
+    iconstraints = intent.get("constraints")
+    if iconstraints is not None and not isinstance(iconstraints, dict):
+        raise ValueError("intent.constraints must be a JSON object")
 
 
 def _check_constraints(c: dict[str, Any], args: dict[str, Any]) -> str | None:

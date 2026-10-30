@@ -254,6 +254,32 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         from raucle.provenance import authorization_block as _authorization_block
 
         authorization = _authorization_block(token_dict) if token_dict else None
+        # Receipts v1.2: bind the task intent + a bounded disclosure (only the
+        # fields the intent constrains) so a third party re-checks the action
+        # against the approved purpose offline.
+        intent_hint = None
+        token_intent = (token_dict or {}).get("intent")
+        if token_intent is not None:
+            # Bounded disclosure: the FIELD names the intent constrains (the
+            # keys inside the constraint entries), not the constraint kinds.
+            c = token_intent.get("constraints") or {}
+            fields: set[str] = set()
+            for kind in (
+                "allowed_values",
+                "forbidden_values",
+                "starts_with",
+                "max_value",
+                "min_value",
+            ):
+                fields |= set(c.get(kind, {}) or {})
+            fields |= set(c.get("required_present", []) or [])
+            intent_hint = {
+                "intent": token_intent,
+                "intent_check": {
+                    "tool": req.tool,
+                    "satisfied_fields": {f: req.args[f] for f in fields if f in req.args},
+                },
+            }
         response = gateway.check_tool_call(
             req.tool,
             req.args,
@@ -264,6 +290,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
             approval_id=x_approval_id or "",
             _authorization_hint=authorization,
             _token_decision=token_decision,
+            _intent_hint=intent_hint,
         )
         # Internal bookkeeping fields never leave the process boundary
         response.pop("_trace_id", None)
