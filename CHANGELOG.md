@@ -1,6 +1,7 @@
 # Changelog
 
-## Unreleased
+## 0.23.5 (2026-10-30) - records lifecycle, counterfactual replay, authorship receipts, time-source anchoring
+
 
 ### Added - I1: counterfactual replay (the incident-review question, answered deterministically)
 - `raucle counterfactual policy --chain ... --inputs ... --policy alt.yaml`:
@@ -63,6 +64,14 @@
   ids deterministic per (harness, test_id, cited receipt).
 - Spec: docs/spec/provenance/v1.2/harness-findings.md.
 
+
+- Release note: the first release carrying the H1-era evidence tooling -
+  raucle records destroy|verify (tamper-evident disposal), raucle
+  counterfactual policy (the incident-review question answered
+  deterministically), the Claude Code authorship hooks, the RFC 3161
+  three-mode time-source model, the receipt-chain-to-audit-chain
+  projection, and the SonarCloud hardening (validated bundle writes,
+  temp-dir verifier chains).
 ## 0.23.4 (2026-10-30) - credential-lease receipts (the x_lease evidence layer)
 
 ### Added - C1: credential-lease receipts (the x_lease evidence layer)
