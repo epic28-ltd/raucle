@@ -1681,15 +1681,14 @@ class CapabilityGate:
         # only be used by a call declaring that same user; cross-pair use is
         # attributable misuse, and an undeclared user on a pair-bound token
         # is refused just the same (the pair IS the principal).
-        if token.acting_for:
-            if not acting_for or acting_for != token.acting_for:
-                who = f"got {acting_for!r}" if acting_for else "no user declared"
-                return GateDecision(
-                    False,
-                    f"acting-for mismatch: token is bound to {token.acting_for!r}, {who}",
-                    token.token_id,
-                    attributable=True,
-                )
+        if token.acting_for and (not acting_for or acting_for != token.acting_for):
+            who = f"got {acting_for!r}" if acting_for else "no user declared"
+            return GateDecision(
+                False,
+                f"acting-for mismatch: token is bound to {token.acting_for!r}, {who}",
+                token.token_id,
+                attributable=True,
+            )
 
         # 7) Argument constraints. Fail closed: any unexpected error while
         # evaluating constraints is a DENY, never a propagated exception — the
