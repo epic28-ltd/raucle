@@ -36,6 +36,9 @@ _LEAF = b"l\x00"
 _NODE = b"n\x00"
 
 
+HASH_PREFIX = "sha256:"
+
+
 def _sha256(data: bytes) -> bytes:
     return hashlib.sha256(data).digest()
 
@@ -71,7 +74,7 @@ def commit_args(args: dict[str, Any]) -> str:
     receipt digests. Empty args commit to a fixed empty-tree digest.
     """
     if not args:
-        return "sha256:" + _sha256(_D + b"empty").hex()
+        return HASH_PREFIX + _sha256(_D + b"empty").hex()
     level = [_leaf(f, args[f]) for f in sorted(args, key=_utf16_key)]
     while len(level) > 1:
         level = _fold_level(level)
@@ -92,7 +95,7 @@ def disclosure_path(args: dict[str, Any], field: str) -> list[tuple[bool, str]] 
     while len(level) > 1:
         if index % 2 == 0:
             sib = level[index + 1] if index + 1 < len(level) else level[index]
-            path.append((False, "sha256:" + sib.hex()))
+            path.append((False, HASH_PREFIX + sib.hex()))
         else:
             path.append((True, "sha256:" + level[index - 1].hex()))
         level = _fold_level(level)
@@ -128,9 +131,9 @@ def verify_disclosure(root: str, disclosure: dict[str, Any]) -> dict[str, Any]:
     Fails closed: any leaf mismatch, bad path shape, or root disagreement
     raises ValueError. Returns the verified field-value mapping.
     """
-    if not root.startswith("sha256:"):
+    if not root.startswith(HASH_PREFIX):
         raise ValueError(f"bad root format: {root[:16]!r}")
-    expected_root = bytes.fromhex(root[len("sha256:") :])
+    expected_root = bytes.fromhex(root[len(HASH_PREFIX) :])
     verified: dict[str, Any] = {}
     fields = disclosure.get("fields")
     if not isinstance(fields, dict):
@@ -144,9 +147,9 @@ def verify_disclosure(root: str, disclosure: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"disclosure for {field!r} missing path")
         digest = _leaf(field, value)
         for is_right, sib_str in path:
-            if not (isinstance(sib_str, str) and sib_str.startswith("sha256:")):
+            if not (isinstance(sib_str, str) and sib_str.startswith(HASH_PREFIX)):
                 raise ValueError(f"bad sibling digest in {field!r} path")
-            sib = bytes.fromhex(sib_str[len("sha256:") :])
+            sib = bytes.fromhex(sib_str[len(HASH_PREFIX) :])
             if len(sib) != 32:
                 raise ValueError(f"bad sibling length in {field!r} path")
             digest = _node(sib, digest) if is_right else _node(digest, sib)
