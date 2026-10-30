@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.23.3 (2026-10-30) - intent binding, cascade revocation, pair permissioning
+## 0.23.4 (2026-10-30) - credential-lease receipts (the x_lease evidence layer)
 
 ### Added - C1: credential-lease receipts (the x_lease evidence layer)
 - A credential lease - a gate-minted, time-limited grant of a vault
@@ -20,6 +20,8 @@
   verifier rejects on truthiness - they now bind the extension block's
   hash and verify through the standard verifier like every other receipt.
 - Tests: tests/test_lease_receipts.py.
+
+## 0.23.3 (2026-10-30) - intent binding, cascade revocation, pair permissioning
 
 ### Added - B1: agent+user pair permissioning (OSS evidence half)
 - The principal becomes the (agent, acting-for user) pair: a capability may
