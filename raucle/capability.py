@@ -1640,6 +1640,239 @@ class CapabilityGate:
             )
         return None
 
+    def _check_hybrid_signature(self, token: Capability) -> GateDecision | None:
+        """Identity stage (2.5): the quantum hybrid component.
+
+        Invariant: a token carrying a pq_key_id must ALSO verify its
+        ML-DSA-65 signature over the SAME canonical body against a key
+        the gate knows - fail-closed, no classical-only acceptance of a
+        hybrid token (the AND rule; mirrors pq1 receipts and
+        checkpoints)."""
+        if token.pq_key_id is None:
+            return None
+        pq_key = self._pq_public_keys.get(token.pq_key_id)
+        if pq_key is None:
+            return GateDecision(
+                False,
+                f"token carries pq_key_id {token.pq_key_id!r} but the gate "
+                "has no matching ML-DSA-65 key; hybrid token cannot be "
+                "verified (fail-closed)",
+                token.token_id,
+            )
+        try:
+            from raucle.pq import _b64url_decode
+
+            pq_sig = _b64url_decode(token.pq_signature or "")
+            if len(pq_sig) != 3309:
+                raise ValueError(f"ML-DSA-65 signature must be 3309 bytes, got {len(pq_sig)}")
+            pq_key.verify(pq_sig, _canonical_json(token.body()))
+        except Exception as exc:
+            return GateDecision(
+                False,
+                f"hybrid ML-DSA-65 component failed verification: {exc}",
+                token.token_id,
+            )
+        return None
+
+    def _check_time_bounds(self, token: Capability, ts: int) -> GateDecision | None:
+        """Identity stage (4): time bounds.
+
+        Invariant: the call time sits strictly inside [not_before,
+        expires_at) - a not-yet-valid or expired token is refused."""
+        if ts < token.not_before:
+            return GateDecision(False, "token not yet valid", token.token_id)
+        if ts >= token.expires_at:
+            return GateDecision(False, "token expired", token.token_id)
+        return None
+
+    def _check_tool_binding(self, token: Capability, tool: str) -> GateDecision | None:
+        """Attributable stage (5): tool binding.
+
+        Invariant: the call may invoke only the tool the token is bound
+        to; using a verified authority for a different tool is
+        attributable misuse, receipted by callers as a denied
+        decision."""
+        if token.tool != tool:
+            return GateDecision(
+                False,
+                f"token bound to tool {token.tool!r}, called {tool!r}",
+                token.token_id,
+                attributable=True,
+            )
+        return None
+
+    def _check_caller_identity(
+        self, token: Capability, agent_id: str | None, acting_for: str | None
+    ) -> GateDecision | None:
+        """Attributable stages (6, 6.5): caller identity.
+
+        Invariant: a caller agent_id must equal the token's or be a
+        dot-delimited descendant of it (the delimiter is required so
+        that 'agent:billing' does NOT authorise 'agent:billing-evil' - a
+        bare prefix check would, a CVE-class privilege escalation); and
+        a pair-bound token may only be used by a call declaring that
+        same user (the pair IS the principal - an undeclared or
+        different user is refused, attributable)."""
+        if agent_id is not None:
+            agent_decision = self._check_agent_id(token, agent_id)
+            if agent_decision is not None:
+                return agent_decision
+        if token.acting_for and (not acting_for or acting_for != token.acting_for):
+            who = f"got {acting_for!r}" if acting_for else "no user declared"
+            return GateDecision(
+                False,
+                f"acting-for mismatch: token is bound to {token.acting_for!r}, {who}",
+                token.token_id,
+                attributable=True,
+            )
+        return None
+
+    def _check_call_args(self, token: Capability, args: dict[str, Any]) -> GateDecision | None:
+        """Attributable stage (7): argument constraints.
+
+        Invariant: the call's arguments must satisfy the token's
+        constraints; any unexpected error while evaluating constraints
+        is a DENY, never a propagated exception - the gate is a choke
+        point and must never crash open. The full traceback goes to the
+        server-side log only; the decision reason is caller-visible and
+        must not leak evaluation internals."""
+        try:
+            why = _check_constraints(token.constraints, args)
+        except Exception:  # pragma: no cover - defensive
+            logger.exception("constraint evaluation raised for token %s; denying", token.token_id)
+            return GateDecision(
+                False, "constraint evaluation error (deny)", token.token_id, attributable=True
+            )
+        if why:
+            return GateDecision(
+                False, f"constraint violated: {why}", token.token_id, attributable=True
+            )
+        return None
+
+    def _check_intent_scope(self, token: Capability, args: dict[str, Any]) -> GateDecision | None:
+        """Attributable stage (7.6): task-intent enforcement.
+
+        Invariant: an intent-bearing authority is used only inside the
+        approved task - the tool must sit inside the intent's tool set
+        and the call's arguments must satisfy the intent's constraints.
+        Evaluated deterministically (no model involvement), fail-closed
+        and attributable: misuse of an intent-bearing authority is
+        evidence."""
+        if token.intent is None:
+            return None
+        intent_tools = token.intent.get("tools")
+        if intent_tools is not None and token.tool not in intent_tools:
+            return GateDecision(
+                False,
+                f"intent scope: tool {token.tool!r} is outside the approved task's tool set",
+                token.token_id,
+                attributable=True,
+            )
+        intent_constraints = token.intent.get("constraints")
+        if intent_constraints:
+            why = _check_constraints(intent_constraints, args)
+            if why:
+                return GateDecision(
+                    False,
+                    f"intent constraint violated: {why}",
+                    token.token_id,
+                    attributable=True,
+                )
+        return None
+
+    def _check_proof_enforcement(self, token: Capability) -> GateDecision | None:
+        """Proof enforcement (7.5): defence-in-depth at gate time.
+
+        Invariant: in "off" mode this is a no-op; in "lenient" /
+        "strict" the gate consults the in-memory trusted_proofs cache
+        and verifies the cited proof is PROVEN with matching
+        grammar/policy hashes (the miss is a DENY with an explicit
+        reason in lenient/strict via _check_proof_binding)."""
+        if self._proof_mode == "off":
+            return None
+        return self._check_proof_binding(token)
+
+    def _check_chain(self, token: Capability) -> tuple[list[str], GateDecision | None]:
+        """Identity stage (8): chain verification.
+
+        Invariant: a token that cites a parent_id MUST have its
+        ancestry verified; with no parent_resolver configured the gate
+        cannot do so and must fail closed rather than silently trust
+        that the issuer minted the chain correctly (§8.7 - the
+        unresolved-chain DENY). Otherwise a hostile child citing a
+        parent_id it never had to justify slips through whenever the
+        deployment forgot to wire a resolver. Root tokens (no
+        parent_id) pass with an empty chain."""
+        chain: list[str] = []
+        if token.parent_id is None:
+            return chain, None
+        if self._resolver is None:
+            return chain, GateDecision(
+                False,
+                f"token cites parent {token.parent_id!r} but no parent_resolver "
+                f"is configured to verify the chain (deny)",
+                token.token_id,
+            )
+        decision = self._verify_ancestor_chain(token, chain)
+        return chain, decision
+
+    def _check_token_identity(self, token: Capability, ts: int) -> GateDecision | None:
+        """Identity stages (1-4): the token authenticates as issued
+        material before anything about the call is examined.
+
+        Invariant: the issuing key is pinned (1, no global root), the
+        classical Ed25519 signature (2) and any hybrid ML-DSA-65
+        component (2.5) verify, the token_id matches the signed body
+        (3), neither the token nor its cited parent is revoked (3.5),
+        and the call time sits inside the validity window (4). A
+        failure here is the token's own and is never attributable."""
+        pem = self._issuers.get(token.key_id)
+        if pem is None:
+            return GateDecision(False, f"unknown key_id {token.key_id!r}", token.token_id)
+        try:
+            self._verify_signature(token, pem)
+        except ValueError as exc:
+            return GateDecision(False, f"bad signature: {exc}", token.token_id)
+        hybrid_decision = self._check_hybrid_signature(token)
+        if hybrid_decision is not None:
+            return hybrid_decision
+        expected_id = "cap:" + _sha256_hex(_canonical_json(token.body()))[:24]
+        if expected_id != token.token_id:
+            return GateDecision(False, "token_id does not match body", token.token_id)
+        revocation = self._check_revocation(token)
+        if revocation is not None:
+            return revocation
+        return self._check_time_bounds(token, ts)
+
+    def _check_attributable_binding(
+        self,
+        token: Capability,
+        tool: str,
+        agent_id: str | None,
+        acting_for: str | None,
+        args: dict[str, Any],
+    ) -> GateDecision | None:
+        """Attributable stages (5-7.6): identity is established; a
+        binding failure is the caller's misuse of a verified authority,
+        receipted by callers as a denied decision (evidence, not
+        noise).
+
+        Invariant: the call uses only the bound tool (5), the caller
+        identity matches the token's principal (6, 6.5), the arguments
+        satisfy the constraints (7) and an intent-bearing authority is
+        used only inside the approved task (7.6). Every failure here is
+        attributable."""
+        tool_decision = self._check_tool_binding(token, tool)
+        if tool_decision is not None:
+            return tool_decision
+        caller_decision = self._check_caller_identity(token, agent_id, acting_for)
+        if caller_decision is not None:
+            return caller_decision
+        args_decision = self._check_call_args(token, args)
+        if args_decision is not None:
+            return args_decision
+        return self._check_intent_scope(token, args)
+
     def check(
         self,
         token: Capability,
@@ -1653,166 +1886,29 @@ class CapabilityGate:
         ts = now if now is not None else _now()
         args = args or {}
 
-        # 1) Issuer pinned?
-        pem = self._issuers.get(token.key_id)
-        if pem is None:
-            return GateDecision(False, f"unknown key_id {token.key_id!r}", token.token_id)
+        # Identity stages (1-4): the token must authenticate as issued
+        # material before anything about the call is examined. A failure
+        # here is the token's own, never attributable misuse.
+        identity_decision = self._check_token_identity(token, ts)
+        if identity_decision is not None:
+            return identity_decision
 
-        # 2) Signature valid?
-        try:
-            self._verify_signature(token, pem)
-        except ValueError as exc:
-            return GateDecision(False, f"bad signature: {exc}", token.token_id)
-
-        # 2.5) Quantum hybrid component (raucle/pq1). When the token carries
-        # a pq_key_id, the ML-DSA-65 signature over the SAME canonical body
-        # must verify too - fail-closed, no classical-only acceptance of a
-        # hybrid token (the AND rule; mirrors pq1 receipts and checkpoints).
-        if token.pq_key_id is not None:
-            pq_key = self._pq_public_keys.get(token.pq_key_id)
-            if pq_key is None:
-                return GateDecision(
-                    False,
-                    f"token carries pq_key_id {token.pq_key_id!r} but the gate "
-                    "has no matching ML-DSA-65 key; hybrid token cannot be "
-                    "verified (fail-closed)",
-                    token.token_id,
-                )
-            try:
-                from raucle.pq import _b64url_decode
-
-                pq_sig = _b64url_decode(token.pq_signature or "")
-                if len(pq_sig) != 3309:
-                    raise ValueError(f"ML-DSA-65 signature must be 3309 bytes, got {len(pq_sig)}")
-                pq_key.verify(pq_sig, _canonical_json(token.body()))
-            except Exception as exc:
-                return GateDecision(
-                    False,
-                    f"hybrid ML-DSA-65 component failed verification: {exc}",
-                    token.token_id,
-                )
-
-        # 3) token_id matches body?
-        expected_id = "cap:" + _sha256_hex(_canonical_json(token.body()))[:24]
-        if expected_id != token.token_id:
-            return GateDecision(False, "token_id does not match body", token.token_id)
-
-        # 3.5) Revocation denylist (early revocation before expiry).
-        # A revoked token, or any child that cites a revoked token as its
-        # parent, is refused.
-        revocation = self._check_revocation(token)
-        if revocation is not None:
-            return revocation
-
-        # 4) Time bounds.
-        if ts < token.not_before:
-            return GateDecision(False, "token not yet valid", token.token_id)
-        if ts >= token.expires_at:
-            return GateDecision(False, "token expired", token.token_id)
-
-        # 5) Tool match. Identity is established above; a binding failure is
-        # attributable misuse (receipted by callers as a denied decision).
-        if token.tool != tool:
-            return GateDecision(
-                False,
-                f"token bound to tool {token.tool!r}, called {tool!r}",
-                token.token_id,
-                attributable=True,
-            )
-
-        # 6) Agent match (when supplied). A caller's agent_id must equal the
-        # token's, or be a *dot-delimited descendant* of it. The delimiter is
-        # required so that 'agent:billing' does NOT authorise 'agent:billing-evil'
-        # (a bare prefix check would — CVE-class privilege escalation).
-        if agent_id is not None:
-            agent_decision = self._check_agent_id(token, agent_id)
-            if agent_decision is not None:
-                return agent_decision
-
-        # 6.5) B1: the (agent, acting-for user) pair. A pair-bound token may
-        # only be used by a call declaring that same user; cross-pair use is
-        # attributable misuse, and an undeclared user on a pair-bound token
-        # is refused just the same (the pair IS the principal).
-        if token.acting_for and (not acting_for or acting_for != token.acting_for):
-            who = f"got {acting_for!r}" if acting_for else "no user declared"
-            return GateDecision(
-                False,
-                f"acting-for mismatch: token is bound to {token.acting_for!r}, {who}",
-                token.token_id,
-                attributable=True,
-            )
-
-        # 7) Argument constraints. Fail closed: any unexpected error while
-        # evaluating constraints is a DENY, never a propagated exception — the
-        # gate is a choke point and must never crash open.
-        try:
-            why = _check_constraints(token.constraints, args)
-        except Exception:  # pragma: no cover - defensive
-            # Full traceback goes to the server-side log only; the decision
-            # reason is caller-visible and must not leak evaluation internals.
-            logger.exception("constraint evaluation raised for token %s; denying", token.token_id)
-            return GateDecision(
-                False, "constraint evaluation error (deny)", token.token_id, attributable=True
-            )
-        if why:
-            return GateDecision(
-                False, f"constraint violated: {why}", token.token_id, attributable=True
-            )
-
-        # 7.6) Receipts v1.2: task-intent enforcement. The intent is evaluated
-        # deterministically (no model involvement): the tool must sit inside the
-        # intent's resource class, and the call's arguments must satisfy the
-        # intent's constraints. Fail-closed and attributable: an intent-bearing
-        # authority that is used for anything else is misuse, and the denial
-        # is evidence.
-        if token.intent is not None:
-            intent_tools = token.intent.get("tools")
-            if intent_tools is not None and token.tool not in intent_tools:
-                return GateDecision(
-                    False,
-                    f"intent scope: tool {token.tool!r} is outside the approved task's tool set",
-                    token.token_id,
-                    attributable=True,
-                )
-            intent_constraints = token.intent.get("constraints")
-            if intent_constraints:
-                why = _check_constraints(intent_constraints, args)
-                if why:
-                    return GateDecision(
-                        False,
-                        f"intent constraint violated: {why}",
-                        token.token_id,
-                        attributable=True,
-                    )
+        # Attributable stages (5-7.6): identity is established; binding
+        # failures are the caller's misuse of a verified authority and
+        # are receipted as a denied decision (evidence, not noise).
+        misuse_decision = self._check_attributable_binding(token, tool, agent_id, acting_for, args)
+        if misuse_decision is not None:
+            return misuse_decision
 
         # 7.5) Proof enforcement (defence-in-depth at gate time).
-        # In "off" mode this is a no-op. In "lenient" / "strict" the
-        # gate consults the in-memory ``trusted_proofs`` cache and
-        # verifies the cited proof is PROVEN and that the token's bound
-        # grammar/policy hashes match.
-        if self._proof_mode != "off":
-            proof_decision = self._check_proof_binding(token)
-            if proof_decision is not None:
-                return proof_decision
+        proof_decision = self._check_proof_enforcement(token)
+        if proof_decision is not None:
+            return proof_decision
 
-        # 8) Chain verification. A token that cites a parent_id MUST have its
-        # ancestry verified; with no parent_resolver configured the gate cannot
-        # do so and must fail closed rather than silently trust that the issuer
-        # minted the chain correctly (§8.7 — unresolved-chain DENY). Otherwise a
-        # hostile child citing a parent_id it never had to justify slips through
-        # whenever the deployment forgot to wire a resolver.
-        chain: list[str] = []
-        if token.parent_id is not None and self._resolver is None:
-            return GateDecision(
-                False,
-                f"token cites parent {token.parent_id!r} but no parent_resolver "
-                f"is configured to verify the chain (deny)",
-                token.token_id,
-            )
-        if token.parent_id is not None and self._resolver is not None:
-            chain_decision = self._verify_ancestor_chain(token, chain)
-            if chain_decision is not None:
-                return chain_decision
+        # 8) Chain verification (§8.7 unresolved-chain DENY).
+        chain, chain_decision = self._check_chain(token)
+        if chain_decision is not None:
+            return chain_decision
 
         return GateDecision(True, "ok", token.token_id, chain)
 
