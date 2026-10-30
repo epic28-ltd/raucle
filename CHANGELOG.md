@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added - EPIC D: harness findings as verifiable evidence (x_finding)
+- A QM/Pentagon-class harness running its security tests through the
+  raucle gate reports every finding as a signed receipt citing the gate
+  receipt that covered the request (RaucleGateway.emit_finding).
+- The offline verifier replays the claim: a finding citing a receipt not
+  in the chain, or misreporting the gate's decision, fails verification
+  with a named error. Emission is the harness's claim; verification is
+  the truth check.
+- Verdict vocabulary closed: confirmed, refuted, expected_pass. Finding
+  ids deterministic per (harness, test_id, cited receipt).
+- Spec: docs/spec/provenance/v1.2/harness-findings.md.
+
 ## 0.23.4 (2026-10-30) - credential-lease receipts (the x_lease evidence layer)
 
 ### Added - C1: credential-lease receipts (the x_lease evidence layer)
