@@ -1640,25 +1640,34 @@ class RaucleGateway:
                 entry["sources"].add(source)
             if destination:
                 entry["destinations"].add(destination)
-            for field, value in (args or {}).items():
-                f = entry["fields"].setdefault(
-                    field, {"kind": "string", "values": set(), "min": None, "max": None, "seen": 0}
-                )
-                f["seen"] += 1
-                if isinstance(value, bool):
-                    f["kind"] = "bool"
-                    f["values"].add(value)
-                elif isinstance(value, int):
-                    f["kind"] = "int"
-                    f["min"] = value if f["min"] is None else min(f["min"], value)
-                    f["max"] = value if f["max"] is None else max(f["max"], value)
-                elif isinstance(value, str):
-                    f["kind"] = "string"
-                    f["values"].add(value)
-                else:
-                    f["kind"] = "other"
+            self._learn_entry_fields(entry, args)
         except Exception:
             logger.exception("learn observe failed")
+
+    @staticmethod
+    def _learn_entry_fields(entry: dict[str, Any], args: dict[str, Any]) -> None:
+        """Invariant: every observed argument value is classified by kind
+        (bool / int / string / other) and aggregated per kind - value
+        sets for strings and bools, min/max bounds for ints - so draft
+        policies infer constraints only from homogeneous observed
+        traffic. Values stay in memory and never enter a draft directly."""
+        for fname, value in (args or {}).items():
+            f = entry["fields"].setdefault(
+                fname, {"kind": "string", "values": set(), "min": None, "max": None, "seen": 0}
+            )
+            f["seen"] += 1
+            if isinstance(value, bool):
+                f["kind"] = "bool"
+                f["values"].add(value)
+            elif isinstance(value, int):
+                f["kind"] = "int"
+                f["min"] = value if f["min"] is None else min(f["min"], value)
+                f["max"] = value if f["max"] is None else max(f["max"], value)
+            elif isinstance(value, str):
+                f["kind"] = "string"
+                f["values"].add(value)
+            else:
+                f["kind"] = "other"
 
     def _learn_clear(self) -> None:
         """Discard all learned observations."""
