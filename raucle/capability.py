@@ -215,6 +215,81 @@ def _validate_tool(tool: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _require_token_str_field(d: dict[str, Any], name: str) -> str:
+    """Parse-boundary invariant: a signed identity field is a non-empty
+    string; anything else is malformed signed material and fails closed
+    with a ValueError, never a KeyError/TypeError on the .get() path."""
+    v = d.get(name)
+    if not isinstance(v, str) or not v:
+        raise ValueError(
+            f"capability token: {name} must be a non-empty string, got {type(v).__name__} {v!r}"
+        )
+    return v
+
+
+def _parse_token_acting_for(d: dict[str, Any]) -> str:
+    """Parse-boundary invariant: acting_for, when present, is a valid pair
+    principal (same identifier grammar as agent ids); an absent field means
+    no pair binding (empty string keeps the body byte-identical to v1.1)."""
+    acting_for = d.get("acting_for", "")
+    if acting_for:
+        _validate_principal(acting_for)
+    return acting_for
+
+
+def _parse_token_intent(d: dict[str, Any]) -> dict[str, Any] | None:
+    """Parse-boundary invariant: the intent block is either absent (None)
+    or a well-formed {statement, tools?, constraints?} object; every
+    malformed shape fails closed with a ValueError naming the field."""
+    intent = d.get("intent")
+    if intent is None:
+        return None
+    if not isinstance(intent, dict):
+        raise ValueError("capability token: intent must be a JSON object")
+    if not isinstance(intent.get("statement"), str) or not intent.get("statement"):
+        raise ValueError("capability token: intent.statement must be a non-empty string")
+    tools = intent.get("tools")
+    if tools is not None and (
+        not isinstance(tools, list) or not all(isinstance(t, str) and t for t in tools) or not tools
+    ):
+        raise ValueError("capability token: intent.tools must be a non-empty list of strings")
+    iconstraints = intent.get("constraints")
+    if iconstraints is not None and not isinstance(iconstraints, dict):
+        raise ValueError("capability token: intent.constraints must be a JSON object")
+    return intent
+
+
+def _parse_token_parent_id(d: dict[str, Any]) -> None:
+    """Parse-boundary invariant: parent_id is the chain link and is either
+    absent/null (a root token) or a non-empty string token-id; a falsy
+    but non-null value would slip past the gate's truthiness-based chain
+    check and skip attenuation verification, so it fails closed here."""
+    pid = d.get("parent_id")
+    if pid is not None and (not isinstance(pid, str) or not pid):
+        raise ValueError(
+            f"capability token: parent_id must be a non-empty string or null, "
+            f"got {type(pid).__name__} {pid!r}"
+        )
+
+
+def _parse_token_timestamps(d: dict[str, Any]) -> tuple[int, int, int]:
+    """Parse-boundary invariant: signed timestamps are canonical integers.
+    Do NOT coerce floats/strings via int() (a non-canonical encoding would
+    re-sign to different bytes and disagrees with the cap-verifier
+    reference, which rejects non-int timestamps); bools are rejected
+    because bool subclasses int but is never a valid epoch. Returns
+    (issued_at, not_before, expires_at) in that order."""
+    out: list[int] = []
+    for name in ("issued_at", "not_before", "expires_at"):
+        v = d.get(name)
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError(
+                f"capability token: {name} must be an integer, got {type(v).__name__} {v!r}"
+            )
+        out.append(v)
+    return out[0], out[1], out[2]
+
+
 @dataclass
 class Capability:
     """An unforgeable signed permission to invoke ``tool`` with constrained args.
@@ -322,20 +397,11 @@ class Capability:
         # Independently re-validate signed-token shape at the parse boundary
         # (defence in depth): mint() enforces these, but a token reaches the gate
         # as untrusted JSON, and the cap-verifier reference rejects the same
-        # malformed shapes — so the gate path must too, not just trust the field.
+        # malformed shapes - so the gate path must too, not just trust the field.
         # Every check raises ValueError (never KeyError/TypeError) so a malformed
         # token fails closed with a clear reason instead of crashing the caller.
-        def _req_str(name: str) -> str:
-            v = d.get(name)
-            if not isinstance(v, str) or not v:
-                raise ValueError(
-                    f"capability token: {name} must be a non-empty string, got "
-                    f"{type(v).__name__} {v!r}"
-                )
-            return v
-
         for _f in ("token_id", "agent_id", "tool", "issuer", "key_id"):
-            _req_str(_f)
+            _require_token_str_field(d, _f)
         _validate_agent_id(d["agent_id"])
         _validate_tool(d["tool"])
         if not isinstance(d.get("constraints"), dict):
@@ -343,60 +409,17 @@ class Capability:
                 "capability token: constraints must be present and a JSON object "
                 "(Capability.body always signs a constraints object, possibly empty)"
             )
-        # B1: optional acting-for user (the pair principal). Same identifier
-        # grammar as agent ids.
-        acting_for = d.get("acting_for", "")
-        if acting_for:
-            _validate_principal(acting_for)
-        # Receipts v1.2: optional intent block {statement, tools?, constraints?}
-        intent = d.get("intent")
-        if intent is not None:
-            if not isinstance(intent, dict):
-                raise ValueError("capability token: intent must be a JSON object")
-            if not isinstance(intent.get("statement"), str) or not intent.get("statement"):
-                raise ValueError("capability token: intent.statement must be a non-empty string")
-            tools = intent.get("tools")
-            if tools is not None and (
-                not isinstance(tools, list)
-                or not all(isinstance(t, str) and t for t in tools)
-                or not tools
-            ):
-                raise ValueError(
-                    "capability token: intent.tools must be a non-empty list of strings"
-                )
-            iconstraints = intent.get("constraints")
-            if iconstraints is not None and not isinstance(iconstraints, dict):
-                raise ValueError("capability token: intent.constraints must be a JSON object")
-        # parent_id is the chain link: it MUST be either absent/null (a root) or
-        # a non-empty string token-id. A falsy-but-non-null value ("" / [] / {})
-        # would otherwise slip past the gate's chain check (truthiness) and skip
-        # attenuation verification.
-        _pid = d.get("parent_id")
-        if _pid is not None and (not isinstance(_pid, str) or not _pid):
-            raise ValueError(
-                f"capability token: parent_id must be a non-empty string or null, "
-                f"got {type(_pid).__name__} {_pid!r}"
-            )
+        acting_for = _parse_token_acting_for(d)
+        intent = _parse_token_intent(d)
+        _parse_token_parent_id(d)
         # A parsed token is signed material: signature MUST be present and a
         # string (matches the cap-verifier reference, which type-checks it as a
-        # required field). An empty string is tolerated here — the signature
-        # check denies it on verify — but a missing/non-string value fails closed
+        # required field). An empty string is tolerated here - the signature
+        # check denies it on verify - but a missing/non-string value fails closed
         # at the parse boundary rather than defaulting to "".
         if not isinstance(d.get("signature"), str):
             raise ValueError("capability token: signature must be present and a string")
-
-        def _ts(name: str) -> int:
-            # Timestamps are signed material and MUST be canonical integers.
-            # Do NOT coerce floats/strings via int() (a non-canonical encoding
-            # would re-sign to different bytes, and would also disagree with the
-            # cap-verifier reference, which rejects non-int timestamps) and do
-            # NOT crash on a missing/None value — reject fail-closed instead.
-            v = d.get(name)
-            if isinstance(v, bool) or not isinstance(v, int):
-                raise ValueError(
-                    f"capability token: {name} must be an integer, got {type(v).__name__} {v!r}"
-                )
-            return v
+        issued_at, not_before, expires_at = _parse_token_timestamps(d)
 
         return cls(
             token_id=d["token_id"],
@@ -405,11 +428,11 @@ class Capability:
             constraints=d.get("constraints", {}),
             issuer=d["issuer"],
             key_id=d["key_id"],
-            issued_at=_ts("issued_at"),
-            not_before=_ts("not_before"),
-            expires_at=_ts("expires_at"),
+            issued_at=issued_at,
+            not_before=not_before,
+            expires_at=expires_at,
             parent_id=d.get("parent_id"),
-            intent=d.get("intent"),
+            intent=intent,
             acting_for=acting_for,
             policy_proof_hash=d.get("policy_proof_hash"),
             grammar_hash=d.get("grammar_hash"),
