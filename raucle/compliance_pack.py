@@ -268,9 +268,8 @@ def build_pack(
 
     # retention.json - observed span vs the regime's expectation
     retention = _retention_statement(chain_path, framework)
-    _bundle_file(out_dir, _RETENTION_FILE).write_text(
-        json.dumps(retention, indent=2), encoding="utf-8"
-    )
+    with open(_bundle_file(out_dir, _RETENTION_FILE), "w", encoding="utf-8") as fh:
+        json.dump(retention, fh, indent=2)
 
     # pack_hash binds the bundle files
     pack_hash = (
@@ -391,8 +390,7 @@ def export_pack(pack_dir: str | Path, fmt: str = "csv") -> dict[str, Any]:
         return {"format": "csv", "files": ["coverage.csv", "extracts.csv"]}
     if fmt == "json":
         export = {"coverage": coverage, "extracts": extracts, "retention": retention}
-        _bundle_file(pack_dir, "pack-export.json").write_text(
-            json.dumps(export, indent=2), encoding="utf-8"
-        )
+        with open(_bundle_file(pack_dir, "pack-export.json"), "w", encoding="utf-8") as fh:
+            json.dump(export, fh, indent=2)
         return {"format": "json", "files": ["pack-export.json"]}
     raise ValueError(f"unknown export format {fmt!r}; use csv or json")

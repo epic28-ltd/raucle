@@ -697,10 +697,8 @@ def verify_anchor(
 
     _td = _tempfile.mkdtemp()
     cert_file = Path(_td) / "cert-line.jsonl"
-    cert_file.write_text(
-        _json.dumps({"receipt_hash": doc["receipt_hash"], "jws": jws}) + "\n",
-        encoding="utf-8",
-    )
+    with open(cert_file, "w", encoding="utf-8") as fh:
+        fh.write(_json.dumps({"receipt_hash": doc["receipt_hash"], "jws": jws}) + "\n")
     try:
         if chain_path is not None:
             vreport = _verify_against_chain(chain_path, doc, jws, kid, pub, report)

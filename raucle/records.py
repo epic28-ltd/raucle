@@ -224,7 +224,8 @@ def verify_destruction(
 
     with tempfile.TemporaryDirectory() as td:
         cert_file = Path(td) / "cert-line.jsonl"
-        cert_file.write_text(json.dumps({"receipt_hash": d["receipt_hash"], "jws": jws}) + "\n")
+        with open(cert_file, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"receipt_hash": d["receipt_hash"], "jws": jws}) + "\n")
         vreport = ProvenanceVerifier(public_keys={kid: pub}).verify_chain(cert_file)
 
     report: dict[str, Any] = {
