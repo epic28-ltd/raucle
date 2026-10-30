@@ -88,7 +88,7 @@ kms-all = [
     "hvac>=1.0",
 ]
 dev = [
-    "raucle[rules,server,compliance,timestamp,langchain]",
+    "raucle[rules,server,compliance,timestamp,langchain,proof]",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-asyncio>=0.23",

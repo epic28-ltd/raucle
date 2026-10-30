@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Added - I1: counterfactual proofs (the z3 leg)
+- `raucle counterfactual policy` attaches a proof to every prevented
+  action. PROVEN: the alternative policy's constraints exclude the whole
+  recorded argument CLASS. The prover (JSONSchemaProver.prove_exclusion,
+  the dual of prove()) checks a JSON schema derived from the recorded
+  args' shapes, field names and primitive types only, never values, and
+  answers whether any call of that shape can satisfy the alternative
+  constraints. REFUTED: the deny was value-specific, not structural, and
+  the escaping field is NAMED (its value never leaves the prover).
+  UNDECIDED, honestly: constraint kinds the prover does not model
+  (allowed_values, starts_with), a recorded shape outside its grammar,
+  a denial by absence of grant, or z3 not installed. Never upgraded; the
+  replay verdict stands alone either way.
+- The report summary gains prevented_proven / prevented_refuted /
+  prevented_undecided, and the verdict states the proof when one is
+  proven. Bounded disclosure holds in every proof row: status, prover
+  identity, the grammar/policy hashes (which bind the material without
+  disclosing it) and field NAMES only. No recorded values, no constraint
+  values, no counterexample values.
+- prove.py: the JSONSchemaProver's encoding is now shared between
+  prove() and prove_exclusion() so the two query directions cannot
+  drift. prove_exclusion is fail-closed in BOTH directions: unmodelled
+  grammar blocks a PROVEN, and a would-be REFUTED witness cannot be
+  certified while unassessed constraints might still deny it. A vacuous
+  exclusion over an uninhabited grammar is UNDECIDED, never PROVEN.
+- The [dev] extra now includes [proof] (z3), so the prover tests run in
+  CI instead of silently skipping.
+
 ## 0.23.5 (2026-10-30) - records lifecycle, counterfactual replay, authorship receipts, time-source anchoring
 
 

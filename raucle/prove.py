@@ -164,6 +164,21 @@ _JSON_PROVER_VERSION = "jsonschema-prover/v1"
 
 
 @dataclass
+class _EncodedQuery:
+    """The direction-independent part of a prover run: the encoded grammar
+    constraints and policy violations, plus the fail-closed notes gathered
+    while encoding. Shared by ``prove`` and ``prove_exclusion`` so the two
+    query directions can never drift apart."""
+
+    notes: list[str]
+    unmodelled: bool
+    constraints: list[Any]
+    z3_vars: dict[str, Any]
+    presence: dict[str, Any]
+    violations: list[Any]
+
+
+@dataclass
 class JSONSchemaProver:
     """Prove that no JSON object matching ``schema`` violates ``policy``.
 
@@ -193,6 +208,21 @@ class JSONSchemaProver:
        would-be PROVEN to **UNDECIDED** (§8.2 — never a proof that omitted part
        of the policy). Express positive whitelists/prefixes as capability
        constraints enforced at the gate.
+
+    Two queries run over this same encoding (and the same fail-closed
+    registry surfaces):
+
+    - :meth:`prove`: is there a schema-valid object that VIOLATES the
+      policy? unsat → PROVEN (the policy holds over the whole grammar);
+      sat → REFUTED with that object.
+    - :meth:`prove_exclusion`: is there a schema-valid object that
+      SATISFIES the policy? unsat → PROVEN (the constraints exclude the
+      whole grammar); sat → REFUTED with a would-be-allowed object. This is
+      the I1 counterfactual query: it certifies that a would-have-been-
+      denied verdict covers the recorded argument CLASS, not just the
+      recorded values. It is fail-closed in BOTH directions: unmodelled
+      grammar/policy cannot yield PROVEN, and a REFUTED witness cannot be
+      certified while unassessed constraints might still deny it.
     """
 
     timeout_ms: int = 5000
@@ -322,17 +352,16 @@ class JSONSchemaProver:
 
         return violations
 
-    def prove(
-        self,
-        schema: dict[str, Any],
-        policy: dict[str, Any],
-    ) -> ProofResult:
-        z3 = _require_z3()
-        if schema.get("type") != "object" or "properties" not in schema:
-            raise UnsupportedGrammar(
-                "JSONSchemaProver only supports top-level type=object with properties"
-            )
+    def _encode_query(
+        self, z3: Any, schema: dict[str, Any], policy: dict[str, Any], *, exclusion: bool
+    ) -> _EncodedQuery:
+        """Shared fail-closed scaffolding for both query directions.
 
+        Validates the top-level shape, builds the Z3 variables and encodes
+        the policy violations. ``exclusion`` selects the direction-specific
+        wording for the fail-closed downgrade notes (the prover direction
+        and the exclusion direction block different verdicts).
+        """
         notes: list[str] = []
 
         # Keywords that change which objects are valid but that this prover does
@@ -348,9 +377,14 @@ class JSONSchemaProver:
         # test pins them; an unmodelled keyword downgrades PROVEN → UNDECIDED.
         unmodelled = sorted(set(schema) - _registry.JSON_SCHEMA_OBJECT_KEYS)
         if unmodelled:
+            downgrade = (
+                "PROVEN and REFUTED both downgraded to UNDECIDED "
+                "(cannot certify completeness in either direction)"
+                if exclusion
+                else "PROVEN downgraded to UNDECIDED (cannot certify completeness)"
+            )
             notes.append(
-                f"schema uses keyword(s) this prover does not model {unmodelled}; "
-                f"PROVEN downgraded to UNDECIDED (cannot certify completeness)"
+                f"schema uses keyword(s) this prover does not model {unmodelled}; {downgrade}"
             )
 
         # Policy-language whitelist (§8.2 — "decorative proof inputs"). The
@@ -364,18 +398,27 @@ class JSONSchemaProver:
         unmodelled_policy = sorted(_registry.unmodelled_policy_keys(set(policy)))
         if unmodelled_policy:
             unmodelled = sorted(set(unmodelled) | set(unmodelled_policy))
+            downgrade = (
+                "PROVEN and REFUTED both downgraded to UNDECIDED "
+                "(cannot certify a policy whose keys it ignores, in either direction)"
+                if exclusion
+                else (
+                    "PROVEN downgraded to UNDECIDED (cannot certify a policy whose keys it ignores)"
+                )
+            )
             notes.append(
                 f"policy uses constraint key(s) this prover does not model "
-                f"{unmodelled_policy}; PROVEN downgraded to UNDECIDED "
-                f"(cannot certify a policy whose keys it ignores)"
+                f"{unmodelled_policy}; {downgrade}"
             )
+
         # Build Z3 variables per declared property.
         constraints: list[Any] = []
         z3_vars, presence, prop_types = self._build_z3_vars(z3, schema, constraints)
 
-        # Encode the policy as a *violation* disjunction.  We ask the solver:
-        # is there any assignment satisfying the schema that ALSO satisfies the
-        # violation?  If unsat, the policy is proven complete.
+        # Encode the policy as a *violation* disjunction. In the prove()
+        # direction the solver asks: is there any assignment satisfying the
+        # schema that ALSO satisfies the violation? In the prove_exclusion()
+        # direction the same encoding is negated (see there).
         # JSON Schema permits undeclared fields unless additionalProperties is
         # explicitly false. A blacklist over a field the schema does not declare
         # is therefore NOT vacuous: an attacker can supply that field with the
@@ -390,29 +433,50 @@ class JSONSchemaProver:
             z3, policy, z3_vars, presence, prop_types, additional_allowed, notes
         )
 
-        if not violations:
-            notes.append("no policy constraints; trivially proven")
+        return _EncodedQuery(
+            notes=notes,
+            unmodelled=bool(unmodelled),
+            constraints=constraints,
+            z3_vars=z3_vars,
+            presence=presence,
+            violations=violations,
+        )
+
+    def prove(
+        self,
+        schema: dict[str, Any],
+        policy: dict[str, Any],
+    ) -> ProofResult:
+        z3 = _require_z3()
+        if schema.get("type") != "object" or "properties" not in schema:
+            raise UnsupportedGrammar(
+                "JSONSchemaProver only supports top-level type=object with properties"
+            )
+
+        q = self._encode_query(z3, schema, policy, exclusion=False)
+        if not q.violations:
+            q.notes.append("no policy constraints; trivially proven")
 
         solver = z3.Solver()
         solver.set("timeout", self.timeout_ms)
-        for c in constraints:
+        for c in q.constraints:
             solver.add(c)
-        solver.add(z3.Or(*violations) if violations else z3.BoolVal(False))
+        solver.add(z3.Or(*q.violations) if q.violations else z3.BoolVal(False))
 
         check = solver.check()
         if str(check) == "unsat":
             # Cannot certify completeness when the schema uses keywords we don't
             # model (patternProperties/composition/$ref) — fail safe.
-            status = "UNDECIDED" if unmodelled else "PROVEN"
+            status = "UNDECIDED" if q.unmodelled else "PROVEN"
             counter = None
         elif str(check) == "sat":
             status = "REFUTED"
             model = solver.model()
-            counter = self._extract_counterexample(model, z3_vars, presence)
+            counter = self._extract_counterexample(model, q.z3_vars, q.presence)
         else:
             status = "UNDECIDED"
             counter = None
-            notes.append(f"solver returned {check}")
+            q.notes.append(f"solver returned {check}")
 
         return ProofResult(
             status=status,
@@ -421,7 +485,114 @@ class JSONSchemaProver:
             grammar_hash=_SHA256_PREFIX + _sha256_hex(_canonical_json(schema)),
             policy_hash=_SHA256_PREFIX + _sha256_hex(_canonical_json(policy)),
             counterexample=counter,
-            notes=notes,
+            notes=q.notes,
+            timeout_ms=self.timeout_ms,
+        )
+
+    def prove_exclusion(
+        self,
+        schema: dict[str, Any],
+        policy: dict[str, Any],
+    ) -> ProofResult:
+        """Prove that the policy's constraints EXCLUDE the whole grammar:
+        every object matching ``schema`` violates at least one constraint.
+
+        The dual of :meth:`prove` over the same encoding. The solver asks:
+        is there a schema-valid object that satisfies ALL policy
+        constraints (one the gate would allow)?
+
+        - unsat -> ``PROVEN``: no such object exists; the constraints
+          exclude every member of the grammar (structural, not
+          value-specific).
+        - sat -> ``REFUTED`` with ``counterexample`` set to a whole
+          schema-valid object that satisfies every constraint (the
+          exclusion is value-specific: some member of the class would
+          still be allowed).
+        - anything the prover cannot model -> ``UNDECIDED``, honestly.
+
+        Fail-closed in BOTH directions, unlike :meth:`prove`:
+
+        - An unmodelled schema keyword may admit objects this model never
+          checked, so a would-be PROVEN is not certified.
+        - An unmodelled policy key may deny the would-be REFUTED witness,
+          so a refutation is not certified either: the witness satisfies
+          only the modelled subset. (In :meth:`prove` a REFUTED stays
+          valid because the counterexample violates a modelled constraint
+          outright.)
+
+        A vacuous exclusion (a grammar that admits no object at all) is
+        reported UNDECIDED, never PROVEN.
+        """
+        z3 = _require_z3()
+        if schema.get("type") != "object" or "properties" not in schema:
+            raise UnsupportedGrammar(
+                "JSONSchemaProver only supports top-level type=object with properties"
+            )
+
+        q = self._encode_query(z3, schema, policy, exclusion=True)
+        q.notes.append(
+            "exclusion query: does any object matching the schema satisfy all "
+            "policy constraints? (PROVEN = none does)"
+        )
+        if not q.violations:
+            q.notes.append("no policy constraints; nothing excludes the grammar")
+
+        if q.unmodelled:
+            return ProofResult(
+                status="UNDECIDED",
+                prover="JSONSchemaProver",
+                prover_version=_JSON_PROVER_VERSION,
+                grammar_hash=_SHA256_PREFIX + _sha256_hex(_canonical_json(schema)),
+                policy_hash=_SHA256_PREFIX + _sha256_hex(_canonical_json(policy)),
+                counterexample=None,
+                notes=q.notes,
+                timeout_ms=self.timeout_ms,
+            )
+
+        solver = z3.Solver()
+        solver.set("timeout", self.timeout_ms)
+        for c in q.constraints:
+            solver.add(c)
+        # The negated violation disjunction: an object satisfying every
+        # policy constraint. With no constraints this is just the schema.
+        if q.violations:
+            solver.add(z3.Not(z3.Or(*q.violations)))
+
+        check = solver.check()
+        if str(check) == "sat":
+            status = "REFUTED"
+            model = solver.model()
+            counter = self._extract_counterexample(model, q.z3_vars, q.presence)
+        elif str(check) == "unsat":
+            # Distinguish "the constraints exclude the class" from "the grammar
+            # admits nothing at all": a vacuous truth is not a certified
+            # exclusion. Re-check the schema alone.
+            inhab = z3.Solver()
+            inhab.set("timeout", self.timeout_ms)
+            for c in q.constraints:
+                inhab.add(c)
+            if str(inhab.check()) == "sat":
+                status = "PROVEN"
+                counter = None
+            else:
+                status = "UNDECIDED"
+                counter = None
+                q.notes.append(
+                    "grammar admits no object at all; exclusion would be vacuous, not certified"
+                )
+        else:
+            status = "UNDECIDED"
+            counter = None
+            q.notes.append(f"solver returned {check}")
+
+        return ProofResult(
+            status=status,
+            prover="JSONSchemaProver",
+            prover_version=_JSON_PROVER_VERSION,
+            grammar_hash=_SHA256_PREFIX + _sha256_hex(_canonical_json(schema)),
+            policy_hash=_SHA256_PREFIX + _sha256_hex(_canonical_json(policy)),
+            counterexample=counter,
+            notes=q.notes,
             timeout_ms=self.timeout_ms,
         )
 

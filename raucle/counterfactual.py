@@ -13,10 +13,25 @@ policy question). The answer per action: the alternative policy would have
 allowed it, or would have denied it. The summary: how many of the
 incident's allowed actions the alternative policy would have prevented.
 
+The z3 leg adds a PROOF alongside the replay. A prevented action carries a
+``proof`` field: PROVEN that the alternative policy's constraints exclude
+the whole recorded argument CLASS (derive a JSON schema from the recorded
+args' shapes - field names and primitive types only, never values - and
+ask JSONSchemaProver.prove_exclusion whether any object of that shape can
+satisfy the alternative constraints). REFUTED names the escaping FIELD,
+never a value: the deny was value-specific, not structural. UNDECIDED is
+honest: constraint kinds the prover does not model (allowed_values,
+starts_with), argument shapes outside its grammar, an alternative policy
+that denies by absence of grant rather than constraints, or z3 not
+installed. UNDECIDED is never upgraded; the replay verdict stands on its
+own either way.
+
 Privacy shape unchanged: receipts carry only input hashes; the args come
 from the input store kept alongside the chain (raucle.replay), and only
 when the operator recorded them. A receipt without a stored input is
-reported as unreplayable, never guessed.
+reported as unreplayable, never guessed. Bounded disclosure holds in the
+report and in every proof row: no denial reasons, no arg values, no
+constraint values; a counterexample contributes field NAMES only.
 """
 
 from __future__ import annotations
@@ -65,6 +80,122 @@ def _lookup_input(store: Any, input_hash: str) -> str | None:
         if stored is not None:
             return stored.text
     return None
+
+
+_JSON_TYPES: tuple[tuple[type, str], ...] = (
+    (bool, "boolean"),
+    (str, "string"),
+    (int, "integer"),
+    (float, "number"),
+)
+
+
+def _shape_schema(args: dict[str, Any]) -> dict[str, Any] | None:
+    """Derive the recorded argument CLASS schema from the args' shapes.
+
+    Field names and primitive JSON types only: recorded VALUES never enter
+    the schema. Every recorded field is required and nothing else is
+    admitted, so the class is exactly "calls with these fields, of these
+    types". Returns None for shapes the constraint prover does not model
+    (lists, nested objects, nulls, or no fields at all) - the caller
+    reports that honestly as UNDECIDED, never guesses.
+    """
+    properties: dict[str, Any] = {}
+    for name, value in args.items():
+        # bool before int: bool is an int subclass in python
+        for py_type, json_type in _JSON_TYPES:
+            if isinstance(value, py_type):
+                properties[name] = {"type": json_type}
+                break
+        else:
+            return None
+    if not properties:
+        return None
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": sorted(properties),
+        "additionalProperties": False,
+    }
+
+
+def _find_alt_rule(alt_rules: Any, tool: str) -> Any:
+    """The alternative-policy rule the replay gate itself used: first rule
+    for the tool matching the replay's (empty) source/destination."""
+    for rule in alt_rules.policies:
+        if rule.tool == tool and rule.matches("", ""):
+            return rule
+    return None
+
+
+def _prove_prevention(args: dict[str, Any], alt_rules: Any, tool: str) -> dict[str, Any]:
+    """The z3 leg: prove the alternative policy's constraints exclude the
+    recorded argument CLASS, not just the recorded values.
+
+    Returns the bounded proof row. Bounded disclosure by construction:
+    status, prover identity, the grammar/policy HASHES (which bind the
+    material without disclosing it), honest notes, and - when REFUTED -
+    the escaping field NAMES. Counterexample VALUES never leave the
+    prover; recorded VALUES and constraint VALUES never enter the row.
+    """
+    from raucle.prove import JSONSchemaProver, UnsupportedGrammar
+
+    rule = _find_alt_rule(alt_rules, tool)
+    if rule is None:
+        return {
+            "status": "UNDECIDED",
+            "notes": [
+                f"no alternative-policy rule matches tool {tool!r}: the "
+                f"counterfactual denial is by absence of grant, which the "
+                f"constraint prover does not model"
+            ],
+        }
+
+    schema = _shape_schema(args)
+    if schema is None:
+        return {
+            "status": "UNDECIDED",
+            "notes": [
+                "the recorded args carry a shape the constraint prover does "
+                "not model (non-primitive field or no fields); replay stands, "
+                "no proof claim"
+            ],
+        }
+
+    # the compiled constraint set is exactly what the gate enforced in the
+    # replay; pass it through verbatim and let the prover's registry decide
+    # what it can model (unmodelled kinds yield UNDECIDED, never a proof)
+    policy = rule.to_mint_kwargs()["constraints"]
+    try:
+        result = JSONSchemaProver().prove_exclusion(schema, policy)
+    except ImportError:
+        return {
+            "status": "UNDECIDED",
+            "notes": [
+                "z3 is not installed (pip install 'raucle[proof]'); the "
+                "prover cannot run; replay stands, no proof claim"
+            ],
+        }
+    except UnsupportedGrammar as exc:
+        return {"status": "UNDECIDED", "notes": [f"unsupported grammar: {exc}"]}
+
+    proof: dict[str, Any] = {
+        "status": result.status,
+        "prover": result.prover,
+        "prover_version": result.prover_version,
+        "grammar_hash": result.grammar_hash,
+        "policy_hash": result.policy_hash,
+        "notes": list(result.notes),
+    }
+    if result.counterexample is not None:
+        # field NAMES only: the counterexample VALUES stay inside the prover
+        proof["counterexample_fields"] = sorted(result.counterexample)
+    return proof
+
+
+def _count_proof_status(rows: list[dict[str, Any]], status: str) -> int:
+    """How many replayed actions carry a proof of the given status."""
+    return sum(1 for r in rows if r.get("proof", {}).get("status") == status)
 
 
 def replay_counterfactual(
@@ -139,6 +270,8 @@ def replay_counterfactual(
                 if rec["decision"] == "allow" and alt_decision == "deny":
                     prevented += 1
                     row["prevented"] = True
+                    # the z3 leg: a PROOF alongside the replay verdict
+                    row["proof"] = _prove_prevention(args, alt_rules, rec["tool"])
                 else:
                     row["prevented"] = False
                     if rec["decision"] == "allow" and alt_decision == "allow":
@@ -148,6 +281,22 @@ def replay_counterfactual(
                 replayed.append(row)
 
     total_replayed = len(replayed)
+    prevented_proven = _count_proof_status(replayed, "PROVEN")
+    prevented_refuted = _count_proof_status(replayed, "REFUTED")
+    prevented_undecided = _count_proof_status(replayed, "UNDECIDED")
+    verdict = (
+        f"the alternative policy would have prevented {prevented} of "
+        f"{prevented + still_allowed} actions the original policy allowed"
+        if (prevented + still_allowed) > 0
+        else "no replayable allowed actions in the chain"
+    )
+    if prevented_proven > 0:
+        # state the proof, not the replay alone; UNDECIDED and REFUTED never
+        # upgrade the sentence
+        verdict += (
+            f"; {prevented_proven} proven to exclude the recorded argument class"
+            f" (no call of that shape satisfies the alternative policy)"
+        )
     return {
         "chain": str(chain_path),
         "alternative_policy": str(alternative_policy_path),
@@ -158,11 +307,9 @@ def replay_counterfactual(
         "prevented_by_alternative": prevented,
         "still_allowed_by_alternative": still_allowed,
         "denies_under_both": would_have_denied_denies,
-        "verdict": (
-            f"the alternative policy would have prevented {prevented} of "
-            f"{prevented + still_allowed} actions the original policy allowed"
-            if (prevented + still_allowed) > 0
-            else "no replayable allowed actions in the chain"
-        ),
+        "prevented_proven": prevented_proven,
+        "prevented_refuted": prevented_refuted,
+        "prevented_undecided": prevented_undecided,
+        "verdict": verdict,
         "actions": replayed,
     }

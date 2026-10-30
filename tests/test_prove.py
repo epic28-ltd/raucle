@@ -108,6 +108,95 @@ def test_jsonschema_hash_is_deterministic():
 
 
 # ---------------------------------------------------------------------------
+# JSON Schema prover - exclusion query (the I1 counterfactual z3 leg)
+# ---------------------------------------------------------------------------
+
+
+def _class_schema(fields: dict[str, str]) -> dict:
+    """A shape-derived class schema: same field names, same primitive types,
+    every recorded field required, nothing else admitted."""
+    return {
+        "type": "object",
+        "properties": {k: {"type": v} for k, v in fields.items()},
+        "required": sorted(fields),
+        "additionalProperties": False,
+    }
+
+
+def test_prove_exclusion_proven_when_constraints_exclude_the_whole_class():
+    """A required-pair combination ban excludes every member of a class that
+    carries both fields: the deny is structural, not value-specific."""
+    schema = _class_schema({"account": "string", "reason": "string"})
+    policy = {"forbidden_field_combinations": [["account", "reason"]]}
+    r = JSONSchemaProver().prove_exclusion(schema, policy)
+    assert r.status == "PROVEN"
+    assert r.counterexample is None
+    assert r.grammar_hash.startswith("sha256:")
+    assert any("exclusion" in n for n in r.notes)
+
+
+def test_prove_exclusion_refuted_with_counterexample_when_value_specific():
+    """A single-value blacklist never excludes a whole string class: some
+    class member escapes the denylist and would still be allowed."""
+    schema = _class_schema({"account": "string"})
+    policy = {"forbidden_values": {"account": ["ACC-999"]}}
+    r = JSONSchemaProver().prove_exclusion(schema, policy)
+    assert r.status == "REFUTED"
+    # the counterexample is a whole class member that satisfies the policy
+    assert set(r.counterexample) == {"account"}
+    assert r.counterexample["account"] != "ACC-999"
+
+
+def test_prove_exclusion_undecided_on_unmodelled_policy_key():
+    """allowed_values is gate-enforced but not prover-modelled: the exclusion
+    can be certified in NEITHER direction (a would-be witness might still be
+    denied by the unassessed constraint). Fail closed, never upgrade."""
+    schema = _class_schema({"account": "string"})
+    r = JSONSchemaProver().prove_exclusion(schema, {"allowed_values": {"account": ["ACC-001"]}})
+    assert r.status == "UNDECIDED"
+    assert any("allowed_values" in n for n in r.notes)
+
+
+def test_prove_exclusion_uninhabited_grammar_is_undecided_not_vacuously_proven():
+    """An empty grammar makes 'every member violates' vacuously true; a
+    vacuous truth is not a certified exclusion."""
+    schema = {
+        "type": "object",
+        "properties": {"n": {"type": "number", "minimum": 10, "maximum": 5}},
+        "required": ["n"],
+    }
+    r = JSONSchemaProver().prove_exclusion(schema, {"max_value": {"n": 100}})
+    assert r.status == "UNDECIDED"
+    assert any("vacuous" in n for n in r.notes)
+
+
+def test_prove_exclusion_empty_policy_refuted_when_grammar_inhabited():
+    """Zero constraints exclude nothing: an inhabited class keeps a member
+    that satisfies them all."""
+    r = JSONSchemaProver().prove_exclusion(_class_schema({"account": "string"}), {})
+    assert r.status == "REFUTED"
+    assert set(r.counterexample) == {"account"}
+
+
+def test_prove_and_prove_exclusion_are_dual_queries():
+    """Same inputs, opposite questions: a policy some members violate and
+    others satisfy is REFUTED in both directions; a policy every member
+    violates is REFUTED for prove() and PROVEN for prove_exclusion()."""
+    schema = _class_schema({"a": "string"})
+    some_violate = {"forbidden_values": {"a": ["x"]}}
+    p = JSONSchemaProver().prove(schema, some_violate)
+    e = JSONSchemaProver().prove_exclusion(schema, some_violate)
+    assert p.status == "REFUTED" and e.status == "REFUTED"
+
+    # A ban no class member escapes: REFUTED for prove() (a violator exists)
+    # and PROVEN for prove_exclusion() (no satisfier exists).
+    two = _class_schema({"a": "string", "b": "string"})
+    everything = {"forbidden_field_combinations": [["a", "b"]]}
+    assert JSONSchemaProver().prove(two, everything).status == "REFUTED"
+    assert JSONSchemaProver().prove_exclusion(two, everything).status == "PROVEN"
+
+
+# ---------------------------------------------------------------------------
 # URL prover
 # ---------------------------------------------------------------------------
 
