@@ -1236,10 +1236,10 @@ def _narrow_agent_id(parent: Capability, narrower_agent_id: str | None) -> str:
     child_agent = narrower_agent_id or parent.agent_id
     if narrower_agent_id and narrower_agent_id != parent.agent_id:
         _validate_agent_id(narrower_agent_id)
-        if not (
-            narrower_agent_id == parent.agent_id
-            or narrower_agent_id.startswith(parent.agent_id + ".")
-        ):
+        # inside this branch the id differs from the parent by the outer
+        # guard, so only the sub-scope test remains (S2589: the equality
+        # alternative here was always false)
+        if not narrower_agent_id.startswith(parent.agent_id + "."):
             raise ValueError(
                 f"narrower_agent_id {narrower_agent_id!r} is not a sub-scope of "
                 f"parent {parent.agent_id!r}"

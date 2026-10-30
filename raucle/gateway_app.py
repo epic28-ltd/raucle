@@ -217,7 +217,7 @@ def _build_intent_hint(
 
 def _handle_gate_tool_call(
     gateway: RaucleGateway,
-    request: Request,
+    _request: Request,  # kept for call-site symmetry; unused (S1172)
     req: GateRequest,
     x_api_key: str | None,
     x_capability_token: str | None,

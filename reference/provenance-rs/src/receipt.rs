@@ -101,6 +101,29 @@ fn str_field<'a>(obj: &'a Map<String, Value>, k: &str) -> Option<&'a str> {
     obj.get(k).and_then(|v| v.as_str())
 }
 
+/// Per-operation required fields (§4). Lenient like the Python reference:
+/// presence only, not value shapes.
+fn check_op_fields(obj: &Map<String, Value>, op: &str) -> Result<(), ProvError> {
+    let has = |k: &str| str_field(obj, k).map(|s| !s.is_empty()).unwrap_or(false);
+
+    if op == "guardrail_scan" && !has("guardrail_verdict") {
+        return err("guardrail_scan requires guardrail_verdict (§4)");
+    }
+    if op == "guardrail_scan" && !has("ruleset_hash") {
+        return err("guardrail_scan requires ruleset_hash (§4)");
+    }
+    if op == "model_call" && !has("model") {
+        return err("model_call requires model (§4)");
+    }
+    if (op == "tool_call" || op == "sanitisation") && !has("tool") {
+        return err(format!("{op} requires tool (§4)"));
+    }
+    if (op == "retrieval" || op == "sanitisation") && !has("corpus") {
+        return err(format!("{op} requires corpus (§4)"));
+    }
+    Ok(())
+}
+
 /// Validate a payload object against §4. Lenient where the Python
 /// reference is lenient: enforces structural invariants (required
 /// fields per operation, parent rules, typ literal), not value shapes.
@@ -125,23 +148,7 @@ pub fn validate_payload(p: &Value) -> Result<(), ProvError> {
         return err(format!("unknown operation: {op}"));
     }
 
-    let has = |k: &str| str_field(obj, k).map(|s| !s.is_empty()).unwrap_or(false);
-
-    if op == "guardrail_scan" && !has("guardrail_verdict") {
-        return err("guardrail_scan requires guardrail_verdict (§4)");
-    }
-    if op == "guardrail_scan" && !has("ruleset_hash") {
-        return err("guardrail_scan requires ruleset_hash (§4)");
-    }
-    if op == "model_call" && !has("model") {
-        return err("model_call requires model (§4)");
-    }
-    if (op == "tool_call" || op == "sanitisation") && !has("tool") {
-        return err(format!("{op} requires tool (§4)"));
-    }
-    if (op == "retrieval" || op == "sanitisation") && !has("corpus") {
-        return err(format!("{op} requires corpus (§4)"));
-    }
+    check_op_fields(obj, op)?;
 
     let parent_count = obj
         .get("parents")
