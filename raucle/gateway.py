@@ -967,6 +967,7 @@ class RaucleGateway:
         authorization: dict[str, Any] | None = None,
         rule_id: str = "",
         intent_block: dict[str, Any] | None = None,
+        acting_for: str = "",
     ) -> str | None:
         """Emit a signed provenance receipt for a gate decision (PR-B).
 
@@ -1002,6 +1003,7 @@ class RaucleGateway:
                 "destination": destination,
                 "policy": policy,
                 "rule_id": rule_id or "",
+                "acting_for": acting_for,
                 "latency_us": latency_us,
                 "trace_id": trace_id,
                 "approval_id": approval_id,
@@ -1136,6 +1138,7 @@ class RaucleGateway:
         *,
         siem: bool = True,
         _intent_hint: dict[str, Any] | None = None,
+        _acting_for: str = "",
     ) -> dict[str, Any]:
         """Finalise a denied result: stats, optional SIEM, connection log."""
         result["decision"] = "deny"
@@ -1157,6 +1160,7 @@ class RaucleGateway:
                 authorization=result.get("_authorization_hint"),
                 rule_id=result.get("rule_id", ""),
                 intent_block=_intent_hint,
+                acting_for=_acting_for,
             )
         except Exception:
             # Fail-closed accountability: if the receipt cannot be written,
@@ -1192,6 +1196,7 @@ class RaucleGateway:
         tool: str = "",
         args: dict[str, Any] | None = None,
         declared_agent_id: str = "",
+        acting_for: str = "",
     ) -> tuple[str | None, str, Any]:
         """Authenticate the caller of /gate under the configured auth mode.
 
@@ -1241,7 +1246,9 @@ class RaucleGateway:
             )
         except (ValueError, TypeError) as exc:
             return None, f"malformed capability token: {exc}", None
-        decision = gate.check(token, tool=tool, agent_id=token.agent_id, args=args)
+        decision = gate.check(
+            token, tool=tool, agent_id=token.agent_id, args=args, acting_for=acting_for
+        )
         if not decision.allowed:
             if decision.attributable:
                 # Authenticated misuse: signature and chain verified; the
@@ -1301,6 +1308,7 @@ class RaucleGateway:
         _authorization_hint: dict[str, Any] | None = None,
         _token_decision: Any = None,
         _intent_hint: dict[str, Any] | None = None,
+        _acting_for: str = "",
     ) -> dict[str, Any]:
         """Gate a tool call. Returns decision dict.
 
@@ -1352,6 +1360,7 @@ class RaucleGateway:
                 f"delegated authority: {_token_decision.reason}",
                 start,
                 _intent_hint=_intent_hint,
+                _acting_for=_acting_for,
             )
 
         if tool not in self._policy_rules or tool not in self._tokens:
@@ -1453,6 +1462,7 @@ class RaucleGateway:
                 authorization=result.get("_authorization_hint"),
                 rule_id=result.get("rule_id", ""),
                 intent_block=_intent_hint,
+                acting_for=_acting_for,
             )
         except Exception:
             logger.exception("receipt emission failed; downgrading to deny")

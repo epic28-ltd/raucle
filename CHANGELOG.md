@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added - B1: agent+user pair permissioning (OSS evidence half)
+- The principal becomes the (agent, acting-for user) pair: a capability may
+  bind to a user via acting_for (user:-prefixed principal grammar); tokens
+  without a pair stay byte-identical to v1.1.
+- The gate refuses cross-pair use - a pair-bound token used with a
+  different (or undeclared) acting-for user denies, attributable, and the
+  receipt records both halves of the pair (x_gate.acting_for).
+- A delegated child inherits the pair and may never re-target a different
+  user; narrowing an unpaired parent to a pair is allowed (setting a user
+  narrows the authority).
+- /gate gains an acting_for request field. The per-pair policy resolution
+  and minting workflows ship in raucle-cloud (the 16.3 split); the
+  two-user demo (same agent, different permission sets, different
+  receipts) is exercised there.
+- Tests: tests/test_pair_permissioning.py; raucle-cloud
+  tests/test_pair_resolution.py.
+
 ### Added - A3: cascade revocation with evidence
 - Revoking a capability now cascades: the whole subtree is walked from the
   delegation ledger, persisted to a revocations file (RAUCLE_REVOCATIONS_FILE,

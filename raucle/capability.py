@@ -251,6 +251,10 @@ class Capability:
     # constraints), bound at mint and enforced per-call by the gate.
     # None keeps the token body byte-identical to v1.1.
     intent: dict[str, Any] | None = None
+    # B1: the acting-for user of the (agent, user) pair principal. Empty
+    # string = no pair binding (byte-identical body to v1.1). A delegated
+    # child inherits it and may never re-target a different user.
+    acting_for: str = ""
     policy_proof_hash: str | None = None
     # Structural binding of the cited proof. When set, downstream
     # verifiers can confirm the proof referenced by ``policy_proof_hash``
@@ -289,6 +293,9 @@ class Capability:
             # Receipts v1.2: only intent-bearing tokens include the field;
             # intent=None keeps the body byte-identical to v1.1.
             body["intent"] = self.intent
+        if self.acting_for:
+            # B1: only pair-bound tokens carry the acting-for user.
+            body["acting_for"] = self.acting_for
         return body
 
     def _signed_material(self) -> bytes:
@@ -336,6 +343,11 @@ class Capability:
                 "capability token: constraints must be present and a JSON object "
                 "(Capability.body always signs a constraints object, possibly empty)"
             )
+        # B1: optional acting-for user (the pair principal). Same identifier
+        # grammar as agent ids.
+        acting_for = d.get("acting_for", "")
+        if acting_for:
+            _validate_principal(acting_for)
         # Receipts v1.2: optional intent block {statement, tools?, constraints?}
         intent = d.get("intent")
         if intent is not None:
@@ -398,6 +410,7 @@ class Capability:
             expires_at=_ts("expires_at"),
             parent_id=d.get("parent_id"),
             intent=d.get("intent"),
+            acting_for=acting_for,
             policy_proof_hash=d.get("policy_proof_hash"),
             grammar_hash=d.get("grammar_hash"),
             policy_hash=d.get("policy_hash"),
@@ -819,6 +832,7 @@ class CapabilityIssuer:
         policy_hash: str | None = None,
         quantum: bool = False,
         intent: dict[str, Any] | None = None,
+        acting_for: str = "",
     ) -> Capability:
         """Mint a fresh capability token.
 
@@ -856,6 +870,8 @@ class CapabilityIssuer:
         _validate_agent_id(agent_id)
         _validate_tool(tool)
         _validate_intent(intent)
+        if acting_for:
+            _validate_principal(acting_for)
 
         # ── TTL sanity guard (TTL-LOW) ──────────────────────────────
         # A token must live for a positive, bounded span. Zero/negative
@@ -904,6 +920,7 @@ class CapabilityIssuer:
             expires_at=now + ttl_seconds,
             parent_id=None,
             intent=intent,
+            acting_for=acting_for,
             policy_proof_hash=policy_proof_hash,
             grammar_hash=grammar_hash,
             policy_hash=policy_hash,
@@ -974,6 +991,7 @@ class CapabilityIssuer:
         narrower_ttl_seconds: int | None = None,
         narrower_agent_id: str | None = None,
         intent: dict[str, Any] | None = None,
+        acting_for: str = "",
     ) -> Capability:
         """Derive a more-restricted child token from ``parent``.
 
@@ -1028,6 +1046,16 @@ class CapabilityIssuer:
         # refused: a delegated authority cannot expand the approved purpose.
         _validate_intent(intent)
         child_intent = intent if intent is not None else parent.intent
+        # B1: the pair. A child may narrow an unpaired parent to a pair, but
+        # may never re-target: a pair-bound parent's child MUST act for the
+        # same user (re-targeting would move the authority to a different
+        # principal - a widening).
+        if parent.acting_for and acting_for and acting_for != parent.acting_for:
+            raise ValueError(
+                f"attenuation re-targeted the acting-for user: parent acts for "
+                f"{parent.acting_for!r}, child for {acting_for!r}"
+            )
+        child_acting_for = acting_for or parent.acting_for
         if intent is not None and parent.intent is not None:
             parent_tools = parent.intent.get("tools")
             if (
@@ -1055,6 +1083,7 @@ class CapabilityIssuer:
             tool=parent.tool,
             constraints=merged,
             intent=child_intent,
+            acting_for=child_acting_for,
             issuer=self.issuer,
             key_id=self.key_id,
             issued_at=now,
@@ -1566,6 +1595,7 @@ class CapabilityGate:
         tool: str,
         agent_id: str | None = None,
         args: dict[str, Any] | None = None,
+        acting_for: str | None = None,
         now: int | None = None,
     ) -> GateDecision:
         ts = now if now is not None else _now()
@@ -1646,6 +1676,20 @@ class CapabilityGate:
             agent_decision = self._check_agent_id(token, agent_id)
             if agent_decision is not None:
                 return agent_decision
+
+        # 6.5) B1: the (agent, acting-for user) pair. A pair-bound token may
+        # only be used by a call declaring that same user; cross-pair use is
+        # attributable misuse, and an undeclared user on a pair-bound token
+        # is refused just the same (the pair IS the principal).
+        if token.acting_for:
+            if not acting_for or acting_for != token.acting_for:
+                who = f"got {acting_for!r}" if acting_for else "no user declared"
+                return GateDecision(
+                    False,
+                    f"acting-for mismatch: token is bound to {token.acting_for!r}, {who}",
+                    token.token_id,
+                    attributable=True,
+                )
 
         # 7) Argument constraints. Fail closed: any unexpected error while
         # evaluating constraints is a DENY, never a propagated exception — the
@@ -1921,6 +1965,18 @@ def _flatten_scalars(val: Any) -> Any:
             yield from _flatten_scalars(v)
     else:
         yield val
+
+
+_PRINCIPAL_RE = re.compile(
+    r"^(?:agent|user):[a-z0-9](?:[a-z0-9_\-]|\.(?=[a-z0-9])){0,126}[a-z0-9]?$"
+)
+
+
+def _validate_principal(principal: str) -> None:
+    """B1: an acting-for principal is agent: or user: prefixed (the pair's
+    human or service half)."""
+    if not _PRINCIPAL_RE.match(principal):
+        raise ValueError(f"acting_for {principal!r} must match {_PRINCIPAL_RE.pattern!r}")
 
 
 def _validate_intent(intent: dict[str, Any] | None) -> None:

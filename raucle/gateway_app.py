@@ -36,6 +36,9 @@ class GateRequest(BaseModel):
     tool: str = Field(..., description="Tool name to call")
     args: dict[str, Any] = Field(default_factory=dict, description="Tool call arguments")
     agent_id: str = Field(default="", description="Agent identity (optional, defaults to policy)")
+    acting_for: str = Field(
+        default="", description="The user the agent acts for (B1 pair principal)"
+    )
     source: str = Field(default="", description="Inbound source (agent name, IP, or service ID)")
     destination: str = Field(
         default="", description="Outbound destination (API endpoint, service, or tool target)"
@@ -256,6 +259,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
             tool=req.tool,
             args=req.args,
             declared_agent_id=req.agent_id,
+            acting_for=req.acting_for,
         )
         if agent_id is None:
             return _gate_deny_response(req, f"unauthenticated: {auth_reason}")
@@ -300,6 +304,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
             _authorization_hint=authorization,
             _token_decision=token_decision,
             _intent_hint=intent_hint,
+            _acting_for=req.acting_for,
         )
         # Internal bookkeeping fields never leave the process boundary
         response.pop("_trace_id", None)
