@@ -1655,16 +1655,28 @@ class ProvenanceVerifier:
         raw_lines_by_hash: dict[str, str],
     ) -> None:
         """v1.1/v1.2 extension re-checks for one receipt (extracted from
-        verify_chain): the delegated-authority digest, cascade revocation
-        (temporal, single-pass), lease grant/redemption windows and
-        scopes, the task-intent re-check, and the harness-finding replay
-        check (EPIC D). Mutates *report* and the collector dicts in
-        place."""
-        # Receipts v1.1/v1.2: decode the JWS payload for the x_gate
-        # extension checks. NB the envelope carries only
-        # {receipt_hash, jws}; x_gate lives INSIDE the signed payload
-        # (the previous `raw.get("x_gate")` was always empty - the
-        # v1.1 digest re-check never fired; found by the A1 tests).
+        verify_chain): one helper per extension family, called in the
+        historical order so the per-line error sequence is unchanged.
+        The collectors (revocations, lease grants, receipts by hash)
+        thread through the helpers and mutate in place, as does
+        *report*."""
+        decoded, x_gate_payload = self._decode_gate_payload(raw)
+        self._verify_delegated_authority_digest(x_gate_payload, line_no, report)
+        self._verify_lease_extension(decoded, line_no, report, lease_grants)
+        self._verify_cascade_revocation(
+            x_gate_payload, decoded, line_no, report, revoked_ids, revocation_lines
+        )
+        self._verify_task_intent(x_gate_payload, receipt, line_no, report)
+        self._verify_harness_finding(decoded, line_no, report, receipts_by_hash)
+        self._verify_time_anchor(decoded, line_no, report, receipts_by_hash, raw_lines_by_hash)
+
+    def _decode_gate_payload(self, raw: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+        """Invariant: x_gate lives INSIDE the signed JWS payload, not in the
+        envelope (the envelope carries only {receipt_hash, jws}); an absent
+        or malformed JWS yields an empty payload, so v1.0 receipts carry no
+        extension checks. Returns (decoded JWS payload, the x_gate dict)."""
+        # NB the previous `raw.get("x_gate")` was always empty - the
+        # v1.1 digest re-check never fired; found by the A1 tests.
         x_gate_payload: dict[str, Any] = {}
         decoded: Any = None
         jws_str = raw.get("jws") if isinstance(raw, dict) else None
@@ -1677,6 +1689,14 @@ class ProvenanceVerifier:
                     x_gate_payload = decoded.get("x_gate") or {}
             except (ValueError, TypeError):
                 x_gate_payload = {}
+        return decoded, x_gate_payload
+
+    def _verify_delegated_authority_digest(
+        self, x_gate_payload: dict[str, Any], line_no: int, report: VerificationReport
+    ) -> None:
+        """Invariant (v1.1): the delegated-authority chain_digest re-derives
+        from the authorization block's own fields; a mismatch means the
+        binding was tampered with or malformed. Mutates *report* in place."""
         auth = x_gate_payload.get("authorization")
         if auth:
             # Recompute the digest from the BLOCK's own fields (the
@@ -1702,10 +1722,19 @@ class ProvenanceVerifier:
                 )
                 report.valid = False
 
-        # C1: lease receipts. Grants collect by lease id; a redemption
-        # must cite a grant, fall inside its TTL window, and never
-        # widen its scopes. The receipt's own iat is the redemption
-        # moment. (x_lease rides the payload root, like x_revocation.)
+    def _verify_lease_extension(
+        self,
+        decoded: Any,
+        line_no: int,
+        report: VerificationReport,
+        lease_grants: dict[str, dict[str, Any]],
+    ) -> None:
+        """Invariant (C1): a lease redemption cites a prior grant in the same
+        chain, falls inside that grant's TTL window (the receipt's own iat
+        is the redemption moment), and never widens the granted scopes.
+        Grants collect into *lease_grants* by lease id. Mutates *report*
+        and *lease_grants* in place."""
+        # (x_lease rides the payload root, like x_revocation.)
         lease = decoded.get("x_lease") if isinstance(decoded, dict) else None
         if isinstance(lease, dict):
             action = lease.get("action")
@@ -1742,10 +1771,20 @@ class ProvenanceVerifier:
                             )
                             report.valid = False
 
-        # A3: cascade revocation. Collect revocation events as we walk
-        # (single pass preserves temporal order): a receipt minted
-        # AFTER a revocation of its cited authority is invalid; one
-        # minted BEFORE it remains valid evidence.
+    def _verify_cascade_revocation(
+        self,
+        x_gate_payload: dict[str, Any],
+        decoded: Any,
+        line_no: int,
+        report: VerificationReport,
+        revoked_ids: set[str],
+        revocation_lines: dict[str, int],
+    ) -> None:
+        """Invariant (A3): temporal cascade, single pass - a receipt minted
+        AFTER a revocation of its cited authority is invalid; one minted
+        BEFORE it remains valid evidence. Revocation events collect as the
+        walk proceeds, so they only bite later lines. Mutates *report*,
+        *revoked_ids* and *revocation_lines* in place."""
         auth_block_now = x_gate_payload.get("authorization") or {}
         cited_now = {
             auth_block_now.get("capability_id"),
@@ -1768,10 +1807,18 @@ class ProvenanceVerifier:
                 revoked_ids.add(rid)
                 revocation_lines[rid] = line_no
 
-        # Receipts v1.2: task-intent re-check (defence-in-depth). Only
-        # ALLOW receipts are re-checked - a DENY for an out-of-intent
-        # attempt is the enforcement working, not a violation. The
-        # re-check is deterministic, over the bounded disclosure.
+    def _verify_task_intent(
+        self,
+        x_gate_payload: dict[str, Any],
+        receipt: ProvenanceReceipt,
+        line_no: int,
+        report: VerificationReport,
+    ) -> None:
+        """Invariant (v1.2, defence-in-depth): an ALLOW receipt must fall
+        inside the approved tool scope and satisfy the intent constraints,
+        re-checked deterministically over the bounded disclosure. A DENY
+        for an out-of-intent attempt is the enforcement working, not a
+        violation. Mutates *report* in place."""
         intent = x_gate_payload.get("intent")
         if intent is not None and x_gate_payload.get("decision") == "allow":
             gate_tool = x_gate_payload.get("tool") or receipt.tool
@@ -1795,12 +1842,17 @@ class ProvenanceVerifier:
                     )
                     report.valid = False
 
-        # EPIC D: harness findings (x_finding). The finding cites the gate
-        # receipt that covered the request; the verifier replays the claim
-        # offline: the cited receipt must exist in the chain, and the
-        # decision the harness reports must match the decision the cited
-        # receipt actually recorded. A finding that misreports the gate
-        # fails verification: the harness cannot lie and stay verifiable.
+    def _verify_harness_finding(
+        self,
+        decoded: Any,
+        line_no: int,
+        report: VerificationReport,
+        receipts_by_hash: dict[str, ProvenanceReceipt],
+    ) -> None:
+        """Invariant (EPIC D): a harness finding replays offline - it must
+        cite a receipt that exists in the chain and report the decision the
+        cited receipt actually recorded; a harness that misreports the gate
+        cannot stay verifiable. Mutates *report* in place."""
         finding = decoded.get("x_finding") if isinstance(decoded, dict) else None
         if isinstance(finding, dict):
             cited = str(finding.get("cited_receipt", ""))
@@ -1822,15 +1874,23 @@ class ProvenanceVerifier:
                     )
                     report.valid = False
 
-        # EPIC G: time-source anchoring (x_timestamp). The anchor receipt
-        # binds a digest (sha256 over the exact cited ledger line) to an
-        # RFC 3161 TimeStampToken from a customer-chosen TSA. The offline
-        # re-check: the digest must bind the receipt's own input_hash, the
-        # cited parent must exist EARLIER in this chain, the head-line
-        # digest must re-derive from the cited raw line, and the embedded
-        # token must verify (imprint, nonce, genTime, TSA signature).
-        # Fail-closed on the parser: a receipt claiming a TSA token in an
-        # install without the timestamp extra never verifies as attested.
+    def _verify_time_anchor(
+        self,
+        decoded: Any,
+        line_no: int,
+        report: VerificationReport,
+        receipts_by_hash: dict[str, ProvenanceReceipt],
+        raw_lines_by_hash: dict[str, str],
+    ) -> None:
+        """Invariant (EPIC G): the anchor binds a digest (sha256 over the
+        exact cited ledger line) to an RFC 3161 TimeStampToken from a
+        customer-chosen TSA. Offline re-check: the digest binds the
+        receipt's own input_hash, the cited parent exists EARLIER in this
+        chain, the head-line digest re-derives from the cited raw line,
+        and the embedded token verifies (imprint, nonce, genTime, TSA
+        signature). Fail-closed: a receipt claiming a TSA token in an
+        install without the timestamp extra never verifies as attested.
+        Mutates *report* in place."""
         x_ts = decoded.get("x_timestamp") if isinstance(decoded, dict) else None
         if isinstance(x_ts, dict):
             mode = x_ts.get("mode")
