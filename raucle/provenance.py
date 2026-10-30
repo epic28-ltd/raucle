@@ -1760,9 +1760,7 @@ class ProvenanceVerifier:
         window (the receipt's own iat is the redemption moment), and
         never widen the granted scopes. Mutates *report* in place."""
         if grant is None:
-            report.errors.append(
-                f"line {line_no}: lease {lid!r} redeemed with no lease grant"
-            )
+            report.errors.append(f"line {line_no}: lease {lid!r} redeemed with no lease grant")
             report.valid = False
             return
         redeemed_at = int(decoded.get("iat", 0))
@@ -1782,8 +1780,7 @@ class ProvenanceVerifier:
                 _assert_narrowing(grant_scopes, redeem_scopes)
             except ValueError as exc:
                 report.errors.append(
-                    f"line {line_no}: lease {lid!r} redeemed "
-                    f"beyond its granted scope ({exc})"
+                    f"line {line_no}: lease {lid!r} redeemed beyond its granted scope ({exc})"
                 )
                 report.valid = False
 
