@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Added - A3: cascade revocation with evidence
+- Revoking a capability now cascades: the whole subtree is walked from the
+  delegation ledger, persisted to a revocations file (RAUCLE_REVOCATIONS_FILE,
+  loaded per call so revocations propagate immediately), and receipted. The
+  revocation itself is a signed, attributable receipt (x_revocation:
+  revoked-by-whom, when, which subtree) that verifies offline like every
+  other receipt.
+- The gate refuses new actions on the subtree: token ids, their direct
+  parents, and every ancestor are checked against the live revocation set.
+- The verifier marks revoked-at-H: a receipt minted AFTER a revocation of
+  its cited authority is INVALID with a named reason; receipts minted
+  before it remain valid evidence - the authority was live when they
+  minted. Single-pass temporal order, no trust in the gate's own
+  enforcement story.
+- Owner-departure operation: POST /api/agents/{id}/revoke-chains revokes
+  every delegated chain of an identity in one receipted action (the
+  lifecycle audit trail); POST /api/revocations revokes a single subtree.
+- Tests: mid-chain cascade, verifier marking, owner departure
+  (tests/test_cascade_revocation.py).
+
 ### Added - receipts v1.2: task-intent binding (A1)
 - A capability token may carry an intent: the approved task statement plus
   structured constraints (resource class via tools, data bound via the

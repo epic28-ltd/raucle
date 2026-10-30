@@ -1646,6 +1646,8 @@ class ProvenanceVerifier:
         """Verify a JSONL chain file."""
         receipts_by_hash: dict[str, ProvenanceReceipt] = {}
         report = VerificationReport(valid=True, receipt_count=0)
+        revoked_ids: set[str] = set()
+        revocation_lines: dict[str, int] = {}
 
         with open(path, encoding="utf-8") as fh:
             for line_no, line in enumerate(fh, start=1):
@@ -1704,6 +1706,31 @@ class ProvenanceVerifier:
                             f"(tampered or malformed delegated-authority binding)"
                         )
                         report.valid = False
+
+                # A3: cascade revocation. Collect revocation events as we walk
+                # (single pass preserves temporal order): a receipt minted
+                # AFTER a revocation of its cited authority is invalid; one
+                # minted BEFORE it remains valid evidence.
+                auth_block_now = x_gate_payload.get("authorization") or {}
+                cited_now = {
+                    auth_block_now.get("capability_id"),
+                    auth_block_now.get("parent_id"),
+                }
+                cited_now.discard(None)
+                hit = revoked_ids.intersection(cited_now)
+                if hit:
+                    report.errors.append(
+                        f"line {line_no}: cited authority {sorted(hit)[0]} "
+                        f"was revoked at line {revocation_lines[sorted(hit)[0]]}"
+                    )
+                    report.valid = False
+                revocation = None
+                if isinstance(decoded, dict):
+                    revocation = decoded.get("x_revocation")
+                if revocation and isinstance(revocation, dict):
+                    for rid in revocation.get("revoked_ids") or []:
+                        revoked_ids.add(rid)
+                        revocation_lines[rid] = line_no
 
                 # Receipts v1.2: task-intent re-check (defence-in-depth). Only
                 # ALLOW receipts are re-checked - a DENY for an out-of-intent

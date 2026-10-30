@@ -1382,6 +1382,33 @@ class DelegationLedger:
         self._mtime = self.path.stat().st_mtime
         return record_hash
 
+    def descendants(self, token_id: str) -> list[str]:
+        """A3: the subtree under *token_id* (inclusive): the id itself plus
+        every record whose ancestor chain reaches it."""
+        self._ensure_loaded()
+        children_of: dict[str, list[str]] = {}
+        for cid, rec in self._records.items():
+            pid = rec.get("capability", {}).get("parent_id")
+            if pid:
+                children_of.setdefault(pid, []).append(cid)
+        out = [token_id]
+        queue = [token_id]
+        while queue:
+            current = queue.pop()
+            for child in children_of.get(current, []):
+                out.append(child)
+                queue.append(child)
+        return out
+
+    def tokens_for_agent(self, agent_id: str) -> list[str]:
+        """A3: every token id in the ledger delegated to *agent_id*."""
+        self._ensure_loaded()
+        return [
+            cid
+            for cid, rec in self._records.items()
+            if rec.get("delegated_to_agent", "") == agent_id
+        ]
+
     def resolver(self):
         """Parent resolver for CapabilityGate: callable (token_id) -> Capability | None."""
 

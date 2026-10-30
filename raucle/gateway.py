@@ -88,6 +88,10 @@ class GatewayConfig:
     # Lean-proven mode). Default "off" is backwards compatible; the
     # boot log warns that declared identity is trusted.
     gate_auth: str = "off"
+    # A3: revocations file (JSONL of {token_id, reason, actor, timestamp}).
+    # Loaded per call so revocations propagate immediately, like the trust
+    # registry. Empty string = no token revocations configured.
+    revocations_file: str = ""
     agent_credentials_file: str = "/data/agent-credentials.jsonl"
     # Receipts v1.1: append-only ledger of delegated capability records; when
     # set, gate auth token mode resolves attenuated chains against it.
@@ -157,6 +161,7 @@ class GatewayConfig:
             approval_ttl_seconds=int(os.environ.get("RAUCLE_APPROVAL_TTL", "300")),
             policy_ledger_path=os.environ.get("RAUCLE_POLICY_LEDGER", ""),
             gate_auth=os.environ.get("RAUCLE_GATE_AUTH", "off"),
+            revocations_file=os.environ.get("RAUCLE_REVOCATIONS_FILE", ""),
             agent_credentials_file=os.environ.get(
                 "RAUCLE_AGENT_CREDENTIALS", "/data/agent-credentials.jsonl"
             ),
@@ -1281,6 +1286,7 @@ class RaucleGateway:
                 if self.config.delegations_file and Path(self.config.delegations_file).exists()
                 else None
             ),
+            revoked_token_ids=self._load_revoked_ids(),
         )
 
     def check_tool_call(
@@ -1883,6 +1889,82 @@ class RaucleGateway:
         except Exception:
             logger.exception("suspend receipt emission failed")
         return {"suspended": True, "revoked": revoked, "receipt_id": receipt_id}
+
+    def _load_revoked_ids(self) -> set[str]:
+        """A3: the currently-revoked token ids (per call, like the registry)."""
+        path = self.config.revocations_file
+        if not path or not Path(path).exists():
+            return set()
+        ids: set[str] = set()
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ids.add(json.loads(line).get("token_id", ""))
+                except ValueError:
+                    continue
+        return {i for i in ids if i}
+
+    def _revoke_ids(self, ids: list[str], *, reason: str, actor: str, root: str) -> dict[str, Any]:
+        """A3 shared leg: persist the revocation records, emit ONE signed
+        revocation receipt naming the whole subtree."""
+        path = Path(self.config.revocations_file or "/tmp/raucle-revocations.jsonl")
+        if self.config.revocations_file:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            now = datetime.now(timezone.utc).isoformat()
+            with open(path, "a", encoding="utf-8") as fh:
+                for tid in ids:
+                    fh.write(
+                        json.dumps(
+                            {"token_id": tid, "reason": reason, "actor": actor, "timestamp": now}
+                        )
+                        + "\n"
+                    )
+        receipt_id = None
+        try:
+            receipt_id = self._emit_authority_receipt(
+                verdict="authority_revoked",
+                extension_key="x_revocation",
+                extension={
+                    "revoked_ids": ids,
+                    "root": root,
+                    "actor": actor,
+                    "reason": reason,
+                },
+            )
+        except Exception:
+            logger.exception("revocation receipt emission failed")
+        return {"revoked": ids, "receipt_id": receipt_id}
+
+    def revoke_capability(self, token_id: str, *, reason: str, actor: str) -> dict[str, Any]:
+        """A3: revoke a capability and its whole subtree, receipted. The gate
+        refuses new actions on every revoked id at the next call; receipts
+        minted afterwards are marked invalid by the offline verifier."""
+        from raucle.capability import DelegationLedger
+
+        if self.config.delegations_file and Path(self.config.delegations_file).exists():
+            ledger = DelegationLedger(self.config.delegations_file)
+            ids = ledger.descendants(token_id)
+        else:
+            ids = [token_id]
+        return self._revoke_ids(ids, reason=reason, actor=actor, root=token_id)
+
+    def revoke_agent_chains(self, agent_id: str, *, reason: str, actor: str) -> dict[str, Any]:
+        """A3 owner-departure: revoke every delegated chain of an identity in
+        one receipted operation (the lifecycle audit trail)."""
+        from raucle.capability import DelegationLedger
+
+        if not (self.config.delegations_file and Path(self.config.delegations_file).exists()):
+            return {"revoked": [], "receipt_id": None}
+        ledger = DelegationLedger(self.config.delegations_file)
+        ids: list[str] = []
+        for tid in ledger.tokens_for_agent(agent_id):
+            for descendant in ledger.descendants(tid):
+                if descendant not in ids:
+                    ids.append(descendant)
+        return self._revoke_ids(ids, reason=reason, actor=actor, root=f"agent:{agent_id}")
 
     def get_stats(self) -> dict[str, Any]:
         return self.stats.summary()

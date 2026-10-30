@@ -81,6 +81,15 @@ class SuspendRequest(BaseModel):
     reason: str = Field(..., description="Why the agent is being suspended")
 
 
+class RevokeRequest(BaseModel):
+    """A3: cascade-revocation request body."""
+
+    token_id: str = Field(
+        ..., description="The capability id to revoke (its whole subtree cascades)"
+    )
+    reason: str = Field(..., description="Why the authority is being revoked")
+
+
 class UserCreateRequest(BaseModel):
     """Create a new admin panel user."""
 
@@ -793,6 +802,41 @@ def _register_authority_routes(
         # Admin only: suspending an agent is the kill switch
         check_access(user, "users")
         return gateway.suspend_agent(agent_id, reason=req.reason, actor=user.name or user.role)
+
+    @app.post(
+        "/api/revocations",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+        },
+    )
+    def revoke_capability(
+        req: RevokeRequest, authorization: str | None = Header(None)
+    ) -> dict[str, Any]:
+        """A3: revoke a capability and its whole subtree, receipted."""
+        user = check_auth(authorization)
+        check_access(user, "users")
+        return gateway.revoke_capability(
+            req.token_id, reason=req.reason, actor=user.name or user.role
+        )
+
+    @app.post(
+        "/api/agents/{agent_id}/revoke-chains",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+        },
+    )
+    def revoke_agent_chains(
+        agent_id: str, req: SuspendRequest, authorization: str | None = Header(None)
+    ) -> dict[str, Any]:
+        """A3 owner-departure: revoke every delegated chain of an identity in
+        one receipted operation (the lifecycle audit trail)."""
+        user = check_auth(authorization)
+        check_access(user, "users")
+        return gateway.revoke_agent_chains(
+            agent_id, reason=req.reason, actor=user.name or user.role
+        )
 
 
 def _line_iat(line: str) -> int | None:
