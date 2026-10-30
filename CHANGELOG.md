@@ -4,6 +4,23 @@
 
 ## 0.23.3 (2026-10-30) - intent binding, cascade revocation, pair permissioning
 
+### Added - C1: credential-lease receipts (the x_lease evidence layer)
+- A credential lease - a gate-minted, time-limited grant of a vault
+  secret's USE, scoped by the delegated authority that authorised it - is
+  now a receipted event: granted, denied, redeemed, revoked, each carrying
+  an x_lease extension (capability chain, secret by HASH only, scopes
+  narrowed from the capability's constraints, TTL).
+- The verifier re-checks redemptions offline without vault access: a
+  redemption must cite a grant, fall inside its TTL window, and never
+  widen its scope.
+- Spec: docs/spec/provenance/v1.2/lease-extension.md. The vault, lease
+  manager and injection proxy ship in raucle-cloud (the 16.3 split).
+- Found and fixed while landing this: authority receipts (suspend,
+  revocation) carried an empty ruleset_hash, which the standard chain
+  verifier rejects on truthiness - they now bind the extension block's
+  hash and verify through the standard verifier like every other receipt.
+- Tests: tests/test_lease_receipts.py.
+
 ### Added - B1: agent+user pair permissioning (OSS evidence half)
 - The principal becomes the (agent, acting-for user) pair: a capability may
   bind to a user via acting_for (user:-prefixed principal grammar); tokens

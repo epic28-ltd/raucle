@@ -1648,6 +1648,7 @@ class ProvenanceVerifier:
         report = VerificationReport(valid=True, receipt_count=0)
         revoked_ids: set[str] = set()
         revocation_lines: dict[str, int] = {}
+        lease_grants: dict[str, dict[str, Any]] = {}
 
         with open(path, encoding="utf-8") as fh:
             for line_no, line in enumerate(fh, start=1):
@@ -1706,6 +1707,48 @@ class ProvenanceVerifier:
                             f"(tampered or malformed delegated-authority binding)"
                         )
                         report.valid = False
+
+                # C1: lease receipts. Grants collect by lease id; a redemption
+                # must cite a grant, fall inside its TTL window, and never
+                # widen its scopes. The receipt's own iat is the redemption
+                # moment. (x_lease rides the payload root, like x_revocation.)
+                lease = decoded.get("x_lease") if isinstance(decoded, dict) else None
+                if isinstance(lease, dict):
+                    action = lease.get("action")
+                    lid = str(lease.get("lease_id", ""))
+                    if action == "granted":
+                        lease_grants[lid] = lease
+                    elif action == "redeemed":
+                        grant = lease_grants.get(lid)
+                        if grant is None:
+                            report.errors.append(
+                                f"line {line_no}: lease {lid!r} redeemed with no lease grant"
+                            )
+                            report.valid = False
+                        else:
+                            redeemed_at = int(decoded.get("iat", 0))
+                            window_end = int(grant.get("granted_at", 0)) + int(
+                                grant.get("ttl_seconds", 0)
+                            )
+                            if redeemed_at > window_end:
+                                report.errors.append(
+                                    f"line {line_no}: lease {lid!r} redeemed after "
+                                    f"lease expired (window ended {window_end})"
+                                )
+                                report.valid = False
+                            grant_scopes = grant.get("scopes") or {}
+                            redeem_scopes = lease.get("scopes") or {}
+                            if redeem_scopes and grant_scopes:
+                                from raucle.capability import _assert_narrowing
+
+                                try:
+                                    _assert_narrowing(grant_scopes, redeem_scopes)
+                                except ValueError as exc:
+                                    report.errors.append(
+                                        f"line {line_no}: lease {lid!r} redeemed "
+                                        f"beyond its granted scope ({exc})"
+                                    )
+                                    report.valid = False
 
                 # A3: cascade revocation. Collect revocation events as we walk
                 # (single pass preserves temporal order): a receipt minted

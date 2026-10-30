@@ -944,7 +944,12 @@ class RaucleGateway:
             "parents": [],
             "taint": ["gate:observed"],
             "input_hash": _sha256_hex(_canonical_json(extension)),
-            "ruleset_hash": "",
+            # The ruleset in force for an authority event is the event's own
+            # extension block: binding its hash makes suspend/revocation/lease
+            # receipts verifiable through the standard chain verifier (the
+            # required-fields check is truthiness-based; an empty hash would
+            # fail it).
+            "ruleset_hash": _sha256_hex(_canonical_json(extension)),
             "guardrail_verdict": verdict,
             extension_key: extension,
         }
