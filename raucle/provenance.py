@@ -1652,6 +1652,7 @@ class ProvenanceVerifier:
         revocation_lines: dict[str, int],
         lease_grants: dict[str, dict[str, Any]],
         receipts_by_hash: dict[str, ProvenanceReceipt],
+        raw_lines_by_hash: dict[str, str],
     ) -> None:
         """v1.1/v1.2 extension re-checks for one receipt (extracted from
         verify_chain): the delegated-authority digest, cascade revocation
@@ -1665,6 +1666,7 @@ class ProvenanceVerifier:
         # (the previous `raw.get("x_gate")` was always empty - the
         # v1.1 digest re-check never fired; found by the A1 tests).
         x_gate_payload: dict[str, Any] = {}
+        decoded: Any = None
         jws_str = raw.get("jws") if isinstance(raw, dict) else None
         if isinstance(jws_str, str) and jws_str.count(".") >= 2:
             seg = jws_str.split(".")[1]
@@ -1820,9 +1822,83 @@ class ProvenanceVerifier:
                     )
                     report.valid = False
 
+        # EPIC G: time-source anchoring (x_timestamp). The anchor receipt
+        # binds a digest (sha256 over the exact cited ledger line) to an
+        # RFC 3161 TimeStampToken from a customer-chosen TSA. The offline
+        # re-check: the digest must bind the receipt's own input_hash, the
+        # cited parent must exist EARLIER in this chain, the head-line
+        # digest must re-derive from the cited raw line, and the embedded
+        # token must verify (imprint, nonce, genTime, TSA signature).
+        # Fail-closed on the parser: a receipt claiming a TSA token in an
+        # install without the timestamp extra never verifies as attested.
+        x_ts = decoded.get("x_timestamp") if isinstance(decoded, dict) else None
+        if isinstance(x_ts, dict):
+            mode = x_ts.get("mode")
+            digest = str(x_ts.get("digest", ""))
+            if digest != "sha256:" + str(decoded.get("input_hash", "")):
+                report.errors.append(
+                    f"line {line_no}: x_timestamp digest does not bind the receipt input_hash"
+                )
+                report.valid = False
+            cited = str(x_ts.get("parent_receipt", ""))
+            if cited not in receipts_by_hash:
+                report.errors.append(
+                    f"line {line_no}: x_timestamp cites receipt {cited[:24]}... not in the chain"
+                )
+                report.valid = False
+            else:
+                raw_cited = raw_lines_by_hash.get(cited)
+                import hashlib as _hl
+
+                rederived = (
+                    "sha256:" + _hl.sha256(raw_cited.encode("utf-8")).hexdigest()
+                    if raw_cited is not None
+                    else ""
+                )
+                if rederived != digest:
+                    report.errors.append(
+                        f"line {line_no}: x_timestamp digest does not "
+                        f"re-derive from the cited ledger line"
+                    )
+                    report.valid = False
+            if mode == "tsa":
+                from raucle.timestamp import verify_token
+
+                token_report = verify_token(
+                    base64.b64decode(x_ts.get("token", "")),
+                    expected_digest=bytes.fromhex(digest.removeprefix("sha256:")),
+                    expected_nonce=int(x_ts.get("nonce", 0)),
+                )
+                if not token_report["valid"]:
+                    report.errors.extend(
+                        f"line {line_no}: Time Stamp Token: {e}" for e in token_report["errors"]
+                    )
+                    report.valid = False
+                elif str(x_ts.get("gen_time")) != str(token_report["gen_time"]):
+                    report.errors.append(
+                        f"line {line_no}: recorded gen_time disagrees with the token's genTime"
+                    )
+                    report.valid = False
+            elif mode == "opentimestamps":
+                # Bounded claim: the receipt proves the anchoring EVENT
+                # was recorded and binds digest + cite; the .ots proof
+                # verifies against the Bitcoin chain externally. No
+                # eIDAS Art 41 presumption attaches to it (spec).
+                pass
+            elif mode == "internal":
+                report.errors.append(
+                    f"line {line_no}: internal time-source mode does not "
+                    f"carry an x_timestamp extension (spec time-source-v1)"
+                )
+                report.valid = False
+            else:
+                report.errors.append(f"line {line_no}: unsupported x_timestamp mode {mode!r}")
+                report.valid = False
+
     def verify_chain(self, path: str | Path) -> VerificationReport:
         """Verify a JSONL chain file."""
         receipts_by_hash: dict[str, ProvenanceReceipt] = {}
+        raw_lines_by_hash: dict[str, str] = {}
         report = VerificationReport(valid=True, receipt_count=0)
         revoked_ids: set[str] = set()
         revocation_lines: dict[str, int] = {}
@@ -1845,6 +1921,10 @@ class ProvenanceVerifier:
                 # Capability conformance (verifier-side, when statements supplied)
                 self._verify_capability_conformance(receipt, line_no, report)
 
+                # G1: the exact ledger line, kept for the x_timestamp
+                # head-digest re-derivation (anchors bind the raw bytes)
+                raw_lines_by_hash[receipt.receipt_hash] = line
+
                 self._verify_receipt_extensions(
                     raw,
                     line_no,
@@ -1854,6 +1934,7 @@ class ProvenanceVerifier:
                     revocation_lines,
                     lease_grants,
                     receipts_by_hash,
+                    raw_lines_by_hash,
                 )
 
                 receipts_by_hash[receipt.receipt_hash] = receipt

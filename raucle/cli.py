@@ -327,6 +327,35 @@ def _build_parser() -> argparse.ArgumentParser:
         "--pubkey", help="Operator public PEM (else the receipt's embedded key)"
     )
 
+    # -- timestamp (G1 time-source anchoring: RFC 3161 + OTS) -----------
+    ts_p = subparsers.add_parser("timestamp", help="Time-source anchoring: RFC 3161 TSA tokens")
+    ts_sub = ts_p.add_subparsers(dest="timestamp_command")
+    ts_stamp = ts_sub.add_parser(
+        "stamp", help="Anchor a chain head through a customer-chosen RFC 3161 TSA"
+    )
+    ts_stamp.add_argument("--chain", required=True, help="The receipt chain JSONL")
+    ts_stamp.add_argument("--url", required=True, help="The TSA's RFC 3161 endpoint")
+    ts_stamp.add_argument(
+        "--operator-key", required=True, help="Ed25519 private PEM for the anchor receipt"
+    )
+    ts_stamp.add_argument("--out", required=True, help="Directory to write anchor.json into")
+    ts_stamp.add_argument(
+        "--timeout", type=float, default=10.0, help="TSA request timeout (seconds)"
+    )
+    ts_verify = ts_sub.add_parser(
+        "verify", help="Offline re-check of an anchor receipt and its token"
+    )
+    ts_verify.add_argument("--anchor", required=True, help="anchor.json")
+    ts_verify.add_argument("--pubkey", help="Operator public PEM (else the anchor's embedded key)")
+    ts_verify.add_argument(
+        "--chain", help="The cited chain: enables the full cite + digest re-derivation"
+    )
+    ts_plan = ts_sub.add_parser(
+        "plan", help="Retimestamp schedule for a long-lived archive (G3 pairing)"
+    )
+    ts_plan.add_argument("--chain", required=True, help="The receipt chain JSONL")
+    ts_plan.add_argument("--out", help="Write the JSON plan here (else stdout)")
+
     # -- compliance (evidence packs, P4) ------------------------------------
     comp_p = subparsers.add_parser(
         "compliance", help="Map a receipt chain to named-framework controls"
@@ -1174,6 +1203,113 @@ def _cmd_records(args: argparse.Namespace) -> int:
             print(f"  escrow error:       {report['escrow_error']}")
         return 0 if report["valid"] else 1
     print("error: records needs a subcommand (destroy | verify)", file=sys.stderr)
+    return 2
+
+
+def _cmd_timestamp(args: argparse.Namespace) -> int:
+    """G1: time-source anchoring - stamp a chain head, verify an anchor,
+    or plan the retimestamp schedule for a long-lived archive."""
+    cmd = getattr(args, "timestamp_command", None)
+    if cmd == "stamp":
+        from raucle.timestamp import build_anchor
+
+        try:
+            manifest = build_anchor(
+                args.chain,
+                url=args.url,
+                operator_key_pem=validate_path(args.operator_key).read_bytes(),
+                out_dir=args.out,
+                timeout=args.timeout,
+            )
+        except FileNotFoundError:
+            print(f"error: no such chain file: {args.chain}", file=sys.stderr)
+            return 1
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        except OSError as exc:
+            print(f"error: TSA request failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"anchor receipt:     {manifest['anchor']}")
+        print(f"  anchored receipt: {manifest['parent_receipt']}")
+        print(f"  digest:           {manifest['digest']}")
+        print(f"  TSA:              {manifest['tsa']}")
+        print(f"  token genTime:    {manifest['gen_time']}")
+        print(f"  token re-check:   {'VALID' if manifest['token_valid'] else 'INVALID'}")
+        return 0
+
+    if cmd == "verify":
+        from raucle.timestamp import verify_anchor
+
+        pubkey = validate_path(args.pubkey).read_bytes() if getattr(args, "pubkey", None) else None
+        chain = getattr(args, "chain", None)
+        try:
+            report = verify_anchor(
+                args.anchor,
+                operator_public_pem=pubkey,
+                chain_path=chain,
+            )
+        except FileNotFoundError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"anchor receipt: {'VALID' if report['valid'] else 'INVALID'}")
+        print(f"  mode:              {report['mode']}")
+        print(f"  TSA:              {report.get('tsa') or ''}")
+        print(f"  genTime:          {report.get('gen_time') or ''}")
+        print(f"  parent receipt:   {report.get('parent_receipt') or ''}")
+        print(f"  cite:             {report['cite_check']}")
+        state = {True: "VALID", False: "INVALID", None: "not re-checked (external proof)"}[
+            report.get("token_valid")
+        ]
+        print(f"  TimeStampToken:   {state}")
+        for err in report["errors"]:
+            print(f"  error:            {err}")
+        return 0 if report["valid"] else 1
+
+    if cmd == "plan":
+        from raucle.timestamp import retimestamp_plan
+
+        try:
+            plan = retimestamp_plan(args.chain)
+        except FileNotFoundError:
+            print(f"error: no such chain file: {args.chain}", file=sys.stderr)
+            return 1
+        import datetime as _dt
+
+        horizon = plan["archive_horizon"]
+        horizon_str = (
+            _dt.datetime.fromtimestamp(horizon, tz=_dt.timezone.utc).isoformat()
+            if horizon
+            else "none (no retention stamps in this chain)"
+        )
+        print(f"retention horizon: {horizon_str}")
+        print(f"anchors found:      {len(plan['anchors'])}")
+        for a in plan["anchors"]:
+            not_after = a.get("tsa_cert_not_after")
+            print(f"  anchor {a['anchor_receipt'][:22]}... ({a['mode']})")
+            print(f"    genTime:          {a.get('gen_time') or ''}")
+            print(f"    TSA cert expires: {not_after or 'n/a'}")
+            print(f"    token re-check:   {a.get('token_valid')}")
+            if a["needs_restamp"]:
+                restamp = a["restamp_by"]
+                restamp_str = (
+                    _dt.datetime.fromtimestamp(restamp, tz=_dt.timezone.utc).isoformat()
+                    if isinstance(restamp, int)
+                    else str(restamp)
+                )
+                print(f"    RESTAMP REQUIRED by: {restamp_str}")
+        tail = plan["unanchored_receipts"]
+        print(
+            f"unanchored retained records: {tail}"
+            + (" (records with a retention schedule but no covering anchor)" if tail else "")
+        )
+        if args.out:
+            import json as _json
+
+            Path(args.out).write_text(_json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+        return 0
+
+    print("error: timestamp needs a subcommand (stamp | verify | plan)", file=sys.stderr)
     return 2
 
 
@@ -2638,6 +2774,9 @@ def _dispatch(argv: list[str] | None = None) -> int:
         ("agents", "list"): _cmd_agents_list,
         ("authorship", "sign"): _cmd_authorship_sign,
         ("authorship", "verify"): _cmd_authorship_verify,
+        ("timestamp", "stamp"): _cmd_timestamp,
+        ("timestamp", "verify"): _cmd_timestamp,
+        ("timestamp", "plan"): _cmd_timestamp,
     }
     sub = getattr(args, f"{args.command.replace('-', '_')}_command", None) if args.command else None
     handler = _SUBCOMMANDS.get((args.command, sub))

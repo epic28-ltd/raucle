@@ -51,6 +51,11 @@ server = [
     "pyotp>=2.9",         # TOTP MFA for admin panel authentication
 ]
 compliance = ["cryptography>=42.0"]
+# G1 RFC 3161 timestamping: asn1crypto PARSES the CMS TimeStampToken
+# (pure Python, no compiled deps, MIT); signature verification itself
+# stays in cryptography, so no new crypto primitive enters the trust
+# path. The request encoder is hand-rolled stdlib DER (fixed shape).
+timestamp = ["asn1crypto>=1.5.1", "cryptography>=42.0"]
 # Post-quantum hybrid signatures (raucle/pq1): ML-DSA-65 needs
 # cryptography>=47 built with AWS-LC/BoringSSL; shipped wheels have it since 48.
 pq = ["cryptography>=48.0"]
@@ -83,13 +88,13 @@ kms-all = [
     "hvac>=1.0",
 ]
 dev = [
-    "raucle[rules,server,compliance,langchain]",
+    "raucle[rules,server,compliance,timestamp,langchain]",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
 ]
-all = ["raucle[rules,ml,server,compliance,multimodal,proof]"]
+all = ["raucle[rules,ml,server,compliance,timestamp,multimodal,proof]"]
 
 [project.scripts]
 raucle = "raucle.cli:main"

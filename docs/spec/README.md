@@ -7,6 +7,7 @@ This directory holds normative specification documents for the Raucle protocol f
 | Spec | Version | Status | Document |
 |---|---|---|---|
 | Raucle Provenance Receipt | v1 | Draft 2 (first published 2026-05-14) | [provenance/v1.md](provenance/v1.md) |
+| Raucle Time Source | v1 | Draft 1 (first published 2026-10-30) | [time-source-v1.md](time-source-v1.md) |
 
 ## Process
 
