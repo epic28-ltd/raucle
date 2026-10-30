@@ -392,6 +392,35 @@ def _build_parser() -> argparse.ArgumentParser:
     receipt_p.add_argument("--pubkey", required=True, help="Path to Ed25519 public key PEM")
     receipt_p.add_argument("--input", help="Expected original prompt (binds receipt to input)")
 
+    # -- authorship ---------------------------------------------------------
+    auth_p = subparsers.add_parser(
+        "authorship",
+        help="Code authorship receipts: sign at session stop, verify offline (hooks plugin)",
+    )
+    auth_sub = auth_p.add_subparsers(dest="authorship_command")
+    auth_sign = auth_sub.add_parser(
+        "sign", help="Collect session evidence and sign a code_authorship receipt"
+    )
+    auth_sign.add_argument("--repo", default=".", help="Repository the coding session acted on")
+    auth_sign.add_argument(
+        "--transcript", help="Session transcript JSONL (tool calls recorded as digests)"
+    )
+    auth_sign.add_argument(
+        "--key", required=True, help="Ed25519 private key PEM used to sign the receipt"
+    )
+    auth_sign.add_argument(
+        "--out",
+        help="Receipt chain output path (default: <repo>/.raucle/authorship/stop-<n>.jsonl)",
+    )
+    auth_verify = auth_sub.add_parser("verify", help="Verify a code_authorship receipt offline")
+    auth_verify.add_argument("receipt", help="Code authorship receipt chain (JSONL envelope)")
+    auth_verify.add_argument(
+        "--pubkey", required=True, help="Path to the issuer's Ed25519 public key PEM"
+    )
+    auth_verify.add_argument(
+        "--format", choices=["table", "json"], default="table", help=_HELP_OUTPUT_FORMAT
+    )
+
     # -- audit-export -------------------------------------------------------
     audit_exp = subparsers.add_parser(
         "audit-export",
@@ -1703,6 +1732,59 @@ def _cmd_verify_receipt(args: argparse.Namespace) -> int:
     return 0
 
 
+def _default_receipt_path(repo: Path) -> Path:
+    slots = repo / ".raucle" / "authorship"
+    count = len(sorted(slots.glob("stop-*.jsonl")))
+    return slots / f"stop-{count:03d}.jsonl"
+
+
+def _cmd_authorship_sign(args: argparse.Namespace) -> int:
+    from raucle.authorship import (
+        collect_authorship,
+        sign_authorship,
+        write_receipt,
+    )
+
+    repo = Path(args.repo).resolve()
+    if not repo.is_dir():
+        print("Error: repository path does not exist.", file=sys.stderr)
+        return 2
+    try:
+        data = collect_authorship(repo, transcript_path=args.transcript)
+        jws, receipt_hash, _ = sign_authorship(data, Path(args.key).read_bytes())
+    except (ValueError, TypeError, OSError) as exc:
+        print(f"Error: could not sign the receipt ({type(exc).__name__}).", file=sys.stderr)
+        return 2
+    out = _default_receipt_path(repo)
+    if args.out:
+        out = Path(args.out)
+    out = write_receipt(jws, receipt_hash, out)
+    print(f"VALID code_authorship receipt: {out}")
+    print(f"receipt_hash: {receipt_hash}")
+    print(f"files: {len(data['files'])}  tool_calls: {data['commands']['tool_calls']}")
+    return 0
+
+
+def _cmd_authorship_verify(args: argparse.Namespace) -> int:
+    from raucle.authorship import verify_authorship
+
+    result = verify_authorship(args.receipt, public_key_pem=Path(args.pubkey).read_bytes())
+    if args.format == "json":
+        print(json.dumps(result, indent=2))
+    else:
+        status = "\033[92mVALID\033[0m" if result["valid"] else "\033[91mINVALID\033[0m"
+        print(f"{status} code_authorship receipt")
+        print(
+            "receipts: {}  files: {}  tool_calls: {}".format(
+                result["receipt_count"], result["file_count"], result["tool_calls"]
+            )
+        )
+        print(f"key_id: {result['key_id']}")
+        for err in result["errors"]:
+            print(f"failure: {err}")
+    return 0 if result["valid"] else 2
+
+
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
     from raucle.mcp_server import MCPServer
 
@@ -2554,6 +2636,8 @@ def _dispatch(argv: list[str] | None = None) -> int:
         ("agents", "issue-key"): _cmd_agents_issue_key,
         ("agents", "revoke-key"): _cmd_agents_revoke_key,
         ("agents", "list"): _cmd_agents_list,
+        ("authorship", "sign"): _cmd_authorship_sign,
+        ("authorship", "verify"): _cmd_authorship_verify,
     }
     sub = getattr(args, f"{args.command.replace('-', '_')}_command", None) if args.command else None
     handler = _SUBCOMMANDS.get((args.command, sub))

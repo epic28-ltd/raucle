@@ -25,6 +25,10 @@ demo-output/
 paper/lean/.lake/
 paper/lean/lake-manifest.json
 .claude/
+
+# Session-stop code_authorship receipts (hooks plugin): evidence about
+# coding sessions, not part of the codebase.
+.raucle/
 /package-lock.json
 
 # compiled conformance helper binary
