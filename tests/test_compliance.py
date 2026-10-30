@@ -51,7 +51,13 @@ class TestEvidenceExtraction:
 
 class TestReports:
     def test_all_frameworks_supported(self):
-        assert set(supported_frameworks()) == {"eu-ai-act", "iso-42001", "soc2"}
+        # dora joined the registry on 30 Oct 2026 (E1b, the compliance pack)
+        assert set(supported_frameworks()) == {
+            "dora",
+            "eu-ai-act",
+            "iso-42001",
+            "soc2",
+        }
 
     def test_eu_ai_act_logging_satisfied_only_with_verified_signatures(self, tmp_path):
         path, signer = _chain(tmp_path)

@@ -337,11 +337,114 @@ def _not_addressed(_ev: ChainEvidence) -> tuple[ControlStatus, str]:
     return ControlStatus.OUT_OF_SCOPE, "raucle does not address this control."
 
 
+def _dora_logging(ev: ChainEvidence) -> tuple[ControlStatus, str]:
+    """RTS 2024/1774 Article 12(2)(c): logging of access-control, identity
+    and ICT operations events. Every gate decision IS such an event for a
+    non-human identity."""
+    if ev.decisions > 0:
+        return (
+            ControlStatus.SATISFIED,
+            f"{ev.decisions} identity-attributed decision events logged "
+            f"({ev.allow} allow, {ev.deny} deny) across {ev.distinct_tools} tools "
+            f"and {ev.distinct_agents} acting identities.",
+        )
+    return ControlStatus.PARTIAL, "no decision events found in the chain."
+
+
+def _dora_tamper(ev: ChainEvidence) -> tuple[ControlStatus, str]:
+    """RTS Article 12(2)(d): logs protected against tampering, deletion and
+    unauthorised access. Satisfied only by SIGNATURE VERIFICATION ACTUALLY
+    RUN against the provided key, never by the chain asserting its own
+    signedness."""
+    if ev.signature_verified and ev.chain_valid:
+        return (
+            ControlStatus.SATISFIED,
+            "chain verification ran and PASSED: every checkpoint signature "
+            "verified against the provided key. Tampering is detectable, not "
+            "merely discouraged.",
+        )
+    if ev.chain_valid and not ev.verifiable:
+        return (
+            ControlStatus.PARTIAL,
+            "chain integrity verified, but conclusive signature verification "
+            "needs the operator public key (pass --pubkey).",
+        )
+    if ev.chain_valid:
+        return (
+            ControlStatus.PARTIAL,
+            "chain integrity verified; the chain is unsigned, so tampering is "
+            "detectable only within the hash chain, not cryptographically "
+            "attributable.",
+        )
+    return (
+        ControlStatus.PARTIAL,
+        "chain could not be verified as valid; this pack records the failure.",
+    )
+
+
+def _dora_retention(_ev: ChainEvidence) -> tuple[ControlStatus, str]:
+    """RTS Article 12(4): the retention period is the entity's own risk
+    decision; the pack records the observed span and states the duty."""
+    return (
+        ControlStatus.PARTIAL,
+        "the pack's retention.json records the observed span; the retention "
+        "period remains the entity's ICT risk-assessment decision per the RTS.",
+    )
+
+
+def _dora_attribution(ev: ChainEvidence) -> tuple[ControlStatus, str]:
+    """FSB Sound Practices (Oct 2026, supervisory expectation): actions
+    attributable to specific agents, and whether each acted within its
+    permissions."""
+    if ev.distinct_agents > 0 and ev.decisions > 0:
+        return (
+            ControlStatus.SATISFIED,
+            f"every decision event carries an acting identity ({ev.distinct_agents} "
+            "distinct agents observed); the delegated-authority binding in each "
+            "row answers the within-its-permissions question.",
+        )
+    return ControlStatus.PARTIAL, "no acting identities observed in the chain."
+
+
 # ---------------------------------------------------------------------------
 # Framework control maps (the honest subset raucle evidences)
 # ---------------------------------------------------------------------------
 
 _FRAMEWORKS: dict[str, tuple[str, list[Control]]] = {
+    "dora": (
+        "EU DORA (Regulation (EU) 2022/2554) logging controls per RTS 2024/1774 Article 12",
+        [
+            Control(
+                "RTS-12(2)(c)",
+                "Logging of access-control, identity and ICT operations events",
+                "Financial entities log access-control, identity-management and "
+                "ICT operations events; an agent's tool calls are such events.",
+                _dora_logging,
+            ),
+            Control(
+                "RTS-12(2)(d)",
+                "Protection of logs against tampering, deletion and unauthorised access",
+                "Logs are protected 'against tampering, deletion, and unauthorised "
+                "access at rest, in transit and, where relevant, in use'.",
+                _dora_tamper,
+            ),
+            Control(
+                "RTS-12(4)",
+                "Retention period proportionate to the risk assessment",
+                "The retention period takes account of the entity's business and "
+                "information security objectives and the ICT risk assessment.",
+                _dora_retention,
+            ),
+            Control(
+                "FSB-ATTR",
+                "Attribution of agentic actions (supervisory expectation)",
+                "The FSB Sound Practices (Oct 2026) expect institutions to "
+                "attribute actions to specific agents and to know whether each "
+                "acted within its permissions throughout its chain of steps.",
+                _dora_attribution,
+            ),
+        ],
+    ),
     "eu-ai-act": (
         "EU AI Act (Regulation 2024/1689) — high-risk AI obligations",
         [

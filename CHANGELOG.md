@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added - E1b: the compliance evidence pack (dora first, the x_compliance certificate)
+- `raucle compliance pack --chain ... --framework dora --pubkey ... 
+  --operator-key ... --out DIR` builds the regime bundle: report.md,
+  coverage.json (control results with regulation citations), extracts.jsonl
+  (bounded decision extracts, no args, no reasons, no constraint values,
+  every line citing its receipt id), retention.json (observed span vs the
+  regime expectation), and the x_compliance verification certificate.
+- The certificate is a signed JWS receipt the auditor verifies offline with
+  the public verifier and the operator public key: no account, no trust in
+  the vendor. A chain that fails verification gets verifier_result invalid,
+  the report says so on its first line, and the CLI exits non-zero. The
+  pack never upgrades bad evidence.
+- The dora framework joins the registry (RTS 2024/1774 Article 12 controls,
+  with the FSB attribution expectation): RTS-12(2)(d) is satisfied only by
+  signature verification actually run against the provided key, never by
+  assertion.
+- Spec: docs/spec/compliance/pack-v1.md.
+
 ### Added - EPIC D: harness findings as verifiable evidence (x_finding)
 - A QM/Pentagon-class harness running its security tests through the
   raucle gate reports every finding as a signed receipt citing the gate

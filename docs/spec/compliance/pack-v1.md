@@ -1,5 +1,10 @@
 # Compliance evidence pack v1 (spec)
 
+Status: PHASE 1 SHIPPED (30 October 2026): the dora framework, the pack
+command, the x_compliance certificate and the acceptance tests are live
+(commits in CHANGELOG). soc2-aiuc1 remains Phase 2 pending the AIUC-1
+control-list pin from the AICPA publication. Original spec text follows.
+
 Status: SPEC (agent-authored, 30 October 2026). Build target: after the LASR
 submission window (5 to 6 November 2026). Companion to the strategy doc's
 section 17 (30 October 2026) and the research reports cited below.

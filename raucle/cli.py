@@ -296,6 +296,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "compliance", help="Map a receipt chain to named-framework controls"
     )
     comp_sub = comp_p.add_subparsers(dest="compliance_command")
+    comp_pk = comp_sub.add_parser(
+        "pack", help="Build a compliance evidence pack (bundle + verification certificate)"
+    )
+    comp_pk.add_argument("--chain", required=True, help="Receipt chain JSONL file")
+    comp_pk.add_argument(
+        "--framework",
+        required=True,
+        help="dora | eu-ai-act | iso-42001 | soc2",
+    )
+    comp_pk.add_argument("--pubkey", help="Public key PEM to verify the chain's signatures")
+    comp_pk.add_argument(
+        "--operator-key",
+        help="Operator Ed25519 private PEM to sign the verification certificate",
+    )
+    comp_pk.add_argument("--out", required=True, help="Output directory for the bundle")
     comp_rep = comp_sub.add_parser("report", help="Generate a compliance evidence map")
     comp_rep.add_argument("chain", help="Receipt chain JSONL file")
     comp_rep.add_argument(
@@ -1041,8 +1056,50 @@ def _cmd_compliance(args: argparse.Namespace) -> int:
 
     from raucle.compliance import build_report, render_markdown, supported_frameworks
 
+    if getattr(args, "compliance_command", None) == "pack":
+        from raucle.compliance_pack import build_pack
+
+        pubkey = validate_path(args.pubkey).read_bytes() if getattr(args, "pubkey", None) else None
+        operator = (
+            validate_path(args.operator_key).read_bytes()
+            if getattr(args, "operator_key", None)
+            else None
+        )
+        try:
+            manifest = build_pack(
+                args.chain,
+                framework=args.framework,
+                out_dir=args.out,
+                verify_key_pem=pubkey,
+                operator_key_pem=operator,
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            print(f"supported: {', '.join(supported_frameworks())}", file=sys.stderr)
+            return 2
+        except FileNotFoundError:
+            print(f"error: no such chain file: {args.chain}", file=sys.stderr)
+            return 1
+        print(f"pack written to {manifest['out']}")
+        print(f"  framework:        {manifest['framework']}")
+        print(f"  chain digest:     {manifest['chain_digest']}")
+        print(f"  pack hash:        {manifest['pack_hash']}")
+        print(f"  verifier result:  {manifest['verifier_result']}")
+        if manifest.get("certificate"):
+            print(f"  certificate:      {manifest['certificate']}")
+        else:
+            print("  certificate:      NOT issued (no operator key supplied)")
+        if manifest["verifier_result"] != "valid":
+            print(
+                "error: the chain failed verification; the pack records the "
+                "failure but does not upgrade bad evidence.",
+                file=sys.stderr,
+            )
+            return 1
+        return 0
+
     if getattr(args, "compliance_command", None) != "report":
-        print("error: compliance needs the 'report' subcommand", file=sys.stderr)
+        print("error: compliance needs a subcommand (report | pack)", file=sys.stderr)
         return 2
     pubkey = validate_path(args.pubkey).read_bytes() if getattr(args, "pubkey", None) else None
     try:
