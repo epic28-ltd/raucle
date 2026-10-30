@@ -198,6 +198,56 @@ def _count_proof_status(rows: list[dict[str, Any]], status: str) -> int:
     return sum(1 for r in rows if r.get("proof", {}).get("status") == status)
 
 
+def _replay_receipt(
+    gateway: Any,
+    alt_rules: Any,
+    store: Any,
+    rec: dict[str, Any],
+) -> tuple[dict[str, Any] | None, int, int, int, int]:
+    """Build the bounded counterfactual row for one receipt decision.
+
+    Returns (row, unreplayable, prevented, still_allowed, denied_both)
+    deltas. Invariant enforced: an action with a missing or unparsable
+    stored input is unreplayable, never guessed (row None,
+    unreplayable 1). Bounded disclosure holds per row: no denial reason
+    (it can quote constraint VALUES), no arg values; the receipt cites
+    the chain and the full reason lives there.
+    """
+    text = _lookup_input(store, rec["input_hash"])
+    if text is None:
+        return None, 1, 0, 0, 0
+    try:
+        args = json.loads(text)
+    except json.JSONDecodeError:
+        return None, 1, 0, 0, 0
+    if not isinstance(args, dict):
+        return None, 1, 0, 0, 0
+
+    alt = gateway.check_tool_call(rec["tool"], args, agent_id=rec["agent_id"])
+    alt_decision = alt.get("decision", "")
+    # bounded disclosure: no reasons in the report - the denial
+    # reason can quote constraint VALUES. The receipt cites the
+    # chain; the full reason lives there.
+    row: dict[str, Any] = {
+        "receipt_hash": rec["receipt_hash"],
+        "tool": rec["tool"],
+        "agent_id": rec["agent_id"],
+        "original_decision": rec["decision"],
+        "counterfactual_decision": alt_decision,
+    }
+    if rec["decision"] == "allow" and alt_decision == "deny":
+        row["prevented"] = True
+        # the z3 leg: a PROOF alongside the replay verdict
+        row["proof"] = _prove_prevention(args, alt_rules, rec["tool"])
+        return row, 0, 1, 0, 0
+    row["prevented"] = False
+    if rec["decision"] == "allow" and alt_decision == "allow":
+        return row, 0, 0, 1, 0
+    if rec["decision"] == "deny" and alt_decision == "deny":
+        return row, 0, 0, 0, 1
+    return row, 0, 0, 0, 0
+
+
 def replay_counterfactual(
     chain_path: str | Path,
     *,
@@ -242,43 +292,15 @@ def replay_counterfactual(
             gateway = RaucleGateway(config)
 
             for rec in _receipt_decisions(chain_path):
-                text = _lookup_input(store, rec["input_hash"])
-                if text is None:
-                    unreplayable += 1
-                    continue
-                try:
-                    args = json.loads(text)
-                except json.JSONDecodeError:
-                    unreplayable += 1
-                    continue
-                if not isinstance(args, dict):
-                    unreplayable += 1
-                    continue
-
-                alt = gateway.check_tool_call(rec["tool"], args, agent_id=rec["agent_id"])
-                alt_decision = alt.get("decision", "")
-                # bounded disclosure: no reasons in the report - the denial
-                # reason can quote constraint VALUES. The receipt cites the
-                # chain; the full reason lives there.
-                row = {
-                    "receipt_hash": rec["receipt_hash"],
-                    "tool": rec["tool"],
-                    "agent_id": rec["agent_id"],
-                    "original_decision": rec["decision"],
-                    "counterfactual_decision": alt_decision,
-                }
-                if rec["decision"] == "allow" and alt_decision == "deny":
-                    prevented += 1
-                    row["prevented"] = True
-                    # the z3 leg: a PROOF alongside the replay verdict
-                    row["proof"] = _prove_prevention(args, alt_rules, rec["tool"])
-                else:
-                    row["prevented"] = False
-                    if rec["decision"] == "allow" and alt_decision == "allow":
-                        still_allowed += 1
-                    elif rec["decision"] == "deny" and alt_decision == "deny":
-                        would_have_denied_denies += 1
-                replayed.append(row)
+                row, unreplayable_one, prevented_one, still_allowed_one, denied_one = (
+                    _replay_receipt(gateway, alt_rules, store, rec)
+                )
+                unreplayable += unreplayable_one
+                prevented += prevented_one
+                still_allowed += still_allowed_one
+                would_have_denied_denies += denied_one
+                if row is not None:
+                    replayed.append(row)
 
     total_replayed = len(replayed)
     prevented_proven = _count_proof_status(replayed, "PROVEN")

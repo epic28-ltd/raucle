@@ -1153,61 +1153,203 @@ def _passport_verify(args, agent_passport, verify_passport, trust_registry_cls) 
     return 1
 
 
+def _records_destroy(args: argparse.Namespace) -> int:
+    """G3 destroy leg: build a destruction over the given span.
+
+    Invariant enforced: a bad span (ValueError) or a missing chain file
+    is an error printed to stderr and nothing is built; receipt lines
+    print only after build_destruction succeeded.
+    """
+    from raucle.records import build_destruction
+
+    try:
+        manifest = build_destruction(
+            args.chain,
+            from_ts=args.from_ts,
+            to_ts=args.to_ts,
+            reason=args.reason,
+            actor=args.actor,
+            operator_key_pem=validate_path(args.operator_key).read_bytes(),
+            out_dir=args.out_dir,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except FileNotFoundError:
+        print(f"error: no such chain file: {args.chain}", file=sys.stderr)
+        return 1
+    print(f"destruction receipt: {manifest['destruction']}")
+    print(f"  records destroyed:  {manifest['record_count']}")
+    print(f"  records retained:  {manifest['retained_count']}")
+    print(f"  span digest:        {manifest['span_digest']}")
+    print(f"  escrow copy:        {manifest['escrow']}")
+    print(f"  re-anchored chain:  {manifest['retained_chain']}")
+    return 0
+
+
+def _records_verify(args: argparse.Namespace) -> int:
+    """G3 verify leg: verify a destruction receipt.
+
+    Invariant enforced: optional inputs (escrow, pubkey) are validated
+    at the path layer before any read; exit 0 only when the destruction
+    verifies, and a missing artefact is an error, not a false INVALID.
+    """
+    from raucle.records import verify_destruction
+
+    escrow = validate_path(args.escrow) if getattr(args, "escrow", None) else None
+    pubkey = validate_path(args.pubkey).read_bytes() if getattr(args, "pubkey", None) else None
+    try:
+        report = verify_destruction(
+            args.destruction, escrow_path=escrow, operator_public_pem=pubkey
+        )
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"destruction receipt: {'VALID' if report['valid'] else 'INVALID'}")
+    print(f"  span:               {report['block'].get('from')} .. {report['block'].get('to')}")
+    print(f"  records destroyed: {report['block'].get('record_count')}")
+    print(f"  actor:              {report['block'].get('actor')}")
+    if report.get("span_digest_matches_escrow") is None:
+        print("  escrow digest:      not re-checked (no escrow supplied)")
+    else:
+        digest_state = "MATCHES" if report["span_digest_matches_escrow"] else "MISMATCH"
+        print(f"  escrow digest:      {digest_state}")
+    if report.get("escrow_error"):
+        print(f"  escrow error:       {report['escrow_error']}")
+    return 0 if report["valid"] else 1
+
+
 def _cmd_records(args: argparse.Namespace) -> int:
     """G3: disposal evidence - destroy a span, or verify a destruction."""
     cmd = getattr(args, "records_command", None)
     if cmd == "destroy":
-        from raucle.records import build_destruction
-
-        try:
-            manifest = build_destruction(
-                args.chain,
-                from_ts=args.from_ts,
-                to_ts=args.to_ts,
-                reason=args.reason,
-                actor=args.actor,
-                operator_key_pem=validate_path(args.operator_key).read_bytes(),
-                out_dir=args.out_dir,
-            )
-        except ValueError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-        except FileNotFoundError:
-            print(f"error: no such chain file: {args.chain}", file=sys.stderr)
-            return 1
-        print(f"destruction receipt: {manifest['destruction']}")
-        print(f"  records destroyed:  {manifest['record_count']}")
-        print(f"  records retained:  {manifest['retained_count']}")
-        print(f"  span digest:        {manifest['span_digest']}")
-        print(f"  escrow copy:        {manifest['escrow']}")
-        print(f"  re-anchored chain:  {manifest['retained_chain']}")
-        return 0
+        return _records_destroy(args)
     if cmd == "verify":
-        from raucle.records import verify_destruction
-
-        escrow = validate_path(args.escrow) if getattr(args, "escrow", None) else None
-        pubkey = validate_path(args.pubkey).read_bytes() if getattr(args, "pubkey", None) else None
-        try:
-            report = verify_destruction(
-                args.destruction, escrow_path=escrow, operator_public_pem=pubkey
-            )
-        except FileNotFoundError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-        print(f"destruction receipt: {'VALID' if report['valid'] else 'INVALID'}")
-        print(f"  span:               {report['block'].get('from')} .. {report['block'].get('to')}")
-        print(f"  records destroyed: {report['block'].get('record_count')}")
-        print(f"  actor:              {report['block'].get('actor')}")
-        if report.get("span_digest_matches_escrow") is None:
-            print("  escrow digest:      not re-checked (no escrow supplied)")
-        else:
-            digest_state = "MATCHES" if report["span_digest_matches_escrow"] else "MISMATCH"
-            print(f"  escrow digest:      {digest_state}")
-        if report.get("escrow_error"):
-            print(f"  escrow error:       {report['escrow_error']}")
-        return 0 if report["valid"] else 1
+        return _records_verify(args)
     print("error: records needs a subcommand (destroy | verify)", file=sys.stderr)
     return 2
+
+
+def _timestamp_stamp(args: argparse.Namespace) -> int:
+    """G1 stamp leg: anchor a chain head with a TSA token.
+
+    Invariant enforced: the operator key is path-validated before any
+    read; a missing chain, a bad anchor request or a TSA transport
+    failure each print an error to stderr and nothing is written.
+    """
+    from raucle.timestamp import build_anchor
+
+    try:
+        manifest = build_anchor(
+            args.chain,
+            url=args.url,
+            operator_key_pem=validate_path(args.operator_key).read_bytes(),
+            out_dir=args.out,
+            timeout=args.timeout,
+        )
+    except FileNotFoundError:
+        print(f"error: no such chain file: {args.chain}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"error: TSA request failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"anchor receipt:     {manifest['anchor']}")
+    print(f"  anchored receipt: {manifest['parent_receipt']}")
+    print(f"  digest:           {manifest['digest']}")
+    print(f"  TSA:              {manifest['tsa']}")
+    print(f"  token genTime:    {manifest['gen_time']}")
+    print(f"  token re-check:   {'VALID' if manifest['token_valid'] else 'INVALID'}")
+    return 0
+
+
+def _timestamp_verify(args: argparse.Namespace) -> int:
+    """G1 verify leg: verify an anchor receipt (optionally re-citing the
+    chain).
+
+    Invariant enforced: the optional pubkey is path-validated before
+    any read; exit 0 only when the anchor verifies, and errors in the
+    report are shown, never swallowed.
+    """
+    from raucle.timestamp import verify_anchor
+
+    pubkey = validate_path(args.pubkey).read_bytes() if getattr(args, "pubkey", None) else None
+    chain = getattr(args, "chain", None)
+    try:
+        report = verify_anchor(
+            args.anchor,
+            operator_public_pem=pubkey,
+            chain_path=chain,
+        )
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"anchor receipt: {'VALID' if report['valid'] else 'INVALID'}")
+    print(f"  mode:              {report['mode']}")
+    print(f"  TSA:              {report.get('tsa') or ''}")
+    print(f"  genTime:          {report.get('gen_time') or ''}")
+    print(f"  parent receipt:   {report.get('parent_receipt') or ''}")
+    print(f"  cite:             {report['cite_check']}")
+    state = {True: "VALID", False: "INVALID", None: "not re-checked (external proof)"}[
+        report.get("token_valid")
+    ]
+    print(f"  TimeStampToken:   {state}")
+    for err in report["errors"]:
+        print(f"  error:            {err}")
+    return 0 if report["valid"] else 1
+
+
+def _timestamp_plan(args: argparse.Namespace) -> int:
+    """G1 plan leg: report the retimestamp schedule of a long-lived
+    archive.
+
+    Invariant enforced: a missing chain is an error and no plan is
+    written; the plan is written to args.out only after it is built in
+    full.
+    """
+    from raucle.timestamp import retimestamp_plan
+
+    try:
+        plan = retimestamp_plan(args.chain)
+    except FileNotFoundError:
+        print(f"error: no such chain file: {args.chain}", file=sys.stderr)
+        return 1
+    import datetime as _dt
+
+    horizon = plan["archive_horizon"]
+    horizon_str = (
+        _dt.datetime.fromtimestamp(horizon, tz=_dt.timezone.utc).isoformat()
+        if horizon
+        else "none (no retention stamps in this chain)"
+    )
+    print(f"retention horizon: {horizon_str}")
+    print(f"anchors found:      {len(plan['anchors'])}")
+    for a in plan["anchors"]:
+        not_after = a.get("tsa_cert_not_after")
+        print(f"  anchor {a['anchor_receipt'][:22]}... ({a['mode']})")
+        print(f"    genTime:          {a.get('gen_time') or ''}")
+        print(f"    TSA cert expires: {not_after or 'n/a'}")
+        print(f"    token re-check:   {a.get('token_valid')}")
+        if a["needs_restamp"]:
+            restamp = a["restamp_by"]
+            restamp_str = (
+                _dt.datetime.fromtimestamp(restamp, tz=_dt.timezone.utc).isoformat()
+                if isinstance(restamp, int)
+                else str(restamp)
+            )
+            print(f"    RESTAMP REQUIRED by: {restamp_str}")
+    tail = plan["unanchored_receipts"]
+    print(
+        f"unanchored retained records: {tail}"
+        + (" (records with a retention schedule but no covering anchor)" if tail else "")
+    )
+    if args.out:
+        import json as _json
+
+        Path(args.out).write_text(_json.dumps(plan, indent=2) + "\n", encoding="utf-8")
+    return 0
 
 
 def _cmd_timestamp(args: argparse.Namespace) -> int:
@@ -1215,104 +1357,11 @@ def _cmd_timestamp(args: argparse.Namespace) -> int:
     or plan the retimestamp schedule for a long-lived archive."""
     cmd = getattr(args, "timestamp_command", None)
     if cmd == "stamp":
-        from raucle.timestamp import build_anchor
-
-        try:
-            manifest = build_anchor(
-                args.chain,
-                url=args.url,
-                operator_key_pem=validate_path(args.operator_key).read_bytes(),
-                out_dir=args.out,
-                timeout=args.timeout,
-            )
-        except FileNotFoundError:
-            print(f"error: no such chain file: {args.chain}", file=sys.stderr)
-            return 1
-        except ValueError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-        except OSError as exc:
-            print(f"error: TSA request failed: {exc}", file=sys.stderr)
-            return 1
-        print(f"anchor receipt:     {manifest['anchor']}")
-        print(f"  anchored receipt: {manifest['parent_receipt']}")
-        print(f"  digest:           {manifest['digest']}")
-        print(f"  TSA:              {manifest['tsa']}")
-        print(f"  token genTime:    {manifest['gen_time']}")
-        print(f"  token re-check:   {'VALID' if manifest['token_valid'] else 'INVALID'}")
-        return 0
-
+        return _timestamp_stamp(args)
     if cmd == "verify":
-        from raucle.timestamp import verify_anchor
-
-        pubkey = validate_path(args.pubkey).read_bytes() if getattr(args, "pubkey", None) else None
-        chain = getattr(args, "chain", None)
-        try:
-            report = verify_anchor(
-                args.anchor,
-                operator_public_pem=pubkey,
-                chain_path=chain,
-            )
-        except FileNotFoundError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 1
-        print(f"anchor receipt: {'VALID' if report['valid'] else 'INVALID'}")
-        print(f"  mode:              {report['mode']}")
-        print(f"  TSA:              {report.get('tsa') or ''}")
-        print(f"  genTime:          {report.get('gen_time') or ''}")
-        print(f"  parent receipt:   {report.get('parent_receipt') or ''}")
-        print(f"  cite:             {report['cite_check']}")
-        state = {True: "VALID", False: "INVALID", None: "not re-checked (external proof)"}[
-            report.get("token_valid")
-        ]
-        print(f"  TimeStampToken:   {state}")
-        for err in report["errors"]:
-            print(f"  error:            {err}")
-        return 0 if report["valid"] else 1
-
+        return _timestamp_verify(args)
     if cmd == "plan":
-        from raucle.timestamp import retimestamp_plan
-
-        try:
-            plan = retimestamp_plan(args.chain)
-        except FileNotFoundError:
-            print(f"error: no such chain file: {args.chain}", file=sys.stderr)
-            return 1
-        import datetime as _dt
-
-        horizon = plan["archive_horizon"]
-        horizon_str = (
-            _dt.datetime.fromtimestamp(horizon, tz=_dt.timezone.utc).isoformat()
-            if horizon
-            else "none (no retention stamps in this chain)"
-        )
-        print(f"retention horizon: {horizon_str}")
-        print(f"anchors found:      {len(plan['anchors'])}")
-        for a in plan["anchors"]:
-            not_after = a.get("tsa_cert_not_after")
-            print(f"  anchor {a['anchor_receipt'][:22]}... ({a['mode']})")
-            print(f"    genTime:          {a.get('gen_time') or ''}")
-            print(f"    TSA cert expires: {not_after or 'n/a'}")
-            print(f"    token re-check:   {a.get('token_valid')}")
-            if a["needs_restamp"]:
-                restamp = a["restamp_by"]
-                restamp_str = (
-                    _dt.datetime.fromtimestamp(restamp, tz=_dt.timezone.utc).isoformat()
-                    if isinstance(restamp, int)
-                    else str(restamp)
-                )
-                print(f"    RESTAMP REQUIRED by: {restamp_str}")
-        tail = plan["unanchored_receipts"]
-        print(
-            f"unanchored retained records: {tail}"
-            + (" (records with a retention schedule but no covering anchor)" if tail else "")
-        )
-        if args.out:
-            import json as _json
-
-            Path(args.out).write_text(_json.dumps(plan, indent=2) + "\n", encoding="utf-8")
-        return 0
-
+        return _timestamp_plan(args)
     print("error: timestamp needs a subcommand (stamp | verify | plan)", file=sys.stderr)
     return 2
 
@@ -1347,68 +1396,81 @@ def _cmd_counterfactual(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_compliance(args: argparse.Namespace) -> int:
-    """Generate a compliance evidence map from a receipt chain."""
-    import json as _json
+def _compliance_pack_handler(args: argparse.Namespace) -> int:
+    """Build a compliance evidence pack over a receipt chain.
 
+    Invariant enforced: optional keys (pubkey, operator key) are
+    path-validated before any read; an unsupported framework (exit 2)
+    or a missing chain (exit 1) writes nothing, and a failed verifier
+    result is recorded honestly, never upgraded.
+    """
+    from raucle.compliance import supported_frameworks
+    from raucle.compliance_pack import build_pack
+
+    pubkey = None if not getattr(args, "pubkey", None) else validate_path(args.pubkey).read_bytes()
+    operator = None
+    if getattr(args, "operator_key", None):
+        operator = validate_path(args.operator_key).read_bytes()
+    try:
+        manifest = build_pack(
+            args.chain,
+            framework=args.framework,
+            out_dir=args.out,
+            verify_key_pem=pubkey,
+            operator_key_pem=operator,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        print(f"supported: {', '.join(supported_frameworks())}", file=sys.stderr)
+        return 2
+    except FileNotFoundError:
+        print(f"error: no such chain file: {args.chain}", file=sys.stderr)
+        return 1
+    print(f"pack written to {manifest['out']}")
+    print(f"  framework:        {manifest['framework']}")
+    print(f"  chain digest:     {manifest['chain_digest']}")
+    print(f"  pack hash:        {manifest['pack_hash']}")
+    print(f"  verifier result:  {manifest['verifier_result']}")
+    if manifest.get("certificate"):
+        print(f"  certificate:      {manifest['certificate']}")
+    else:
+        print("  certificate:      NOT issued (no operator key supplied)")
+    if manifest["verifier_result"] != "valid":
+        print(
+            "error: the chain failed verification; the pack records the "
+            "failure but does not upgrade bad evidence.",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def _compliance_export_handler(args: argparse.Namespace) -> int:
+    """Export an existing compliance pack bundle in the given format.
+
+    Invariant enforced: an incomplete pack bundle is an error printed
+    to stderr; the export either completes or reports what is missing.
+    """
+    from raucle.compliance_pack import export_pack
+
+    try:
+        result = export_pack(args.pack, fmt=args.format)
+    except FileNotFoundError as exc:
+        print(f"error: pack bundle incomplete: {exc}", file=sys.stderr)
+        return 1
+    print(f"exports written to {args.pack}: {', '.join(result['files'])}")
+    return 0
+
+
+def _compliance_report_handler(args: argparse.Namespace, _json: Any) -> int:
+    """Build a compliance evidence map and render it as JSON or Markdown.
+
+    Invariant enforced: an unsupported framework (exit 2) or a missing
+    chain (exit 1) produces no report; the rendered text is written to
+    args.out only when the whole map is in hand.
+    """
     from raucle.compliance import build_report, render_markdown, supported_frameworks
 
-    if getattr(args, "compliance_command", None) == "pack":
-        from raucle.compliance_pack import build_pack
-
-        pubkey = validate_path(args.pubkey).read_bytes() if getattr(args, "pubkey", None) else None
-        operator = (
-            validate_path(args.operator_key).read_bytes()
-            if getattr(args, "operator_key", None)
-            else None
-        )
-        try:
-            manifest = build_pack(
-                args.chain,
-                framework=args.framework,
-                out_dir=args.out,
-                verify_key_pem=pubkey,
-                operator_key_pem=operator,
-            )
-        except ValueError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            print(f"supported: {', '.join(supported_frameworks())}", file=sys.stderr)
-            return 2
-        except FileNotFoundError:
-            print(f"error: no such chain file: {args.chain}", file=sys.stderr)
-            return 1
-        print(f"pack written to {manifest['out']}")
-        print(f"  framework:        {manifest['framework']}")
-        print(f"  chain digest:     {manifest['chain_digest']}")
-        print(f"  pack hash:        {manifest['pack_hash']}")
-        print(f"  verifier result:  {manifest['verifier_result']}")
-        if manifest.get("certificate"):
-            print(f"  certificate:      {manifest['certificate']}")
-        else:
-            print("  certificate:      NOT issued (no operator key supplied)")
-        if manifest["verifier_result"] != "valid":
-            print(
-                "error: the chain failed verification; the pack records the "
-                "failure but does not upgrade bad evidence.",
-                file=sys.stderr,
-            )
-            return 1
-        return 0
-
-    if getattr(args, "compliance_command", None) == "export":
-        from raucle.compliance_pack import export_pack
-
-        try:
-            result = export_pack(args.pack, fmt=args.format)
-        except FileNotFoundError as exc:
-            print(f"error: pack bundle incomplete: {exc}", file=sys.stderr)
-            return 1
-        print(f"exports written to {args.pack}: {', '.join(result['files'])}")
-        return 0
-
-    if getattr(args, "compliance_command", None) != "report":
-        print("error: compliance needs a subcommand (report | pack | export)", file=sys.stderr)
-        return 2
     pubkey = validate_path(args.pubkey).read_bytes() if getattr(args, "pubkey", None) else None
     try:
         report = build_report(args.chain, framework=args.framework, public_key_pem=pubkey)
@@ -1436,6 +1498,20 @@ def _cmd_compliance(args: argparse.Namespace) -> int:
     else:
         print(text)
     return 0
+
+
+def _cmd_compliance(args: argparse.Namespace) -> int:
+    """Generate a compliance evidence map from a receipt chain."""
+    import json as _json
+
+    if getattr(args, "compliance_command", None) == "pack":
+        return _compliance_pack_handler(args)
+    if getattr(args, "compliance_command", None) == "export":
+        return _compliance_export_handler(args)
+    if getattr(args, "compliance_command", None) != "report":
+        print("error: compliance needs a subcommand (report | pack | export)", file=sys.stderr)
+        return 2
+    return _compliance_report_handler(args, _json)
 
 
 def _load_registry_from_path(args: argparse.Namespace, trust_registry_cls) -> Any:

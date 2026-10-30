@@ -50,6 +50,58 @@ def _decode_payload(jws: str) -> dict[str, Any]:
     return json.loads(base64.urlsafe_b64decode(seg))
 
 
+class _MalformedReceipt(Exception):
+    """An envelope or receipt the projection cannot decode: skip and
+    count as a malformed line, never guess."""
+
+
+class _NonDecisionReceipt(Exception):
+    """A decodable receipt carrying no gate decision block: skip and
+    count as a non-decision receipt."""
+
+
+def _receipt_row(
+    jws: str,
+    receipt_hash: str,
+    line_no: int,
+    public_pem: bytes | None,
+    verifiers: dict[str, Any],
+) -> tuple[str, str, dict[str, Any]]:
+    """The (timestamp, receipt_hash, x_gate block) row of one envelope.
+
+    Invariant enforced: the envelope's receipt_hash must bind its JWS
+    and the signature must verify against the supplied key when one is
+    given (fail closed on tampering: raise, never launder). An envelope
+    or receipt that cannot be decoded raises _MalformedReceipt and is
+    skipped, never guessed.
+    """
+    from raucle.provenance import ProvenanceReceipt, ProvenanceVerifier
+
+    if _HASH_PREFIX + hashlib.sha256(jws.encode("ascii")).hexdigest() != receipt_hash:
+        raise ValueError(
+            f"receipt chain tampered: envelope receipt_hash does not bind its JWS (line {line_no})"
+        )
+    try:
+        receipt = ProvenanceReceipt.from_jws(jws, strict=True, validate_structure=False)
+        payload = _decode_payload(jws)
+    except (ValueError, KeyError):
+        raise _MalformedReceipt from None
+    if public_pem is not None:
+        kid = receipt.agent_key_id
+        if kid not in verifiers:
+            verifiers[kid] = ProvenanceVerifier(public_keys={kid: public_pem})
+        if not verifiers[kid]._verify_signature(receipt):
+            raise ValueError(
+                f"receipt chain signature verification failed for "
+                f"agent_key_id={kid} (line {line_no}): the supplied key "
+                "does not authenticate this source chain"
+            )
+    block = payload.get("x_gate")
+    if not (isinstance(block, dict) and str(block.get("decision", "")).lower() in _DECISIONS):
+        raise _NonDecisionReceipt
+    return _iso_timestamp(payload.get("iat")), receipt_hash, block
+
+
 def _receipt_rows(
     receipts_path: Path, public_pem: bytes | None
 ) -> tuple[list[tuple[str, str, dict[str, Any]]], int, int]:
@@ -60,12 +112,10 @@ def _receipt_rows(
     receipt_hash does not bind its JWS raises (the source chain is
     tampered and must not be laundered into a pack).
     """
-    from raucle.provenance import ProvenanceReceipt, ProvenanceVerifier
-
     rows: list[tuple[str, str, dict[str, Any]]] = []
     non_decisions = 0
     malformed = 0
-    verifiers: dict[str, ProvenanceVerifier] = {}
+    verifiers: dict[str, Any] = {}
 
     for line_no, line in enumerate(receipts_path.read_text(encoding="utf-8").splitlines(), 1):
         line = line.strip()
@@ -78,32 +128,12 @@ def _receipt_rows(
         except (json.JSONDecodeError, KeyError, TypeError):
             malformed += 1
             continue
-        if _HASH_PREFIX + hashlib.sha256(jws.encode("ascii")).hexdigest() != receipt_hash:
-            raise ValueError(
-                f"receipt chain tampered: envelope receipt_hash does not "
-                f"bind its JWS (line {line_no})"
-            )
         try:
-            receipt = ProvenanceReceipt.from_jws(jws, strict=True, validate_structure=False)
-            payload = _decode_payload(jws)
-        except (ValueError, KeyError):
+            rows.append(_receipt_row(jws, receipt_hash, line_no, public_pem, verifiers))
+        except _MalformedReceipt:
             malformed += 1
-            continue
-        if public_pem is not None:
-            kid = receipt.agent_key_id
-            if kid not in verifiers:
-                verifiers[kid] = ProvenanceVerifier(public_keys={kid: public_pem})
-            if not verifiers[kid]._verify_signature(receipt):
-                raise ValueError(
-                    f"receipt chain signature verification failed for "
-                    f"agent_key_id={kid} (line {line_no}): the supplied key "
-                    "does not authenticate this source chain"
-                )
-        block = payload.get("x_gate")
-        if not (isinstance(block, dict) and str(block.get("decision", "")).lower() in _DECISIONS):
+        except _NonDecisionReceipt:
             non_decisions += 1
-            continue
-        rows.append((_iso_timestamp(payload.get("iat")), receipt_hash, block))
     return rows, non_decisions, malformed
 
 
@@ -141,6 +171,26 @@ def _gate_event(block: dict[str, Any], receipt_hash: str, timestamp: str) -> dic
     return event
 
 
+def _audit_row(line: str) -> tuple[str, dict[str, Any]] | None:
+    """The (timestamp, event) row of one audit chain line.
+
+    Invariant enforced: meta and checkpoint records are chain
+    bookkeeping and never become event rows; an unparseable line is
+    skipped, never guessed (returns None).
+    """
+    try:
+        rec = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(rec, dict) or rec.get("chain_meta") or rec.get("checkpoint"):
+        return None
+    event = rec.get("event") if isinstance(rec.get("event"), dict) else rec
+    if not isinstance(event, dict):
+        return None
+    timestamp = str(event.get("timestamp", "") or rec.get("timestamp", ""))
+    return timestamp, dict(event)
+
+
 def _audit_rows(audit_path: Path) -> tuple[list[tuple[str, dict[str, Any]]], set[str]]:
     """The event rows in an audit chain (meta and checkpoint records aside),
     plus the receipt ids its decision rows already cite."""
@@ -150,17 +200,11 @@ def _audit_rows(audit_path: Path) -> tuple[list[tuple[str, dict[str, Any]]], set
         line = line.strip()
         if not line:
             continue
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
+        row = _audit_row(line)
+        if row is None:
             continue
-        if not isinstance(rec, dict) or rec.get("chain_meta") or rec.get("checkpoint"):
-            continue
-        event = rec.get("event") if isinstance(rec.get("event"), dict) else rec
-        if not isinstance(event, dict):
-            continue
-        timestamp = str(event.get("timestamp", "") or rec.get("timestamp", ""))
-        rows.append((timestamp, dict(event)))
+        rows.append(row)
+        event = row[1]
         if str(event.get("decision", "")).upper() in {"ALLOW", "DENY"} and event.get("receipt_id"):
             cited.add(str(event["receipt_id"]))
     return rows, cited
