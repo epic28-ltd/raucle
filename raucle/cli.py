@@ -23,6 +23,10 @@ from raucle import __version__
 from raucle._paths import validate_path
 from raucle.scanner import MAX_INPUT_BYTES, Scanner
 
+_CHAIN_JSONL_HELP = "The receipt chain JSONL"
+_VALID_COLOR = "\033[92mVALID\033[0m"
+_INVALID_COLOR = "\033[91mINVALID\033[0m"
+
 _DEFAULT_AGENT_STORE = "/data/agent-credentials.jsonl"
 
 logger = logging.getLogger(__name__)
@@ -300,7 +304,7 @@ def _build_parser() -> argparse.ArgumentParser:
     cf_pol = cf_sub.add_parser(
         "policy", help="Replay a receipt chain against an alternative policy"
     )
-    cf_pol.add_argument("--chain", required=True, help="The receipt chain JSONL")
+    cf_pol.add_argument("--chain", required=True, help=_CHAIN_JSONL_HELP)
     cf_pol.add_argument("--inputs", required=True, help="The input-store JSONL")
     cf_pol.add_argument("--policy", required=True, help="The alternative policy YAML")
     cf_pol.add_argument("--out", help="Write the JSON report here (else stdout)")
@@ -333,7 +337,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ts_stamp = ts_sub.add_parser(
         "stamp", help="Anchor a chain head through a customer-chosen RFC 3161 TSA"
     )
-    ts_stamp.add_argument("--chain", required=True, help="The receipt chain JSONL")
+    ts_stamp.add_argument("--chain", required=True, help=_CHAIN_JSONL_HELP)
     ts_stamp.add_argument("--url", required=True, help="The TSA's RFC 3161 endpoint")
     ts_stamp.add_argument(
         "--operator-key", required=True, help="Ed25519 private PEM for the anchor receipt"
@@ -353,7 +357,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ts_plan = ts_sub.add_parser(
         "plan", help="Retimestamp schedule for a long-lived archive (G3 pairing)"
     )
-    ts_plan.add_argument("--chain", required=True, help="The receipt chain JSONL")
+    ts_plan.add_argument("--chain", required=True, help=_CHAIN_JSONL_HELP)
     ts_plan.add_argument("--out", help="Write the JSON plan here (else stdout)")
 
     # -- compliance (evidence packs, P4) ------------------------------------
@@ -1669,7 +1673,7 @@ def _cmd_audit_verify(args: argparse.Namespace) -> int:
     if args.format == "json":
         print(json.dumps(report.to_dict(), indent=2))
     else:
-        status = "\033[92mVALID\033[0m" if report.valid else "\033[91mINVALID\033[0m"
+        status = _VALID_COLOR if report.valid else _INVALID_COLOR
         print(f"Audit chain: {status}")
         print(f"  Events:               {report.event_count}")
         print(f"  Checkpoints:          {report.checkpoint_count}")
@@ -1908,7 +1912,7 @@ def _cmd_authorship_verify(args: argparse.Namespace) -> int:
     if args.format == "json":
         print(json.dumps(result, indent=2))
     else:
-        status = "\033[92mVALID\033[0m" if result["valid"] else "\033[91mINVALID\033[0m"
+        status = _VALID_COLOR if result["valid"] else _INVALID_COLOR
         print(f"{status} code_authorship receipt")
         print(
             "receipts: {}  files: {}  tool_calls: {}".format(
@@ -2043,7 +2047,7 @@ def _load_provenance_pubkeys(
 
 def _print_provenance_report(report: Any) -> None:
     """Print a provenance verification report in human-readable format."""
-    status = "\033[92mVALID\033[0m" if report.valid else "\033[91mINVALID\033[0m"
+    status = _VALID_COLOR if report.valid else _INVALID_COLOR
     print(f"Provenance chain: {status}")
     print(f"  Receipts:                  {report.receipt_count}")
     print(f"  Signature failures:        {report.signature_failures}")

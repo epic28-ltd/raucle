@@ -41,7 +41,7 @@ def _receipt_decisions(chain_path: str | Path) -> list[dict[str, Any]]:
             envelope = json.loads(line)
             seg = envelope["jws"].split(".")
             payload = json.loads(base64.urlsafe_b64decode(seg[1] + "==" * (-len(seg[1]) % 4)))
-        except (json.JSONDecodeError, KeyError, ValueError):
+        except (KeyError, ValueError):  # JSONDecodeError is a ValueError (S5713)
             continue
         block = payload.get("x_gate")
         if isinstance(block, dict) and block.get("decision"):

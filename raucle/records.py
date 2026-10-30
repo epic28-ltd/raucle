@@ -217,10 +217,15 @@ def verify_destruction(
 
     pub: bytes = operator_public_pem or d.get("operator_public_key_pem", "").encode("ascii")
     kid = hashlib.sha256(pub).hexdigest()[:16]
-    cert_file = Path(destruction_path).with_suffix(".cert-line.jsonl")
-    cert_file.write_text(json.dumps({"receipt_hash": d["receipt_hash"], "jws": jws}) + "\n")
-    vreport = ProvenanceVerifier(public_keys={kid: pub}).verify_chain(cert_file)
-    cert_file.unlink()
+    # the one-receipt chain for the verifier is written to a throwaway
+    # temporary directory, never beside the operator's files (no derived
+    # sibling paths; SonarCloud S2083)
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        cert_file = Path(td) / "cert-line.jsonl"
+        cert_file.write_text(json.dumps({"receipt_hash": d["receipt_hash"], "jws": jws}) + "\n")
+        vreport = ProvenanceVerifier(public_keys={kid: pub}).verify_chain(cert_file)
 
     report: dict[str, Any] = {
         "valid": bool(vreport.valid),

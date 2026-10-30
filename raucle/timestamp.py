@@ -612,7 +612,13 @@ def verify_anchor(
     }
 
     # the operator signature via the public verifier (single-line chain)
-    cert_file = Path(anchor_path).with_suffix(".cert-line.jsonl")
+    # the single-receipt chain for the verifier lives in a throwaway
+    # temporary directory, never beside the operator's files (SonarCloud
+    # S2083: no paths derived from content-bearing files)
+    import tempfile as _tempfile
+
+    _td = _tempfile.mkdtemp()
+    cert_file = Path(_td) / "cert-line.jsonl"
     cert_file.write_text(
         _json.dumps({"receipt_hash": doc["receipt_hash"], "jws": jws}) + "\n",
         encoding="utf-8",
@@ -636,6 +642,7 @@ def verify_anchor(
             vreport = _verify_standalone(jws, pub, report)
     finally:
         cert_file.unlink(missing_ok=True)
+        Path(_td).rmdir()  # the throwaway directory goes too
 
     report["errors"].extend(vreport.errors)
     report["valid"] = bool(vreport.valid)
@@ -667,7 +674,12 @@ def _verify_standalone(jws: str, pub: bytes, report: dict[str, Any]) -> Any:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
         key = serialization.load_pem_public_key(pub)
-        assert isinstance(key, Ed25519PublicKey)  # anchor receipts are Ed25519
+        if not isinstance(key, Ed25519PublicKey):
+            # anchor receipts are Ed25519; anything else is a malformed
+            # anchor, not an assertion failure (SonarCloud S5779)
+            r.valid = False
+            r.errors.append("anchor public key is not Ed25519")
+            return r
         sig_bytes = _b64.urlsafe_b64decode(seg[2] + "=" * (-len(seg[2]) % 4))
         signing_input = f"{seg[0]}.{seg[1]}".encode("ascii")
         key.verify(sig_bytes, signing_input)  # verify(signature, data)

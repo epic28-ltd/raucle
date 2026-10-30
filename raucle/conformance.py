@@ -78,7 +78,7 @@ def commit_args(args: dict[str, Any]) -> str:
     level = [_leaf(f, args[f]) for f in sorted(args, key=_utf16_key)]
     while len(level) > 1:
         level = _fold_level(level)
-    return "sha256:" + level[0].hex()
+    return HASH_PREFIX + level[0].hex()
 
 
 def disclosure_path(args: dict[str, Any], field: str) -> list[tuple[bool, str]] | None:
@@ -97,7 +97,7 @@ def disclosure_path(args: dict[str, Any], field: str) -> list[tuple[bool, str]] 
             sib = level[index + 1] if index + 1 < len(level) else level[index]
             path.append((False, HASH_PREFIX + sib.hex()))
         else:
-            path.append((True, "sha256:" + level[index - 1].hex()))
+            path.append((True, HASH_PREFIX + level[index - 1].hex()))
         level = _fold_level(level)
         index //= 2
     return path

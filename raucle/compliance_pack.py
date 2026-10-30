@@ -27,13 +27,30 @@ from raucle.compliance import (
 _HASH_PREFIX = "sha256:"
 _RECEIPT_TYP = "provenance-receipt/v1"
 _RECEIPT_CRIT = "raucle/v1"
+_COVERAGE_FILE = "coverage.json"
+_EXTRACTS_FILE = "extracts.jsonl"
+_RETENTION_FILE = "retention.json"
+_EURLEX_RTS = "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=OJ:L_202401774"
+
+
+def _bundle_file(base: str | Path, filename: str) -> Path:
+    """Join a literal bundle filename to a resolved base directory and
+    prove the result stays inside it (SonarCloud S2083: every bundle write
+    goes through this validation barrier; the filename is always a literal,
+    never derived from file content)."""
+    root = Path(base).resolve()
+    target = (root / filename).resolve()
+    if not target.is_relative_to(root):
+        raise ValueError(f"bundle path escapes the pack directory: {filename!r}")
+    return target
+
 
 #: Per-control regulation citations, keyed by framework then control id.
 _FRAMEWORK_CITATIONS: dict[str, dict[str, str]] = {
     "dora": {
-        "RTS-12(2)(c)": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=OJ:L_202401774",
-        "RTS-12(2)(d)": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=OJ:L_202401774",
-        "RTS-12(4)": "https://eur-lex.europa.eu/legal-content/EN/TXT/HTML/?uri=OJ:L_202401774",
+        "RTS-12(2)(c)": _EURLEX_RTS,
+        "RTS-12(2)(d)": _EURLEX_RTS,
+        "RTS-12(4)": _EURLEX_RTS,
         "FSB-ATTR": "https://www.fsb.org/uploads/P151026-1.pdf",
     }
 }
@@ -218,7 +235,7 @@ def build_pack(
             "> **VERIFIER RESULT: INVALID.** The chain failed verification. "
             "This pack records the failure; it does not upgrade bad evidence.\n\n" + md
         )
-    (out_dir / "report.md").write_text(md, encoding="utf-8")
+    _bundle_file(out_dir, "report.md").write_text(md, encoding="utf-8")
 
     # coverage.json - control results + regulation citations
     citations = _FRAMEWORK_CITATIONS.get(framework, {})
@@ -240,25 +257,29 @@ def build_pack(
             for c in report.controls
         ],
     }
-    (out_dir / "coverage.json").write_text(json.dumps(coverage, indent=2), encoding="utf-8")
+    _bundle_file(out_dir, _COVERAGE_FILE).write_text(
+        json.dumps(coverage, indent=2), encoding="utf-8"
+    )
 
     # extracts.jsonl - bounded decision extracts
-    with open(out_dir / "extracts.jsonl", "w", encoding="utf-8") as fh:
+    with open(_bundle_file(out_dir, _EXTRACTS_FILE), "w", encoding="utf-8") as fh:
         for extract in _bounded_extracts(chain_path):
             fh.write(json.dumps(extract) + "\n")
 
     # retention.json - observed span vs the regime's expectation
     retention = _retention_statement(chain_path, framework)
-    (out_dir / "retention.json").write_text(json.dumps(retention, indent=2), encoding="utf-8")
+    _bundle_file(out_dir, _RETENTION_FILE).write_text(
+        json.dumps(retention, indent=2), encoding="utf-8"
+    )
 
     # pack_hash binds the bundle files
     pack_hash = (
         _HASH_PREFIX
         + hashlib.sha256(
             (
-                _sha256_file(out_dir / "coverage.json")
-                + _sha256_file(out_dir / "extracts.jsonl")
-                + _sha256_file(out_dir / "retention.json")
+                _sha256_file(_bundle_file(out_dir, _COVERAGE_FILE))
+                + _sha256_file(_bundle_file(out_dir, _EXTRACTS_FILE))
+                + _sha256_file(_bundle_file(out_dir, _RETENTION_FILE))
             ).encode("ascii")
         ).hexdigest()
     )
@@ -308,7 +329,7 @@ def build_pack(
     }
     jws, receipt_hash, _pub = _sign_certificate(payload, operator_key_pem)
     cert_line = json.dumps({"receipt_hash": receipt_hash, "jws": jws})
-    (out_dir / "certificate.json").write_text(cert_line + "\n", encoding="utf-8")
+    _bundle_file(out_dir, "certificate.json").write_text(cert_line + "\n", encoding="utf-8")
     manifest["certificate"] = str(out_dir / "certificate.json")
     manifest["certificate_receipt_hash"] = receipt_hash
     return manifest
@@ -339,21 +360,21 @@ def export_pack(pack_dir: str | Path, fmt: str = "csv") -> dict[str, Any]:
     import csv
 
     pack_dir = Path(pack_dir)
-    coverage = json.loads((pack_dir / "coverage.json").read_text(encoding="utf-8"))
+    coverage = json.loads(_bundle_file(pack_dir, _COVERAGE_FILE).read_text(encoding="utf-8"))
     extracts = [
         json.loads(line)
-        for line in (pack_dir / "extracts.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in _bundle_file(pack_dir, _EXTRACTS_FILE).read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    retention = json.loads((pack_dir / "retention.json").read_text(encoding="utf-8"))
+    retention = json.loads(_bundle_file(pack_dir, _RETENTION_FILE).read_text(encoding="utf-8"))
 
     if fmt == "csv":
-        with open(pack_dir / "coverage.csv", "w", newline="", encoding="utf-8") as fh:
+        with open(_bundle_file(pack_dir, "coverage.csv"), "w", newline="", encoding="utf-8") as fh:
             writer = csv.writer(fh)
             writer.writerow(["control_id", "title", "status", "evidence", "citation"])
             for c in coverage["controls"]:
                 writer.writerow([c["id"], c["title"], c["status"], c["evidence"], c["citation"]])
-        with open(pack_dir / "extracts.csv", "w", newline="", encoding="utf-8") as fh:
+        with open(_bundle_file(pack_dir, "extracts.csv"), "w", newline="", encoding="utf-8") as fh:
             writer = csv.writer(fh)
             writer.writerow(["ref", "decision", "agent_id", "tool", "rule_id", "receipt_id"])
             for e in extracts:
@@ -370,6 +391,8 @@ def export_pack(pack_dir: str | Path, fmt: str = "csv") -> dict[str, Any]:
         return {"format": "csv", "files": ["coverage.csv", "extracts.csv"]}
     if fmt == "json":
         export = {"coverage": coverage, "extracts": extracts, "retention": retention}
-        (pack_dir / "pack-export.json").write_text(json.dumps(export, indent=2), encoding="utf-8")
+        _bundle_file(pack_dir, "pack-export.json").write_text(
+            json.dumps(export, indent=2), encoding="utf-8"
+        )
         return {"format": "json", "files": ["pack-export.json"]}
     raise ValueError(f"unknown export format {fmt!r}; use csv or json")

@@ -1835,7 +1835,7 @@ class ProvenanceVerifier:
         if isinstance(x_ts, dict):
             mode = x_ts.get("mode")
             digest = str(x_ts.get("digest", ""))
-            if digest != "sha256:" + str(decoded.get("input_hash", "")):
+            if digest != _SHA256_PREFIX + str(decoded.get("input_hash", "")):
                 report.errors.append(
                     f"line {line_no}: x_timestamp digest does not bind the receipt input_hash"
                 )
@@ -1851,7 +1851,7 @@ class ProvenanceVerifier:
                 import hashlib as _hl
 
                 rederived = (
-                    "sha256:" + _hl.sha256(raw_cited.encode("utf-8")).hexdigest()
+                    _SHA256_PREFIX + _hl.sha256(raw_cited.encode("utf-8")).hexdigest()
                     if raw_cited is not None
                     else ""
                 )
@@ -1866,7 +1866,7 @@ class ProvenanceVerifier:
 
                 token_report = verify_token(
                     base64.b64decode(x_ts.get("token", "")),
-                    expected_digest=bytes.fromhex(digest.removeprefix("sha256:")),
+                    expected_digest=bytes.fromhex(digest.removeprefix(_SHA256_PREFIX)),
                     expected_nonce=int(x_ts.get("nonce", 0)),
                 )
                 if not token_report["valid"]:
