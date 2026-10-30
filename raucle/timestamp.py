@@ -237,18 +237,31 @@ def _extract_tst_info(signed_data: Any) -> tuple[Any, bytes]:
 
 
 def _find_signer_cert(signed_data: Any, signer_info: Any) -> Any:
-
+    """Invariant: the signer's certificate must be carried inside the
+    token itself (no out-of-band trust store), whichever signer-id shape
+    the token uses; an unresolvable signer fails with a named error."""
     sid = signer_info["sid"]
     chosen = sid.chosen
     if sid.name == "issuer_and_serial_number":
-        issuer_der = chosen["issuer"].dump()
-        serial = chosen["serial_number"].native
-        for c in signed_data["certificates"] or []:
-            cert = c.chosen["tbs_certificate"]
-            if cert["issuer"].dump() == issuer_der and cert["serial_number"].native == serial:
-                return c.chosen
-        raise TimestampError("signer certificate not carried in the token")
-    ski = chosen.native
+        return _find_issuer_serial_cert(
+            signed_data, chosen["issuer"].dump(), chosen["serial_number"].native
+        )
+    return _find_ski_cert(signed_data, chosen.native)
+
+
+def _find_issuer_serial_cert(signed_data: Any, issuer_der: bytes, serial: Any) -> Any:
+    """Invariant: issuer-and-serial signer ids resolve by exact DER issuer
+    and serial match against the token's own certificate set."""
+    for c in signed_data["certificates"] or []:
+        cert = c.chosen["tbs_certificate"]
+        if cert["issuer"].dump() == issuer_der and cert["serial_number"].native == serial:
+            return c.chosen
+    raise TimestampError("signer certificate not carried in the token")
+
+
+def _find_ski_cert(signed_data: Any, ski: Any) -> Any:
+    """Invariant: subject-key-identifier signer ids resolve by the key
+    identifier extension against the token's own certificate set."""
     for c in signed_data["certificates"] or []:
         cert = c.chosen
         for ext in cert["tbs_certificate"]["extensions"] or []:
@@ -323,97 +336,23 @@ def verify_token(
         tst, tst_der = _extract_tst_info(signed_data)
 
         # 1. message imprint: the token attests the digest we expect
-        imprint = tst["message_imprint"]
-        hash_name = imprint["hash_algorithm"]["algorithm"].native
-        if hash_name not in _DIGEST_BY_NAME:
-            return fail(f"unsupported imprint hash {hash_name!r}")
-        report["hash_algorithm"] = hash_name
-        if imprint["hashed_message"].native != expected_digest:
-            return fail("message imprint mismatch (token does not attest this digest)")
-
+        _check_message_imprint(tst, expected_digest, report)
         # 2. nonce: the reply binds our request (replay protection)
-        nonce = tst["nonce"].native if tst["nonce"] is not None else None
-        if nonce != expected_nonce:
-            return fail(f"nonce mismatch (expected {expected_nonce}, token has {nonce})")
-
-        gen_time: datetime = tst["gen_time"].native
-        report["gen_time"] = gen_time.astimezone(timezone.utc).isoformat()
-        report["serial"] = tst["serial_number"].native
-        report["policy"] = str(tst["policy"].native)
+        _check_nonce(tst, expected_nonce)
+        _record_tst_info_fields(tst, report)
 
         # 3. the signer and its certificate
-        if not signed_data["signer_infos"]:
-            return fail("token carries no SignerInfo")
-        signer_info = signed_data["signer_infos"][0]
-        signed_attrs = signer_info["signed_attrs"]
-        if signed_attrs is None:
-            return fail("SignerInfo lacks signed attributes (RFC 3161 requires them)")
-        attrs = {a["type"].native: a for a in signed_attrs}
-
+        signer_info, signed_attrs = _require_signer_attrs(signed_data)
         # 4. mandatory signed attributes: contentType + messageDigest
-        if "content_type" not in attrs:
-            return fail("signed attributes missing contentType")
-        if attrs["content_type"]["values"][0].native != "tst_info":
-            return fail(
-                "signed attribute contentType is not TSTInfo "
-                f"({attrs['content_type']['values'][0].native!r})"
-            )
-        if "message_digest" not in attrs:
-            return fail("signed attributes missing messageDigest")
-        digest_alg_name = signer_info["digest_algorithm"]["algorithm"].native
-        if digest_alg_name not in _DIGEST_BY_NAME:
-            return fail(f"unsupported digest algorithm {digest_alg_name!r}")
-        md_expected = _DIGEST_BY_NAME[digest_alg_name](tst_der).digest()
-        md_recorded = attrs["message_digest"]["values"][0].native
-        if md_recorded != md_expected:
-            return fail("messageDigest attribute does not match the TSTInfo content")
+        digest_alg_name = _check_signed_attributes(signer_info, signed_attrs, tst_der)
 
         cert = _find_signer_cert(signed_data, signer_info)
-        subject = cert.subject.native
-        report["tsa_cert_subject"] = (
-            ", ".join(f"{k}={v}" for k, v in subject.items())
-            if isinstance(subject, dict)
-            else str(subject)
-        )
-        validity = cert["tbs_certificate"]["validity"]
-        not_after = validity["not_after"].native
-        report["tsa_cert_not_after"] = not_after.astimezone(timezone.utc).isoformat()
-
+        _record_cert_fields(cert, report)
         # 5. genTime inside the TSA certificate's validity window (LTV hook)
-        not_before = validity["not_before"].native
-        if not (not_before <= gen_time <= not_after):
-            return fail("genTime falls outside the TSA certificate validity window")
+        _check_gen_time_window(cert, tst["gen_time"].native)
 
         # 6. the signature itself, over the DER-encoded signed attributes.
-        # The field is IMPLICIT [0]-tagged; the signature is over the SET OF
-        # encoding (RFC 5652 5.3), so re-tag: 0x31 + the tagged chunk body.
-        attrs_chunk = signed_attrs.dump()
-        if attrs_chunk[0] != 0xA0:
-            return fail("signed attributes are not tagged as expected")
-        signed_attrs_der = b"\x31" + attrs_chunk[1:]
-        signature = signer_info["signature"].native
-
-        from cryptography.hazmat.primitives import hashes as _hashes
-        from cryptography.hazmat.primitives import serialization
-
-        verify_key = serialization.load_der_public_key(cert.public_key.dump())
-        if pinned_key_pem is not None:
-            pinned = serialization.load_pem_public_key(pinned_key_pem)
-
-            def _key_bytes(key: Any) -> bytes:
-                return key.public_bytes(
-                    encoding=serialization.Encoding.DER,
-                    format=serialization.PublicFormat.SubjectPublicKeyInfo,
-                )
-
-            if _key_bytes(pinned) != _key_bytes(verify_key):
-                return fail("pinned TSA key does not match the token's signer key")
-        alg = {
-            "sha256": _hashes.SHA256,
-            "sha384": _hashes.SHA384,
-            "sha512": _hashes.SHA512,
-        }[digest_alg_name]()
-        _verify_signature_with_key(verify_key, signature, signed_attrs_der, alg)
+        _check_tsa_signature(signer_info, signed_attrs, cert, digest_alg_name, pinned_key_pem)
 
         report["valid"] = True
         return report
@@ -421,6 +360,147 @@ def verify_token(
         return fail(str(exc))
     except Exception as exc:  # noqa: BLE001 - verification must not leak crashes
         return fail(f"token re-check failed: {type(exc).__name__}: {exc}")
+
+
+def _check_message_imprint(tst: Any, expected_digest: bytes, report: dict[str, Any]) -> None:
+    """Invariant: the token attests exactly the digest the operator
+    supplied, with a hash algorithm raucle can recompute; the reported
+    hash algorithm names what the token used, supported or not."""
+    imprint = tst["message_imprint"]
+    hash_name = imprint["hash_algorithm"]["algorithm"].native
+    if hash_name not in _DIGEST_BY_NAME:
+        raise TimestampError(f"unsupported imprint hash {hash_name!r}")
+    report["hash_algorithm"] = hash_name
+    if imprint["hashed_message"].native != expected_digest:
+        raise TimestampError("message imprint mismatch (token does not attest this digest)")
+
+
+def _check_nonce(tst: Any, expected_nonce: int) -> None:
+    """Invariant: the token carries the request's nonce, so a replayed or
+    substituted token never verifies as the reply to this request."""
+    nonce = tst["nonce"].native if tst["nonce"] is not None else None
+    if nonce != expected_nonce:
+        raise TimestampError(f"nonce mismatch (expected {expected_nonce}, token has {nonce})")
+
+
+def _record_tst_info_fields(tst: Any, report: dict[str, Any]) -> None:
+    """Invariant: the summary fields (genTime, serial, policy) come from
+    the parsed TSTInfo before signature verification, so the returned
+    report always names what the token claimed, valid or not."""
+    gen_time: datetime = tst["gen_time"].native
+    report["gen_time"] = gen_time.astimezone(timezone.utc).isoformat()
+    report["serial"] = tst["serial_number"].native
+    report["policy"] = str(tst["policy"].native)
+
+
+def _require_signer_attrs(signed_data: Any) -> tuple[Any, Any]:
+    """Invariant: the token must carry at least one SignerInfo with the
+    RFC 3161 mandatory signed attributes; the first signer is the one
+    re-checked."""
+    if not signed_data["signer_infos"]:
+        raise TimestampError("token carries no SignerInfo")
+    signer_info = signed_data["signer_infos"][0]
+    signed_attrs = signer_info["signed_attrs"]
+    if signed_attrs is None:
+        raise TimestampError("SignerInfo lacks signed attributes (RFC 3161 requires them)")
+    return signer_info, signed_attrs
+
+
+def _check_signed_attributes(signer_info: Any, signed_attrs: Any, tst_der: bytes) -> str:
+    """Invariant: RFC 3161 requires the signer to sign contentType and
+    messageDigest attributes; both are re-checked against the TSTInfo
+    bytes, so a token whose attributes do not cover the attested content
+    never verifies. Returns the signer's digest algorithm name."""
+    attrs = {a["type"].native: a for a in signed_attrs}
+    if "content_type" not in attrs:
+        raise TimestampError("signed attributes missing contentType")
+    if attrs["content_type"]["values"][0].native != "tst_info":
+        raise TimestampError(
+            "signed attribute contentType is not TSTInfo "
+            f"({attrs['content_type']['values'][0].native!r})"
+        )
+    if "message_digest" not in attrs:
+        raise TimestampError("signed attributes missing messageDigest")
+    digest_alg_name = signer_info["digest_algorithm"]["algorithm"].native
+    if digest_alg_name not in _DIGEST_BY_NAME:
+        raise TimestampError(f"unsupported digest algorithm {digest_alg_name!r}")
+    md_expected = _DIGEST_BY_NAME[digest_alg_name](tst_der).digest()
+    md_recorded = attrs["message_digest"]["values"][0].native
+    if md_recorded != md_expected:
+        raise TimestampError("messageDigest attribute does not match the TSTInfo content")
+    return digest_alg_name
+
+
+def _record_cert_fields(cert: Any, report: dict[str, Any]) -> None:
+    """Invariant: the TSA identity and certificate expiry are recorded
+    from the token's own signer certificate, not from any external
+    store."""
+    subject = cert.subject.native
+    report["tsa_cert_subject"] = (
+        ", ".join(f"{k}={v}" for k, v in subject.items())
+        if isinstance(subject, dict)
+        else str(subject)
+    )
+    validity = cert["tbs_certificate"]["validity"]
+    not_after = validity["not_after"].native
+    report["tsa_cert_not_after"] = not_after.astimezone(timezone.utc).isoformat()
+
+
+def _check_gen_time_window(cert: Any, gen_time: datetime) -> None:
+    """Invariant: genTime must fall inside the TSA certificate's validity
+    window (the LTV hook: an attestation past the certificate's expiry
+    must be restamped, never accepted)."""
+    validity = cert["tbs_certificate"]["validity"]
+    not_before = validity["not_before"].native
+    not_after = validity["not_after"].native
+    if not (not_before <= gen_time <= not_after):
+        raise TimestampError("genTime falls outside the TSA certificate validity window")
+
+
+def _check_tsa_signature(
+    signer_info: Any,
+    signed_attrs: Any,
+    cert: Any,
+    digest_alg_name: str,
+    pinned_key_pem: bytes | None,
+) -> None:
+    """Invariant: the signature is verified over the DER-encoded signed
+    attributes (the field is IMPLICIT [0]-tagged; the signature covers
+    the SET OF encoding, RFC 5652 5.3, so the chunk is re-tagged 0x31)
+    against the token's own signer key; a pinned key must be that exact
+    key, not merely any key the token carries."""
+    from cryptography.hazmat.primitives import hashes as _hashes
+    from cryptography.hazmat.primitives import serialization
+
+    attrs_chunk = signed_attrs.dump()
+    if attrs_chunk[0] != 0xA0:
+        raise TimestampError("signed attributes are not tagged as expected")
+    signed_attrs_der = b"\x31" + attrs_chunk[1:]
+    signature = signer_info["signature"].native
+
+    verify_key = serialization.load_der_public_key(cert.public_key.dump())
+    if pinned_key_pem is not None:
+        pinned = serialization.load_pem_public_key(pinned_key_pem)
+        if _public_key_der(pinned) != _public_key_der(verify_key):
+            raise TimestampError("pinned TSA key does not match the token's signer key")
+    alg = {
+        "sha256": _hashes.SHA256,
+        "sha384": _hashes.SHA384,
+        "sha512": _hashes.SHA512,
+    }[digest_alg_name]()
+    _verify_signature_with_key(verify_key, signature, signed_attrs_der, alg)
+
+
+def _public_key_der(key: Any) -> bytes:
+    """Invariant: key identity compares DER SubjectPublicKeyInfo bytes,
+    the canonical encoding, so a pinned TSA key matches only the exact
+    same key."""
+    from cryptography.hazmat.primitives import serialization
+
+    return key.public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -586,8 +666,6 @@ def verify_anchor(
     """
     import json as _json
 
-    from raucle.provenance import ProvenanceVerifier
-
     doc = _json.loads(Path(anchor_path).read_text(encoding="utf-8"))
     jws = doc["jws"]
     seg = jws.split(".")
@@ -625,19 +703,7 @@ def verify_anchor(
     )
     try:
         if chain_path is not None:
-            # full mode: append the anchor to a copy of the cited chain
-            import tempfile
-
-            with tempfile.NamedTemporaryFile(
-                "w", suffix=".jsonl", delete=False, encoding="utf-8"
-            ) as tf:
-                tf.write(Path(chain_path).read_text(encoding="utf-8"))
-                if not Path(chain_path).read_text(encoding="utf-8").endswith("\n"):
-                    tf.write("\n")
-                tf.write(_json.dumps({"receipt_hash": doc["receipt_hash"], "jws": jws}) + "\n")
-                combined = tf.name
-            vreport = ProvenanceVerifier(public_keys={kid: pub}).verify_chain(combined)
-            report["cite_check"] = "re-checked against the chain"
+            vreport = _verify_against_chain(chain_path, doc, jws, kid, pub, report)
         else:
             vreport = _verify_standalone(jws, pub, report)
     finally:
@@ -652,6 +718,35 @@ def verify_anchor(
         report["errors"].append("the anchor file's token copy disagrees with the signed token")
         report["valid"] = False
     return report
+
+
+def _verify_against_chain(
+    chain_path: str | Path,
+    doc: dict[str, Any],
+    jws: str,
+    kid: str,
+    pub: bytes,
+    report: dict[str, Any],
+) -> Any:
+    """Invariant: chain mode verifies the anchor appended to a copy of the
+    cited ledger, held in a throwaway temporary file (never beside the
+    operator's files, SonarCloud S2083), so the parent cite and the
+    head-line digest re-check against the real chain before the anchor
+    is trusted."""
+    import json as _json
+    import tempfile
+
+    from raucle.provenance import ProvenanceVerifier
+
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8") as tf:
+        tf.write(Path(chain_path).read_text(encoding="utf-8"))
+        if not Path(chain_path).read_text(encoding="utf-8").endswith("\n"):
+            tf.write("\n")
+        tf.write(_json.dumps({"receipt_hash": doc["receipt_hash"], "jws": jws}) + "\n")
+        combined = tf.name
+    vreport = ProvenanceVerifier(public_keys={kid: pub}).verify_chain(combined)
+    report["cite_check"] = "re-checked against the chain"
+    return vreport
 
 
 def _verify_standalone(jws: str, pub: bytes, report: dict[str, Any]) -> Any:
@@ -738,8 +833,6 @@ def retimestamp_plan(chain_path: str | Path) -> dict[str, Any]:
     covering them - is counted. Bounded disclosure: hashes and dates
     only, never receipt contents.
     """
-    import json as _json
-
     lines = [
         ln.strip() for ln in Path(chain_path).read_text(encoding="utf-8").splitlines() if ln.strip()
     ]
@@ -749,81 +842,101 @@ def retimestamp_plan(chain_path: str | Path) -> dict[str, Any]:
     retained_receipts = 0
 
     for idx, line in enumerate(lines):
-        try:
-            rec = _json.loads(line)
-        except _json.JSONDecodeError:
+        decoded = _decode_receipt_payload(line)
+        if decoded is None:
             continue
-        jws = rec.get("jws", "")
-        if not isinstance(jws, str) or jws.count(".") < 2:
-            continue
-        seg = jws.split(".")[1]
-        payload = _json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
-
-        gate = payload.get("x_gate") or {}
-        retention_until = int(gate.get("retention_until", 0) or 0)
+        rec, payload = decoded
+        retention_until = _retention_until(payload)
         if retention_until > 0:
             horizon = max(horizon, retention_until)
             retained_receipts += 1
-
         x_ts = payload.get("x_timestamp")
         if isinstance(x_ts, dict):
             last_anchor_index = idx
-            mode = x_ts.get("mode", "tsa")
-            entry: dict[str, Any] = {
-                "anchor_receipt": rec.get("receipt_hash", ""),
-                "parent_receipt": x_ts.get("parent_receipt", ""),
-                "mode": mode,
-                "gen_time": x_ts.get("gen_time"),
-                "tsa_cert_not_after": None,
-                "needs_restamp": False,
-                "restamp_by": None,
-                "token_valid": None,
-            }
-            if mode == "tsa":
-                token_der = base64.b64decode(x_ts.get("token", ""))
-                token_report = verify_token(
-                    token_der,
-                    expected_digest=bytes.fromhex(
-                        str(x_ts.get("digest", "")).removeprefix(_HASH_PREFIX)
-                    ),
-                    expected_nonce=int(x_ts.get("nonce", 0)),
-                )
-                entry["token_valid"] = token_report["valid"]
-                if not token_report["valid"]:
-                    entry["needs_restamp"] = True
-                    entry["restamp_by"] = "now (token fails re-check)"
-                elif token_report["tsa_cert_not_after"]:
-                    not_after = datetime.fromisoformat(token_report["tsa_cert_not_after"])
-                    entry["tsa_cert_not_after"] = token_report["tsa_cert_not_after"]
-                    not_after_epoch = int(not_after.timestamp())
-                    if horizon and not_after_epoch <= horizon:
-                        entry["needs_restamp"] = True
-                        entry["restamp_by"] = not_after_epoch - _RESTAMP_SAFETY_DAYS * 86400
-            anchors.append(entry)
-
-    unanchored = 0
-    if last_anchor_index >= 0:
-        for idx, line in enumerate(lines):
-            if idx <= last_anchor_index:
-                continue
-            try:
-                rec = _json.loads(line)
-            except _json.JSONDecodeError:
-                continue
-            jws = rec.get("jws", "")
-            if not isinstance(jws, str) or jws.count(".") < 2:
-                continue
-            seg = jws.split(".")[1]
-            payload = _json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
-            gate = payload.get("x_gate") or {}
-            if int(gate.get("retention_until", 0) or 0) > 0:
-                unanchored += 1
-    else:
-        unanchored = retained_receipts
+            anchors.append(_anchor_entry(rec, x_ts, horizon))
 
     return {
         "archive_horizon": horizon,
         "anchors": anchors,
-        "unanchored_receipts": unanchored,
+        "unanchored_receipts": _count_unanchored(lines, last_anchor_index, retained_receipts),
         "restamp_safety_days": _RESTAMP_SAFETY_DAYS,
     }
+
+
+def _decode_receipt_payload(line: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Invariant: a ledger line contributes to the plan only when it is a
+    JSON receipt envelope whose JWS payload decodes; unparseable lines
+    are skipped, while a malformed base64 or JSON payload fails the whole
+    plan (fail closed: the ledger is the evidence)."""
+    import json as _json
+
+    try:
+        rec = _json.loads(line)
+    except _json.JSONDecodeError:
+        return None
+    jws = rec.get("jws", "")
+    if not isinstance(jws, str) or jws.count(".") < 2:
+        return None
+    seg = jws.split(".")[1]
+    payload = _json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
+    return rec, payload
+
+
+def _retention_until(payload: dict[str, Any]) -> int:
+    """Invariant: retention claims are integers, 0 meaning no schedule; a
+    malformed claim fails the plan rather than being read as zero."""
+    gate = payload.get("x_gate") or {}
+    return int(gate.get("retention_until", 0) or 0)
+
+
+def _anchor_entry(rec: dict[str, Any], x_ts: dict[str, Any], horizon: int) -> dict[str, Any]:
+    """Invariant: every anchor entry is re-checked offline against the
+    token it carries; an anchor whose token fails re-verification, or
+    whose TSA certificate expires before the retention horizon, is
+    flagged for restamping, never silently trusted."""
+    mode = x_ts.get("mode", "tsa")
+    entry: dict[str, Any] = {
+        "anchor_receipt": rec.get("receipt_hash", ""),
+        "parent_receipt": x_ts.get("parent_receipt", ""),
+        "mode": mode,
+        "gen_time": x_ts.get("gen_time"),
+        "tsa_cert_not_after": None,
+        "needs_restamp": False,
+        "restamp_by": None,
+        "token_valid": None,
+    }
+    if mode == "tsa":
+        token_der = base64.b64decode(x_ts.get("token", ""))
+        token_report = verify_token(
+            token_der,
+            expected_digest=bytes.fromhex(str(x_ts.get("digest", "")).removeprefix(_HASH_PREFIX)),
+            expected_nonce=int(x_ts.get("nonce", 0)),
+        )
+        entry["token_valid"] = token_report["valid"]
+        if not token_report["valid"]:
+            entry["needs_restamp"] = True
+            entry["restamp_by"] = "now (token fails re-check)"
+        elif token_report["tsa_cert_not_after"]:
+            not_after = datetime.fromisoformat(token_report["tsa_cert_not_after"])
+            entry["tsa_cert_not_after"] = token_report["tsa_cert_not_after"]
+            not_after_epoch = int(not_after.timestamp())
+            if horizon and not_after_epoch <= horizon:
+                entry["needs_restamp"] = True
+                entry["restamp_by"] = not_after_epoch - _RESTAMP_SAFETY_DAYS * 86400
+    return entry
+
+
+def _count_unanchored(lines: list[str], last_anchor_index: int, retained_receipts: int) -> int:
+    """Invariant: a retained receipt counts as unanchored when no anchor
+    at or after its ledger position covers it; with no anchor anywhere
+    in the ledger, every retained receipt is unanchored."""
+    if last_anchor_index < 0:
+        return retained_receipts
+    unanchored = 0
+    for idx, line in enumerate(lines):
+        if idx <= last_anchor_index:
+            continue
+        decoded = _decode_receipt_payload(line)
+        if decoded is not None and _retention_until(decoded[1]) > 0:
+            unanchored += 1
+    return unanchored
