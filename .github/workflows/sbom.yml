@@ -1,0 +1,41 @@
+name: sbom
+
+# H4 supply-chain evidence: a CycloneDX SBOM for every tagged release,
+# uploaded as a workflow artefact. Deliberately ISOLATED from the publish
+# pipeline: an SBOM failure must never block a release, and a release must
+# never ship without its SBOM going unnoticed (the artefact's absence is
+# visible on the run list either way).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the package and the SBOM generator
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[dev]" cyclonedx-py
+      - name: Generate the CycloneDX SBOM (environment)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cyclonedx-py environment \
+            --output-format JSON \
+            --output-file "sbom-raucle-${VERSION}.cdx.json" \
+            --validate
+      - name: Upload SBOM artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-raucle-${{ github.ref_name }}
+          path: sbom-raucle-*.cdx.json
+          retention-days: 90

@@ -320,3 +320,34 @@ def test_pack_without_operator_key_marks_unsigned(stack):
     assert manifest["certificate"] is None
     assert not (out / "certificate.json").exists()
     assert "no operator key" in (out / "report.md").read_text()
+
+
+def test_auditor_exports_csv_and_json(stack):
+    """I3: CSV and structured JSON exports over the bundle."""
+    from raucle.compliance_pack import export_pack
+
+    out = stack["tmp"] / "pack-export-src"
+    build_pack(
+        stack["chain"],
+        framework="dora",
+        out_dir=out,
+        verify_key_pem=stack["pub"],
+        operator_key_pem=stack["operator_priv"],
+    )
+    result = export_pack(out, fmt="csv")
+    assert result["files"] == ["coverage.csv", "extracts.csv"]
+    coverage_csv = (out / "coverage.csv").read_text()
+    assert "control_id,title,status,evidence,citation" in coverage_csv
+    assert "RTS-12(2)(d)" in coverage_csv
+    extracts_csv = (out / "extracts.csv").read_text()
+    assert len(extracts_csv.strip().splitlines()) >= 3  # header + 2 extract rows
+
+    # the CSVs carry no secret material either
+    assert "sk-live-DO-NOT-LEAK" not in coverage_csv + extracts_csv
+
+    result = export_pack(out, fmt="json")
+    assert result["files"] == ["pack-export.json"]
+    export = json.loads((out / "pack-export.json").read_text())
+    assert len(export["coverage"]["controls"]) >= 1
+    assert len(export["extracts"]) == 2
+    assert export["retention"]["framework"] == "dora"

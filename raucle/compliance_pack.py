@@ -326,3 +326,50 @@ def verify_pack_certificate(certificate_path: str | Path, operator_public_pem: b
         Path(certificate_path)
     )
     return bool(report.valid)
+
+
+def export_pack(pack_dir: str | Path, fmt: str = "csv") -> dict[str, Any]:
+    """I3: auditor-facing exports over an existing pack bundle.
+
+    csv writes coverage.csv (one row per control) and extracts.csv (one
+    row per decision extract) beside the bundle; json writes a single
+    pack-export.json combining coverage, extracts and retention. The
+    exports derive from the bundle; they never restate what the bundle
+    does not contain."""
+    import csv
+
+    pack_dir = Path(pack_dir)
+    coverage = json.loads((pack_dir / "coverage.json").read_text(encoding="utf-8"))
+    extracts = [
+        json.loads(line)
+        for line in (pack_dir / "extracts.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    retention = json.loads((pack_dir / "retention.json").read_text(encoding="utf-8"))
+
+    if fmt == "csv":
+        with open(pack_dir / "coverage.csv", "w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["control_id", "title", "status", "evidence", "citation"])
+            for c in coverage["controls"]:
+                writer.writerow([c["id"], c["title"], c["status"], c["evidence"], c["citation"]])
+        with open(pack_dir / "extracts.csv", "w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["ref", "decision", "agent_id", "tool", "rule_id", "receipt_id"])
+            for e in extracts:
+                writer.writerow(
+                    [
+                        e.get("ref", ""),
+                        e.get("decision", ""),
+                        e.get("agent_id", ""),
+                        e.get("tool", ""),
+                        e.get("rule_id", ""),
+                        e.get("receipt_id", ""),
+                    ]
+                )
+        return {"format": "csv", "files": ["coverage.csv", "extracts.csv"]}
+    if fmt == "json":
+        export = {"coverage": coverage, "extracts": extracts, "retention": retention}
+        (pack_dir / "pack-export.json").write_text(json.dumps(export, indent=2), encoding="utf-8")
+        return {"format": "json", "files": ["pack-export.json"]}
+    raise ValueError(f"unknown export format {fmt!r}; use csv or json")
