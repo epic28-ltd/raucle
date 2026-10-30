@@ -183,6 +183,111 @@ def _live_pulse_payload(gateway: RaucleGateway) -> dict[str, Any]:
     return payload
 
 
+def _build_intent_hint(
+    req: GateRequest, token_intent: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Build the receipt intent hint for a capability-token intent.
+
+    Invariant: the hint binds the task intent plus a BOUNDED disclosure -
+    only the field names the intent constrains (keys inside constraint
+    entries), never the constraint kinds themselves - so a third party
+    re-checks the action against the approved purpose offline.
+    """
+    if token_intent is None:
+        return None
+    c = token_intent.get("constraints") or {}
+    fields: set[str] = set()
+    for kind in (
+        "allowed_values",
+        "forbidden_values",
+        "starts_with",
+        "max_value",
+        "min_value",
+    ):
+        fields |= set(c.get(kind, {}) or {})
+    fields |= set(c.get("required_present", []) or [])
+    return {
+        "intent": token_intent,
+        "intent_check": {
+            "tool": req.tool,
+            "satisfied_fields": {f: req.args[f] for f in fields if f in req.args},
+        },
+    }
+
+
+def _handle_gate_tool_call(
+    gateway: RaucleGateway,
+    request: Request,
+    req: GateRequest,
+    x_api_key: str | None,
+    x_capability_token: str | None,
+    x_trace_id: str | None,
+    x_approval_id: str | None,
+) -> dict[str, Any]:
+    """Gate a tool call. Returns allow/deny/escalate decision.
+
+    Authentication (RAUCLE_GATE_AUTH): "off" trusts the declared
+    agent_id (internal networks only); "apikey" requires X-Api-Key;
+    "token" requires X-Capability-Token (verified against the trust
+    registry).
+
+    Denial semantics: an UNAUTHENTICATED caller (no verifiable
+    identity) is denied pre-gate with the reason - decision + reason
+    echoed, no receipt, because there is no trustworthy chain to
+    bind. An ATTRIBUTABLE denial - a validly-signed token whose call
+    exceeds the delegated authority (wrong tool, constraint
+    violation) - is denied WITH a receipt binding the delegated-
+    authority chain: who tried what is evidence, not noise.
+    """
+    import json as _json
+
+    token_dict = None
+    if x_capability_token:
+        try:
+            token_dict = _json.loads(x_capability_token)
+        except _json.JSONDecodeError:
+            return _gate_deny_response(req, "X-Capability-Token is not valid JSON")
+    import uuid as _uuid
+
+    trace_id = x_trace_id or _uuid.uuid4().hex
+    agent_id, auth_reason, token_decision = gateway.authenticate_caller(
+        api_key=x_api_key,
+        capability_token=token_dict,
+        tool=req.tool,
+        args=req.args,
+        declared_agent_id=req.agent_id,
+        acting_for=req.acting_for,
+    )
+    if agent_id is None:
+        return _gate_deny_response(req, f"unauthenticated: {auth_reason}")
+    # Receipts v1.1: bind the delegated-authority chain into the receipt
+    from raucle.provenance import authorization_block as _authorization_block
+
+    authorization = _authorization_block(token_dict) if token_dict else None
+    # Receipts v1.2: bind the task intent + a bounded disclosure (only the
+    # fields the intent constrains) so a third party re-checks the action
+    # against the approved purpose offline.
+    intent_hint = _build_intent_hint(req, (token_dict or {}).get("intent"))
+    response = gateway.check_tool_call(
+        req.tool,
+        req.args,
+        agent_id,
+        req.source,
+        req.destination,
+        trace_id=trace_id,
+        approval_id=x_approval_id or "",
+        _authorization_hint=authorization,
+        _token_decision=token_decision,
+        _intent_hint=intent_hint,
+        _acting_for=req.acting_for,
+    )
+    # Internal bookkeeping fields never leave the process boundary
+    response.pop("_trace_id", None)
+    response.pop("_args", None)
+    response.pop("_authorization_hint", None)
+    return response
+
+
 def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
     """Create the gateway API app (agent-facing)."""
     app = FastAPI(
@@ -227,90 +332,16 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         x_trace_id: str | None = Header(None, alias="X-Trace-Id"),
         x_approval_id: str | None = Header(None, alias="X-Approval-Id"),
     ) -> dict[str, Any]:
-        """Gate a tool call. Returns allow/deny/escalate decision.
-
-        Authentication (RAUCLE_GATE_AUTH): "off" trusts the declared
-        agent_id (internal networks only); "apikey" requires X-Api-Key;
-        "token" requires X-Capability-Token (verified against the trust
-        registry).
-
-        Denial semantics: an UNAUTHENTICATED caller (no verifiable
-        identity) is denied pre-gate with the reason - decision + reason
-        echoed, no receipt, because there is no trustworthy chain to
-        bind. An ATTRIBUTABLE denial - a validly-signed token whose call
-        exceeds the delegated authority (wrong tool, constraint
-        violation) - is denied WITH a receipt binding the delegated-
-        authority chain: who tried what is evidence, not noise.
-        """
-        import json as _json
-
-        token_dict = None
-        if x_capability_token:
-            try:
-                token_dict = _json.loads(x_capability_token)
-            except _json.JSONDecodeError:
-                return _gate_deny_response(req, "X-Capability-Token is not valid JSON")
-        import uuid as _uuid
-
-        trace_id = x_trace_id or _uuid.uuid4().hex
-        agent_id, auth_reason, token_decision = gateway.authenticate_caller(
-            api_key=x_api_key,
-            capability_token=token_dict,
-            tool=req.tool,
-            args=req.args,
-            declared_agent_id=req.agent_id,
-            acting_for=req.acting_for,
+        """Gate a tool call. Returns allow/deny/escalate decision."""
+        return _handle_gate_tool_call(
+            gateway,
+            request,
+            req,
+            x_api_key,
+            x_capability_token,
+            x_trace_id,
+            x_approval_id,
         )
-        if agent_id is None:
-            return _gate_deny_response(req, f"unauthenticated: {auth_reason}")
-        # Receipts v1.1: bind the delegated-authority chain into the receipt
-        from raucle.provenance import authorization_block as _authorization_block
-
-        authorization = _authorization_block(token_dict) if token_dict else None
-        # Receipts v1.2: bind the task intent + a bounded disclosure (only the
-        # fields the intent constrains) so a third party re-checks the action
-        # against the approved purpose offline.
-        intent_hint = None
-        token_intent = (token_dict or {}).get("intent")
-        if token_intent is not None:
-            # Bounded disclosure: the FIELD names the intent constrains (the
-            # keys inside the constraint entries), not the constraint kinds.
-            c = token_intent.get("constraints") or {}
-            fields: set[str] = set()
-            for kind in (
-                "allowed_values",
-                "forbidden_values",
-                "starts_with",
-                "max_value",
-                "min_value",
-            ):
-                fields |= set(c.get(kind, {}) or {})
-            fields |= set(c.get("required_present", []) or [])
-            intent_hint = {
-                "intent": token_intent,
-                "intent_check": {
-                    "tool": req.tool,
-                    "satisfied_fields": {f: req.args[f] for f in fields if f in req.args},
-                },
-            }
-        response = gateway.check_tool_call(
-            req.tool,
-            req.args,
-            agent_id,
-            req.source,
-            req.destination,
-            trace_id=trace_id,
-            approval_id=x_approval_id or "",
-            _authorization_hint=authorization,
-            _token_decision=token_decision,
-            _intent_hint=intent_hint,
-            _acting_for=req.acting_for,
-        )
-        # Internal bookkeeping fields never leave the process boundary
-        response.pop("_trace_id", None)
-        response.pop("_args", None)
-        response.pop("_authorization_hint", None)
-        return response
 
     @app.get(
         "/health",

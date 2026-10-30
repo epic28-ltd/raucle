@@ -532,30 +532,10 @@ class TrustRegistry:
         operator_pq_public_pem: bytes | str | None = None,
     ) -> None:
         """Verify operator signatures on each entry if the chain is signed."""
-        from cryptography.exceptions import InvalidSignature
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
-        # The operator's ML-DSA-65 key, when the registry is hybrid-signed.
-        # Pinned out-of-band (parameter or the signer itself) exactly like
-        # the classical operator key - never trusted from the entries.
-        operator_pq_key: Any = None
-        if operator_pq_public_pem is not None:
-            from raucle.pq import pq_public_key_from_pem
-
-            operator_pq_key = pq_public_key_from_pem(
-                operator_pq_public_pem.decode()
-                if isinstance(operator_pq_public_pem, bytes)
-                else operator_pq_public_pem
-            )
-        elif self._signer is not None:
-            try:
-                from raucle.pq import HybridRecordSigner
-
-                if isinstance(self._signer, HybridRecordSigner):
-                    operator_pq_key = self._signer._pq_private.public_key()
-            except ImportError:
-                pass
+        operator_pq_key = self._resolve_operator_pq_key(operator_pq_public_pem)
 
         pem = operator_public_pem
         if pem is None and self._signer is not None:
@@ -574,13 +554,52 @@ class TrustRegistry:
         loaded = serialization.load_pem_public_key(pem)
         if not isinstance(loaded, Ed25519PublicKey):
             raise RegistryIntegrityError("operator key is not Ed25519")
+        self._verify_entry_operator_sigs(loaded, operator_pq_key)
+
+    def _resolve_operator_pq_key(self, operator_pq_public_pem: bytes | str | None) -> Any:
+        """Resolve the operator's ML-DSA-65 key, when the registry is
+        hybrid-signed.
+
+        Invariant: the PQ operator key is pinned out-of-band (parameter
+        or the signer itself), exactly like the classical operator key -
+        never trusted from the entries.
+        """
+        operator_pq_key: Any = None
+        if operator_pq_public_pem is not None:
+            from raucle.pq import pq_public_key_from_pem
+
+            operator_pq_key = pq_public_key_from_pem(
+                operator_pq_public_pem.decode()
+                if isinstance(operator_pq_public_pem, bytes)
+                else operator_pq_public_pem
+            )
+        elif self._signer is not None:
+            try:
+                from raucle.pq import HybridRecordSigner
+
+                if isinstance(self._signer, HybridRecordSigner):
+                    operator_pq_key = self._signer._pq_private.public_key()
+            except ImportError:
+                pass
+        return operator_pq_key
+
+    def _verify_entry_operator_sigs(self, ed25519_key: Any, operator_pq_key: Any) -> None:
+        """Verify the classical plus, fail-closed, any hybrid ML-DSA-65
+        operator signature component of every entry.
+
+        Invariant: an entry declaring operator_pq_key_id MUST also verify
+        its ML-DSA-65 component - no classical-only acceptance of a
+        hybrid entry.
+        """
+        from cryptography.exceptions import InvalidSignature
+
         pq_loaded: dict[str, Any] = {}
         for i, e in enumerate(self._entries):
             sig = e.get("operator_sig")
             if not sig:
                 raise RegistryIntegrityError(f"entry {i}: missing operator signature")
             try:
-                loaded.verify(_b64d(sig), e["hash"].encode("ascii"))
+                ed25519_key.verify(_b64d(sig), e["hash"].encode("ascii"))
             except (InvalidSignature, ValueError) as exc:
                 raise RegistryIntegrityError(f"entry {i}: operator signature invalid") from exc
             # Quantum-ready entries: operator_pq_key_id declared -> the

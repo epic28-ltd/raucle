@@ -145,18 +145,33 @@ def verify_disclosure(root: str, disclosure: dict[str, Any]) -> dict[str, Any]:
         path = entry.get("path")
         if path is None:
             raise ValueError(f"disclosure for {field!r} missing path")
-        digest = _leaf(field, value)
-        for is_right, sib_str in path:
-            if not (isinstance(sib_str, str) and sib_str.startswith(HASH_PREFIX)):
-                raise ValueError(f"bad sibling digest in {field!r} path")
-            sib = bytes.fromhex(sib_str[len(HASH_PREFIX) :])
-            if len(sib) != 32:
-                raise ValueError(f"bad sibling length in {field!r} path")
-            digest = _node(sib, digest) if is_right else _node(digest, sib)
-        if digest != expected_root:
-            raise ValueError(f"disclosure for {field!r} does not match root")
+        _assert_leaf_reaches_root(field, value, path, expected_root)
         verified[field] = value
     return verified
+
+
+def _assert_leaf_reaches_root(
+    field: str,
+    value: Any,
+    path: list[Any],
+    expected_root: bytes,
+) -> None:
+    """Walk one leaf's Merkle path to the root.
+
+    Invariant (fail-closed): every sibling along the path is a well-formed
+    hash-prefixed 32-byte digest, and the recomputed root equals the
+    committed root; any mismatch raises ValueError.
+    """
+    digest = _leaf(field, value)
+    for is_right, sib_str in path:
+        if not (isinstance(sib_str, str) and sib_str.startswith(HASH_PREFIX)):
+            raise ValueError(f"bad sibling digest in {field!r} path")
+        sib = bytes.fromhex(sib_str[len(HASH_PREFIX) :])
+        if len(sib) != 32:
+            raise ValueError(f"bad sibling length in {field!r} path")
+        digest = _node(sib, digest) if is_right else _node(digest, sib)
+    if digest != expected_root:
+        raise ValueError(f"disclosure for {field!r} does not match root")
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +239,24 @@ def recheck_constraints(
     """
     results: dict[str, str] = {}
 
+    _recheck_evaluated_kinds(constraints, disclosed_fields, results)
+    _recheck_required_present(constraints, disclosed_fields, results)
+    _recheck_forbidden_combinations(constraints, disclosed_fields, results)
+
+    return results
+
+
+def _recheck_evaluated_kinds(
+    constraints: dict[str, Any],
+    disclosed_fields: dict[str, Any],
+    results: dict[str, str],
+) -> None:
+    """Every constraint kind with an evaluator: fold its per-field
+    tri-state into VIOLATED / UNKNOWN / SATISFIED.
+
+    Invariant (fail-closed): any undisclosed field touching the kind makes
+    the kind UNKNOWN, never conformance.
+    """
     for kind, evaluator in _EVALUATORS.items():
         if kind not in constraints:
             continue
@@ -243,7 +276,16 @@ def recheck_constraints(
         else:
             results[kind] = "SATISFIED"
 
-    # required_present: every named field must have been disclosed.
+
+def _recheck_required_present(
+    constraints: dict[str, Any],
+    disclosed_fields: dict[str, Any],
+    results: dict[str, str],
+) -> None:
+    """required_present: every named field must have been disclosed.
+
+    Invariant (fail-closed): a single missing field yields UNKNOWN.
+    """
     required = constraints.get("required_present")
     if isinstance(required, list) and required:
         if all(f in disclosed_fields for f in required):
@@ -251,28 +293,37 @@ def recheck_constraints(
         else:
             results["required_present"] = "UNKNOWN"
 
-    # forbidden_field_combinations: a combination is violated only if ALL
-    # its fields are disclosed; any undisclosed field leaves it UNKNOWN.
-    combos = constraints.get("forbidden_field_combinations")
-    if isinstance(combos, list) and combos:
-        combo_results = []
-        for combo in combos:
-            if not isinstance(combo, list):
-                continue
-            if all(f in disclosed_fields for f in combo):
-                combo_results.append(
-                    "VIOLATED" if all(disclosed_fields[f] for f in combo) else "SATISFIED"
-                )
-            else:
-                combo_results.append("UNKNOWN")
-        if any(r == "VIOLATED" for r in combo_results):
-            results["forbidden_field_combinations"] = "VIOLATED"
-        elif all(r == "SATISFIED" for r in combo_results):
-            results["forbidden_field_combinations"] = "SATISFIED"
-        else:
-            results["forbidden_field_combinations"] = "UNKNOWN"
 
-    return results
+def _recheck_forbidden_combinations(
+    constraints: dict[str, Any],
+    disclosed_fields: dict[str, Any],
+    results: dict[str, str],
+) -> None:
+    """forbidden_field_combinations: a combination is violated only if ALL
+    its fields are disclosed; any undisclosed field leaves it UNKNOWN.
+
+    Invariant (fail-closed): UNKNOWN combinations never count as
+    conformance.
+    """
+    combos = constraints.get("forbidden_field_combinations")
+    if not (isinstance(combos, list) and combos):
+        return
+    combo_results = []
+    for combo in combos:
+        if not isinstance(combo, list):
+            continue
+        if all(f in disclosed_fields for f in combo):
+            combo_results.append(
+                "VIOLATED" if all(disclosed_fields[f] for f in combo) else "SATISFIED"
+            )
+        else:
+            combo_results.append("UNKNOWN")
+    if any(r == "VIOLATED" for r in combo_results):
+        results["forbidden_field_combinations"] = "VIOLATED"
+    elif all(r == "SATISFIED" for r in combo_results):
+        results["forbidden_field_combinations"] = "SATISFIED"
+    else:
+        results["forbidden_field_combinations"] = "UNKNOWN"
 
 
 __all__ = [
