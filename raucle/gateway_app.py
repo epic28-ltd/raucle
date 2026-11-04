@@ -408,7 +408,9 @@ def _register_deployment_intake_routes(app: FastAPI, gateway: RaucleGateway) -> 
         try:
             status, body = accept_deployment(gateway, jws=req.jws, artefact=req.artefact)
         except DeploymentIntakeError as exc:
-            raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "detail": exc.detail}) from exc
+            raise HTTPException(
+                status_code=exc.status_code, detail={"code": exc.code, "detail": exc.detail}
+            ) from exc
         if status != 200:
             raise HTTPException(status_code=status, detail=body)
         return body
@@ -1084,6 +1086,47 @@ def _register_receipt_routes(
                 detail="ancestry requires the receipt index (set RAUCLE_RECEIPT_STORE_DIR)",
             )
         return gateway._receipt_index.ancestry(receipt_hash, max_depth=max_depth)
+
+    @app.get(
+        "/api/chains/{receipt_hash}",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+            "404": {"description": "Unknown receipt hash"},
+        },
+    )
+    def get_chain_graph(
+        receipt_hash: str,
+        depth: int = 5,
+        breadth: int = 200,
+        authorization: str | None = Header(None),
+    ) -> dict[str, Any]:
+        """Resolve the complete authority graph for one decision receipt.
+
+        Originating authority, delegation hops, the policy binding and
+        inline lease/revocation events, bounded by depth/breadth (work
+        is capped server-side). Derived only from verified receipt
+        links; unverifiable material is an explicit node state, never
+        silently resolved.
+        """
+        from raucle.chain_graph import (
+            _MAX_BREADTH,
+            _MAX_DEPTH,
+            resolve_chain_graph_for_gateway,
+        )
+
+        user = check_auth(authorization)
+        check_access(user, "receipts")
+        graph = resolve_chain_graph_for_gateway(
+            gateway,
+            receipt_hash,
+            depth=min(max(int(depth), 0), _MAX_DEPTH),
+            breadth=min(max(int(breadth), 1), _MAX_BREADTH),
+        )
+        root_node = graph.get("root")
+        if isinstance(root_node, dict) and root_node.get("state") == "unknown":
+            raise HTTPException(status_code=404, detail="unknown receipt hash")
+        return graph
 
     @app.get(
         "/api/receipts/export",
