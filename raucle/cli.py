@@ -28,6 +28,8 @@ _VALID_COLOR = "\033[92mVALID\033[0m"
 _INVALID_COLOR = "\033[91mINVALID\033[0m"
 
 _DEFAULT_AGENT_STORE = "/data/agent-credentials.jsonl"
+_DEFAULT_CANARY_LEDGER = "/data/canary-ledger.jsonl"
+_DEFAULT_CANARY_RECEIPTS = "/data/canary-receipts.jsonl"
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +147,32 @@ def _build_parser() -> argparse.ArgumentParser:
     agents_revoke.add_argument("--store", default=_DEFAULT_AGENT_STORE)
     agents_list = agents_sub.add_parser("list", help="List agents with active keys")
     agents_list.add_argument("--store", default=_DEFAULT_AGENT_STORE)
+
+    # -- canary (one-time exfil canary mint/observe, P1.3a) ----------------
+    canary_p = subparsers.add_parser(
+        "canary", help="Mint one-time canary credentials and observe their appearance"
+    )
+    canary_sub = canary_p.add_subparsers(dest="canary_command")
+    canary_mint = canary_sub.add_parser("mint", help="Mint a one-time canary for a run")
+    canary_mint.add_argument("--run-id", required=True, help="Run id the canary is tied to")
+    canary_mint.add_argument("--store", default=_DEFAULT_AGENT_STORE)
+    canary_mint.add_argument(
+        "--ledger",
+        default=_DEFAULT_CANARY_LEDGER,
+        help=f"Canary ledger path (default: {_DEFAULT_CANARY_LEDGER})",
+    )
+    canary_mint.add_argument(
+        "--receipts",
+        default=_DEFAULT_CANARY_RECEIPTS,
+        help=f"Canary receipt stream path (default: {_DEFAULT_CANARY_RECEIPTS})",
+    )
+    canary_observe = canary_sub.add_parser(
+        "observe", help="Present a canary value and print a deterministic verdict"
+    )
+    canary_observe.add_argument("--value", required=True, help="The presented canary value")
+    canary_observe.add_argument("--store", default=_DEFAULT_AGENT_STORE)
+    canary_observe.add_argument("--ledger", default=_DEFAULT_CANARY_LEDGER)
+    canary_observe.add_argument("--receipts", default=_DEFAULT_CANARY_RECEIPTS)
 
     serve_p = subparsers.add_parser("serve", help="Start the REST API server")
     serve_p.add_argument(
@@ -969,6 +997,33 @@ def _cmd_agents_revoke_key(args: argparse.Namespace) -> int:
         return 0
     print(f"no active credential for {args.agent_id}", file=sys.stderr)
     return 1
+
+
+def _canary_service(args: argparse.Namespace) -> Any:
+    from raucle.agent_credentials import AgentCredentialStore
+    from raucle.canary_service import CanaryService
+
+    return CanaryService(
+        AgentCredentialStore(path=args.store),
+        ledger_path=args.ledger,
+        receipts_path=args.receipts,
+    )
+
+
+def _cmd_canary_mint(args: argparse.Namespace) -> int:
+    mint = _canary_service(args).mint(run_id=args.run_id)
+    print(f"canary minted for run {mint.run_id} (shown once, stored hashed):")
+    print(mint.value)
+    print(f"mint_id: {mint.mint_id}", file=sys.stderr)
+    return 0
+
+
+def _cmd_canary_observe(args: argparse.Namespace) -> int:
+    verdict = _canary_service(args).observe(value=args.value)
+    # The verdict bytes are the deterministic, byte-comparable form;
+    # printing exactly them keeps repeat runs diff-able.
+    sys.stdout.buffer.write(verdict.verdict_bytes() + b"\n")
+    return 0 if verdict.observed() else 1
 
 
 def _cmd_agents_list(args: argparse.Namespace) -> int:
@@ -2852,6 +2907,8 @@ def _dispatch(argv: list[str] | None = None) -> int:
         ("agents", "issue-key"): _cmd_agents_issue_key,
         ("agents", "revoke-key"): _cmd_agents_revoke_key,
         ("agents", "list"): _cmd_agents_list,
+        ("canary", "mint"): _cmd_canary_mint,
+        ("canary", "observe"): _cmd_canary_observe,
         ("authorship", "sign"): _cmd_authorship_sign,
         ("authorship", "verify"): _cmd_authorship_verify,
         ("timestamp", "stamp"): _cmd_timestamp,
