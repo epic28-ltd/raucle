@@ -687,3 +687,55 @@ def baseline_constraint_for(policy: Any, tool: str, agent_id: str) -> dict[str, 
         if rule.tool == tool and rule.agent_id == agent_id:
             return rule.to_mint_kwargs()["constraints"]
     return {}
+
+
+def delta_artefact_digest(artefact: dict[str, Any]) -> str:
+    """The sha256 hex digest of the canonical artefact JSON.
+
+    The digest is what activation receipts sign: an artefact presented
+    later must hash to the digest beside it or it is not the artefact
+    the approver saw.
+    """
+    from raucle.provenance import _canonical_json, _sha256_hex
+
+    return _sha256_hex(_canonical_json(artefact))
+
+
+_ARTEFACT_KIND = "policy_activation_delta"
+
+
+def _bounded_section(rows: list[dict[str, Any]], *, id_key: str = "rule_id") -> dict[str, Any]:
+    """Traceable counts for a section: one count with the IDs it counts
+    beside it (the register's accountability rule)."""
+    return {
+        "count": len(rows),
+        "ids": sorted({str(r[id_key]) for r in rows if r.get(id_key)}),
+        "rows": rows,
+    }
+
+
+def activation_artefact(report: DeltaReport) -> dict[str, Any]:
+    """The bounded, pack-eligible artefact for a delta report (P1.6c).
+
+    Decision rows keep only receipt IDs and actions (bounded disclosure:
+    no rule constraint values ride the artefact).
+    """
+    return {
+        "artefact_kind": _ARTEFACT_KIND,
+        "policy_versions": report.policy_versions,
+        "flipped_decisions": _bounded_section(report.flips, id_key="receipt_id"),
+        "authority_paths_opened": _bounded_section(report.authority_paths_opened),
+        "authority_paths_closed": _bounded_section(report.authority_paths_closed),
+        "authority_paths_changed": _bounded_section(report.authority_paths_changed),
+        "delegation_hop_impact": report.delegation_hops,
+        "invariants_preserved": sorted(
+            {
+                inv["invariant"]
+                for inv in report.invariants["invariants"]
+                if inv["holds_in_both"]
+            }
+        ),
+        "invariants_mode": report.invariants["mode"],
+        "register_sentence": report.register_sentence,
+        "gaps": list(report.gaps),
+    }

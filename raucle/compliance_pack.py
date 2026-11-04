@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -217,6 +218,7 @@ def build_pack(
     out_dir: str | Path,
     verify_key_pem: bytes | None = None,
     operator_key_pem: bytes | None = None,
+    extra_artefacts: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the pack bundle. Returns the manifest; callers exit non-zero
     when manifest["verifier_result"] != "valid"."""
@@ -272,16 +274,27 @@ def build_pack(
         json.dump(retention, fh, indent=2)
 
     # pack_hash binds the bundle files
-    pack_hash = (
-        _HASH_PREFIX
-        + hashlib.sha256(
-            (
-                _sha256_file(_bundle_file(out_dir, _COVERAGE_FILE))
-                + _sha256_file(_bundle_file(out_dir, _EXTRACTS_FILE))
-                + _sha256_file(_bundle_file(out_dir, _RETENTION_FILE))
-            ).encode("ascii")
-        ).hexdigest()
-    )
+    _hash_terms = [
+        _sha256_file(_bundle_file(out_dir, _COVERAGE_FILE)),
+        _sha256_file(_bundle_file(out_dir, _EXTRACTS_FILE)),
+        _sha256_file(_bundle_file(out_dir, _RETENTION_FILE)),
+    ]
+
+    # optional evidence artefacts (P1.6c): e.g. the activation delta
+    # artefact. Written into the bundle and folded into pack_hash, so
+    # the manifest binds them like any other member.
+    if extra_artefacts:
+        for name, art in sorted(extra_artefacts.items()):
+            if not re.fullmatch(r"[a-z0-9._-]{1,64}", name):
+                raise ValueError(f"artefact name rejected: {name!r}")
+            filename = f"artefact-{name}.json"
+            _bundle_file(out_dir, filename).write_text(
+                json.dumps(art, indent=2), encoding="utf-8"
+            )
+            _hash_terms.append(_sha256_file(_bundle_file(out_dir, filename)))
+    pack_hash = _HASH_PREFIX + hashlib.sha256(
+        "".join(_hash_terms).encode("ascii")
+    ).hexdigest()
     chain_digest = _sha256_file(chain_path)
 
     manifest: dict[str, Any] = {

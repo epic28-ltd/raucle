@@ -851,6 +851,51 @@ def _register_authority_routes(
         return result
 
     @app.get(
+        "/api/activation-requests",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+        },
+    )
+    def list_activation_requests(authorization: str | None = Header(None)) -> dict[str, Any]:
+        """P1.6c: pending policy-activation requests with their blast-radius
+        delta summary, so the activate path shows the delta before
+        confirmation."""
+        user = check_auth(authorization)
+        check_access(user, "receipts")
+        rows = gateway._activations.pending()
+        return {"count": len(rows), "activation_requests": rows}
+
+    @app.post(
+        "/api/activation-requests/{request_id}/decision",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+            "404": {"description": "Unknown or expired request"},
+            "409": {"description": "Request is not pending"},
+        },
+    )
+    def decide_activation_request(
+        request_id: str,
+        req: ApprovalDecisionRequest,
+        authorization: str | None = Header(None),
+    ) -> dict[str, Any]:
+        """Receipted decision on an activation request carrying the delta."""
+        user = check_auth(authorization)
+        check_access(user, "policies")
+        from raucle.activation import ActivationError
+
+        try:
+            result = gateway.decide_activation(
+                request_id,
+                approved=req.approved,
+                approver=user.name or user.role,
+            )
+        except ActivationError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        return result
+
+    @app.get(
         "/api/policy-ledger",
         responses={
             "401": {"description": "MFA required or missing Authorization header"},

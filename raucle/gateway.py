@@ -781,9 +781,13 @@ class RaucleGateway:
         # Authority attribution (PR-E): human approval workflow + policy
         # change ledger. Approvals live in memory (receipts are the durable
         # record); the ledger is append-only hash-chained JSONL.
+        from raucle.activation import ActivationApprovalManager
         from raucle.approvals import ApprovalManager
 
         self._approvals = ApprovalManager(ttl_seconds=config.approval_ttl_seconds)
+        self._activations = ActivationApprovalManager(
+            ttl_seconds=config.approval_ttl_seconds
+        )
         self._policy_ledger_head = _HASH_PREFIX + "0" * 64
 
     def _init_gate_identity(self) -> None:
@@ -2004,6 +2008,108 @@ class RaucleGateway:
             )
         except Exception:
             logger.exception("approval-decision receipt emission failed")
+        return {
+            "request_id": request.request_id,
+            "status": request.status,
+            "approver": approver,
+            "receipt_id": receipt_id,
+        }
+
+    # ------------------------------------------------------------------
+    # P1.6c: receipted activation requests carrying the delta artefact
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _bounded_receipt_summary(summary: dict[str, Any]) -> dict[str, Any]:
+        """Receipt-safe projection of the delta summary: strings, ints,
+        bools and lists of strings only (strict envelope: no floats)."""
+        safe: dict[str, Any] = {}
+        for key, value in summary.items():
+            is_list_of_str = isinstance(value, list) and all(
+                isinstance(v, str) for v in value
+            )
+            if isinstance(value, (str, int, bool)) or is_list_of_str:
+                safe[key] = value
+            elif isinstance(value, dict):
+                safe[key] = RaucleGateway._bounded_receipt_summary(value)
+        return safe
+
+    def request_policy_activation(
+        self,
+        *,
+        policy_id: str,
+        requested_by: str,
+        batch: Any,
+        baseline_policy: Any,
+        candidate_policy: Any,
+        chain_graphs: dict[str, dict[str, Any]] | None = None,
+        use_z3: bool = True,
+    ) -> dict[str, Any]:
+        """P1.6c: create an activation request in the approvals queue with
+        the blast-radius delta artefact computed at request time, and
+        receipt the artefact like other governance events.
+
+        The request receipt embeds the bounded delta summary and the
+        artefact digest: the activate path shows the delta before
+        confirmation, and the signed receipt is what binds the artefact
+        the approver saw. Receipt emission is best-effort (same
+        discipline as tool-call approval requests); the delta summary in
+        the result is the caller-facing artefact for the confirm step.
+        """
+        request = self._activations.create_request(
+            policy_id=policy_id,
+            requested_by=requested_by,
+            batch=batch,
+            baseline_policy=baseline_policy,
+            candidate_policy=candidate_policy,
+            chain_graphs=chain_graphs,
+            use_z3=use_z3,
+        )
+        receipt_id = None
+        try:
+            receipt_id = self._emit_authority_receipt(
+                verdict="activation_requested",
+                extension_key="x_activation",
+                extension={
+                    "request_id": request.request_id,
+                    "policy_id": policy_id,
+                    "requested_by": requested_by,
+                    "artefact_digest": request.artefact_digest,
+                    "delta_summary": self._bounded_receipt_summary(request.delta_summary),
+                },
+            )
+        except Exception:
+            logger.exception("activation-request receipt emission failed")
+        request.receipt_id = receipt_id
+        return {
+            "request_id": request.request_id,
+            "policy_id": policy_id,
+            "status": request.status,
+            "artefact_digest": request.artefact_digest,
+            "delta_summary": request.delta_summary,
+            "receipt_id": receipt_id,
+        }
+
+    def decide_activation(
+        self, request_id: str, *, approved: bool, approver: str
+    ) -> dict[str, Any]:
+        """Receipted decision on an activation request carrying the delta."""
+        request = self._activations.decide(request_id, approved=approved, approver=approver)
+        receipt_id = None
+        try:
+            receipt_id = self._emit_authority_receipt(
+                verdict="activation_granted" if approved else "activation_denied",
+                extension_key="x_activation",
+                extension={
+                    "request_id": request.request_id,
+                    "policy_id": request.policy_id,
+                    "approver": approver,
+                    "artefact_digest": request.artefact_digest,
+                    "delta_summary": self._bounded_receipt_summary(request.delta_summary),
+                },
+            )
+        except Exception:
+            logger.exception("activation-decision receipt emission failed")
         return {
             "request_id": request.request_id,
             "status": request.status,

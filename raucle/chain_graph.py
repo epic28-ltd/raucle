@@ -356,6 +356,8 @@ def _receipt_node(
         node["gate"] = {
             "decision": x_gate.get("decision"),
             "reason": x_gate.get("reason"),
+            "tool": x_gate.get("tool"),
+            "agent_id": x_gate.get("agent_id"),
             "policy": x_gate.get("policy"),
             "rule_id": x_gate.get("rule_id") or "",
             "trace_id": x_gate.get("trace_id") or "",
