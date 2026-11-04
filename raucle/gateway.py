@@ -65,6 +65,26 @@ _DRAFT_POLICY_HEADER: tuple[str, ...] = (
 # ---------------------------------------------------------------------------
 
 
+def _deployment_trust_from_env() -> dict:
+    """Load the pinned deployment trust root from the environment.
+
+    RAUCLE_DEPLOYMENT_TRUST_FILE points at a JSON mapping with the same
+    shape as the ``deployment_trust`` YAML section. Unset or unreadable
+    means "no intake" (the unchanged default posture), never
+    "trust by default": a broken trust-root file must not enable intake.
+    """
+    path = os.environ.get("RAUCLE_DEPLOYMENT_TRUST_FILE", "")
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("RAUCLE_DEPLOYMENT_TRUST_FILE %s unreadable: %s", path, exc)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 @dataclass
 class GatewayConfig:
     """Gateway configuration loaded from environment or config file."""
@@ -150,6 +170,12 @@ class GatewayConfig:
     # Authority attribution (PR-E): human approvals, policy change ledger
     approval_ttl_seconds: int = 300
     policy_ledger_path: str = ""  # when unset, no ledger is written
+    # Deployment intake (H1 phase 5): the PINNED portal trust root for
+    # externally-signed policy deployments. Empty mapping = no intake
+    # endpoint (the default posture is unchanged). Keys: issuer,
+    # public_key_pem | key_path, algorithm (EdDSA only), policy_target,
+    # nonce_cache. Portal credentials never flow to the gate.
+    deployment_trust: dict = field(default_factory=dict)
 
     @classmethod
     def from_env(cls) -> GatewayConfig:
@@ -192,6 +218,7 @@ class GatewayConfig:
                 os.environ.get("RAUCLE_RECEIPT_SEGMENT_MAX_BYTES", "67108864")
             ),
             receipt_index_path=os.environ.get("RAUCLE_RECEIPT_INDEX_PATH", ""),
+            deployment_trust=_deployment_trust_from_env(),
         )
 
     @classmethod

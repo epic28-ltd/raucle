@@ -62,6 +62,20 @@ reason about residual trust. It reflects the hardening from the 2026-06 security
 - **Server:** ships **unauthenticated by default** — set `RAUCLE_DETECT_API_KEY` and bind to a
   trusted interface before exposing it.
 
+## Deployment intake (external, portal-signed policies)
+- `POST /api/deployments/accept` exists ONLY when a `deployment_trust`
+  section is configured; the default posture has no intake endpoint
+  (404) and nothing about the gate's other surfaces changes.
+- The gate verifies the portal's Ed25519 JWS against its PINNED public
+  key (issuer-pinned, EdDSA, digest-bound to the artefact in the request,
+  nonce-replay-protected). Portal credentials never flow to the gate.
+- On accept, the artefact is written atomically and the deployment is
+  bound into the hash-chained audit chain + a gate-signed receipt under
+  the gate's own identity. Every refusal is fail-closed and audited; the
+  live policy is never touched on a verification refusal.
+- Trust model and third-party offline verification: see
+  `docs/deployment-intake.md`.
+
 ## Keys & supply chain
 - Private keys are written `0600`. Do not commit key files (`*.pem`/`*.key` are git-ignored).
 - Releases are published to PyPI via OIDC Trusted Publishing (no long-lived token); CI actions

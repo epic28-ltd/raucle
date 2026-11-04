@@ -30,6 +30,13 @@ _BEARER_PREFIX = "Bearer "
 # ---------------------------------------------------------------------------
 
 
+class DeployAcceptRequest(BaseModel):
+    """One external policy-deployment push: portal receipt + artefact."""
+
+    jws: str = Field(..., description="Portal-issued JWS deployment receipt")
+    artefact: str = Field(..., description="Canonical policy artefact the receipt binds")
+
+
 class GateRequest(BaseModel):
     """A tool call from an AI agent to be gated."""
 
@@ -358,7 +365,53 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
                 raise HTTPException(status_code=401, detail="Health check unauthorized")
         return {"status": "ok"}
 
+    _register_deployment_intake_routes(app, gateway)
+
     return app
+
+
+def _register_deployment_intake_routes(app: FastAPI, gateway: RaucleGateway) -> None:
+    """POST /api/deployments/accept (H1 phase 5).
+
+    Registered ONLY when ``deployment_trust`` is configured: the default
+    posture keeps the endpoint absent (404), so an unconfigured gate
+    refuses external deployments by not hearing about them at all.
+    """
+    from raucle.deployment_intake import (
+        DeploymentIntakeError,
+        accept_deployment,
+        resolve_deployment_trust,
+    )
+
+    if resolve_deployment_trust(getattr(gateway.config, "deployment_trust", None)) is None:
+        return
+
+    @app.post(
+        "/api/deployments/accept",
+        responses={
+            "400": {"description": "Artefact malformed or digest mismatch"},
+            "401": {"description": "JWS signature does not verify against the pinned root"},
+            "403": {"description": "Untrusted issuer, malformed receipt, or replayed nonce"},
+            "503": {"description": "Pinned trust root or nonce cache unavailable (fail-closed)"},
+        },
+    )
+    def accept_deployment_endpoint(
+        req: DeployAcceptRequest,
+    ) -> dict[str, Any]:
+        """Accept a portal-signed policy deployment artefact.
+
+        Verify against the gate's PINNED portal trust root, apply the
+        artefact atomically, append the bound deployment to the gate's
+        hash-chained audit chain under the gate's own signer. Unverified
+        pushes fail closed: never applied, and the rejection is audited.
+        """
+        try:
+            status, body = accept_deployment(gateway, jws=req.jws, artefact=req.artefact)
+        except DeploymentIntakeError as exc:
+            raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "detail": exc.detail}) from exc
+        if status != 200:
+            raise HTTPException(status_code=status, detail=body)
+        return body
 
 
 # ---------------------------------------------------------------------------
