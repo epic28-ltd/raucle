@@ -179,7 +179,7 @@ def _delegation_hops(graph: dict[str, Any]) -> tuple[int, list[str]]:
             current = parents[current]
             hops += 1
         deepest = max(deepest, hops)
-    return len(token_ids), sorted(set(t for t in token_ids if t))
+    return len(token_ids), sorted({t for t in token_ids if t})
 
 
 def delegation_hop_impact(
@@ -274,26 +274,33 @@ def _make_threshold_negation(baseline_c: dict[str, Any], candidate_c: dict[str, 
     claim for the modelled kinds actually present."""
 
     def _negation(z3: Any, solver: Any) -> None:
-        terms = []
-        counter = 0
-        for key, bigger_widens in _WIDEN_FIELDS:
-            base_bounds = baseline_c.get(key, {})
-            cand_bounds = candidate_c.get(key, {})
-            for f in set(base_bounds) & set(cand_bounds):
-                b, c = base_bounds[f], cand_bounds[f]
-                if not isinstance(b, (int, float)) or not isinstance(c, (int, float)):
-                    continue
-                vb = z3.Real(f"__base_{counter}")
-                vc = z3.Real(f"__cand_{counter}")
-                counter += 1
-                solver.add(vb == b, vc == c)
-                terms.append(vc > vb if bigger_widens else vc < vb)
-        if terms:
-            solver.add(z3.Or(*terms))
-        else:
-            solver.add(z3.BoolVal(False))
+        _threshold_negation_terms(z3, solver, baseline_c, candidate_c)
 
     return _negation
+
+
+def _threshold_negation_terms(
+    z3: Any, solver: Any, baseline_c: dict[str, Any], candidate_c: dict[str, Any]
+) -> None:
+    """Assert SOME shared bound moved outwards; unsat proves tightening."""
+    terms = []
+    counter = 0
+    for key, bigger_widens in _WIDEN_FIELDS:
+        base_bounds = baseline_c.get(key, {})
+        cand_bounds = candidate_c.get(key, {})
+        for f in set(base_bounds) & set(cand_bounds):
+            b, c = base_bounds[f], cand_bounds[f]
+            if not isinstance(b, (int, float)) or not isinstance(c, (int, float)):
+                continue
+            vb = z3.Real(f"__base_{counter}")
+            vc = z3.Real(f"__cand_{counter}")
+            counter += 1
+            solver.add(vb == b, vc == c)
+            terms.append(vc > vb if bigger_widens else vc < vb)
+    if terms:
+        solver.add(z3.Or(*terms))
+    else:
+        solver.add(z3.BoolVal(False))
 
 
 def _check_threshold_invariant_z3(
@@ -322,31 +329,39 @@ def _make_denylist_negation(baseline_c: dict[str, Any], candidate_c: dict[str, A
     Unsat proves the superset."""
 
     def _negation(z3: Any, solver: Any) -> None:
-        terms, counter = [], 0
-        for f in set(baseline_c.get("forbidden_values", {})) & set(
-            candidate_c.get("forbidden_values", {})
-        ):
-            base_vals = baseline_c["forbidden_values"][f]
-            cand_vals = candidate_c["forbidden_values"][f]
-            base_idx, cand_idx = {}, {}
-            for val in {*base_vals, *cand_vals}:
-                if val not in base_idx and val not in cand_idx:
-                    idx = counter
-                    counter += 1
-                    base_idx[val] = idx
-                    cand_idx.setdefault(val, idx)
-            missing = [base_idx[v] for v in base_idx if v not in cand_idx]
-            for m in missing:
-                v = z3.Int(f"__val_{counter}")
-                counter += 1
-                solver.add(v == m)
-                terms.append(z3.BoolVal(True))
-        if terms:
-            solver.add(z3.Or(*terms))
-        else:
-            solver.add(z3.BoolVal(False))
+        _denylist_negation_terms(z3, solver, baseline_c, candidate_c)
 
     return _negation
+
+
+def _denylist_negation_terms(
+    z3: Any, solver: Any, baseline_c: dict[str, Any], candidate_c: dict[str, Any]
+) -> None:
+    """Model every forbidden value at baseline whose candidate-membership
+    is absent as a distinct Int index; unsat proves the superset."""
+    terms, counter = [], 0
+    for f in set(baseline_c.get("forbidden_values", {})) & set(
+        candidate_c.get("forbidden_values", {})
+    ):
+        base_vals = baseline_c["forbidden_values"][f]
+        cand_vals = candidate_c["forbidden_values"][f]
+        base_idx, cand_idx = {}, {}
+        for val in {*base_vals, *cand_vals}:
+            if val not in base_idx and val not in cand_idx:
+                idx = counter
+                counter += 1
+                base_idx[val] = idx
+                cand_idx.setdefault(val, idx)
+        missing = [base_idx[v] for v in base_idx if v not in cand_idx]
+        for m in missing:
+            v = z3.Int(f"__val_{counter}")
+            counter += 1
+            solver.add(v == m)
+            terms.append(z3.BoolVal(True))
+    if terms:
+        solver.add(z3.Or(*terms))
+    else:
+        solver.add(z3.BoolVal(False))
 
 
 def _check_denylist_invariant_z3(
@@ -497,6 +512,20 @@ def invariant_diff(
             lambda b, c: (not _denylist_widenings(b, c), []),
         )
 
+    invariants = _collect_invariant_rows(
+        base_by_tool, cand_by_tool, flipped_rows, checkers, mode
+    )
+    return {"mode": mode, "z3_invoked": z3_available, "invariants": invariants}
+
+
+def _collect_invariant_rows(
+    base_by_tool: dict[str, list[Any]],
+    cand_by_tool: dict[str, list[Any]],
+    flipped_rows: list[dict[str, Any]],
+    checkers: tuple[Any, ...],
+    mode: str,
+) -> list[dict[str, Any]]:
+    """One invariant row set per tool present in either policy version."""
     invariants: list[dict[str, Any]] = []
     for tool in sorted(set(base_by_tool) | set(cand_by_tool)):
         base_rules = base_by_tool.get(tool)
@@ -513,7 +542,7 @@ def invariant_diff(
             invariants.extend(_withdrawn_invariant_rows(tool, base_rules, mode, receipts))
         else:
             invariants.extend(_opened_invariant_rows(tool, cand_rules or [], mode, receipts))
-    return {"mode": mode, "z3_invoked": z3_available, "invariants": invariants}
+    return invariants
 
 
 # ---------------------------------------------------------------------------
