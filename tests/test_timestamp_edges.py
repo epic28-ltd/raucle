@@ -10,13 +10,14 @@ import base64
 import hashlib
 import json
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
 from raucle import timestamp as ts
 from raucle.timestamp import (
+    TimestampError,
     build_anchor,
     build_timestamp_request,
     chain_head_digest,
@@ -24,14 +25,11 @@ from raucle.timestamp import (
     parse_response,
     retimestamp_plan,
     submit_timestamp_request,
-    TimestampError,
     verify_anchor,
     verify_token,
 )
-
-from tests.test_timestamping import MOCK_POLICY_OID, MockTSA
+from tests.test_timestamping import MOCK_POLICY_OID, MockTSA, _mint_receipt_chain, _operator_key
 from tests.test_timestamping import _b64u as _b64u  # re-export for local minting
-from tests.test_timestamping import _mint_receipt_chain, _operator_key
 
 
 @pytest.fixture
@@ -126,9 +124,7 @@ def _get_token(tsa, *, corrupt=False):
         tsa.corrupt_signature = True
     digest = hashlib.sha256(b"chain head edge").digest()
     nonce = new_nonce()
-    reply = submit_timestamp_request(
-        tsa.url, build_timestamp_request(digest, nonce), timeout=5.0
-    )
+    reply = submit_timestamp_request(tsa.url, build_timestamp_request(digest, nonce), timeout=5.0)
     token = parse_response(reply)["token"]
     if corrupt:
         tsa.corrupt_signature = False
@@ -213,9 +209,6 @@ def _unsigned_token(tst_fields, version="v3"):
 
 
 def test_verify_rejects_unsupported_imprint_hash():
-    from datetime import datetime, timezone
-
-    from asn1crypto import tsp
 
     tst = {
         "version": 1,
@@ -271,7 +264,8 @@ def test_verify_missing_signed_attrs_is_named():
 
 
 def test_verify_unresolvable_signer_cert_is_named(mock_tsa):
-    from asn1crypto import cms, x509 as ax509
+    from asn1crypto import cms
+    from asn1crypto import x509 as ax509
 
     token, dg, nc = _get_token(mock_tsa)
     ci = _load_token(token)
@@ -406,7 +400,6 @@ def _mint_chain_with_key(tmp_path, ed, pub, rows, name, retention_days=0):
     """Receipt ledger in the gate's envelope shape, signed with a supplied
     Ed25519 key — so the same key verifies both chain lines and the anchor
     receipt (verify_anchor passes exactly one public key)."""
-    from cryptography.hazmat.primitives import serialization
 
     from raucle.provenance import _canonical_json, _sha256_hex
 
@@ -563,8 +556,13 @@ def _forge_anchor_doc(tmp_path, x_ts, input_hash):
 
 
 def test_verify_anchor_digest_binding_mismatch(tmp_path):
-    x_ts = {"mode": "tsa", "digest": "sha256:" + "ab" * 32, "token": "", "nonce": 1,
-            "gen_time": "2026-01-01T00:00:00+00:00"}
+    x_ts = {
+        "mode": "tsa",
+        "digest": "sha256:" + "ab" * 32,
+        "token": "",
+        "nonce": 1,
+        "gen_time": "2026-01-01T00:00:00+00:00",
+    }
     p = _forge_anchor_doc(tmp_path, x_ts, "aa" * 32)
     report = verify_anchor(p)
     assert not report["valid"]
@@ -599,7 +597,12 @@ def test_verify_anchor_standalone_token_invalid(tmp_path, mock_tsa):
     hdr, pl, sig = doc["jws"].split(".")
     p = tmp_path / "badtoken.json"
     p.write_text(
-        json.dumps({**doc, "jws": f"{hdr}.{base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b'=').decode()}.{sig}"}),
+        json.dumps(
+            {
+                **doc,
+                "jws": f"{hdr}.{base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b'=').decode()}.{sig}",
+            }
+        ),
         encoding="utf-8",
     )
     report = verify_anchor(p)
@@ -621,7 +624,6 @@ def test_verify_anchor_gen_time_disagreement(tmp_path, mock_tsa):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     ed = Ed25519PrivateKey.generate()
-    from cryptography.hazmat.primitives import serialization
 
     pub_pem = ed.public_key().public_bytes(
         encoding=serialization.Encoding.PEM,
@@ -642,21 +644,26 @@ def test_verify_anchor_gen_time_disagreement(tmp_path, mock_tsa):
     report = verify_anchor(p)
     assert not report["valid"]
     assert report["errors"], report
-    assert any(
-        "gen_time" in e or "Time Stamp Token" in e for e in report["errors"]
-    ), report["errors"]
+    assert any("gen_time" in e or "Time Stamp Token" in e for e in report["errors"]), report[
+        "errors"
+    ]
 
 
 def test_verify_anchor_token_copy_disagreement(tmp_path, mock_tsa):
-    from raucle.timestamp import anchor_payload
     from raucle.compliance_pack import _sign_certificate
+    from raucle.timestamp import anchor_payload
 
     chain, res = _mint_anchor(tmp_path, mock_tsa, name="c8")
     doc = json.loads(open(res["anchor"], encoding="utf-8").read())
     parent, digest = chain_head_digest(chain)
     payload = anchor_payload(
-        digest=digest, parent_receipt=parent, tsa_url=mock_tsa.url, nonce=1,
-        token_der=b"other token", gen_time=str(res["gen_time"]), serial=1,
+        digest=digest,
+        parent_receipt=parent,
+        tsa_url=mock_tsa.url,
+        nonce=1,
+        token_der=b"other token",
+        gen_time=str(res["gen_time"]),
+        serial=1,
         policy=MOCK_POLICY_OID,
     )
     jws, receipt_hash, _ = _sign_certificate(payload, _operator_key(tmp_path)[0])
@@ -706,9 +713,7 @@ def test_retimestamp_plan_unanchored_tail(tmp_path, mock_tsa):
     extra = _mint_receipt_chain(tmp_path, rows=2, retention_days=3650, name="r3")
     with open(chain, "a", encoding="utf-8") as fh:
         fh.write(
-            json.dumps(
-                {"receipt_hash": anchor_doc["receipt_hash"], "jws": anchor_doc["jws"]}
-            )
+            json.dumps({"receipt_hash": anchor_doc["receipt_hash"], "jws": anchor_doc["jws"]})
             + "\n"
         )
         fh.writelines(open(extra, encoding="utf-8").readlines())
