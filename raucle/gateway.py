@@ -1432,13 +1432,15 @@ class RaucleGateway:
         """
         try:
             verdict = self.admission_check_agent(agent_id)
-        except Exception:
-            # Log a sanitised identifier only: agent ids arrive on the wire
-            # and could carry control characters; neither the raw value nor
-            # the exception text goes to the log file unescaped.
-            logger.exception(
-                "admission check failed; refusing agent with sanitised id %r",
-                _log_safe(agent_id),
+        except Exception as exc:
+            # The raised exception and its message can carry untrusted
+            # values (agent ids and registry contents arrive on the wire),
+            # so neither goes to the log line: only the exception type is
+            # logged, sanitised through repr. Keep full diagnostics in the
+            # receipt, not in the log file (S5145).
+            logger.error(
+                "admission check failed with %r; refusing to admit the agent",
+                repr(type(exc).__name__),
             )
             return "admission check failed"
         return "" if verdict.allowed else f"admission refused: {verdict.reason}"
