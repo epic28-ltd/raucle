@@ -259,3 +259,36 @@ def test_string_expiry_fails_closed_not_crash(tmp_path):
     v = verify_passport(passport.to_dict(), registry=reg, now=2)
     assert not v.valid
     assert "expires_at" in v.reason  # never raises # never raises
+
+
+class TestCLIMalformedPassportFile:
+    def test_verify_missing_file_is_named_error(self, tmp_path, capsys):
+        from raucle.cli import main
+
+        reg = tmp_path / "reg.jsonl"
+        reg.write_text("")
+        rc = main(["passport", "verify", str(tmp_path / "nope.json"), "--registry", str(reg)])
+        assert rc == 1
+        assert "cannot load passport" in capsys.readouterr().err
+
+    def test_verify_unparseable_file_is_named_error(self, tmp_path, capsys):
+        from raucle.cli import main
+
+        reg = tmp_path / "reg.jsonl"
+        reg.write_text("")
+        p = tmp_path / "p.json"
+        p.write_text("not json{", encoding="utf-8")
+        rc = main(["passport", "verify", str(p), "--registry", str(reg)])
+        assert rc == 1
+        assert "cannot load passport" in capsys.readouterr().err
+
+    def test_verify_non_object_file_is_named_error(self, tmp_path, capsys):
+        from raucle.cli import main
+
+        reg = tmp_path / "reg.jsonl"
+        reg.write_text("")
+        p = tmp_path / "p.json"
+        p.write_text("[1, 2, 3]", encoding="utf-8")
+        rc = main(["passport", "verify", str(p), "--registry", str(reg)])
+        assert rc == 1
+        assert "cannot load passport" in capsys.readouterr().err
