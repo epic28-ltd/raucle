@@ -74,4 +74,5 @@ def test_stonechat_easter_egg():
         with contextlib.redirect_stdout(buf):
             assert main([alias]) == 0
         out = buf.getvalue()
-        assert "stonechat" in out and "receipt" in out
+        assert "stonechat" in out
+        assert "receipt" in out

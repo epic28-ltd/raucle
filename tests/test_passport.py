@@ -58,7 +58,8 @@ def test_revoked_issuer_rejected(issued):
     reg, _signer, _agent, passport = issued
     reg.revoke(passport.issuer_key_id, reason="org key rotated")
     v = verify_passport(passport.to_dict(), registry=reg)
-    assert not v.valid and "revoked" in v.reason
+    assert not v.valid
+    assert "revoked" in v.reason
 
 
 def test_unknown_issuer_rejected(tmp_path, issued):
@@ -66,7 +67,8 @@ def test_unknown_issuer_rejected(tmp_path, issued):
     other = TrustRegistry(tmp_path / "other.jsonl")
     other.publish(Ed25519Signer.generate().public_key_pem().decode(), issuer="someone else")
     v = verify_passport(passport.to_dict(), registry=other)
-    assert not v.valid and "unknown" in v.reason
+    assert not v.valid
+    assert "unknown" in v.reason
 
 
 def test_tampered_statement_rejected(tmp_path, issued):
@@ -85,7 +87,8 @@ def test_expired_passport_rejected(tmp_path):
         agent.statement, issuer_signer=org_signer, issuer="Org X", ttl_seconds=1
     )
     v = verify_passport(passport.to_dict(), registry=reg, now=passport.expires_at + 5)
-    assert not v.valid and "expired" in v.reason
+    assert not v.valid
+    assert "expired" in v.reason
 
 
 def test_unknown_version_rejected(issued):
@@ -154,7 +157,8 @@ class TestCLI:
                 str(out),
             ]
         )
-        assert rc == 0 and out.exists()
+        assert rc == 0
+        assert out.exists()
 
         rc2 = main(["passport", "verify", str(out), "--registry", str(tmp_path / "reg.jsonl")])
         assert rc2 == 0
@@ -220,7 +224,8 @@ def test_issuer_impersonation_rejected(tmp_path):
     # to be a bank it is not: issue with issuer="Megabank" while registry says bank-a.
     passport = issue_passport(agent.statement, issuer_signer=org_signer, issuer="Megabank")
     v = verify_passport(passport.to_dict(), registry=reg)
-    assert not v.valid and "issuer mismatch" in v.reason
+    assert not v.valid
+    assert "issuer mismatch" in v.reason
 
 
 def test_malformed_passport_fails_closed(tmp_path):
@@ -252,4 +257,5 @@ def test_string_expiry_fails_closed_not_crash(tmp_path):
     passport.expires_at = "9999999999"
     passport.issuer_signature = _b64(org_signer.sign(_canonical_json(passport.body())))
     v = verify_passport(passport.to_dict(), registry=reg, now=2)
-    assert not v.valid and "expires_at" in v.reason  # never raises
+    assert not v.valid
+    assert "expires_at" in v.reason  # never raises # never raises

@@ -450,7 +450,8 @@ def test_receipt_binds_exact_signed_request_not_just_canonical_hash():
     assert binding["signed_request_hash"] != binding["canonical_request_hash"]
     # And it leaks no credential/signature material (it is only a hash).
     blob = repr(res.receipt).lower()
-    assert "aws4-hmac-sha256" not in blob and "akidexample" not in blob
+    assert "aws4-hmac-sha256" not in blob
+    assert "akidexample" not in blob
 
 
 # ---------------------------------------------------------------------------

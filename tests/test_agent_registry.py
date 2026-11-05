@@ -31,7 +31,7 @@ ATT = Attestation(
 CEIL = DelegationCeilings(max_hops=3, max_scope=4, lease_ceilings={"max_ttl_seconds": 600})
 
 
-@pytest.fixture()
+@pytest.fixture
 def signer():
     return Ed25519Signer.generate()
 
@@ -55,7 +55,8 @@ def test_descriptor_verifies_offline(signer, tmp_path):
     loaded = json.loads(path.read_text(encoding="utf-8"))
     verdict = verify_descriptor(loaded, signer.public_key_pem())
     assert verdict.valid
-    assert verdict.valid and verdict.descriptor
+    assert verdict.valid
+    assert verdict.descriptor
     assert verdict.descriptor.agent_id == "agent:svc"
     assert verdict.descriptor.version == DESCRIPTOR_VERSION
     assert verdict.descriptor.ceilings.max_hops == 3
@@ -100,24 +101,36 @@ def test_unknown_version_and_unknown_field_fail_closed(signer):
         parse_descriptor(body2)
 
 
-def test_attestation_and_ceiling_validation(signer):
-    bad = Attestation(
+def test_attestation_bad_hash_rejected():
+    att = Attestation(
         attested_manifest_hash="not-a-hash",
         attested_manifest_kind="agent-card",
         framework="f",
         framework_version="1",
     )
     with pytest.raises(DescriptorError):
-        bad.validate()
+        att.validate()
+
+
+def test_attestation_unknown_kind_rejected():
+    att = Attestation(
+        attested_manifest_hash=_sha(b"x"),
+        attested_manifest_kind="nope",
+        framework="f",
+        framework_version="1",
+    )
     with pytest.raises(DescriptorError):
-        Attestation(
-            attested_manifest_hash=_sha(b"x"),
-            attested_manifest_kind="nope",
-            framework="f",
-            framework_version="1",
-        ).validate()
+        att.validate()
+
+
+def test_delegation_ceiling_unknown_lease_rejected():
+    ceilings = DelegationCeilings(lease_ceilings={"max_turtle": 1})
     with pytest.raises(DescriptorError):
-        DelegationCeilings(lease_ceilings={"max_turtle": 1}).validate()
+        ceilings.validate()
+
+
+def test_issue_descriptor_negative_max_hops_rejected(signer):
+    ceilings = DelegationCeilings(max_hops=-1)
     with pytest.raises(DescriptorError):
         issue_descriptor(
             "agent:svc",
@@ -125,7 +138,7 @@ def test_attestation_and_ceiling_validation(signer):
             operator_binding="b",
             status="enrolled",
             attestation=ATT,
-            ceilings=DelegationCeilings(max_hops=-1),
+            ceilings=ceilings,
             signer=signer,
         )
 
@@ -165,7 +178,8 @@ def test_registry_enrol_update_retire_append_only(signer, tmp_path):
     assert current.attestation.attested_manifest_hash == "sha256:" + "0" * 64
     reloaded = AgentRegistry(reg_path)
     current2 = reloaded.resolve("agent:a")
-    assert current2 is not None and current2.status == "retired"
+    assert current2 is not None
+    assert current2.status == "retired"
     assert len(reloaded.agent_ids()) == 1
 
 
@@ -202,7 +216,8 @@ def test_credential_store_integration(signer, tmp_path):
         credential_store=creds,
     )
     assert record["status"] == "enrolled"
-    assert key is not None and key.startswith("rak_")
+    assert key is not None
+    assert key.startswith("rak_")
     assert creds.verify(key) == "agent:new"
     # Second enrolment rotates nothing: the agent already holds a key.
     record2, key2 = reg.enrol(

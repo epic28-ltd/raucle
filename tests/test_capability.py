@@ -350,16 +350,18 @@ def test_strict_mint_refuses_undecided():
     from raucle.errors import PolicyUnproven
 
     iss = CapabilityIssuer.generate(issuer="p.x", require_proof=True)
+    proof = _undecided_proof()
     with pytest.raises(PolicyUnproven, match="PROVEN.*UNDECIDED"):
-        iss.mint(agent_id="agent:x", tool="t", proof_result=_undecided_proof())
+        iss.mint(agent_id="agent:x", tool="t", proof_result=proof)
 
 
 def test_strict_mint_refuses_refuted():
     from raucle.errors import PolicyUnproven
 
     iss = CapabilityIssuer.generate(issuer="p.x", require_proof=True)
+    proof = _refuted_proof()
     with pytest.raises(PolicyUnproven, match="PROVEN.*REFUTED"):
-        iss.mint(agent_id="agent:x", tool="t", proof_result=_refuted_proof())
+        iss.mint(agent_id="agent:x", tool="t", proof_result=proof)
 
 
 def test_strict_mint_binds_proven_hashes_into_token():
@@ -523,7 +525,8 @@ def test_gate_proof_mode_strict_denies_proof_unbound_to_constraints():
         trusted_proofs={proof.hash: proof},
     )
     d = gate.check(cap, tool="t", args={"amount": 999_999})
-    assert not d.allowed and "not bound" in d.reason
+    assert not d.allowed
+    assert "not bound" in d.reason
 
 
 def test_unknown_constraint_key_raises_not_silently_dropped():
@@ -560,7 +563,8 @@ def test_starts_with_constraint_allows_and_denies():
     assert tok.constraints == {"starts_with": {"customer_id": "C-"}}
     assert gate.check(tok, tool="lookup_customer", args={"customer_id": "C-123"}).allowed
     bad = gate.check(tok, tool="lookup_customer", args={"customer_id": "X-9"})
-    assert not bad.allowed and "does not start with" in bad.reason
+    assert not bad.allowed
+    assert "does not start with" in bad.reason
     # non-string value also fails the prefix check
     assert not gate.check(tok, tool="lookup_customer", args={"customer_id": 42}).allowed
 
@@ -613,9 +617,11 @@ def test_revocation_denylist_refuses_token_and_children():
     # Revoke the parent → both parent and child are refused.
     gate.revoke(tok.token_id)
     d_parent = gate.check(tok, tool="lookup_customer")
-    assert not d_parent.allowed and "revoked" in d_parent.reason
+    assert not d_parent.allowed
+    assert "revoked" in d_parent.reason
     d_child = gate.check(child, tool="lookup_customer", agent_id="agent:ops.sub")
-    assert not d_child.allowed and "revoked" in d_child.reason
+    assert not d_child.allowed
+    assert "revoked" in d_child.reason
 
 
 def test_revocation_via_constructor():

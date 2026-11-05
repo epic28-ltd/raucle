@@ -1438,7 +1438,10 @@ class RaucleGateway:
             # so neither goes to the log line: only the exception type is
             # logged, sanitised through repr. Keep full diagnostics in the
             # receipt, not in the log file (S5145).
-            logger.error(
+            # logging.exception() is deliberately NOT used here: the
+            # traceback would emit the untrusted exception message.
+            # See docs/spikes/SONAR-ACCEPTANCE.md (S8572 entry).
+            logger.error(  # NOSONAR S8572 - would emit untrusted message (S5145)
                 "admission check failed with %r; refusing to admit the agent",
                 repr(type(exc).__name__),
             )

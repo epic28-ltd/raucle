@@ -35,7 +35,7 @@ policies:
 """
 
 
-@pytest.fixture()
+@pytest.fixture
 def config(tmp_path):
     return GatewayConfig(
         host="127.0.0.1",
@@ -49,7 +49,7 @@ def config(tmp_path):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def gw(config, tmp_path):
     policy = tmp_path / "policies.yaml"
     policy.write_text(POLICY)
@@ -199,7 +199,8 @@ class TestGateReceiptEmission:
         )
         assert r1.json()["trace_id"] == "trace-abc"
         assert r2.json()["trace_id"] == "trace-abc"
-        assert r3.json()["trace_id"] and r3.json()["trace_id"] != "trace-abc"
+        assert r3.json()["trace_id"]
+        assert r3.json()["trace_id"] != "trace-abc"
 
     def test_emit_receipts_false_disables(self, config, tmp_path):
         """emit_receipts=False restores pre-PR-B behaviour exactly."""

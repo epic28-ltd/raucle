@@ -26,7 +26,7 @@ policies:
 """
 
 
-@pytest.fixture()
+@pytest.fixture
 def bridge(tmp_path):
     issuer = CapabilityIssuer.generate(issuer="test-issuer")
     ledger = DelegationLedger(tmp_path / "delegations.jsonl")

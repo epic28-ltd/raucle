@@ -104,7 +104,7 @@ def _recompute_pack_hash(out_dir):
     return "sha256:" + digest(parts.encode("ascii")).hexdigest()
 
 
-@pytest.fixture()
+@pytest.fixture
 def stack(tmp_path):
     chain, signer, pub = _signed_chain(tmp_path)
     operator_priv, operator_pub = _operator_key(tmp_path)

@@ -267,7 +267,8 @@ class TestMerkleRoot:
     def test_two_leaves_deterministic(self):
         r1 = _merkle_root(["a" * 64, "b" * 64])
         r2 = _merkle_root(["a" * 64, "b" * 64])
-        assert r1 == r2 and len(r1) == 64
+        assert r1 == r2
+        assert len(r1) == 64
 
     def test_odd_leaves_duplicates_last(self):
         # Three leaves should hash without error (last is duplicated at each odd level)
