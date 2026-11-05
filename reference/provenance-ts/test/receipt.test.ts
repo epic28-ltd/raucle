@@ -363,7 +363,7 @@ async function importSeedKey(seedHex: string): Promise<webcrypto.CryptoKey> {
   // PKCS#8 wrapper for a raw Ed25519 seed (RFC 8410).
   const prefix = Buffer.from('302e020100300506032b657004220420', 'hex')
   const pkcs8 = Buffer.concat([prefix, seed])
-  return subtle.importKey('pkcs8', pkcs8, { name: 'Ed25519' }, false, ['sign'])
+  return await subtle.importKey('pkcs8', pkcs8, { name: 'Ed25519' }, false, ['sign'])
 }
 
 async function importPubPem(pem: string): Promise<webcrypto.CryptoKey> {
@@ -372,7 +372,7 @@ async function importPubPem(pem: string): Promise<webcrypto.CryptoKey> {
     .replace(/-----END PUBLIC KEY-----/, '')
     .replace(/\s+/g, '')
   const der = new Uint8Array(Buffer.from(b64, 'base64'))
-  return subtle.importKey('spki', der, { name: 'Ed25519' }, false, ['verify'])
+  return await subtle.importKey('spki', der, { name: 'Ed25519' }, false, ['verify'])
 }
 
 test('spec vectors: verify + byte-identical re-emit', async () => {

@@ -1,0 +1,83 @@
+
+"action"str
+)"provenance_hash"str
+"confidence"str
+$	"receipt"str
+"layer_scores"str
+
+"injection_detected"str
+;2"Serialise to a plain dictionary (JSON-friendly)."str
+"categories"str
+	"verdict"str
+"notes"str
+"matched_rules"str
+"attack_technique"strself_ _("ž'
+%
+a j(	d"#new-object#Bdict(
+&
+b b(#"#get-field# verdict: 
+
+b b(#"	#map-set#:+
+)
+c c()"#get-field# confidence: 
+
+c c()	"	#map-set#:3
+1
+d" d(9" #get-field# injection_detected: 
+
+d d(9"	#map-set#:
++
+)
+e e()"#get-field# categories: 
+
+e e()"	#map-set#:1
+/
+f  f(5"#get-field# attack_technique: 
+
+f f(5"	#map-set#:-
++
+g g(-"#get-field# layer_scores: 
+
+g g(-"	#map-set#:.
+,
+h h(/"#get-field# matched_rules: 
+
+h h(/"	#map-set#:'
+%
+i i(!"#get-field# action: 
+
+i i(!"	#map-set#:&
+$
+k k("#get-field# notes:)
+'
+k k("
+__bool__*:BboolH"
+k k( *k k(
+"V&
+$
+l l(#"#get-field# notes:$
+"
+l l(# "#array-write#:"u(
+&
+m m(!"#get-field# receipt:)
+'
+m m(""
+__bool__*:!BboolH"
+m m(" *m m(
+"X(
+&
+n n('#"#get-field# receipt:$
+"
+n n('%"#array-write#:$#"}0
+.
+o o(&"#get-field# provenance_hash:)
+'
+o o('"
+__bool__*:&BboolH"
+o o(' *o o(
+"`0
+.
+p# p(7("#get-field# provenance_hash:$
+"
+p p(7*"#array-write#:)("
+q q(*1/home/craigamcw/Projects/raucle/raucle/scanner.py

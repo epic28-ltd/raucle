@@ -1,0 +1,21 @@
+
+ÚÐ"Hash the active ruleset for inclusion in a receipt.
+
+    Uses a canonical projection of (id, score, patterns) so reordering rules
+    or changing irrelevant metadata does not invalidate prior receipts.
+    "strrulesN N(,"‡+
+)
+U \(	"?python-unknown?:Blist!
+
+] ](#"#unknown-value#;
+9
+T ^(
+projection"
+builtinssorted*:Blist5
+3
+_ _(2""
+raucle.verdicts_canonical_json:1
+/
+_ _(3"
+raucle.verdicts_sha256_hex:
+_ _(3*2/home/craigamcw/Projects/raucle/raucle/verdicts.py

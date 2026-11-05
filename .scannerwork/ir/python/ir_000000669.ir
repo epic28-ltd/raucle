@@ -1,0 +1,88 @@
+
+"tampered_receipts"str
+ "capability_violations"str
+	"signature_failures"str
+%"unauthorised_sanitisations"str
+"receipt_count"str
+&"taint_monotonicity_failures"str
+"errors"str
+"parent_link_failures"str
+"valid"strself
+û
+ û
+("ä&
+$
+
+ü
+ †(	"#new-object#Bdict(
+&
+
+ý
+ ý
+("#get-field# valid:"
+ 
+
+ý
+ ý
+("	#map-set#:0
+.
+
+þ
+ þ
+(/"#get-field# receipt_count:"
+ 
+
+þ
+ þ
+(/"	#map-set#:5
+3
+
+ÿ
+" ÿ
+(9
+" #get-field# signature_failures:"
+ 
+
+ÿ
+ ÿ
+(9"	#map-set#:	
+7
+5
+
+€$ €(="" #get-field# parent_link_failures:"
+ 
+
+€ €(="	#map-set#:>
+<
+
++ (K")'#get-field# taint_monotonicity_failures:"
+ 
+
+ (K"	#map-set#:8
+6
+
+‚% ‚(?"#!#get-field# capability_violations:"
+ 
+
+‚ ‚(?"	#map-set#:=
+;
+
+ƒ* ƒ(I"(&#get-field# unauthorised_sanitisations:"
+ 
+
+ƒ ƒ(I"	#map-set#:4
+2
+
+„! „(7"#get-field# tampered_receipts:"
+ 
+
+„ „(7"	#map-set#:)
+'
+
+… …(!"#get-field# errors:"
+ 
+
+… …(!"	#map-set#:
+
+ü
+ †(	*4/home/craigamcw/Projects/raucle/raucle/provenance.py

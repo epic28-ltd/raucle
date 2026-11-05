@@ -1,0 +1,23 @@
+
+"="str
+
+4intdata8 8("¼*
+(
+9 9(#"
+builtinslen*:Bint%
+#
+9 9('"	#binop %#*2%:%
+#
+9 9('"	#binop -#*2-:%
+#
+9 9(,"	#binop %#*2%:.
+,
+9 9(-padding"	#binop *#*2*:"
+ 
+:$ :(2	"	#binop +#2+:5
+3
+: :(3
+"
+base64urlsafe_b64decode:	Bbytes
+: :(3
+*2/home/craigamcw/Projects/raucle/raucle/verdicts.py

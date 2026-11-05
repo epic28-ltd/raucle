@@ -1,0 +1,122 @@
+
+	"rule_id"str
+ "delegation_hop_impact"str
+"policy_versions"str
+!"authority_paths_opened"str
+"artefact_kind"str
++"gaps"str
+
+"flipped_decisions"str
+!"authority_paths_closed"str
+ÌÂ"The bounded, pack-eligible artefact for a delta report (P1.6c).
+
+    Decision rows keep only receipt IDs and actions (bounded disclosure:
+    no rule constraint values ride the artefact).
+    "str
+"invariants_preserved"str
+%"mode"str
+#"invariants_mode"str
+"receipt_id"str
+("register_sentence"str
+""authority_paths_changed"strreport
+¸ ¸(+"ï
+&
+$
+
+¾ Ì("#new-object#Bdict#
+!
+
+¿ ¿('"#unknown-value#"
+ 
+
+¿ ¿('"	#map-set#:2
+0
+
+À À(1"#get-field# policy_versions:"
+ 
+
+À À(1	"	#map-set#:(
+&
+
+Á. Á(:"#get-field# flips:=
+;
+
+Á Á(P"'
+raucle.delta_report_bounded_section:"
+ 
+
+Á Á(P"	#map-set#:
+9
+7
+
+Â3 Â(P"$"#get-field# authority_paths_opened:=
+;
+
+Â" Â(Q"'
+raucle.delta_report_bounded_section:"
+ 
+
+Â Â(Q"	#map-set#:9
+7
+
+Ã3 Ã(P"$"#get-field# authority_paths_closed:=
+;
+
+Ã" Ã(Q"'
+raucle.delta_report_bounded_section:"
+ 
+
+Ã Ã(Q"	#map-set#::
+8
+
+Ä4 Ä(R"%##get-field# authority_paths_changed:=
+;
+
+Ä# Ä(S"'
+raucle.delta_report_bounded_section:"
+ 
+
+Ä Ä(S"	#map-set#:2
+0
+
+Å! Å(7"#get-field# delegation_hops:"
+ 
+
+Å Å(7"	#map-set#:,
+*
+
+Ç Ç(a "?python-unknown?:Bset0
+.
+
+Æ  È(	!"
+builtinssorted*: Blist"
+ 
+
+Æ È(	""	#map-set#:!-
++
+
+É É(,$"#get-field# invariants:$
+"
+
+É É(4&"#array-read#:$%"
+ 
+
+É É(4'"	#map-set#:#&4
+2
+
+Ê Ê(5)"#get-field# register_sentence:"
+ 
+
+Ê Ê(5*"	#map-set#:()'
+%
+
+Ë Ë( ,"#get-field# gaps:.
+,
+
+Ë Ë(!-"
+builtinslist*:,Blist"
+ 
+
+Ë Ë(!."	#map-set#:+-
+
+¾ Ì(*6/home/craigamcw/Projects/raucle/raucle/delta_report.py

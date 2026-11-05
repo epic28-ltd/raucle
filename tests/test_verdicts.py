@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import pytest
 
 cryptography = pytest.importorskip("cryptography")
@@ -17,7 +18,7 @@ from raucle.verdicts import (
 
 class TestHashHelpers:
     def test_hash_input_is_deterministic(self):
-        assert hash_input("hello") == hash_input("hello")
+        assert hash_input("hello") == hashlib.sha256("hello".encode("utf-8")).hexdigest()
         assert hash_input("hello") != hash_input("world")
         assert len(hash_input("x")) == 64  # sha256 hex
 

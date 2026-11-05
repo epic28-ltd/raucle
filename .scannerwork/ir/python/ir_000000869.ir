@@ -1,0 +1,18 @@
+
+Äº"Return a ``json.loads`` ``object_pairs_hook`` that rejects duplicate keys.
+
+    Duplicate keys are valid per the JSON grammar but their handling is
+    implementation-defined (Python keeps the last value; a first-key parser
+    sees the other), so a signed payload could verify here while presenting
+    different content elsewhere â€” encoding malleability. We refuse them.
+    ``context`` names the payload kind in the error message.
+    "strcontextS  S(<"µ!
+
+e e("#unknown-value#(
+&
+] e(%closure"#new-object#)
+'
+] e("#set-field# context:+
+)
+] e("?python-partial-apply?:
+e e(*0/home/craigamcw/Projects/raucle/raucle/_canon.py

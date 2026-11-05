@@ -1,0 +1,76 @@
+
+"reason"str
+"proof_artefact"str
+ "verification_pointers"str
+		"allowed"str
+"evaluation_ms"str
+	"backend"str
+"action"strself
+¶ ¶(allowed
+¸ ¸(action
+¹ ¹(reason
+º º(evaluation_ms
+» »(proof_artefact
+¼ ¼()%verification_pointers
+½ ½(;"Ë.
+,
+
+¿! Å(	kwargs"#new-object#Bdict"
+ 
+
+À À(
+"	#map-set#:	"
+ 
+
+Á Á("	#map-set#:"
+ 
+
+Â Â("	#map-set#:'
+%
+
+Ã Ã( "#get-field# name:.
+,
+
+Ã Ã( "?python-partial-apply?:"
+ 
+
+Ã Ã( "	#map-set#:"
+ 
+
+Ä Ä(*"	#map-set#:=
+;
+
+Æ Æ(*"(&#get-field# _supports_assurance_fields:+
+)
+
+Æ Æ(*"
+__bool__*:BboolH "
+
+Æ Æ(* *
+Æ Æ(
+"m&
+$
+
+Ç Ç(5"#array-write#:+
+)
+
+È. È(C"
+__bool__*:BboolH"
+
+È. È(C "g'
+%
+
+É& É(."#unaryop **#2**:(
+&
+
+É É(/"?python-unknown?:
+
+É É(/"<&
+$
+
+ÈG È(I"#new-object#Bdict
+
+È. È(I"B*&
+$
+
+È È(I"#array-write#:*B/home/craigamcw/Projects/raucle/raucle/integrations/agt_backend.py

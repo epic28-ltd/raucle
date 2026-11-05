@@ -1,0 +1,37 @@
+
+falsebool
+;2"Serialise back to YAML (round-trip for editing)."str
+	"version"str
+
+
+"policies"str
+"issuer"strself
+Å Å("×,
+*
+
+Ç Û(	data"#new-object#Bdict*
+(
+
+È È(#"#get-field# version:"
+ 
+
+È È(#"	#map-set#:)
+'
+
+É É(!"#get-field# issuer:"
+ 
+
+É É(!	"	#map-set#:-
++
+
+Ê Ú("?python-unknown?:Blist"
+ 
+
+Ê Ú("	#map-set#:
+#
+!
+
+Ü Ü(I"
+yamldump:
+
+Ü Ü(I*0/home/craigamcw/Projects/raucle/raucle/policy.py

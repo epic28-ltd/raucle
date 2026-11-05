@@ -1,0 +1,24 @@
+
+êà"The sha256 hex digest of the canonical artefact JSON.
+
+    The digest is what activation receipts sign: an artefact presented
+    later must hash to the digest beside it or it is not the artefact
+    the approver saw.
+    "strartefact
+Ÿ Ÿ(2"î5
+3
+
+¦ ¦(>_canonical_json"?python-unknown?1
+/
+
+¦ ¦(>_sha256_hex"?python-unknown?9
+7
+
+¨ ¨(0"$
+raucle.provenance_canonical_json:5
+3
+
+¨ ¨(1" 
+raucle.provenance_sha256_hex:
+
+¨ ¨(1*6/home/craigamcw/Projects/raucle/raucle/delta_report.py

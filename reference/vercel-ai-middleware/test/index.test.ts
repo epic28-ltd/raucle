@@ -97,8 +97,8 @@ test("emitted receipts form a valid chain (root + decisions)", async () => {
     onReceipt: (rec) => { receipts.push(rec); },
   });
   const tools = r.gateTools({
-    a: { execute: async () => "a" },
-    b: { execute: async () => "b" },
+    a: { execute: () => Promise.resolve("a") },
+    b: { execute: () => Promise.resolve("b") },
   });
   await tools.a.execute!({});
   await tools.b.execute!({});
@@ -116,7 +116,7 @@ test("custom gate overrides the built-in policy evaluator", async () => {
     issuer: issuerFrom(privateKey),
     gate: (toolName) => { seen.push(toolName); return { decision: toolName === "ok" ? "ALLOW" : "BLOCK", reason: "custom" }; },
   });
-  const tools = r.gateTools({ ok: { execute: async () => 1 }, no: { execute: async () => 2 } });
+  const tools = r.gateTools({ ok: { execute: () => Promise.resolve(1) }, no: { execute: async () => 2 } });
   assert.equal(await tools.ok.execute!({}), 1);
   await assert.rejects(() => tools.no.execute!({}), RauclePolicyDenied);
   assert.deepEqual(seen, ["ok", "no"]);

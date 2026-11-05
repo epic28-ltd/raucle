@@ -1,0 +1,35 @@
+
+"unauthenticated"str
+úð"Structural prompt-injection resistance on the tool-call surface (a call outside the signed capability cannot execute; {ev.deny} blocked here); the record's integrity is {integrity}. Not a full robustness/accuracy regime for model outputs."str
+"authenticated"strev
+Ç Ç(!#raucle.compliance.ControlStatus"@
+>
+
+È# È(8	integrity" #get-field# signature_verified:+
+)
+
+È# È(8"
+__bool__*:BboolH,"*
+
+È# È(8 *
+È  È("2
+È9 È(="
+
+È È(O"
+
+È È(O"Ý*	integrity*
+(
+
+É Í("#unknown-value#Btuple*
+(
+
+É É( 	"#get-field# PARTIAL:(
+&
+
+É Í(
+"#array-add-last#:	(
+&
+
+É Í("#array-add-last#:
+
+É Í(*4/home/craigamcw/Projects/raucle/raucle/compliance.py

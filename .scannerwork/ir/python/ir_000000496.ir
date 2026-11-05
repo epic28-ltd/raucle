@@ -1,0 +1,25 @@
+
+öì"Envelope fields that are neither modelled nor a registered extension.
+
+    There is no wildcard: a field is allowed only if it is in ``ENVELOPE_FIELDS``
+    or explicitly enumerated in ``ENVELOPE_EXTENSION_FIELDS`` (empty in v1).
+    "strfields
+À À(="Ü,
+*
+
+Æ Æ("
+builtinsset*:Bset#
+!
+
+Æ Æ(("#unknown-value#'
+%
+
+Æ Æ(("	#binop -#*2-:#
+!
+
+Æ+ Æ(D"#unknown-value#'
+%
+
+Æ Æ(D"	#binop -#*2-:
+
+Æ Æ(D*2/home/craigamcw/Projects/raucle/raucle/registry.py

@@ -1,0 +1,125 @@
+
+§"Return the canonical body that gets signed (excludes ``signature``).
+
+        ``sanitisation_authority`` is included only when non-empty so that
+        statements signed before this field existed continue to verify
+        byte-for-byte (backward-compatible serialisation).
+        "str
+"data_classifications"str
+"allowed_tools"str
+
+"public_key_pem"str
+"key_id"str
+""expires_at"str
+
+"agent_id"str
+"issuer"str
+"allowed_models"str
+!*"sanitisation_authority"str
+"issued_at"strself
+ï ï("µ	,
+*
+
+ö €(	body"#new-object#Bdict+
+)
+
+÷ ÷(%"#get-field# agent_id:"
+ 
+
+÷ ÷(%"	#map-set#:)
+'
+
+ø ø(!"#get-field# key_id:"
+ 
+
+ø ø(!	"	#map-set#:1
+/
+
+ù ù(1"#get-field# public_key_pem:"
+ 
+
+ù ù(1"	#map-set#:
+1
+/
+
+ú% ú(8"#get-field# allowed_models:#
+!
+
+ú> ú(H"#unknown-value#1
+/
+
+ú ú(I"
+builtinssorted*:Blist"
+ 
+
+ú ú(I"	#map-set#:0
+.
+
+û$ û(6"#get-field# allowed_tools:#
+!
+
+û< û(F"#unknown-value#1
+/
+
+û û(G"
+builtinssorted*:Blist"
+ 
+
+û û(G"	#map-set#:7
+5
+
+ü+ ü(D"" #get-field# data_classifications:#
+!
+
+üJ ü(T"#unknown-value#1
+/
+
+ü$ ü(U"
+builtinssorted*:Blist"
+ 
+
+ü ü(U"	#map-set#:)
+'
+
+ý ý(!"#get-field# issuer:"
+ 
+
+ý ý(!"	#map-set#:,
+*
+
+þ þ(' "#get-field# issued_at:"
+ 
+
+þ þ('!"	#map-set#: -
++
+
+ÿ ÿ()#"#get-field# expires_at:"
+ 
+
+ÿ ÿ()$"	#map-set#:"#9
+7
+
+ (&%"$"#get-field# sanitisation_authority:+
+)
+
+ (&&"
+__bool__*:%BboolH "
+
+ (&& *
+ (
+"Ã9
+7
+
+‚4 ‚(O'"$"#get-field# sanitisation_authority:#
+!
+
+‚U ‚(_("#unknown-value#1
+/
+
+‚- ‚(`)"
+builtinssorted*:'(Blist&
+$
+
+‚ ‚(`+"#array-write#:*)"
+
+ƒ ƒ(*4/home/craigamcw/Projects/raucle/raucle/provenance.py

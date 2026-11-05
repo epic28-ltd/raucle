@@ -1,0 +1,112 @@
+
+#"signature"str
+"issuer"str
+"public_key_pem"str
+"issued_at"str
+"data_classifications"str
+C:"capability statement: unknown field(s) {sorted(unknown)}"str
+
+0int
+"allowed_models"str
+"allowed_tools"str
+NE"capability statement: must be a JSON object, got {type(d).__name__}"str
+!"expires_at"str
+"key_id"str
+!"sanitisation_authority"str
+
+"agent_id"strcls
+ã ã(d
+ã ã((dict"|+
+)
+
+å å(""#is-instance#:Bbool+
+)
+
+å å(""#unaryop !#2!:Bbool "
+
+å å(" *
+å å(
+"F0
+.
+
+ç ç(d"
+ValueError*:B
+ValueError2
+
+ç ç(d"÷,
+*
+
+è è("
+builtinsset*:Bset#
+!
+
+è è(1	"#unknown-value#0
+.
+
+è è(1
+unknown"	#binop -#*2-:	+
+)
+
+ê ê("
+__bool__*:
+BboolH "
+
+ê ê( *
+ê ê(
+"F0
+.
+
+ë ë(Y"
+ValueError*:B
+ValueError2
+
+ë ë(Y"Ç<
+:
+
+î î(5"&
+raucle.provenance_cap_stmt_req_str:<
+:
+
+ï ï(1"&
+raucle.provenance_cap_stmt_req_str:<
+:
+
+ñ ñ(A"&
+raucle.provenance_cap_stmt_req_str:A
+?
+
+ó ó(F"+
+raucle.provenance_cap_stmt_opt_str_list:A
+?
+
+ò ò(D"+
+raucle.provenance_cap_stmt_opt_str_list:A
+?
+
+ô! ô(R"+
+raucle.provenance_cap_stmt_opt_str_list:A
+?
+
+ö# ö(V"+
+raucle.provenance_cap_stmt_opt_str_list:<
+:
+
+õ õ(1"&
+raucle.provenance_cap_stmt_req_str:=
+;
+
+ú ú(7 "&
+raucle.provenance_cap_stmt_opt_int:D
+B
+
+ù ù(A"".
+raucle.provenance_cap_stmt_opt_int_or_none:!<
+:
+
+û û(7$"&
+raucle.provenance_cap_stmt_opt_str:#%
+#
+
+ì ü(	%"cls: "$
+
+ì ü(	%*4/home/craigamcw/Projects/raucle/raucle/provenance.py

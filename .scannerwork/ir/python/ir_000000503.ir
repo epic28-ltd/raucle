@@ -1,0 +1,14 @@
+
+"%Y-%m-%dT%H:%M:%S"str
+0'".{int((time.time() % 1) * 1000):03d}Z"str"±!
+
+{. {(;"#unknown-value#(
+&
+{. {(;"
+timegmtime:Btuple)
+'
+{ {(<"
+timestrftime:Bstr'
+%
+{ }("	#binop +#2+:Bstr
+{ }(*>/home/craigamcw/Projects/raucle/raucle/integrations/autogen.py

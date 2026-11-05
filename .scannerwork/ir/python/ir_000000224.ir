@@ -1,0 +1,60 @@
+
+"protocolVersion"str
+"tools"str
+falsebool
+"listChanged"str
+"serverInfo"str
+	"version"str
+	"capabilities"str
+"name"str
+truebool
+"raucle"strself
+Î Î(params
+Î Î(2"ª0
+.
+
+Ï Ï("#set-field# _initialized:&
+$
+
+Ð Ô(	"#new-object#Bdict#
+!
+
+Ñ Ñ(/"#unknown-value#"
+ 
+
+Ñ Ñ(/"	#map-set#:&
+$
+
+Ò Ò(=
+"#new-object#Bdict&
+$
+
+Ò& Ò(<"#new-object#Bdict"
+ 
+
+Ò' Ò(;"	#map-set#:"
+ 
+
+Ò Ò(<"	#map-set#:
+"
+ 
+
+Ò Ò(="	#map-set#:	
+&
+$
+
+Ó Ó(D"#new-object#Bdict"
+ 
+
+Ó Ó(+"	#map-set#:#
+!
+
+Ó8 Ó(C"#unknown-value#"
+ 
+
+Ó- Ó(C"	#map-set#:"
+ 
+
+Ó Ó(D"	#map-set#:
+
+Ð Ô(	*4/home/craigamcw/Projects/raucle/raucle/mcp_server.py

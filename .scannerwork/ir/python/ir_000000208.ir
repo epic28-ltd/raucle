@@ -1,0 +1,54 @@
+
+"rules"str
+"strategies_tested"str
+100int
+
+"total_variants"str
+"overall_coverage_pct"str
+
+1int
+"total_caught"strself
+à à("¡&
+$
+
+â è(	"#new-object#Bdict3
+1
+
+ä* ä(?"#get-field# overall_coverage:'
+%
+
+ä* ä(E"	#binop *#*2*:*
+(
+
+ä$ ä(I"
+builtinsround*:"
+ 
+
+ä ä(I	"	#map-set#:1
+/
+
+ã ã(1"#get-field# total_variants:"
+ 
+
+ã ã(1"	#map-set#:
+/
+-
+
+å å(-"#get-field# total_caught:"
+ 
+
+å å(-"	#map-set#:4
+2
+
+ç! ç(7"#get-field# strategies_tested:"
+ 
+
+ç ç(7"	#map-set#:-
++
+
+é é(8"?python-unknown?:Blist"
+ 
+
+é é(8"	#map-set#:
+
+â è(	*1/home/craigamcw/Projects/raucle/raucle/mutator.py

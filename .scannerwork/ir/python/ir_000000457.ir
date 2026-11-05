@@ -1,0 +1,102 @@
+
+"issuer"str
+"issuer_pubkey"str
+"tool"str
+"attenuation_chain"str
+"policy_proof_hash"str
+'"signature"str
+"call_args_hash"str
+$"timestamp"str
+
+"decision"str
+
+"agent_id"str
+"lean_theorem_id"str
+!"decision_reason"str
+	"schema_hash"strself
+¨ ¨("Å	&
+$
+
+≠ ª(	"#new-object#Bdict)
+'
+
+Æ Æ(!"#get-field# issuer:"
+ 
+
+Æ Æ(!"	#map-set#:0
+.
+
+Ø Ø(/"#get-field# issuer_pubkey:"
+ 
+
+Ø Ø(/"	#map-set#:.
+,
+
+∞ ∞(+
+"#get-field# schema_hash:"
+ 
+
+∞ ∞(+"	#map-set#:	
+4
+2
+
+±! ±(7"#get-field# policy_proof_hash:"
+ 
+
+± ±(7"	#map-set#:2
+0
+
+≤ ≤(3"#get-field# lean_theorem_id:"
+ 
+
+≤ ≤(3"	#map-set#:4
+2
+
+≥! ≥(7"#get-field# attenuation_chain:"
+ 
+
+≥ ≥(7"	#map-set#:+
+)
+
+¥ ¥(%"#get-field# agent_id:"
+ 
+
+¥ ¥(%"	#map-set#:'
+%
+
+µ µ("#get-field# tool:"
+ 
+
+µ µ("	#map-set#:1
+/
+
+∂ ∂(1"#get-field# call_args_hash:"
+ 
+
+∂ ∂(1"	#map-set#:+
+)
+
+∑ ∑(%"#get-field# decision:"
+ 
+
+∑ ∑(% "	#map-set#:2
+0
+
+∏ ∏(3""#get-field# decision_reason:"
+ 
+
+∏ ∏(3#"	#map-set#:!",
+*
+
+π π('%"#get-field# timestamp:"
+ 
+
+π π('&"	#map-set#:$%,
+*
+
+∫ ∫('("#get-field# signature:"
+ 
+
+∫ ∫(')"	#map-set#:'(
+
+≠ ª(	*F/home/craigamcw/Projects/raucle/raucle/integrations/agent_framework.py

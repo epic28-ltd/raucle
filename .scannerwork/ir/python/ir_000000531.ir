@@ -1,0 +1,80 @@
+
+%"invariants_mode"str
+!"authority_paths_opened"str
+("gaps"str
+ "delegation_hop_impact"str
+"count"str
+"artefact_kind"str
+&"delegation_hop_impact_count"str
+!"authority_paths_closed"str
+
+"flipped_decisions"str
+""invariants_preserved"str
+"receipt_ids"str
+"register_sentence"str
+Ã¹"The bounded summary attached to the request payload.
+
+    Flip count with receipt IDs, paths opened/closed with rule IDs,
+    widened rules, preserved invariants, register sentence. Scalar or
+    string values only (plus string lists): the summary rides signed
+    receipt material where floats are banned.
+    "str
+""authority_paths_changed"strartefactK  K(8"Ù$
+"
+S a("#new-object#Bdict"
+ 
+T T(2"#array-read#: 
+
+T T(2"	#map-set#:"
+ 
+U U(:"#array-read#: 
+
+U U(:	"	#map-set#:$
+"
+V Y(	"#new-object#Bdict"
+ 
+W W(2"#array-read#:
+"
+ 
+W W(;"#array-read#: 
+
+W W(;"	#map-set#:+
+)
+X X(`"?python-unknown?:Blist 
+
+X X(`"	#map-set#: 
+
+V Y(	"	#map-set#:
+"
+ 
+Z" Z(D"#array-read#: 
+
+Z Z(D"	#map-set#:"
+ 
+[" [(D"#array-read#: 
+
+[ [(D"	#map-set#:"
+ 
+\# \(F"#array-read#: 
+
+\ \(F"	#map-set#:"
+ 
+]+ ](L"#array-read#:*
+(
+]' ](M "
+builtinslen*:Bint 
+
+] ](M!"	#map-set#: "
+ 
+^  ^(@#"#array-read#:" 
+
+^ ^(@$"	#map-set#:"#"
+ 
+_ _(6&"#array-read#:% 
+
+_ _(6'"	#map-set#:%&"
+ 
+` `( )"#array-read#:( 
+
+` `( *"	#map-set#:()
+S a(*4/home/craigamcw/Projects/raucle/raucle/activation.py

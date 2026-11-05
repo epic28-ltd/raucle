@@ -1,0 +1,36 @@
+
+
+"ALERT"str
+"BLOCK"str
+"MALICIOUS"str
+	"SUSPICIOUS"str
+"ALLOW"str
+"CLEAN"strself
+¨ ¨("à<
+:
+
+© ©('verdict"#get-field# combined_verdict:.
+,
+
+© ©('"?python-partial-apply?:$
+"
+
+© ©('verdict"#id#:&
+$
+
+ª ª(N"#new-object#Bdict"
+ 
+
+ª ª( "	#map-set#:"
+ 
+
+ª" ª(7"	#map-set#:	
+"
+ 
+
+ª9 ª(M"	#map-set#:$
+"
+
+ª ª(W"#array-read#:
+
+ª ª(W*4/home/craigamcw/Projects/raucle/raucle/multimodal.py

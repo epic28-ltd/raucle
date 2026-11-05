@@ -1,0 +1,42 @@
+
+"issuer_key_id"str
+"expires_at"str
+ƒù"Canonical body the issuer signs (excludes the signature).
+
+        ``version`` is part of the signed body (read from the field, not a
+        constant), so a tampered version either fails the version check or
+        breaks the signature.
+        "str
+"statement"str
+	"version"str
+
+"issuer"str
+"issued_at"strselfL L("Š$
+"
+S Z(	"#new-object#Bdict(
+&
+T T(#"#get-field# version: 
+
+T T(#"	#map-set#:*
+(
+U U('"#get-field# statement: 
+
+U U('	"	#map-set#:'
+%
+V V(!"#get-field# issuer: 
+
+V V(!"	#map-set#:
+.
+,
+W W(/"#get-field# issuer_key_id: 
+
+W W(/"	#map-set#:*
+(
+X X('"#get-field# issued_at: 
+
+X X('"	#map-set#:+
+)
+Y Y()"#get-field# expires_at: 
+
+Y Y()"	#map-set#:
+S Z(	*2/home/craigamcw/Projects/raucle/raucle/passport.py

@@ -1,0 +1,26 @@
+
+"uri"str
+aX"Signed provenance receipts + per-skill capability authorisation for inter-agent calls."str
+falsebool
+`W"The ``AgentExtension`` entry an agent lists in its Card to advertise the
+    binding."str
+"description"str
+
+"1"str
+		"version"str
+
+"required"str"á$
+"
+7 >("#new-object#Bdict!
+
+8 8('"#unknown-value# 
+
+8 8('"	#map-set#: 
+
+9 ;(	"	#map-set#: 
+
+< <("	#map-set#:	
+ 
+
+= =("	#map-set#:
+7 >(*-/home/craigamcw/Projects/raucle/raucle/a2a.py

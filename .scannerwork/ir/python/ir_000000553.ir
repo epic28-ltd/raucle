@@ -1,0 +1,12 @@
+
+NE"Return events that couldn't be forwarded (for admin panel display)."strself
+¢ ¢("n*
+(
+
+¤ ¤( "#get-field# _buffer:.
+,
+
+¤ ¤(!"
+builtinslist*:Blist
+
+¤ ¤(!*1/home/craigamcw/Projects/raucle/raucle/gateway.py

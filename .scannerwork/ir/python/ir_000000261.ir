@@ -1,0 +1,72 @@
+
+"notes"str
+"policy_hash"str
+"grammar_hash"str
+"status"str
+"prover"str
+"counterexample"str
+"timeout_ms"str
+	"prover_version"strself
+à à("®&
+$
+
+â í(	"#new-object#Bdict)
+'
+
+ä ä(!"#get-field# status:"
+ 
+
+ä ä(!"	#map-set#:)
+'
+
+ã ã(!"#get-field# prover:"
+ 
+
+ã ã(!"	#map-set#:1
+/
+
+å å(1
+"#get-field# prover_version:"
+ 
+
+å å(1"	#map-set#:	
+/
+-
+
+ç ç(-"#get-field# grammar_hash:"
+ 
+
+ç ç(-"	#map-set#:.
+,
+
+é é(+"#get-field# policy_hash:"
+ 
+
+é é(+"	#map-set#:1
+/
+
+è è(1"#get-field# counterexample:"
+ 
+
+è è(1"	#map-set#:(
+&
+
+ê ê(&"#get-field# notes:#
+!
+
+ê, ê(<"#unknown-value#1
+/
+
+ê ê(="
+builtinssorted*:Blist"
+ 
+
+ê ê(="	#map-set#:-
++
+
+ë ë()"#get-field# timeout_ms:"
+ 
+
+ë ë()"	#map-set#:
+
+â í(	*//home/craigamcw/Projects/raucle/raucle/prove.py

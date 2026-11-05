@@ -1,0 +1,111 @@
+
+"q"str
+"run"str
+"build"str
+"--"str
+
+"--nologo"str
+"--project"str
+truebool
+!"interop/Interop.csproj"str
+"dotnet"str
+"provenance-cs"str
+"-v"str
+"--no-build"str
+
+0int
+"--harness"strreqs
+É É(	list"π	)
+'
+
+Ö Ö(L"#unknown-value#Blist(
+&
+
+Ö Ö(L
+"
+#is-exact#:	Bbool
+
+
+Ö Ö(L"
+#assume#:
+:
+8
+
+Ö Ö(L"#set-field# __collection_size:Bint(
+&
+
+Ö Ö(L"#array-add-last#:(
+&
+
+Ö Ö(L"#array-add-last#:(
+&
+
+Ö Ö(L"#array-add-last#:(
+&
+
+Ö Ö(L"#array-add-last#:(
+&
+
+Ö Ö(L"#array-add-last#:(
+&
+
+Ö Ö(L"#array-add-last#:#
+!
+
+Ü Ü("#unknown-value#,
+*
+
+Ü Ü(!"#dependent-value#*:G
+E
+
+Ñ ä("
+
+subprocessrun:Bsubprocess.CompletedProcess)
+'
+
+å å(a"#unknown-value#Blist(
+&
+
+å å(a"
+#is-exact#:	Bbool
+
+
+å å(a "
+#assume#::
+8
+
+å å(a!"#set-field# __collection_size:Bint(
+&
+
+å å(a""#array-add-last#:(
+&
+
+å å(a#"#array-add-last#:(
+&
+
+å å(a$"#array-add-last#:(
+&
+
+å å(a%"#array-add-last#:(
+&
+
+å å(a&"#array-add-last#:(
+&
+
+å å(a'"#array-add-last#:(
+&
+
+å å(a("#array-add-last#:#
+!
+
+ç ç()"#unknown-value#,
+*
+
+ç ç(*"#dependent-value#*:)0
+.
+
+ã è(+"
+conformance
+_run_lines:*
+
+ã è(+*8/home/craigamcw/Projects/raucle/reference/conformance.py

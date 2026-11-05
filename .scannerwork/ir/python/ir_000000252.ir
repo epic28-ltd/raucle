@@ -1,0 +1,28 @@
+
+
+4int
+"="strtext
+Ð Ð("¢,
+*
+
+Ó Ó("
+builtinslen*:Bint*
+(
+
+Ó Ó("#unaryop -#2-:Bint'
+%
+
+Ó Ó("	#binop %#*2%:,
+*
+
+Ó
+ Ó( pad"	#binop *#*2*:$
+"
+
+Ô$ Ô(."	#binop +#2+:7
+5
+
+Ô Ô(/	"
+base64urlsafe_b64decode:Bbytes
+
+Ô Ô(/	*,/home/craigamcw/Projects/raucle/raucle/pq.py

@@ -1,0 +1,31 @@
+
+"kind"str
+	
+"severity"str
+"detail"strself
+‚ ‚("§&
+$
+
+ƒ ƒ(T"#new-object#Bdict'
+%
+
+ƒ ƒ(!"#get-field# kind:"
+ 
+
+ƒ ƒ(!"	#map-set#:)
+'
+
+ƒ- ƒ(8"#get-field# detail:"
+ 
+
+ƒ# ƒ(8"	#map-set#:+
+)
+
+ƒF ƒ(S
+"#get-field# severity:"
+ 
+
+ƒ: ƒ(S"	#map-set#:	
+
+
+ƒ ƒ(T*4/home/craigamcw/Projects/raucle/raucle/multimodal.py

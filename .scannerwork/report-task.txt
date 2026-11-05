@@ -1,0 +1,6 @@
+organization=epic28-ltd
+projectKey=epic28-ltd_raucle
+serverUrl=https://sonarcloud.io
+dashboardUrl=https://sonarcloud.io/dashboard?id=epic28-ltd_raucle
+ceTaskId=AaGqyiqKC2D1N3M_9hc0
+ceTaskUrl=https://sonarcloud.io/api/ce/task?id=AaGqyiqKC2D1N3M_9hc0

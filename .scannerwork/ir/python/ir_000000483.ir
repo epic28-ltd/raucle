@@ -1,0 +1,72 @@
+
+"event_count"str
+	"checkpoint_count"str
+"first_invalid_index"str
+"chain_key_id"str
+"signed_mode"str
+"valid"str
+"valid_signatures"str
+"errors"str
+"invalid_signatures"strself
+Ã Ã("½&
+$
+
+Ä Î(	"#new-object#Bdict(
+&
+
+Å Å("#get-field# valid:"
+ 
+
+Å Å("	#map-set#:.
+,
+
+Æ Æ(+"#get-field# event_count:"
+ 
+
+Æ Æ(+"	#map-set#:3
+1
+
+Ç  Ç(5
+"#get-field# checkpoint_count:"
+ 
+
+Ç Ç(5"	#map-set#:	
+3
+1
+
+È  È(5"#get-field# valid_signatures:"
+ 
+
+È È(5"	#map-set#:5
+3
+
+É" É(9" #get-field# invalid_signatures:"
+ 
+
+É É(9"	#map-set#:6
+4
+
+Ê# Ê(;"!#get-field# first_invalid_index:"
+ 
+
+Ê Ê(;"	#map-set#:)
+'
+
+Ë Ë(!"#get-field# errors:"
+ 
+
+Ë Ë(!"	#map-set#:.
+,
+
+Ì Ì(+"#get-field# signed_mode:"
+ 
+
+Ì Ì(+"	#map-set#:/
+-
+
+Í Í(-"#get-field# chain_key_id:"
+ 
+
+Í Í(-"	#map-set#:
+
+Ä Î(	*//home/craigamcw/Projects/raucle/raucle/audit.py

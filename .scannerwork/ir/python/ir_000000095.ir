@@ -1,0 +1,24 @@
+
+"="str
+
+4intdata3
+ 3("¼*
+(
+4 4(#"
+builtinslen*:Bint%
+#
+4 4('"	#binop %#*2%:%
+#
+4 4('"	#binop -#*2-:%
+#
+4 4(,"	#binop %#*2%:.
+,
+4 4(-padding"	#binop *#*2*:"
+ 
+5% 5(3	"	#binop +#2+:5
+3
+5 5(4
+"
+base64urlsafe_b64decode:	Bbytes
+5 5(4
+*3/home/craigamcw/Projects/raucle/raucle/handshake.py

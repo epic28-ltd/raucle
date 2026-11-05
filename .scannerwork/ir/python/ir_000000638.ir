@@ -1,0 +1,29 @@
+
+trueboolself
+¡ ¡(model
+¡ ¡(&"¯1
+/
+
+¢ ¢(""#get-field# allowed_models:+
+)
+
+¢ ¢(""
+__bool__*:BboolH+
+)
+
+¢ ¢(""#unaryop !#2!:Bbool "
+
+¢ ¢(" *
+¢ ¢(
+"
+
+£ £("u1
+/
+
+¤ ¤(+"#get-field# allowed_models:,
+*
+
+¤ ¤(+"
+#binop in#2in:Bbool
+
+¤ ¤(+*4/home/craigamcw/Projects/raucle/raucle/provenance.py

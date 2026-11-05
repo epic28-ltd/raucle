@@ -1,0 +1,38 @@
+
+falsebool
+Ž„"Stable rule identity: a path is the grant to this tool for this agent
+    on this source/destination, not the cosmetic rule index."str
+
+0intrule6 6(list"Ô%
+#
+:	 :("#get-field# tool:)
+'
+: :(!"#get-field# agent_id:'
+%
+:# :(."#get-field# source:,
+*
+:0 :(@"#get-field# destination:'
+%
+: :(A"#unknown-value#Blist&
+$
+: :(A	"
+#is-exact#:Bbool
+
+: :(A
+"
+#assume#:	8
+6
+: :(A"#set-field# __collection_size:Bint&
+$
+: :(A"#array-add-last#:&
+$
+: :(A"#array-add-last#:&
+$
+: :(A"#array-add-last#:&
+$
+: :(A"#array-add-last#:!
+
+9 9("#unknown-value#,
+*
+9 <("?python-unknown?:Bstr
+9 <(*6/home/craigamcw/Projects/raucle/raucle/delta_report.py

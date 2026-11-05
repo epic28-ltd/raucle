@@ -1,0 +1,8 @@
+
+ìâ"Hex SHA-256 of *body* â€” the value of the ``x-amz-content-sha256`` header
+    that S3 requires as a signed header. Exposed so a caller can set the header
+    to exactly the hash this module signs into the canonical request."strbody% %("G5
+3
+) )(""
+raucle.broker.sigv4_sha256_hex:
+) )(*6/home/craigamcw/Projects/raucle/raucle/broker/sigv4.py

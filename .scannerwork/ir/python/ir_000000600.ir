@@ -1,0 +1,19 @@
+
+
+4int
+"="strs# #("è*
+(
+$0 $(6"
+builtinslen*:Bint(
+&
+$/ $(6"#unaryop -#2-:Bint%
+#
+$/ $(:"	#binop %#*2%:%
+#
+$( $(;"	#binop *#*2*:"
+ 
+$$ $(;"	#binop +#2+:5
+3
+$ $(<	"
+base64urlsafe_b64decode:Bbytes
+$ $(<	*8/home/craigamcw/Projects/raucle/reference/conformance.py

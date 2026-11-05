@@ -1,0 +1,90 @@
+
+"S3518"bool
+6-"Check if recent scores are trending upward."str
+"division by zero"bool
+falsebool
+"a"bool
+
+0int
+
+6intself
+á á("©+
+)
+
+ã ã("#get-field# _history:,
+*
+
+ã ã("
+builtinslen*:Bint*
+(
+
+ã ã(!"	#binop <#2<:Bbool "
+
+ã ã(! *
+ã ã(
+"
+
+ä ä("©5
+3
+
+æ æ(6scores"?python-unknown?:Blist3
+1
+
+ç ç(	recent_3"#unknown-value#Blist5
+3
+
+è è("
+
+previous_3"#unknown-value#Blist'
+%
+
+ê ê(""
+builtinssum*:	,
+*
+
+ê% ê(2"
+builtinslen*:	Bint,
+*
+
+ê ê(2"
+#binop !=#2!=:Bbool"
+ 
+
+ê ê(2"
+#assert#:?
+=
+
+ê ê(2
+avg_recent"#dependent-value#*:Bfloat'
+%
+
+ë ë(&"
+builtinssum*:
+,
+*
+
+ë) ë(8"
+builtinslen*:
+Bint,
+*
+
+ë ë(8"
+#binop !=#2!=:Bbool"
+ 
+
+ë ë(8"
+#assert#:A
+?
+
+ë ë(8avg_previous"#dependent-value#*:Bfloat3
+1
+
+í í()"#dependent-value#*:Bfloat8
+6
+
+í- í(G"#!#get-field# _escalation_threshold:+
+)
+
+í í(G"?python-unknown?*:
+
+í í(G*1/home/craigamcw/Projects/raucle/raucle/session.py

@@ -32,7 +32,7 @@ async function setup() {
   return { issuerPriv, callerCard, calleeCard };
 }
 
-test("agent card extension + metadata are well-formed", async () => {
+test("agent card extension + metadata are well-formed", () => {
   const ext = raucleAgentCardExtension();
   assert.equal(ext.uri, RAUCLE_A2A_EXTENSION_URI);
   const md = raucleCardMetadata({ iss: "https://x/raucle", keyId: "k1", publicKey: "AAAA" }, { transfer: "deadbeef" });

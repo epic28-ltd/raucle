@@ -1,0 +1,14 @@
+self
+• •( raucle.outcome.OutcomeStatus"–)
+'
+
+– –("#get-field# status:)
+'
+
+– –(2"#get-field# LANDED:,
+*
+
+– –(2"
+#binop ==#2==:Bbool
+
+– –(2*1/home/craigamcw/Projects/raucle/raucle/outcome.py

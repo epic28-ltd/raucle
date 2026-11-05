@@ -1,0 +1,59 @@
+
+
+
+"baseline"str
+"requested_by"str
+qh"Bounded row for the queue: the delta summary, never the raw
+        decision rows' constraint context."str
+"created_at"str
+"candidate"str
+"expires_at"str
+"artefact_digest"str
+"status"str
+"policy_id"str
+"delta_summary"str
+"request_id"strself2 2("Ú$
+"
+5 @(	"#new-object#Bdict+
+)
+6 6()"#get-field# request_id: 
+
+6 6()"	#map-set#:*
+(
+7 7('"#get-field# policy_id: 
+
+7 7('	"	#map-set#:/
+-
+8 8(+"#get-field# baseline_label: 
+
+8 8(+"	#map-set#:
+0
+.
+9 9(-"#get-field# candidate_label: 
+
+9 9(-"	#map-set#:-
++
+: :(-"#get-field# requested_by: 
+
+: :(-"	#map-set#:0
+.
+; ;(3"#get-field# artefact_digest: 
+
+; ;(3"	#map-set#:.
+,
+< <(/"#get-field# delta_summary: 
+
+< <(/"	#map-set#:'
+%
+= =(!"#get-field# status: 
+
+= =(!"	#map-set#:+
+)
+> >()"#get-field# created_at: 
+
+> >()"	#map-set#:+
+)
+? ?() "#get-field# expires_at: 
+
+? ?()!"	#map-set#: 
+5 @(	*4/home/craigamcw/Projects/raucle/raucle/activation.py

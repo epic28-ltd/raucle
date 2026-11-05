@@ -1,0 +1,39 @@
+
+!"{r.key_id}  {r.issuer}"str
+
+0int
++	""({len(active)} active issuer(s))"str
+0'"Print active issuers from a registry."strreg
+¬ ¬("„5
+3
+
+® ®(8active"?python-unknown?:Blist9
+7
+
+¯ ¯("
+builtinsiter*:Btyping.Iterator
+
+¯ ¯("\4
+2
+
+¯ ¯("
+builtins
+__has_next*:Bbool"" 
+
+¯ ¯( *
+¯ ¯(H"j+
+)
+
+° °((r"
+builtinsnext*:3
+1
+
+° °(("
+builtinsprint*:BNoneType"I3
+1
+
+± ±(.
+"
+builtinsprint*:	BNoneType
+
+² ²(*-/home/craigamcw/Projects/raucle/raucle/cli.py

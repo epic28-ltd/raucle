@@ -1,0 +1,636 @@
+
+"<\s*system\s*>"str
+ î"override_other_tools"str
+∑≠"Static analysis for Model Context Protocol (MCP) server manifests.
+
+Scans MCP server tool definitions for prompt injection, hidden instructions,
+rug-pull indicators, and other tool-poisoning attack patterns identified by
+Palo Alto Unit 42, Invariant, Microsoft, and Simon Willison in 2025‚Äì2026.
+
+Two operating modes:
+
+1. **Scan a single manifest** ‚Äî pass a parsed dict::
+
+        from raucle.mcp_scanner import scan_manifest
+        findings = scan_manifest(manifest_dict)
+
+2. **Scan a manifest file or directory** ‚Äî pass a path::
+
+        findings = scan_manifest_file("server.json")
+        findings = scan_manifest_dir("./mcp-servers/")
+
+The scanner returns a list of :class:`Finding` objects.  Output can be
+serialised as JSON or SARIF (for GitHub Advanced Security integration).
+
+Detection categories
+--------------------
+- ``hidden_instruction`` ‚Äî invisible/zero-width chars or special tags in tool
+  descriptions (the classic ``<IMPORTANT>``, ``<SYSTEM>``, ``[INST]`` attacks)
+- ``prompt_injection`` ‚Äî direct injection phrases in tool descriptions
+- ``credential_exposure`` ‚Äî secrets baked into the manifest
+- ``rug_pull_indicator`` ‚Äî descriptions or names that change semantics
+  post-approval ("ignore the above‚Ä¶", "now act as‚Ä¶")
+- ``ssrf_target`` ‚Äî tool URLs pointing at internal metadata services
+- ``shell_pattern`` ‚Äî tools that take raw shell commands
+- ``ambiguous_authority`` ‚Äî tools claiming to override others
+"str
+*"im_start_tag"str
+p"execute_silently"str
+"system_tag"str
+Å⁄w"(?i)(?:169\.254\.169\.254|metadata\.google\.internal|localhost|127\.0\.0\.1|0\.0\.0\.0|::1|file://|gopher://|dict://)"str
+
+"inst_tag"str
+≠"aws_access_key"str
+ Ç"post_approval_change"str
+Ih@"(?i)\b(?:jailbreak|DAN|do\s+anything\s+now|developer\s+mode)\b"str
+*¿ "(?i)bearer\s+[a-z0-9._\-]{20,}"str
+<∑2"-----BEGIN\s+(?:RSA\s+|EC\s+)?PRIVATE\s+KEY-----"str
+∂"private_key"str
+»"api_key_assignment"str
+16("<!--\s*(?:ignore|override|instruction)"str
+NoneNoneType
+\qS"(?i)(?:silently|without\s+(?:asking|telling|notifying))\s+(?:execute|run|perform)"str
+U"act_as"str
+lÉb"(?i)(?:description|behaviour|behavior)\s+(?:will\s+)?(?:change|update|mutate)\s+(?:after|once)\b"str
+"<\s*important\s*>"str
+g"jailbreak_keywords"str
+5"hidden_html_comment"str
++"<\|im_start\|>"str
+ L"override_instructions"str
+Æ"AKIA[A-Z0-9]{16}"str
+7ï-"(?i)override(?:s)?\s+(?:other|all)\s+tools?"str
+
+0int
+%J"[‚Äã-‚Äè‚Ä®-‚ÄØÔªø‚Å†-‚Å§]"str
+H…>"(?i)(?:api[_-]?key|password)\s*[:=]\s*['\"]?[a-z0-9_\-]{16,}"str
+•"sk-[A-Za-z0-9]{20,}"str
+ø"bearer_token"str
+^"reveal_prompt"str
+ã"dynamic_description"str
+"important_tag"str
+ "\[\s*INST\s*\]"str
+X‹N"(?i)\b(?:shell|bash|sh|exec|execute_command|run_command|system_call|popen)\b"str
+§"openai_key"str
+*å "(?i)description\s+is\s+dynamic"str
+\MS"(?i)ignore\s+(?:all\s+)?(?:previous|prior|above)\s+(?:instructions|prompts|rules)"str
+QVH"(?i)\b(?:act|behave|respond)\s+as\s+(?:a\s+|an\s+)?(?:different|new)\b"str
+L_C"(?i)reveal\s+(?:your|the)\s+(?:system\s+)?(?:prompt|instructions)"strAlist	tuple"±G!
+
+ZR Z(T7"#unknown-value#!
+
+Y3 Y(5,"#unknown-value#!
+
+X/ X(1!"#unknown-value#!
+
+W1 W(3"#unknown-value#!
+
+V7 V(9	"#unknown-value#-
++
+# #("annotations"?python-unknown?+
+)
+' '(!	dataclass"?python-unknown?&
+$
+( ((Enum"?python-unknown?&
+$
+) )(Path"?python-unknown?%
+#
+* *(Any"?python-unknown?+
+)
+V7 V(D
+"#get-field# IGNORECASE:	-
++
+V V(E"
+recompile:
+B
+re.Pattern(
+&
+V V(F"#unknown-value#Btuple&
+$
+V V(F"
+#is-exact#:Bbool
+
+V V(F"
+#assume#:8
+6
+V V(F"#set-field# __collection_size:Bint&
+$
+V V(F"#array-add-last#:&
+$
+V V(F"#array-add-last#:+
+)
+W1 W(>"#get-field# IGNORECASE:-
++
+W W(?"
+recompile:B
+re.Pattern(
+&
+W W(@"#unknown-value#Btuple&
+$
+W W(@"
+#is-exact#:Bbool
+
+W W(@"
+#assume#:8
+6
+W W(@"#set-field# __collection_size:Bint&
+$
+W W(@"#array-add-last#:&
+$
+W W(@"#array-add-last#:+
+)
+X/ X(<""#get-field# IGNORECASE:!-
++
+X X(=#"
+recompile: "B
+re.Pattern(
+&
+X X(>$"#unknown-value#Btuple&
+$
+X X(>%"
+#is-exact#:$Bbool
+
+X X(>&"
+#assume#:%8
+6
+X X(>'"#set-field# __collection_size:$Bint&
+$
+X X(>("#array-add-last#:$&
+$
+X X(>)"#array-add-last#:$#+
+)
+Y3 Y(@-"#get-field# IGNORECASE:,-
++
+Y Y(A."
+recompile:+-B
+re.Pattern(
+&
+Y Y(B/"#unknown-value#Btuple&
+$
+Y Y(B0"
+#is-exact#:/Bbool
+
+Y Y(B1"
+#assume#:08
+6
+Y Y(B2"#set-field# __collection_size:/Bint&
+$
+Y Y(B3"#array-add-last#:/*&
+$
+Y Y(B4"#array-add-last#:/.+
+)
+ZR Z(_8"#get-field# IGNORECASE:7-
++
+Z Z(`9"
+recompile:68B
+re.Pattern(
+&
+Z Z(a:"#unknown-value#Btuple&
+$
+Z Z(a;"
+#is-exact#::Bbool
+
+Z Z(a<"
+#assume#:;8
+6
+Z Z(a="#set-field# __collection_size::Bint&
+$
+Z Z(a>"#array-add-last#::5&
+$
+Z Z(a?"#array-add-last#::9=
+;
+U: [(@_HIDDEN_TAG_PATTERNS"#unknown-value#Blist&
+$
+U: [(B"
+#is-exact#:@ABbool
+
+U: [(C"
+#assume#:B8
+6
+U: [(D"#set-field# __collection_size:@Bint&
+$
+U: [(E"#array-add-last#:@&
+$
+U: [(F"#array-add-last#:@&
+$
+U: [(G"#array-add-last#:@$&
+$
+U: [(H"#array-add-last#:@/&
+$
+U: [(I"#array-add-last#:@:>
+<
+^ ^(.K_INVISIBLE_CHARS"
+recompile:JB
+re.Pattern,
+*
+d f(	N"
+recompile:MB
+re.Pattern(
+&
+b g(O"#unknown-value#Btuple&
+$
+b g(P"
+#is-exact#:OBbool
+
+b g(Q"
+#assume#:P8
+6
+b g(R"#set-field# __collection_size:OBint&
+$
+b g(S"#array-add-last#:OL&
+$
+b g(T"#array-add-last#:ON,
+*
+j j(]W"
+recompile:VB
+re.Pattern(
+&
+h k(X"#unknown-value#Btuple&
+$
+h k(Y"
+#is-exact#:XBbool
+
+h k(Z"
+#assume#:Y8
+6
+h k(["#set-field# __collection_size:XBint&
+$
+h k(\"#array-add-last#:XU&
+$
+h k(]"#array-add-last#:XW,
+*
+n n(X`"
+recompile:_B
+re.Pattern(
+&
+l o(a"#unknown-value#Btuple&
+$
+l o(b"
+#is-exact#:aBbool
+
+l o(c"
+#assume#:b8
+6
+l o(d"#set-field# __collection_size:aBint&
+$
+l o(e"#array-add-last#:a^&
+$
+l o(f"#array-add-last#:a`,
+*
+r r(Ui"
+recompile:hB
+re.Pattern(
+&
+p s(j"#unknown-value#Btuple&
+$
+p s(k"
+#is-exact#:jBbool
+
+p s(l"
+#assume#:k8
+6
+p s(m"#set-field# __collection_size:jBint&
+$
+p s(n"#array-add-last#:jg&
+$
+p s(o"#array-add-last#:ji,
+*
+v x(	r"
+recompile:qB
+re.Pattern(
+&
+t y(s"#unknown-value#Btuple&
+$
+t y(t"
+#is-exact#:sBbool
+
+t y(u"
+#assume#:t8
+6
+t y(v"#set-field# __collection_size:sBint&
+$
+t y(w"#array-add-last#:sp&
+$
+t y(x"#array-add-last#:sr<
+:
+a9 z(y_INJECTION_PATTERNS"#unknown-value#Blist&
+$
+a9 z(z"
+#is-exact#:yABbool
+
+a9 z({"
+#assume#:z8
+6
+a9 z(|"#set-field# __collection_size:yBint&
+$
+a9 z(}"#array-add-last#:yO&
+$
+a9 z(~"#array-add-last#:yX&
+$
+a9 z("#array-add-last#:ya'
+%
+a9 z(Ä"#array-add-last#:yj'
+%
+a9 z(Å"#array-add-last#:ys0
+.
+
+Ä Ç(	Ñ"
+recompile:ÉB
+re.Pattern*
+(
+	~ É(Ö"#unknown-value#Btuple)
+'
+	~ É(Ü"
+#is-exact#:ÖBbool 
+
+	~ É(á"
+#assume#:Ü;
+9
+	~ É(à"#set-field# __collection_size:ÖBint*
+(
+	~ É(â"#array-add-last#:ÖÇ*
+(
+	~ É(ä"#array-add-last#:ÖÑ0
+.
+
+Ñ Ñ(Iç"
+recompile:åB
+re.Pattern+
+)
+
+Ñ Ñ(Jé"#unknown-value#Btuple*
+(
+
+Ñ Ñ(Jè"
+#is-exact#:éBbool!
+
+
+Ñ Ñ(Jê"
+#assume#:è<
+:
+
+Ñ Ñ(Jë"#set-field# __collection_size:éBint+
+)
+
+Ñ Ñ(Jí"#array-add-last#:éã+
+)
+
+Ñ Ñ(Jì"#array-add-last#:éç0
+.
+
+Ö Ö(Wñ"
+recompile:ïB
+re.Pattern+
+)
+
+Ö Ö(Xó"#unknown-value#Btuple*
+(
+
+Ö Ö(Xò"
+#is-exact#:óBbool!
+
+
+Ö Ö(Xô"
+#assume#:ò<
+:
+
+Ö Ö(Xö"#set-field# __collection_size:óBint+
+)
+
+Ö Ö(Xõ"#array-add-last#:óî+
+)
+
+Ö Ö(Xú"#array-add-last#:óñ<
+:
+	}7 Ü(ù_RUGPULL_PATTERNS"#unknown-value#Blist)
+'
+	}7 Ü(û"
+#is-exact#:ùABbool 
+
+	}7 Ü(ü"
+#assume#:û;
+9
+	}7 Ü(†"#set-field# __collection_size:ùBint*
+(
+	}7 Ü(°"#array-add-last#:ùÖ*
+(
+	}7 Ü(¢"#array-add-last#:ùé*
+(
+	}7 Ü(£"#array-add-last#:ùó0
+.
+
+ä ä(5¶"
+recompile:•B
+re.Pattern+
+)
+
+ä ä(6ß"#unknown-value#Btuple*
+(
+
+ä ä(6®"
+#is-exact#:ßBbool!
+
+
+ä ä(6©"
+#assume#:®<
+:
+
+ä ä(6™"#set-field# __collection_size:ßBint+
+)
+
+ä ä(6´"#array-add-last#:ß§+
+)
+
+ä ä(6¨"#array-add-last#:ß¶0
+.
+
+ã ã(6Ø"
+recompile:ÆB
+re.Pattern+
+)
+
+ã ã(7∞"#unknown-value#Btuple*
+(
+
+ã ã(7±"
+#is-exact#:∞Bbool!
+
+
+ã ã(7≤"
+#assume#:±<
+:
+
+ã ã(7≥"#set-field# __collection_size:∞Bint+
+)
+
+ã ã(7¥"#array-add-last#:∞≠+
+)
+
+ã ã(7µ"#array-add-last#:∞Ø0
+.
+
+å å(S∏"
+recompile:∑B
+re.Pattern+
+)
+
+å å(Tπ"#unknown-value#Btuple*
+(
+
+å å(T∫"
+#is-exact#:πBbool!
+
+
+å å(Tª"
+#assume#:∫<
+:
+
+å å(Tº"#set-field# __collection_size:πBint+
+)
+
+å å(TΩ"#array-add-last#:π∂+
+)
+
+å å(Tæ"#array-add-last#:π∏0
+.
+
+ç ç(B¡"
+recompile:¿B
+re.Pattern+
+)
+
+ç ç(C¬"#unknown-value#Btuple*
+(
+
+ç ç(C√"
+#is-exact#:¬Bbool!
+
+
+ç ç(Cƒ"
+#assume#:√<
+:
+
+ç ç(C≈"#set-field# __collection_size:¬Bint+
+)
+
+ç ç(C∆"#array-add-last#:¬ø+
+)
+
+ç ç(C«"#array-add-last#:¬¡0
+.
+
+ë ë(S "
+recompile:…B
+re.Pattern+
+)
+
+é í(À"#unknown-value#Btuple*
+(
+
+é í(Ã"
+#is-exact#:ÀBbool!
+
+
+é í(Õ"
+#assume#:Ã<
+:
+
+é í(Œ"#set-field# __collection_size:ÀBint+
+)
+
+é í(œ"#array-add-last#:À»+
+)
+
+é í(–"#array-add-last#:À <
+:
+
+â6 ì(—_SECRET_PATTERNS"#unknown-value#Blist*
+(
+
+â6 ì(“"
+#is-exact#:—ABbool!
+
+
+â6 ì(”"
+#assume#:“<
+:
+
+â6 ì(‘"#set-field# __collection_size:—Bint+
+)
+
+â6 ì(’"#array-add-last#:—ß+
+)
+
+â6 ì(÷"#array-add-last#:—∞+
+)
+
+â6 ì(◊"#array-add-last#:—π+
+)
+
+â6 ì(ÿ"#array-add-last#:—¬+
+)
+
+â6 ì(Ÿ"#array-add-last#:—À?
+=
+
+ñ ù(€_SSRF_TARGETS"
+recompile:⁄B
+re.Pattern>
+<
+
+† ¢(›_SHELL_HINTS"
+recompile:‹B
+re.Pattern'
+%
+™ «ﬁ%closure"#new-object#%
+#
+™ «ﬂ"#set-field# Any:ﬁ+
+)
+™ «‡"?python-partial-apply?:ﬁ'
+%
+« ”·%closure"#new-object#%
+#
+« ”‚"#set-field# Any:·+
+)
+« ”„"?python-partial-apply?:·'
+%
+” Á‰%closure"#new-object#%
+#
+” ÁÂ"#set-field# Any:‰+
+)
+” ÁÊ"?python-partial-apply?:‰'
+%
+Á äÁ%closure"#new-object#%
+#
+Á äË"#set-field# Any:Á0
+.
+Á äÈ"#set-field# _SSRF_TARGETS:Á€+
+)
+Á äÍ"?python-partial-apply?:Á'
+%
+ä ˛Î%closure"#new-object#2
+0
+ä ˛Ï"#set-field# _INVISIBLE_CHARS:ÎK6
+4
+ä ˛Ì"" #set-field# _HIDDEN_TAG_PATTERNS:Î@5
+3
+ä ˛Ó"!#set-field# _INJECTION_PATTERNS:Îy4
+2
+ä ˛Ô"#set-field# _RUGPULL_PATTERNS:Îù3
+1
+ä ˛"#set-field# _SECRET_PATTERNS:Î—/
+-
+ä ˛Ò"#set-field# _SHELL_HINTS:Î›+
+)
+ä ˛Ú"?python-partial-apply?:Î'
+%
+˛ áÛ%closure"#new-object#%
+#
+˛ áÙ"#set-field# Any:Û+
+)
+˛ áı"?python-partial-apply?:Û'
+%
+¢ ⁄ˆ%closure"#new-object#%
+#
+¢ ⁄˜"#set-field# Any:ˆ+
+)
+¢ ⁄¯"?python-partial-apply?:ˆ *5/home/craigamcw/Projects/raucle/raucle/mcp_scanner.py

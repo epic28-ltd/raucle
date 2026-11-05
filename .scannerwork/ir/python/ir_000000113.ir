@@ -1,0 +1,20 @@
+
+
+4int
+"="strsegment7
+ 7("è*
+(
+86 8(B"
+builtinslen*:Bint(
+&
+85 8(B"#unaryop -#2-:Bint%
+#
+85 8(F"	#binop %#*2%:%
+#
+8. 8(G"	#binop *#*2*:"
+ 
+8$ 8(G"	#binop +#2+:5
+3
+8 8(H	"
+base64urlsafe_b64decode:Bbytes
+8 8(H	*5/home/craigamcw/Projects/raucle/raucle/chain_graph.py

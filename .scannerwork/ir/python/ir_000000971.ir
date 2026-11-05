@@ -1,0 +1,120 @@
+
+"deny"str
+!/"forbidden_combinations"str
+"max"str
+'4"forbidden_field_combinations"str
+)"starts_with"str
+E<"Compile DSL constraint syntax to the gate's native format."str
+'"required_present"str
+"	"require"str
+"max_value"str
+"allow"str
+ "min_value"str
+"forbidden_values"str
+"min"str
+
+"allowed_values"strselfZ Z(!"¨.
+,
+\# \(%compiled"#new-object#Bdict,
+*
+_ _(&"#get-field# constraints:*
+(
+_ _(&"
+#binop in#2in:Bbool"
+_ _(& *_ _(
+"Â,
+*
+`@ `(P"#get-field# constraints:"
+ 
+`@ `(Y"#array-read#:@
+>
+`) `(Z	"-
+raucle.policy.PolicyRule_expand_wildcards:$
+"
+` `(Z"#array-write#:
+	"z,
+*
+c c(%"#get-field# constraints:*
+(
+c c(%"
+#binop in#2in:Bbool"
+c c(% *c c(
+"Â,
+*
+dB d(R"#get-field# constraints:"
+ 
+dB d(Z"#array-read#:@
+>
+d+ d(["-
+raucle.policy.PolicyRule_expand_wildcards:$
+"
+d d(["#array-write#:"z,
+*
+g g($"#get-field# constraints:*
+(
+g g($"
+#binop in#2in:Bbool"
+g g($ *g g(
+"€,
+*
+h$ h(4"#get-field# constraints:"
+ 
+h$ h(;"#array-read#:$
+"
+h h(;"#array-write#:"z,
+*
+k k($"#get-field# constraints:*
+(
+k k($"
+#binop in#2in:Bbool"
+k k($ *k k(
+"€,
+*
+l$ l(4"#get-field# constraints:"
+ 
+l$ l(;"#array-read#:$
+"
+l l(;!"#array-write#: "z,
+*
+o o((#"#get-field# constraints:*
+(
+o o(($"
+#binop in#2in:"#Bbool"
+o o(($	 
+*o o(
+"€	,
+*
+p+ p(;%"#get-field# constraints:"
+ 
+p+ p(F&"#array-read#:%"$
+"
+p p(F("#array-write#:'&
+"z
+,
+*
+s s(,*"#get-field# constraints:*
+(
+s s(,+"
+#binop in#2in:)*Bbool"
+s s(,+ *s s(
+"€,
+*
+t& t(6,"#get-field# constraints:"
+ 
+t& t(E-"#array-read#:,)$
+"
+t t(E."#array-write#:)-"z,
+*
+w' w(70"#get-field# constraints:*
+(
+w w(71"
+#binop in#2in:/0Bbool"
+w w(71 *w w(
+"€,
+*
+x7 x(G2"#get-field# constraints:"
+ 
+x7 x(a3"#array-read#:2/$
+"
+x x(a5"#array-write#:43"
+z z(*0/home/craigamcw/Projects/raucle/raucle/policy.py

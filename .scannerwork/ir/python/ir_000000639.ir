@@ -1,0 +1,29 @@
+
+trueboolself
+¦ ¦(tool
+¦ ¦($"®0
+.
+
+§ §(!"#get-field# allowed_tools:+
+)
+
+§ §(!"
+__bool__*:BboolH+
+)
+
+§ §(!"#unaryop !#2!:Bbool "
+
+§ §(! *
+§ §(
+"
+
+¨ ¨("t0
+.
+
+© ©()"#get-field# allowed_tools:,
+*
+
+© ©()"
+#binop in#2in:Bbool
+
+© ©()*4/home/craigamcw/Projects/raucle/raucle/provenance.py

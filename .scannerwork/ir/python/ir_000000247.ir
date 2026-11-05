@@ -1,0 +1,54 @@
+
+
+3int
+
+
+0int
+
+1int
+ÑÇ"Wrap an existing Ed25519 identity with a fresh ML-DSA-65 key.
+
+        The normal adoption path: load the agent identity exactly as
+        today, then upgrade it to quantum-safe emission.
+        "str
+
+2int
+7."ed25519_private must be an Ed25519PrivateKey"strcls
+Õ Õ(ed25519_private
+Õ Õ(.GCcryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PrivateKey"|+
+)
+
+Û Û(="#is-instance#:Bbool+
+)
+
+Û Û(="#unaryop !#2!:Bbool "
+
+Û Û(= *
+Û Û(
+"D.
+,
+
+Ü Ü(K"	TypeError*:B	TypeError2
+
+Ü Ü(K"€6
+4
+
+Ý  Ý(-	
+pq_private"
+	raucle.pqpq_generate4
+2
+
+Ý Ý(-
+pq_private"#python-unpack#:	
++
+)
+
+Ý Ý(-_"#python-unpack#:	0
+.
+
+Ý Ý(-pq_kid"#python-unpack#:	
+
+
+Þ Þ(\"cls:
+
+Þ Þ(\*,/home/craigamcw/Projects/raucle/raucle/pq.py

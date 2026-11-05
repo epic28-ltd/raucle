@@ -1,0 +1,1047 @@
+
+g"(?i)anti-?ai\s+mode"str
+PÜF"(?i)system\s+prompt\s*(verbatim|exactly|word\s+for\s+word|in\s+full)"str
+°"sql_injection"str
+)ë"(?i)%2e%2e%2f|%252e%252e%252f"str
+…"PI-007"str
+·0.60float
+*d!"(?i)simulate\s+.*\bunfiltered\b"str
+/c&"(?i)from\s+now\s+on.*two\s+responses"str
+ó"context_stuffing"str
+‘	"OUT-003"str
+?"role_hijacking"str
+ 
+"severity"str
+¥"mcp_tool_poisoning"str
+ƒ"output_injection"str
+/ª%"(?i)when\s+called.*execute.*command"str
+Ë"data_loss"str
+Ù"tool_abuse"str
+4ç*"\b[A-Z]{2}\d{2}\s?[A-Z0-9]{4}\s?\d{7,}\b"str
+Ì"sk-[A-Za-z0-9]{20,}"str
+10000int
+’"(?i)rot13\s*:\s*"str
+ˇ0.70float
+(Ω"(?i)override.*tool.*behavior"str
+)†"(?i)Human:\s*\n.*\nAssistant:"str
+S'J"(?i)override\s+(your\s+)?(system|previous)\s+(prompt|instructions|rules)"str
+w0.90float
+E∏;"(?i)(?:file://|gopher://|dict://|ftp://(?:localhost|127))"str
+®	"OUT-001"str
+S≥I"(?i)my\s+(?:rules?|guidelines?|directives?)\s+(?:state|say|are|include)"str
+GÏ="(?i)(api[_-]?key|apikey)\s*[=:]\s*['\"]?[A-Za-z0-9_\-]{20,}"str
+!ü"(?i)<<SYS>>.*<</SYS>>"str
+ãÅÄ"(?i)(output|print|show|display|reveal|give|tell|dump|paste|type)\s+.{0,15}(system\s+)?(prompt|instructions?|rules|directives?)"str
+hﬁ^"(?i)(?:send|post|transmit|exfiltrate)\s+(?:this|the|all)\s+(?:data|information|content)\s+to"str
+G"(?i)you\s+are\s+DAN"str
+Õ	"evasion"str
+H%?"(?i)disregard\s+(all\s+)?prior\s+(instructions|context|rules)"str
+"instruction_override"str
+–"MEDIUM"str
+Ê"credential_exposure"str
+À"encoding_bypass"str
+¥"ssrf"str
+£"(?i)\[system\]\s*#"str
+ï"PI-005"str
+Q∞G"(?i)(?:my|the)\s+system\s+(?:prompt|instructions?)\s+(?:is|are|says?)"str
+`
+"CRITICAL"str
+*‘ "(?i)hex\s*:\s*[0-9a-fA-F]{20,}"str
+*(!"(?i)you\s+are\s+now\s+(a|an)\s+"str
+i"(?i)AIM\s+mode"str
+
+"TOOL-001"str
+;J2"(?i)enable\s+(unrestricted|unlimited|god)\s+mode"str
+VÉL"(?i)what\s+(is|are|were)\s+your\s+(system\s+)?(prompt|instructions?|rules)"str
+í0.80float
+*º "(?i)hidden\s+instruction.*tool"str
+?ê5"(?i)(?:/etc/passwd|/etc/shadow|\.env|\.ssh/|id_rsa)"str
+è"\.\./\.\./"str
+"name"str
+ ÷"exfiltration_channel"str
+≤"PI-006"str
+&)"(?i)new\s+instructions?:\s+"str
+6∫,"(?i)tool_description.*ignore.*instructions"str
+à
+"TOOL-002"str
+"â"\b[A-Z]{2}\d{6}[A-Z]\b"str
+Q§G"(?i)(?:'\s*(?:OR|AND)\s+['\d]|;\s*DROP\s+TABLE|UNION\s+SELECT|--\s*$)"str
+#Ú"dangerous_shell_command"str
+-å#"\b\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\b"str
+H›>"(?i)(?:fetch|curl|wget|requests?\.get)\s*\(\s*['\"]https?://"str
+ø	"OUT-002"str
+Ÿ"output_exfiltration"str
+M˘C"(?i)(?:rm\s+-rf|mkfs|dd\s+if=|chmod\s+777|curl.*\|\s*(?:sh|bash))"str
+"˙"(?i)(?:sudo|su\s+-)\s+"str
+"technique"str
+.˚$"(?i)(?:>\s*/etc/|/dev/(?:sd|null))"str
+°"\x00+"str
+!û"sql_injection_in_args"str
+H"(?i)jailbreak\s+mode"str
+0.75float
+.Ô$"(?i)bearer\s+[A-Za-z0-9_\-\.]{20,}"str
+KÑA"(?i)repeat\s+(everything|all|the\s+text)\s+(above|before|prior)"str
+"¸"(?i)(?:eval|exec)\s*\("str
+9"score"str
+8D/"(?i)pretend\s+(you\s+are|to\s+be)\s+(a|an)\s+"str
+W±M"(?i)(?:here\s+(?:is|are)\s+)?my\s+(?:original|initial|base)\s+instructions?"str
+Ç	"DLP-002"str
+!"HIGH"str
+#
+"patterns"str
+Y"PI-003"str
+™"system_prompt_leak"str
+["dan_jailbreak"str
+"id"str
+4Ò*"-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----"str
+:0.85float
++¡!"instruction_injection_in_output"str
+ú
+"TOOL-003"str
+.ã$"\b[A-Z]{1,2}\d{1,2}\s?\d[A-Z]{2}\b"str
+%ä"\b\d{3}\s?\d{4}\s?\d{4}\b"str
+¨"data_leakage"str
+8I/"(?i)developer\s+mode\s+(enabled|activated|on)"str
+7E."(?i)act\s+as\s+(if\s+you\s+are\s+)?(a|an)\s+"str
+%*"(?i)system\s*:\s*you\s+are"str
+e"(?i)maximum\s+mode"str
+P&G"(?i)forget\s+(all\s+)?(your|previous)\s+(instructions|rules|training)"str
+z"PI-004"str
+c«Y"(?i)(?:ignore|disregard|override)\s+(?:all\s+)?(?:previous|prior|above)\s+instructions?"str
+H≤>"(?i)i\s+was\s+(?:told|instructed|programmed|configured)\s+to"str
+ò0.65float
+|"data_exfiltration"str
+´°"Pattern matching layer -- fast regex-based detection of known injection techniques.
+
+This module provides the first line of defence, scanning prompts against a library
+of compiled regular expressions that match known attack signatures. Target latency
+is under 1 ms for a typical prompt.
+"str
+"direct_injection"str
+0“&"(?i)base64\s*:\s*[A-Za-z0-9+/=]{20,}"str
+7”-"(?i)decode\s+this\s*:\s*[A-Za-z0-9+/=]{20,}"str
+[‹Q"(?i)!\[[^\]]*\]\(https?://[^)]*(?:api[_-]?key|token|secret|password|credential)"str
+h"(?i)DUDE\s+mode"str
+>…4"(?i)<\|im_start\|>|<\|im_end\|>|\[INST\]|\[/INST\]"str
+/b&"(?i)\bDAN\b.*\bdo\s+anything\s+now\b"str
+"PI-001"str
+SÖI"(?i)(copy|paste|echo)\s+(your|the)\s+(system\s+)?(prompt|instructions?)"str
+NoneNoneType
+P•F"(?i)(?:INSERT\s+INTO|UPDATE\s+.*SET|DELETE\s+FROM)\s+(?!.*\bWHERE\b)"str
+ô"indirect_injection"str
+Ú"AKIA[A-Z0-9]{16}"str
+F"(?i)roleplay\s+as\s+"str
+Ø
+"TOOL-004"str
+A7"(?i)(secret|token)\s*[=:]\s*['\"]?[A-Za-z0-9_\-]{20,}"str
+#û"(?i)\[INST\].*\[/INST\]"str
+∂"tool_poisoning"str
+\ÇR"(?i)(show|print|reveal|display)\s+me\s+.{0,10}(system\s+)?(prompt|instructions?)"str
+>¢4"(?i)<!-- .*(ignore|override|new instructions).*-->"str
+]∑S"(?i)(?:169\.254\.169\.254|metadata\.google|localhost|127\.0\.0\.1|0\.0\.0\.0|::1)"str
+±"ssrf_attempt"str
+]"jailbreak"str
+H$?"(?i)ignore\s+(all\s+)?previous\s+(instructions|prompts|rules)"str
+AÓ7"(?i)(password|passwd|pwd)\s*[=:]\s*['\"]?[^\s'\"]{8,}"str
+‰	"DLP-001"str
+ä"path_traversal"str
+Ñ"pii_exposure"str
+_»U"(?i)(?:you\s+(?:must|should|need\s+to)|please)\s+(?:now\s+)?(?:execute|run|perform)"str
+<÷2"(?i)translate\s+from\s+(base64|hex|binary|rot13)"str
+100000int
+="PI-002"str
+f"(?i)opposite\s+mode"str
+$ù"(?i)<\|im_start\|>system"str
+
+"category"str
+ˆ"shell_injection"str
+
+/0int,list"πf-
++
+ ("annotations"?python-unknown?+
+)
+ (	lru_cache"?python-unknown?%
+#
+ (Any"?python-unknown?!
+
+ (#"#unknown-value#?
+=
+	 ($logger"
+logging	getLogger:Blogging.Logger$
+"
+ %closure"#new-object#'
+%
+ "#set-field# lru_cache:$
+"
+ 	"#set-field# logger:'
+%
+ 
+"?python-partial-apply?:$
+"
+ *%closure"#new-object#!
+
+ *"#set-field# Any:'
+%
+ *"?python-partial-apply?:.
+,
+* *(MAX_INPUT_LENGTH"#id#:Bint5
+3
+5 5( _PER_PATTERN_MAX_LENGTH"#id#:Bint3
+1
+; ;(_SCAN_TIME_BUDGET_S"#id#:Bfloat$
+"
+G W("#new-object#Bdict 
+
+H H("	#map-set#: 
+
+I I(&"	#map-set#: 
+
+J J(&"	#map-set#: 
+
+K K(+"	#map-set#: 
+
+L L(""	#map-set#: !'
+%
+M U(	+"#unknown-value#Blist&
+$
+M U(	-"
+#is-exact#:+,Bbool
+
+M U(	."
+#assume#:-8
+6
+M U(	0"#set-field# __collection_size:+/Bint&
+$
+M U(	1"#array-add-last#:+$&
+$
+M U(	2"#array-add-last#:+%&
+$
+M U(	3"#array-add-last#:+&&
+$
+M U(	4"#array-add-last#:+'&
+$
+M U(	5"#array-add-last#:+(&
+$
+M U(	6"#array-add-last#:+)&
+$
+M U(	7"#array-add-last#:+* 
+
+M U(	8"	#map-set#:#+ 
+
+V V(;"	#map-set#:9:$
+"
+Y i(<"#new-object#Bdict 
+
+Z Z(>"	#map-set#:<= 
+
+[ [( @"	#map-set#:<? 
+
+\ \(&A"	#map-set#:< 
+
+] ](%B"	#map-set#:<? 
+
+^ ^(C"	#map-set#:< !'
+%
+_ g(	K"#unknown-value#Blist&
+$
+_ g(	L"
+#is-exact#:K,Bbool
+
+_ g(	M"
+#assume#:L8
+6
+_ g(	N"#set-field# __collection_size:K/Bint&
+$
+_ g(	O"#array-add-last#:KD&
+$
+_ g(	P"#array-add-last#:KE&
+$
+_ g(	Q"#array-add-last#:KF&
+$
+_ g(	R"#array-add-last#:KG&
+$
+_ g(	S"#array-add-last#:KH&
+$
+_ g(	T"#array-add-last#:KI&
+$
+_ g(	U"#array-add-last#:KJ 
+
+_ g(	V"	#map-set#:<#K 
+
+h h(W"	#map-set#:<9$
+"
+k |(X"#new-object#Bdict 
+
+l l(Z"	#map-set#:XY 
+
+m m(\"	#map-set#:X[ 
+
+n n(^"	#map-set#:X] 
+
+o o($_"	#map-set#:X[ 
+
+p p(a"	#map-set#:X `'
+%
+q z(	j"#unknown-value#Blist&
+$
+q z(	k"
+#is-exact#:j,Bbool
+
+q z(	l"
+#assume#:k8
+6
+q z(	m"#set-field# __collection_size:j/Bint&
+$
+q z(	n"#array-add-last#:jb&
+$
+q z(	o"#array-add-last#:jc&
+$
+q z(	p"#array-add-last#:jd&
+$
+q z(	q"#array-add-last#:je&
+$
+q z(	r"#array-add-last#:jf&
+$
+q z(	s"#array-add-last#:jg&
+$
+q z(	t"#array-add-last#:jh&
+$
+q z(	u"#array-add-last#:ji 
+
+q z(	v"	#map-set#:X#j 
+
+{ {(x"	#map-set#:X9w%
+#
+	~ ç(y"#new-object#Bdict 
+
+ ({"	#map-set#:yz"
+ 
+
+Ä Ä(#}"	#map-set#:y|"
+ 
+
+Å Å('~"	#map-set#:y|"
+ 
+
+Ç Ç(("	#map-set#:y|#
+!
+
+É É(Ä"	#map-set#:y `*
+(
+
+Ñ ã(	á"#unknown-value#Blist*
+(
+
+Ñ ã(	à"
+#is-exact#:á,Bbool!
+
+
+Ñ ã(	â"
+#assume#:à<
+:
+
+Ñ ã(	ä"#set-field# __collection_size:á/Bint+
+)
+
+Ñ ã(	ã"#array-add-last#:áÅ+
+)
+
+Ñ ã(	å"#array-add-last#:áÇ+
+)
+
+Ñ ã(	ç"#array-add-last#:áÉ+
+)
+
+Ñ ã(	é"#array-add-last#:áÑ+
+)
+
+Ñ ã(	è"#array-add-last#:áÖ+
+)
+
+Ñ ã(	ê"#array-add-last#:áÜ$
+"
+
+Ñ ã(	ë"	#map-set#:y#á$
+"
+
+å å(ì"	#map-set#:y9í'
+%
+
+è ü(î"#new-object#Bdict%
+#
+
+ê ê(ñ"	#map-set#:îï%
+#
+
+ë ë("ò"	#map-set#:îó%
+#
+
+í í((ö"	#map-set#:îô%
+#
+
+ì ì('õ"	#map-set#:îó$
+"
+
+î î(ú"	#map-set#:î !*
+(
+
+ï ù(	§"#unknown-value#Blist*
+(
+
+ï ù(	•"
+#is-exact#:§,Bbool!
+
+
+ï ù(	¶"
+#assume#:•<
+:
+
+ï ù(	ß"#set-field# __collection_size:§/Bint+
+)
+
+ï ù(	®"#array-add-last#:§ù+
+)
+
+ï ù(	©"#array-add-last#:§û+
+)
+
+ï ù(	™"#array-add-last#:§ü+
+)
+
+ï ù(	´"#array-add-last#:§†+
+)
+
+ï ù(	¨"#array-add-last#:§°+
+)
+
+ï ù(	≠"#array-add-last#:§¢+
+)
+
+ï ù(	Æ"#array-add-last#:§£%
+#
+
+ï ù(	Ø"	#map-set#:î#§$
+"
+
+û û(∞"	#map-set#:î9:'
+%
+
+° Æ(±"#new-object#Bdict%
+#
+
+¢ ¢(≥"	#map-set#:±≤%
+#
+
+£ £($µ"	#map-set#:±¥%
+#
+
+§ §($∑"	#map-set#:±∂%
+#
+
+• •()∏"	#map-set#:±¥$
+"
+
+¶ ¶(π"	#map-set#:± `*
+(
+
+ß ¨(	æ"#unknown-value#Blist*
+(
+
+ß ¨(	ø"
+#is-exact#:æ,Bbool!
+
+
+ß ¨(	¿"
+#assume#:ø<
+:
+
+ß ¨(	¡"#set-field# __collection_size:æ/Bint+
+)
+
+ß ¨(	¬"#array-add-last#:æ∫+
+)
+
+ß ¨(	√"#array-add-last#:æª+
+)
+
+ß ¨(	ƒ"#array-add-last#:æº+
+)
+
+ß ¨(	≈"#array-add-last#:æΩ%
+#
+
+ß ¨(	∆"	#map-set#:±#æ$
+"
+
+≠ ≠(«"	#map-set#:±9w'
+%
+
+∞ æ(»"#new-object#Bdict%
+#
+
+± ±( "	#map-set#:»…%
+#
+
+≤ ≤(!Ã"	#map-set#:»À%
+#
+
+≥ ≥(Œ"	#map-set#:»Õ%
+#
+
+¥ ¥(&œ"	#map-set#:»À%
+#
+
+µ µ(—"	#map-set#:» –*
+(
+
+∂ º(	◊"#unknown-value#Blist*
+(
+
+∂ º(	ÿ"
+#is-exact#:◊,Bbool!
+
+
+∂ º(	Ÿ"
+#assume#:ÿ<
+:
+
+∂ º(	⁄"#set-field# __collection_size:◊/Bint+
+)
+
+∂ º(	€"#array-add-last#:◊“+
+)
+
+∂ º(	‹"#array-add-last#:◊”+
+)
+
+∂ º(	›"#array-add-last#:◊‘+
+)
+
+∂ º(	ﬁ"#array-add-last#:◊’+
+)
+
+∂ º(	ﬂ"#array-add-last#:◊÷%
+#
+
+∂ º(	‡"	#map-set#:»#◊%
+#
+
+Ω Ω(‚"	#map-set#:»9·'
+%
+
+¿ –(„"#new-object#Bdict%
+#
+
+¡ ¡(Â"	#map-set#:„‰%
+#
+
+¬ ¬(%Á"	#map-set#:„Ê%
+#
+
+√ √(È"	#map-set#:„Ë%
+#
+
+ƒ ƒ(*Í"	#map-set#:„Ê$
+"
+
+≈ ≈(Î"	#map-set#:„ `*
+(
+
+∆ Œ(	Û"#unknown-value#Blist*
+(
+
+∆ Œ(	Ù"
+#is-exact#:Û,Bbool!
+
+
+∆ Œ(	ı"
+#assume#:Ù<
+:
+
+∆ Œ(	ˆ"#set-field# __collection_size:Û/Bint+
+)
+
+∆ Œ(	˜"#array-add-last#:ÛÏ+
+)
+
+∆ Œ(	¯"#array-add-last#:ÛÌ+
+)
+
+∆ Œ(	˘"#array-add-last#:ÛÓ+
+)
+
+∆ Œ(	˙"#array-add-last#:ÛÔ+
+)
+
+∆ Œ(	˚"#array-add-last#:Û+
+)
+
+∆ Œ(	¸"#array-add-last#:ÛÒ+
+)
+
+∆ Œ(	˝"#array-add-last#:ÛÚ%
+#
+
+∆ Œ(	˛"	#map-set#:„#Û%
+#
+
+œ œ(Ä"	#map-set#:„9ˇ'
+%
+
+“ ‡(Å"#new-object#Bdict%
+#
+
+” ”(É"	#map-set#:ÅÇ%
+#
+
+‘ ‘(Ö"	#map-set#:ÅÑ%
+#
+
+’ ’(Ü"	#map-set#:ÅË%
+#
+
+÷ ÷(#á"	#map-set#:ÅÑ$
+"
+
+◊ ◊(à"	#map-set#:Å !*
+(
+
+ÿ ﬁ(	é"#unknown-value#Blist*
+(
+
+ÿ ﬁ(	è"
+#is-exact#:é,Bbool!
+
+
+ÿ ﬁ(	ê"
+#assume#:è<
+:
+
+ÿ ﬁ(	ë"#set-field# __collection_size:é/Bint+
+)
+
+ÿ ﬁ(	í"#array-add-last#:éâ+
+)
+
+ÿ ﬁ(	ì"#array-add-last#:éä+
+)
+
+ÿ ﬁ(	î"#array-add-last#:éã+
+)
+
+ÿ ﬁ(	ï"#array-add-last#:éå+
+)
+
+ÿ ﬁ(	ñ"#array-add-last#:éç%
+#
+
+ÿ ﬁ(	ó"	#map-set#:Å#é%
+#
+
+ﬂ ﬂ(ô"	#map-set#:Å9ò;
+9
+	E) ·(öBUILTIN_PATTERNS"#unknown-value#Blist)
+'
+	E) ·(õ"
+#is-exact#:ö,Bbool 
+
+	E) ·(ú"
+#assume#:õ;
+9
+	E) ·(ù"#set-field# __collection_size:ö/Bint)
+'
+	E) ·(û"#array-add-last#:ö)
+'
+	E) ·(ü"#array-add-last#:ö<)
+'
+	E) ·(†"#array-add-last#:öX)
+'
+	E) ·(°"#array-add-last#:öy*
+(
+	E) ·(¢"#array-add-last#:öî*
+(
+	E) ·(£"#array-add-last#:ö±*
+(
+	E) ·(§"#array-add-last#:ö»*
+(
+	E) ·(•"#array-add-last#:ö„*
+(
+	E) ·(¶"#array-add-last#:öÅ'
+%
+
+È ˆ(ß"#new-object#Bdict%
+#
+
+Í Í(©"	#map-set#:ß®%
+#
+
+Î Î($´"	#map-set#:ß™%
+#
+
+Ï Ï("≠"	#map-set#:ß¨%
+#
+
+Ì Ì()Æ"	#map-set#:ß™$
+"
+
+Ó Ó(Ø"	#map-set#:ß `*
+(
+
+Ô Ù(	¥"#unknown-value#Blist*
+(
+
+Ô Ù(	µ"
+#is-exact#:¥,Bbool!
+
+
+Ô Ù(	∂"
+#assume#:µ<
+:
+
+Ô Ù(	∑"#set-field# __collection_size:¥/Bint+
+)
+
+Ô Ù(	∏"#array-add-last#:¥∞+
+)
+
+Ô Ù(	π"#array-add-last#:¥±+
+)
+
+Ô Ù(	∫"#array-add-last#:¥≤+
+)
+
+Ô Ù(	ª"#array-add-last#:¥≥%
+#
+
+Ô Ù(	º"	#map-set#:ß#¥%
+#
+
+ı ı(Ω"	#map-set#:ß9í'
+%
+
+˜ É(æ"#new-object#Bdict%
+#
+
+¯ ¯(¿"	#map-set#:æø%
+#
+
+˘ ˘(1¬"	#map-set#:æ¡%
+#
+
+˙ ˙((√"	#map-set#:æô%
+#
+
+˚ ˚('≈"	#map-set#:æƒ$
+"
+
+¸ ¸(∆"	#map-set#:æ !*
+(
+
+˝ Å(	 "#unknown-value#Blist*
+(
+
+˝ Å(	À"
+#is-exact#: ,Bbool!
+
+
+˝ Å(	Ã"
+#assume#:À<
+:
+
+˝ Å(	Õ"#set-field# __collection_size: /Bint+
+)
+
+˝ Å(	Œ"#array-add-last#: «+
+)
+
+˝ Å(	œ"#array-add-last#: »+
+)
+
+˝ Å(	–"#array-add-last#: …%
+#
+
+˝ Å(	—"	#map-set#:æ# $
+"
+
+Ç Ç(“"	#map-set#:æ9'
+%
+
+Ñ ê(”"#new-object#Bdict%
+#
+
+Ö Ö(’"	#map-set#:”‘%
+#
+
+Ü Ü(&◊"	#map-set#:”÷$
+"
+
+á á('ÿ"	#map-set#:”|%
+#
+
+à à(*⁄"	#map-set#:”Ÿ$
+"
+
+â â(€"	#map-set#:” `*
+(
+
+ä é(	ﬂ"#unknown-value#Blist*
+(
+
+ä é(	‡"
+#is-exact#:ﬂ,Bbool!
+
+
+ä é(	·"
+#assume#:‡<
+:
+
+ä é(	‚"#set-field# __collection_size:ﬂ/Bint+
+)
+
+ä é(	„"#array-add-last#:ﬂ‹+
+)
+
+ä é(	‰"#array-add-last#:ﬂ›+
+)
+
+ä é(	Â"#array-add-last#:ﬂﬁ%
+#
+
+ä é(	Ê"	#map-set#:”#ﬂ$
+"
+
+è è(Á"	#map-set#:”9:8
+6
+
+Ë% ë(ËOUTPUT_RULES"#unknown-value#Blist*
+(
+
+Ë% ë(È"
+#is-exact#:Ë,Bbool!
+
+
+Ë% ë(Í"
+#assume#:È<
+:
+
+Ë% ë(Î"#set-field# __collection_size:Ë/Bint+
+)
+
+Ë% ë(Ï"#array-add-last#:Ëß+
+)
+
+Ë% ë(Ì"#array-add-last#:Ëæ+
+)
+
+Ë% ë(Ó"#array-add-last#:Ë”'
+%
+
+ò •(Ô"#new-object#Bdict%
+#
+
+ô ô(Ò"	#map-set#:Ô%
+#
+
+ö ö()Û"	#map-set#:ÔÚ%
+#
+
+õ õ( ı"	#map-set#:ÔÙ%
+#
+
+ú ú(&˜"	#map-set#:Ôˆ$
+"
+
+ù ù(¯"	#map-set#:Ô `*
+(
+
+û £(	˝"#unknown-value#Blist*
+(
+
+û £(	˛"
+#is-exact#:˝,Bbool!
+
+
+û £(	ˇ"
+#assume#:˛<
+:
+
+û £(	Ä"#set-field# __collection_size:˝/Bint+
+)
+
+û £(	Å"#array-add-last#:˝˘+
+)
+
+û £(	Ç"#array-add-last#:˝˙+
+)
+
+û £(	É"#array-add-last#:˝˚+
+)
+
+û £(	Ñ"#array-add-last#:˝¸%
+#
+
+û £(	Ö"	#map-set#:Ô#˝$
+"
+
+§ §(Ü"	#map-set#:Ô9w'
+%
+
+¶ ≤(á"#new-object#Bdict%
+#
+
+ß ß(â"	#map-set#:áà%
+#
+
+® ®( ã"	#map-set#:áä%
+#
+
+© ©( å"	#map-set#:áÙ%
+#
+
+™ ™(%ç"	#map-set#:áä$
+"
+
+´ ´(é"	#map-set#:á !*
+(
+
+¨ ∞(	í"#unknown-value#Blist*
+(
+
+¨ ∞(	ì"
+#is-exact#:í,Bbool!
+
+
+¨ ∞(	î"
+#assume#:ì<
+:
+
+¨ ∞(	ï"#set-field# __collection_size:í/Bint+
+)
+
+¨ ∞(	ñ"#array-add-last#:íè+
+)
+
+¨ ∞(	ó"#array-add-last#:íê+
+)
+
+¨ ∞(	ò"#array-add-last#:íë%
+#
+
+¨ ∞(	ô"	#map-set#:á#í$
+"
+
+± ±(ö"	#map-set#:á9:'
+%
+
+≥ æ(õ"#new-object#Bdict%
+#
+
+¥ ¥(ù"	#map-set#:õú%
+#
+
+µ µ('ü"	#map-set#:õû%
+#
+
+∂ ∂( †"	#map-set#:õÙ%
+#
+
+∑ ∑($¢"	#map-set#:õ°$
+"
+
+∏ ∏(£"	#map-set#:õ `*
+(
+
+π º(	¶"#unknown-value#Blist*
+(
+
+π º(	ß"
+#is-exact#:¶,Bbool!
+
+
+π º(	®"
+#assume#:ß<
+:
+
+π º(	©"#set-field# __collection_size:¶/Bint+
+)
+
+π º(	™"#array-add-last#:¶§+
+)
+
+π º(	´"#array-add-last#:¶•%
+#
+
+π º(	¨"	#map-set#:õ#¶$
+"
+
+Ω Ω(≠"	#map-set#:õ9:'
+%
+
+ø  (Æ"#new-object#Bdict%
+#
+
+¿ ¿(∞"	#map-set#:ÆØ%
+#
+
+¡ ¡(≤"	#map-set#:Æ±%
+#
+
+¬ ¬( ≥"	#map-set#:ÆÙ%
+#
+
+√ √(µ"	#map-set#:Æ¥$
+"
+
+ƒ ƒ(∂"	#map-set#:Æ !*
+(
+
+≈ »(	π"#unknown-value#Blist*
+(
+
+≈ »(	∫"
+#is-exact#:π,Bbool!
+
+
+≈ »(	ª"
+#assume#:∫<
+:
+
+≈ »(	º"#set-field# __collection_size:π/Bint+
+)
+
+≈ »(	Ω"#array-add-last#:π∑+
+)
+
+≈ »(	æ"#array-add-last#:π∏%
+#
+
+≈ »(	ø"	#map-set#:Æ#π%
+#
+
+… …(¿"	#map-set#:Æ9í;
+9
+
+ó( À(¡TOOL_CALL_RULES"#unknown-value#Blist*
+(
+
+ó( À(¬"
+#is-exact#:¡,Bbool!
+
+
+ó( À(√"
+#assume#:¬<
+:
+
+ó( À(ƒ"#set-field# __collection_size:¡/Bint+
+)
+
+ó( À(≈"#array-add-last#:¡Ô+
+)
+
+ó( À(∆"#array-add-last#:¡á+
+)
+
+ó( À(«"#array-add-last#:¡õ+
+)
+
+ó( À(»"#array-add-last#:¡Æ *2/home/craigamcw/Projects/raucle/raucle/patterns.py

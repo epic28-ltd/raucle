@@ -1,0 +1,53 @@
+
+"type"str
+	"isError"str
+	"content"str
+"text"str
+truebool
+
+0intself
+× ×(msg_id
+× ×(%text
+×' ×(0list"•&
+$
+
+Ø  Ø(^"#new-object#Bdict&
+$
+
+Ø- Ø(K"#new-object#Bdict"
+ 
+
+Ø. Ø(<	"	#map-set#:"
+ 
+
+Ø> Ø(J
+"	#map-set#:)
+'
+
+Ø, Ø(L"#unknown-value#Blist(
+&
+
+Ø, Ø(L"
+#is-exact#:Bbool
+
+
+Ø, Ø(L"
+#assume#::
+8
+
+Ø, Ø(L"#set-field# __collection_size:Bint(
+&
+
+Ø, Ø(L"#array-add-last#:"
+ 
+
+Ø! Ø(L"	#map-set#:"
+ 
+
+ØN Ø(]"	#map-set#:E
+C
+
+Ø Ø(_"/
+(raucle.broker.mcp_server.RaucleMCPServer_ok:
+
+Ø Ø(_*;/home/craigamcw/Projects/raucle/raucle/broker/mcp_server.py

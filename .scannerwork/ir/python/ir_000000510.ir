@@ -1,0 +1,24 @@
+
+"="str
+
+4intdatar
+ r("¼*
+(
+s s(#"
+builtinslen*:Bint%
+#
+s s('"	#binop %#*2%:%
+#
+s s('"	#binop -#*2-:%
+#
+s s(,"	#binop %#*2%:.
+,
+s s(-padding"	#binop *#*2*:"
+ 
+t% t(3	"	#binop +#2+:5
+3
+t t(4
+"
+base64urlsafe_b64decode:	Bbytes
+t t(4
+*8/home/craigamcw/Projects/raucle/raucle/agent_registry.py

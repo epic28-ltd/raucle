@@ -1,0 +1,125 @@
+
+"0.1.0"str
+Ã¹"Create the admin panel app (operator-facing).
+
+    Thin composition root: auth closures over *users*, then endpoint
+    groups are registered by dedicated module-level functions.
+    "str
+?6"Enterprise admin panel for policy, stats, and config"str
+
+"Raucle Gateway Admin"strgateway
+Ý Ý(+users
+Ý- Ý(?"î#
+!
+
+û6 û(B%"#unknown-value##
+!
+
+û* û(4$"#unknown-value##
+!
+
+ú2 ú(>""#unknown-value##
+!
+
+ú& ú(0!"#unknown-value##
+!
+
+ù4 ù(@"#unknown-value##
+!
+
+ù( ù(2"#unknown-value##
+!
+
+ø7 ø(C"#unknown-value##
+!
+
+ø+ ø(5"#unknown-value##
+!
+
+÷9 ÷(E"#unknown-value##
+!
+
+÷- ÷(7"#unknown-value##
+!
+
+ö6 ö(B"#unknown-value##
+!
+
+ö* ö(4"#unknown-value##
+!
+
+õ5 õ(A"#unknown-value##
+!
+
+õ) õ(3"#unknown-value##
+!
+
+ô5 ô(A"#unknown-value##
+!
+
+ô) ô(3"#unknown-value#*
+(
+
+ä ê(%closure"#new-object#)
+'
+
+ä ê("#set-field# users:-
++
+
+ä ê("?python-partial-apply?:*
+(
+
+ê í(%closure"#new-object#)
+'
+
+ê í("#set-field# users:-
++
+
+ê í(	"?python-partial-apply?:C
+A
+
+í
+ ñ(app"	FastAPI:
+Bfastapi.applications.FastAPIC
+A
+
+ó ó()"-
+raucle.gateway_app_register_health_routes:D
+B
+
+ô ô(B",
+raucle.gateway_app_register_stats_routes:D
+B
+
+õ õ(B",
+raucle.gateway_app_register_learn_routes:E
+C
+
+ö ö(C"-
+raucle.gateway_app_register_policy_routes:H
+F
+
+÷ ÷(F"0
+raucle.gateway_app_register_authority_routes:F
+D
+
+ø ø(D".
+raucle.gateway_app_register_receipt_routes:C
+A
+
+ù ù(A "+
+raucle.gateway_app_register_siem_routes:C
+A
+
+ú ú(?#"+
+raucle.gateway_app_register_user_routes:!"E
+C
+
+û û(C&"-
+raucle.gateway_app_register_config_routes:$%>
+<
+
+ü ü('")
+raucle.gateway_app_register_ui_routes:
+
+þ þ(*5/home/craigamcw/Projects/raucle/raucle/gateway_app.py

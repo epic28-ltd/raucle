@@ -1,0 +1,23 @@
+
+"="str
+
+4ints ("³*
+(
+4 (:"
+builtinslen*:Bint%
+#
+4 (>"	#binop %#*2%:%
+#
+0 (>"	#binop -#*2-:%
+#
+/ (C"	#binop %#*2%:%
+#
+( (D"	#binop *#*2*:"
+ 
+$ (D	"	#binop +#2+:5
+3
+ (E
+"
+base64urlsafe_b64decode:	Bbytes
+ (E
+*7/home/craigamcw/Projects/raucle/raucle/receipt_index.py

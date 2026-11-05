@@ -1,0 +1,26 @@
+
+"run_id"str
+"key_fingerprint"str
+	"minted_at"str
+	"mint_id"strselfO O("ï$
+"
+P U(	"#new-object#Bdict(
+&
+Q Q(#"#get-field# mint_id: 
+
+Q Q(#"	#map-set#:'
+%
+R R(!"#get-field# run_id: 
+
+R R(!"	#map-set#:*
+(
+S S('
+"#get-field# minted_at: 
+
+S S('"	#map-set#:	
+0
+.
+T T(3"#get-field# key_fingerprint: 
+
+T T(3"	#map-set#:
+P U(	*8/home/craigamcw/Projects/raucle/raucle/canary_service.py

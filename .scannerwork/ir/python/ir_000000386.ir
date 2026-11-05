@@ -1,0 +1,71 @@
+
+"generated_at"str
+	"summary"str
+"global_findings"str
+"chain_verdict"str
+
+"tool_version"str
+"kind"str
+"input_hashes"str
+@7"The canonical, signable manifest body (no signature)."str
+"nodes"str
+"obligations"str
+!"raucle-audit-export/v1"strself
+è è("Å&
+$
+
+ë õ(	"#new-object#Bdict"
+ 
+
+í í(,"	#map-set#:/
+-
+
+ì ì(-"#get-field# generated_at:"
+ 
+
+ì ì(-	"	#map-set#:/
+-
+
+î î(-"#get-field# tool_version:"
+ 
+
+î î(-"	#map-set#:
+0
+.
+
+ï ï(/"#get-field# chain_verdict:"
+ 
+
+ï ï(/"	#map-set#:-
++
+
+ñ ñ(4"?python-unknown?:Blist"
+ 
+
+ñ ñ(4"	#map-set#:-
++
+
+ó ó(@"?python-unknown?:Blist"
+ 
+
+ó ó(@"	#map-set#:2
+0
+
+ò ò(3"#get-field# global_findings:"
+ 
+
+ò ò(3"	#map-set#:*
+(
+
+ô ô(#"#get-field# summary:"
+ 
+
+ô ô(#"	#map-set#:/
+-
+
+ö ö(-"#get-field# input_hashes:"
+ 
+
+ö ö(-"	#map-set#:
+
+ë õ(	*6/home/craigamcw/Projects/raucle/raucle/audit_export.py

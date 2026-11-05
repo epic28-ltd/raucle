@@ -1,0 +1,28 @@
+
+
+4int
+"="strsegment
+› ›("¢,
+*
+
+ž ž("
+builtinslen*:Bint*
+(
+
+ž ž("#unaryop -#2-:Bint'
+%
+
+ž ž(""	#binop %#*2%:,
+*
+
+ž
+ ž(#pad"	#binop *#*2*:$
+"
+
+Ÿ$ Ÿ(1"	#binop +#2+:7
+5
+
+Ÿ Ÿ(2	"
+base64urlsafe_b64decode:Bbytes
+
+Ÿ Ÿ(2	*;/home/craigamcw/Projects/raucle/raucle/deployment_intake.py

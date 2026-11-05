@@ -1,0 +1,118 @@
+
+LC"{kind} field name must be a non-empty string, got {fld!r} (¬ß8.5)"str
+VM"{kind} must be a JSON list of field names, got {type(val).__name__} (¬ß8.5)"str
+"NFC"str
+ZQ"{kind} field names {seen[norm]!r} and {fld!r} collide under Unicode NFC (¬ß8.5)"str
+èÖ"Validate a field-name list constraint (required_present): a JSON list of
+    non-empty strings, distinct under Unicode NFC (¬ß8.5)."strkind
+˛ ˛(&c
+˛( ˛(9liststr"ß)
+'
+
+Å
+ Å(val"#array-read#:+
+)
+
+Ç Ç( "#is-instance#:Bbool+
+)
+
+Ç Ç( "#unaryop !#2!:Bbool "
+
+Ç Ç(  *
+Ç Ç("F0
+.
+
+É Ö(		"
+ValueError*:B
+ValueError2
+
+É Ö(		"},
+*
+
+Ü Ü(
+seen"#new-object#Bdict9
+7
+
+á á("
+builtinsiter*:Btyping.Iterator
+
+á á("ã* val *seen
+4
+2
+
+á á("
+builtins
+__has_next*:Bbool"" 
+
+á á( *
+á á(H"°-
++
+
+à è(fld"
+builtinsnext*:+
+)
+
+à à(#"#is-instance#:Bbool+
+)
+
+à à(#"#unaryop !#2!:Bbool"
+
+à à(# "
+
+ê ê( "n+
+)
+
+à' à(."
+__bool__*:BboolH+
+)
+
+à' à(."#unaryop !#2!:Bbool
+
+à à(."6* "
+
+à à(. 	*
+à à(
+"F0
+.
+
+â â(a"
+ValueError*:B
+ValueError2
+
+â â(a"Å	9
+7
+
+ä ä(0norm"
+unicodedata	normalize:Bstr,
+*
+
+ã ã("
+#binop in#2in:Bbool"
+
+ã ã(
+ "h
+$
+"
+
+ã ã(&"#array-read#:,
+*
+
+ã ã(-"
+#binop !=#2!=:Bbool
+
+ã ã(-"6*	
+ "
+
+ã ã(- *
+ã ã(
+"F0
+.
+
+å é("
+ValueError*:B
+ValueError2
+
+å é("0&
+$
+
+è è("#array-write#:*4/home/craigamcw/Projects/raucle/raucle/capability.py

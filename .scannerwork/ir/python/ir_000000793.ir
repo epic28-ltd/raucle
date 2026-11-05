@@ -1,0 +1,20 @@
+
+PG"Convert a manifest field value to a flat string for pattern matching."str
+falseboolvalue
+Ç Ç(str"O+
+)
+
+É É("#is-instance#:Bbool "
+
+É É( *
+É É("
+
+Ê Ê("i#
+!
+
+Ë Ë("#unknown-value#.
+,
+
+Ë Ë(0"?python-unknown?:Bstr
+
+Ë Ë(0*5/home/craigamcw/Projects/raucle/raucle/mcp_scanner.py

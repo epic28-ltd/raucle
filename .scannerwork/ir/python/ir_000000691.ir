@@ -1,0 +1,16 @@
+
+íà"The audit chain's own record hash: sha256 over the canonical record
+    WITHOUT its hash field (same formula as HashChainSink.append)."strrecI I($"ç3
+1
+L L(9_canonical_json"?python-unknown?/
+-
+L L(9_sha256_hex"?python-unknown?1
+/
+N N(8body"?python-unknown?:Bdict2
+0
+O O(,"
+raucle.audit_canonical_json:.
+,
+O O(-"
+raucle.audit_sha256_hex:
+O O(-*1/home/craigamcw/Projects/raucle/raucle/records.py

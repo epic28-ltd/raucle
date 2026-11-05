@@ -1,0 +1,20 @@
+
+0'".{int((time.time() % 1) * 1000):03d}Z"str
+OF"ISO 8601 timestamp with millisecond precision and explicit Z suffix."str
+"%Y-%m-%dT%H:%M:%S"str"»#
+!
+
+Å. Å(;"#unknown-value#*
+(
+
+Å. Å(;"
+timegmtime:Btuple+
+)
+
+Å Å(<"
+timestrftime:Bstr)
+'
+
+Å Ç("	#binop +#2+:Bstr
+
+Å Ç(*F/home/craigamcw/Projects/raucle/raucle/integrations/agent_framework.py

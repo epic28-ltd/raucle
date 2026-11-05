@@ -1,0 +1,35 @@
+
+"rows"str
+v"Traceable counts for a section: one count with the IDs it counts
+    beside it (the register's accountability rule)."str
+"ids"str
+"count"strrows
+® ®(/id_key
+®4 ®(K"¶&
+$
+
+± µ("#new-object#Bdict,
+*
+
+² ²("
+builtinslen*:Bint"
+ 
+
+² ²("	#map-set#:.
+,
+
+³ ³(E	"?python-unknown?:Bset0
+.
+
+³ ³(F
+"
+builtinssorted*:	Blist"
+ 
+
+³ ³(F"	#map-set#:
+"
+ 
+
+´ ´("	#map-set#:
+
+± µ(*6/home/craigamcw/Projects/raucle/raucle/delta_report.py

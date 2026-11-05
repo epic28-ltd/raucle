@@ -1,0 +1,19 @@
+
+LC"Hash an arbitrary JSON-serialisable object for receipt inclusion."strobj
+ï ï("Ï#
+!
+
+ñ ñ("#unknown-value#9
+7
+
+ñ( ñ(<"$
+raucle.provenance_canonical_json:5
+3
+
+ñ ñ(=" 
+raucle.provenance_sha256_hex:$
+"
+
+ñ ñ(="	#binop +#2+:
+
+ñ ñ(=*4/home/craigamcw/Projects/raucle/raucle/provenance.py

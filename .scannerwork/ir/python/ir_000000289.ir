@@ -1,0 +1,41 @@
+
+"status"str
+"minted_at"str
+		"mint_id"str
+"observed_at"str
+"key_fingerprint"str
+"reason"str
+"run_id"strselft t("Õ$
+"
+u }(	"#new-object#Bdict'
+%
+v v(!"#get-field# status: 
+
+v v(!"	#map-set#:'
+%
+w w(!"#get-field# reason: 
+
+w w(!"	#map-set#:(
+&
+x x(#
+"#get-field# mint_id: 
+
+x x(#"	#map-set#:	
+'
+%
+y y(!"#get-field# run_id: 
+
+y y(!"	#map-set#:0
+.
+z z(3"#get-field# key_fingerprint: 
+
+z z(3"	#map-set#:*
+(
+{ {('"#get-field# minted_at: 
+
+{ {('"	#map-set#:,
+*
+| |(+"#get-field# observed_at: 
+
+| |(+"	#map-set#:
+u }(	*8/home/craigamcw/Projects/raucle/raucle/canary_service.py

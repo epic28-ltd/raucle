@@ -1,0 +1,69 @@
+
+"--example"str
+"provenance-rs"str
+"build"str
+"emit"str
+"cargo"str
+
+0int
+"run"str
+truebool
+	"--quiet"strreqsl l(list"‰'
+%
+n n(:"#unknown-value#Blist&
+$
+n n(:	"
+#is-exact#:Bbool
+
+n n(:
+"
+#assume#:	8
+6
+n n(:"#set-field# __collection_size:Bint&
+$
+n n(:"#array-add-last#:&
+$
+n n(:"#array-add-last#:&
+$
+n n(:"#array-add-last#:&
+$
+n n(:"#array-add-last#:&
+$
+n n(:"#array-add-last#:!
+
+o o("#unknown-value#*
+(
+o o(!"#dependent-value#*:E
+C
+m s("
+
+subprocessrun:Bsubprocess.CompletedProcess'
+%
+u u(8"#unknown-value#Blist&
+$
+u u(8"
+#is-exact#:Bbool
+
+u u(8"
+#assume#:8
+6
+u u(8"#set-field# __collection_size:Bint&
+$
+u u(8"#array-add-last#:&
+$
+u u(8"#array-add-last#:&
+$
+u u(8"#array-add-last#:&
+$
+u u(8"#array-add-last#:&
+$
+u u(8 "#array-add-last#:!
+
+v v(!"#unknown-value#*
+(
+v v(""#dependent-value#*:!.
+,
+t x(#"
+conformance
+_run_lines:"
+t x(#*8/home/craigamcw/Projects/raucle/reference/conformance.py
