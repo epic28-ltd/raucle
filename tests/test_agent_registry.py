@@ -101,24 +101,36 @@ def test_unknown_version_and_unknown_field_fail_closed(signer):
         parse_descriptor(body2)
 
 
-def test_attestation_and_ceiling_validation(signer):
-    bad = Attestation(
+def test_attestation_bad_hash_rejected():
+    att = Attestation(
         attested_manifest_hash="not-a-hash",
         attested_manifest_kind="agent-card",
         framework="f",
         framework_version="1",
     )
     with pytest.raises(DescriptorError):
-        bad.validate()
+        att.validate()
+
+
+def test_attestation_unknown_kind_rejected():
+    att = Attestation(
+        attested_manifest_hash=_sha(b"x"),
+        attested_manifest_kind="nope",
+        framework="f",
+        framework_version="1",
+    )
     with pytest.raises(DescriptorError):
-        Attestation(
-            attested_manifest_hash=_sha(b"x"),
-            attested_manifest_kind="nope",
-            framework="f",
-            framework_version="1",
-        ).validate()
+        att.validate()
+
+
+def test_delegation_ceiling_unknown_lease_rejected():
+    ceilings = DelegationCeilings(lease_ceilings={"max_turtle": 1})
     with pytest.raises(DescriptorError):
-        DelegationCeilings(lease_ceilings={"max_turtle": 1}).validate()
+        ceilings.validate()
+
+
+def test_issue_descriptor_negative_max_hops_rejected(signer):
+    ceilings = DelegationCeilings(max_hops=-1)
     with pytest.raises(DescriptorError):
         issue_descriptor(
             "agent:svc",
@@ -126,7 +138,7 @@ def test_attestation_and_ceiling_validation(signer):
             operator_binding="b",
             status="enrolled",
             attestation=ATT,
-            ceilings=DelegationCeilings(max_hops=-1),
+            ceilings=ceilings,
             signer=signer,
         )
 
