@@ -119,8 +119,9 @@ class TestIntegrity:
         reg = TrustRegistry(tmp_path / "r.jsonl", operator_signer=op)
         reg.publish(_issuer("a").public_key_pem, issuer="A")
         loaded = TrustRegistry.load(tmp_path / "r.jsonl")
+        foreign_pem = Ed25519Signer.generate().public_key_pem()
         with pytest.raises(RegistryIntegrityError):
-            loaded.verify_integrity(operator_public_pem=Ed25519Signer.generate().public_key_pem())
+            loaded.verify_integrity(operator_public_pem=foreign_pem)
 
     def test_unsigned_registry_chain_only(self, tmp_path):
         reg = TrustRegistry(tmp_path / "r.jsonl")  # no operator signer
@@ -155,8 +156,9 @@ def test_duplicate_issuer_name_rejected(tmp_path):
     #3): the issuer string is the identity verifiers match on."""
     reg = TrustRegistry(tmp_path / "r.jsonl")
     reg.publish(_issuer("a").public_key_pem, issuer="Acme Bank")
+    dup_pem = _issuer("b").public_key_pem
     with pytest.raises(ValueError, match="collides with an active key"):
-        reg.publish(_issuer("b").public_key_pem, issuer="Acme Bank")  # different key, same name
+        reg.publish(dup_pem, issuer="Acme Bank")  # different key, same name
     # Re-publishing the SAME key under its name is fine.
     same = _issuer("c")
     reg.publish(same.public_key_pem, issuer="Other")
@@ -199,75 +201,102 @@ def test_confusable_issuer_names_rejected(tmp_path):
     """Case/whitespace-confusable names cannot both be active (codex r3 #2)."""
     reg = TrustRegistry(tmp_path / "r.jsonl")
     reg.publish(_issuer("a").public_key_pem, issuer="Acme Bank")
+    confusable_pem = _issuer("b").public_key_pem
     with pytest.raises(ValueError, match="collides"):
-        reg.publish(_issuer("b").public_key_pem, issuer="acme bank ")  # casefold+strip collide
+        reg.publish(confusable_pem, issuer="acme bank ")  # casefold+strip collide
 
 
 def test_blank_issuer_rejected(tmp_path):
     """A blank/whitespace issuer name is refused (codex r5): an empty identity
     must not be registrable."""
     reg = TrustRegistry(tmp_path / "r.jsonl")
+    blank_pub = _issuer("x").public_key_pem
     for bad in ("", "   ", "\t"):
         with pytest.raises(ValueError, match="non-empty"):
-            reg.publish(_issuer("x").public_key_pem, issuer=bad)
+            reg.publish(blank_pub, issuer=bad)
 
 
-def test_stale_snapshot_detected_via_freshness_anchor(tmp_path):
-    """A REAL stale signed prefix — chain-valid, operator-signed, but rolled
-    back to before a revocation — is caught when the consumer pins a freshness
-    anchor (codex r7, hardened test per codex r8)."""
+def _stale_rollback_fixture(tmp_path):
+    """Builds the stale-rollback scenario: operator op publishes issuer 'a',
+    a genuine signed pre-revocation snapshot is captured, the key is revoked,
+    and the attacker serves the genuine older prefix (codex r7/r8)."""
     op = Ed25519Signer.generate()
     path = tmp_path / "r.jsonl"
     reg = TrustRegistry(path, operator_signer=op)
     kid = reg.publish(_issuer("a").public_key_pem, issuer="org-a")
     stale_text = path.read_text()  # genuine signed snapshot BEFORE revocation
-    stale_head = reg.head()
     reg.revoke(kid)
     fresh_head = reg.head()
-    assert stale_head["index"] < fresh_head["index"]  # head advanced on revoke
-
-    # The attacker's rollback: serve the genuine older prefix.
     stale = TrustRegistry.from_jsonl(stale_text)
-    # Without a freshness anchor it verifies fine — that's the gap.
-    assert stale.verify_integrity(operator_public_pem=op.public_key_pem())
-    # With the FRESH head hash pinned, the rollback is rejected.
+    return op, kid, stale, fresh_head
+
+
+def test_stale_snapshot_detected_via_expected_head(tmp_path):
+    """A REAL stale signed prefix — chain-valid, operator-signed, but rolled
+    back to before a revocation — is caught when the consumer pins the fresh
+    head hash as the freshness anchor (codex r7, hardened per codex r8)."""
+    op, kid, stale, fresh_head = _stale_rollback_fixture(tmp_path)
+    assert stale.public_key(kid) is not None  # revoked key still resolvable in stale view
+
+    op_pem = op.public_key_pem()
     with pytest.raises(RegistryIntegrityError, match="stale"):
-        stale.verify_integrity(
-            operator_public_pem=op.public_key_pem(),
-            expected_head_hash=fresh_head["hash"],
-        )
-    # min_index at the fresh head is rejected too.
+        stale.verify_integrity(operator_public_pem=op_pem, expected_head_hash=fresh_head["hash"])
+
+
+def test_stale_snapshot_detected_via_min_index(tmp_path):
+    """min_index at the fresh head is rejected for the rolled-back prefix."""
+    _op, _kid, stale, fresh_head = _stale_rollback_fixture(tmp_path)
     with pytest.raises(RegistryIntegrityError, match="stale"):
-        stale.verify_integrity(
-            operator_public_pem=op.public_key_pem(), min_index=fresh_head["index"]
-        )
-    # max_age rejects an old head.
+        stale.verify_integrity(min_index=fresh_head["index"])
+
+
+def test_stale_snapshot_detected_via_max_age(tmp_path):
+    """max_age rejects an old (pre-revocation) head."""
+    _op, _kid, stale, fresh_head = _stale_rollback_fixture(tmp_path)
     with pytest.raises(RegistryIntegrityError, match="stale"):
-        stale.verify_integrity(
-            operator_public_pem=op.public_key_pem(),
-            max_age_seconds=1,
-            now=fresh_head["ts"] + 10_000,
-        )
-    # And the revoked key is still resolvable in the stale view — the exploit
-    # the anchor exists to stop.
+        stale.verify_integrity(max_age_seconds=1, now=fresh_head["ts"] + 10_000)
+
+
+def test_stale_snapshot_verifies_without_anchor(tmp_path):
+    """Without any freshness anchor it verifies fine — that's the gap the
+    anchor exists to stop (the original exploit is preserved as evidence)."""
+    op, kid, stale, _fresh_head = _stale_rollback_fixture(tmp_path)
+    # And the revoked key is still resolvable in the stale view — the exploit.
     assert stale.public_key(kid) is not None
+    assert stale.verify_integrity(operator_public_pem=op.public_key_pem())
 
 
-def test_freshness_enforced_even_without_operator_key(tmp_path):
-    """Freshness anchors must not be bypassed when a signed registry is verified
-    without the operator key (codex r8 MEDIUM): the early unauthenticated return
-    used to skip min_index/expected_head_hash/max_age entirely."""
+def _unverified_snapshot(tmp_path):
+    """A freshly published signed registry loaded without any verification."""
     op = Ed25519Signer.generate()
     path = tmp_path / "r.jsonl"
     reg = TrustRegistry(path, operator_signer=op)
     reg.publish(_issuer("a").public_key_pem, issuer="org-a")
     loaded = TrustRegistry.load(path)
+    return reg, loaded
+
+
+def test_freshness_head_hash_enforced_without_operator_key(tmp_path):
+    """expected_head_hash must bite even without the operator key
+    (codex r8 MEDIUM): the early unauthenticated return used to skip it."""
+    _reg, loaded = _unverified_snapshot(tmp_path)
     with pytest.raises(RegistryIntegrityError, match="stale"):
         loaded.verify_integrity(expected_head_hash="f" * 64)  # no operator key
+
+
+def test_freshness_min_index_enforced_without_operator_key(tmp_path):
+    """min_index must bite even without the operator key (codex r8 MEDIUM)."""
+    _reg, loaded = _unverified_snapshot(tmp_path)
     with pytest.raises(RegistryIntegrityError, match="stale"):
         loaded.verify_integrity(min_index=999)
+
+
+def test_freshness_max_age_enforced_without_operator_key(tmp_path):
+    """max_age must bite even without the operator key (codex r8 MEDIUM)."""
+    reg, loaded = _unverified_snapshot(tmp_path)
+    old_head = reg.head()["ts"]
     with pytest.raises(RegistryIntegrityError, match="stale"):
-        loaded.verify_integrity(max_age_seconds=1, now=reg.head()["ts"] + 10_000)
+        loaded.verify_integrity(max_age_seconds=1, now=old_head + 10_000)
 
 
 def test_future_dated_head_rejected(tmp_path):
@@ -278,9 +307,10 @@ def test_future_dated_head_rejected(tmp_path):
     reg = TrustRegistry(path, operator_signer=op)
     reg.publish(_issuer("a").public_key_pem, issuer="org-a")
     head_ts = reg.head()["ts"]
+    op_pem = op.public_key_pem()
     with pytest.raises(RegistryIntegrityError, match="future"):
         reg.verify_integrity(
-            operator_public_pem=op.public_key_pem(),
+            operator_public_pem=op_pem,
             max_age_seconds=3600,
             now=head_ts - 10_000,  # head is 10000s in this verifier's future
         )

@@ -282,13 +282,20 @@ def _tamper_header(jws, **overrides):
     return f"{nh}.{p}.{s}"
 
 
-def test_strict_from_jws_rejects_bad_typ_and_marker(tmp_path):
+def test_strict_from_jws_rejects_bad_typ(tmp_path):
     idn, c = _chain(tmp_path)
     jws = json.loads(c.read_text().strip().splitlines()[0])["jws"]
+    tampered = _tamper_header(jws, typ="not-provenance")
     with pytest.raises(ValueError, match="typ"):
-        ProvenanceReceipt.from_jws(_tamper_header(jws, typ="not-provenance"), strict=True)
+        ProvenanceReceipt.from_jws(tampered, strict=True)
+
+
+def test_strict_from_jws_rejects_bad_marker(tmp_path):
+    idn, c = _chain(tmp_path)
+    jws = json.loads(c.read_text().strip().splitlines()[0])["jws"]
+    tampered = _tamper_header(jws, **{"raucle/v1": "nope"})
     with pytest.raises(ValueError, match="raucle/v1"):
-        ProvenanceReceipt.from_jws(_tamper_header(jws, **{"raucle/v1": "nope"}), strict=True)
+        ProvenanceReceipt.from_jws(tampered, strict=True)
 
 
 # --- LangChain blacklist-on-opaque-string guard (#3b/#5) ---------------------
