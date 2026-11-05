@@ -4,6 +4,12 @@ Skipped automatically when ``agent-framework`` is not installed; the
 contract-level tests in ``test_agent_framework_integration.py`` cover the
 unit-level behaviour without that dependency.
 
+SKIP DECISION (2026-11-05): ``agent-framework>=1.0`` cannot be resolved on
+this environment's Python 3.14 dev venv (no compatible distribution), so the
+real-framework milestone tests stay CI-owned (3.11-3.13 matrix); locally the
+contract-level suite keeps the wire-up covered. Backlog: revisit when a
+py3.14 wheel exists.
+
 What this file proves
 ---------------------
 

@@ -4,6 +4,13 @@ Requires the ``crewai`` extra (``pip install 'raucle[crewai]'``); skipped
 otherwise. These drive the genuine ``BaseTool.run(**kwargs)`` path — the same
 path a Crew uses — so a denied call is verified to block the real tool body, not
 a mock.
+
+SKIP DECISION (2026-11-05): ``crewai>=1.0`` has no Python 3.14 distribution
+(the dev venv is py3.14), so these tests are documented-excluded locally; the
+CI 3.11-3.13 matrix installs the extra and owns this proof. Until a py3.14
+crewai exists, ``tests/test_integrations_contract.py`` covers the wrapper's
+own surface against a faithful BaseTool stand-in. Backlog: retire the
+stand-ins when a py3.14-compatible crewai ships.
 """
 
 from __future__ import annotations
