@@ -1,9 +1,0 @@
-
-ÎÄ"Compile all patterns for a rule, skipping un-compilable ones.
-
-    Returns a list of ``(compiled, raw_pattern)`` tuples where *compiled*
-    is ``None`` for patterns that failed to compile.
-    "strrule (/"=+
-)
-# #(G"?python-unknown?:Blist
-# #(G*2/home/craigamcw/Projects/raucle/raucle/patterns.py

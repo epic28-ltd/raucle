@@ -1,33 +1,0 @@
-
-"./cmd/emit"str
-"go"str
-"provenance-go"str
-"run"str
-
-	0intreqsh h(list"±'
-%
-i i(1"#unknown-value#Blist&
-$
-i i(1"
-#is-exact#:Bbool
-
-i i(1"
-#assume#:8
-6
-i i(1
-"#set-field# __collection_size:	Bint&
-$
-i i(1"#array-add-last#:&
-$
-i i(1"#array-add-last#:&
-$
-i i(1"#array-add-last#:!
-
-i3 i(6"#unknown-value#*
-(
-i3 i(H"#dependent-value#*:.
-,
-i i(O"
-conformance
-_run_lines:
-i i(O*8/home/craigamcw/Projects/raucle/reference/conformance.py

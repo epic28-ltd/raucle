@@ -1,48 +1,0 @@
-
-"type"str
-	"content"str
-"text"str
-
-0intself
-Ô Ô(msg_id
-Ô Ô("text
-Ô$ Ô(-list"ñ&
-$
-
-Õ  Õ(M"#new-object#Bdict&
-$
-
-Õ- Õ(K"#new-object#Bdict"
- 
-
-Õ. Õ(<	"	#map-set#:"
- 
-
-Õ> Õ(J
-"	#map-set#:)
-'
-
-Õ, Õ(L"#unknown-value#Blist(
-&
-
-Õ, Õ(L"
-#is-exact#:Bbool
-
-
-Õ, Õ(L"
-#assume#::
-8
-
-Õ, Õ(L"#set-field# __collection_size:Bint(
-&
-
-Õ, Õ(L"#array-add-last#:"
- 
-
-Õ! Õ(L"	#map-set#:E
-C
-
-Õ Õ(N"/
-(raucle.broker.mcp_server.RaucleMCPServer_ok:
-
-Õ Õ(N*;/home/craigamcw/Projects/raucle/raucle/broker/mcp_server.py

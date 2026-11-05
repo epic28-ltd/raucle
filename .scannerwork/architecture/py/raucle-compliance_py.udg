@@ -1,943 +1,0 @@
-
-1.0PythonFrontend*py2.B¥#
-
-imports1
-
-extends2
-
-returns3
-
-	has param4
-
-
-calls5
-
-module6
-
-
-class7
-
-method8
-
-function9
-
-raucle/compliance.py11
-
-raucle.compliance13
-
-
-__future__14
-
-
-json16
-
-collections.abc18
-
-dataclasses20
-
-
-enum22
-
-pathlib24
-
-typing26
-
-raucle._paths28
-
-raucle.audit30
-%
-raucle.compliance.ControlStatus32
-	
-str34
-
-	enum.Enum36
-%
-raucle.compliance.ChainEvidence38
-
-dataclasses.dataclass40
-)
-#raucle.compliance._read_chain_lines41
-.
-(raucle.compliance._verify_chain_evidence43
-
-NoneType45
-
-
-bool47
--
-'raucle.compliance._tally_decision_event49
-
-
-dict51
-	
-set53
-)
-#raucle.compliance._tally_scan_event55
-+
-%raucle.compliance._tally_chain_events57
-
-
-list59
-*
-$raucle.compliance._chain_auth_status61
-(
-"raucle.compliance.extract_evidence63
-
-raucle.compliance.Control65
-%
-raucle.compliance.ControlResult67
-(
-"raucle.compliance.ComplianceReport69
-0
-*raucle.compliance.ComplianceReport.summary71
-0
-*raucle.compliance.ComplianceReport.to_dict73
-#
-raucle.compliance._signed_log75
-
-tuple77
-'
-!raucle.compliance._access_control79
-#
-raucle.compliance._monitoring81
-(
-"raucle.compliance._human_oversight83
-#
-raucle.compliance._robustness85
-&
- raucle.compliance._not_addressed87
-%
-raucle.compliance._dora_logging89
-$
-raucle.compliance._dora_tamper91
-'
-!raucle.compliance._dora_retention93
-)
-#raucle.compliance._dora_attribution95
-,
-&raucle.compliance.supported_frameworks97
-$
-raucle.compliance.build_report99
-(
-!raucle.compliance.render_markdown101
-
-str.splitlines103
-
-pathlib.Path.read_text105
-"
-raucle._paths.validate_path107
-
-	str.strip109
-
-
-json.loads111
-.
-'raucle.audit.AuditVerifier.verify_chain113
-!
-raucle.audit.AuditVerifier115
-
-dict.get117
-
-set.add119
-
-
-isinstance121
-
-
-len123
-
-dataclasses.field125
-
-sorted127
-
-	str.lower129
-
-
-ValueError131
-
-str.join133
-
-list.append135
-
-str.replace137
-
-ARG_encoding139
-
-utf-8140
-
-ARG_0141
-
-agent_id142
-
-tool143
-
-RTS-12(2)(c)144
-
-ARG_1145
-D
-=Logging of access-control, identity and ICT operations events146
-
-ARG_2147
-É
-|Financial entities log access-control, identity-management and ICT operations events; an agent's tool calls are such events.148
-
-RTS-12(2)(d)149
-M
-FProtection of logs against tampering, deletion and unauthorised access150
-Å
-zLogs are protected 'against tampering, deletion, and unauthorised access at rest, in transit and, where relevant, in use'.151
-
-	RTS-12(4)152
-<
-5Retention period proportionate to the risk assessment153
-É
-|The retention period takes account of the entity's business and information security objectives and the ICT risk assessment.154
-
-FSB-ATTR155
-?
-8Attribution of agentic actions (supervisory expectation)156
-ª
-≥The FSB Sound Practices (Oct 2026) expect institutions to attribute actions to specific agents and to know whether each acted within its permissions throughout its chain of steps.157
-
-Art.12158
-)
-"Record-keeping (automatic logging)159
-|
-uHigh-risk AI systems shall technically allow for the automatic recording of events (logs) over the system's lifetime.160
-
-Art.14161
-
-Human oversight162
-\
-UHigh-risk AI systems shall be designed to be effectively overseen by natural persons.163
-
-Art.15164
--
-&Accuracy, robustness and cybersecurity165
-y
-rHigh-risk AI systems shall be resilient to attempts to alter their use or behaviour by exploiting vulnerabilities.166
-
-A.6.2.6167
-)
-"AI system operation and monitoring168
-J
-CThe organization shall log and monitor the operation of AI systems.169
-
-A.6.2.8170
-(
-!AI system recording of event logs171
-N
-GThe organization shall determine the event logs needed and retain them.172
-
-A.8.3173
-8
-1Information for interested parties / auditability174
-W
-PThe organization shall provide information enabling assessment of the AI system.175
-
-CC6.1176
-
-Logical access controls177
-e
-^The entity implements logical access security measures to protect against unauthorized access.178
-
-CC7.2179
-
-Monitoring for anomalies180
-b
-[The entity monitors system components for anomalies indicative of malicious acts or errors.181
-
-CC7.3182
-/
-(Evaluation of security events (evidence)183
-S
-LThe entity evaluates security events and maintains evidence of its response.184
--
-&unknown framework Ôøø; choose from Ôøø185
-
-|186
-
-
-\\|187
-"
-| **Ôøø** Ôøø | Ôøø | Ôøø |188J
-
-10
-
-1011 j∫
-!
-12
-12136 *
-10 (
-
-15
-15146
-
-17
-17166
-
-19
-19186
-
-21
-21206
-
-23
-23226
-
-25
-25246
-
-27
-27266
-
-29
-29286
-
-31
-31306
-
-33
-33327 212
-
-35
-35347
-
-37
-37367
-
-39
-39387 212R
-
-40
-
-42
-42419 212
-
-44
-44439 212
-
-46
-46457
-
-48
-48477
-
-50
-50499 212
-
-52
-52517
-
-54
-54537
-
-56
-56559 212
-
-58
-58579 212
-
-60
-60597
-
-62
-62619 212
-
-64
-64639 212
-
-66
-66657 212R
-
-40
-
-68
-68677 212R
-
-40
-
-70
-70697 212R
-
-40
-
-72
-72718 270
-
-74
-74738 270
-
-76
-76759 212
-
-78
-78777
-
-80
-80799 212
-
-82
-82819 212
-
-84
-84839 212
-
-86
-86859 212
-
-88
-88879 212
-
-90
-90899 212
-
-92
-92919 212
-
-94
-94939 212
-
-96
-96959 212
-
-98
-98979 212
-
-100
-100999 212
-
-102
-1021019 212
-
-104
-1041038
-
-106
-1061058
-
-108
-1081079
-
-110
-1101098
-
-112
-1121119
-
-114
-1141138
-
-116
-1161157
-
-118
-1181178
-
-120
-1201198
-
-122
-1221219
-
-124
-1241239
-
-126
-1261259
-
-128
-1281279
-
-130
-1301298
-
-132
-1321317
-
-134
-1341338
-
-136
-1361358
-
-138
-1381378rª
-
-12151*
-10 (#
-
-12171*
-10 (
-
-12191*
-10 (%
-
-12211*
-10 ()
-
-12231*
-10   (
-
-12251*
-10! !(
-
-12271*
-10" "(
-
-12291*
-10$ $((
-
-12311*
-10`	 `(/
-
-33352*
-10' '(
-
-33372*
-10' '(
-
-44463*
-10S S(
-
-44394*
-10S S(
-
-44484*
-10S S(
-
-44484*
-10S S(
-
-50463*
-10q q(
-
-50524*
-10q q(
-
-50394*
-10q q(
-
-50544*
-10q q(
-
-50544*
-10q q(
-
-56463*
-10~ ~(
-
-56524*
-10~ ~(
-
-56394*
-10~ ~(
-
-58463*
-10Ö Ö(
-
-58604*
-10Ö Ö(
-
-58394*
-10Ö Ö(
-
-62353*
-10° °(
-
-62394*
-10° °(
-
-64393*
-10ß ß(
-
-72523*
-10‹	 ‹(
-
-74523*
-10‚	 ‚(
-
-76783*
-10Ñ Ñ(
-
-76394*
-10Ñ Ñ(
-
-80783*
-10† †(
-
-80394*
-10† †(
-
-82783*
-10´ ´(
-
-82394*
-10´ ´(
-
-84783*
-10ø ø(
-
-84394*
-10ø ø(
-
-86783*
-10« «(
-
-86394*
-10« «(
-
-88783*
-10– –(
-
-88394*
-10– –(
-
-90783*
-10‘ ‘(
-
-90394*
-10‘ ‘(
-
-92783*
-10‚ ‚(
-
-92394*
-10‚ ‚(
-
-94783*
-10Å Å(
-
-94394*
-10Å Å(
-
-96783*
-10ã ã(
-
-96394*
-10ã ã(
-
-98603*
-10ú ú(
-
-100703*
-10† †(
-
-100354*
-10† †(
-
-102353*
-10∆ ∆(
-
-102704*
-10∆ ∆(
-
-421045*
-10G G(W
-*
-421065*
-10G G(J2
-
-139
-140
-
-421085*
-10G G(.
-
-421105*
-10J J( 
-
-42485*
-10L# L(G
-
-421125*
-10L( L(8
-
-441145*
-10g g(\
-
-441165*
-10g g(C
-
-44485*
-10i i(1
-*
-501185*
-10x x(2
-
-141
-142
-
-501205*
-10y	 y(&
-*
-501185*
-10z z(2
-
-141
-143
-
-501205*
-10{	 {(!
-
-58545*
-10á á(
-
-58545*
-10à à(
-
-581125*
-10é é(#
-
-58485*
-10í í(0
-
-581225*
-10ó% ó(G
-
-58505*
-10ö ö(<
-
-58565*
-10ú ú()
-
-581245*
-10ù ù(%
-
-581245*
-10û û(#
-
-64395*
-10≤
- ≤(
-
-64425*
-10∂ ∂(+
-
-64445*
-10ª ª(W
-
-64585*
-10º º('
-
-121265*
-10Ÿ% Ÿ(@
-
-74725*
-10È È(&
-G
-12665*
-10° ß(2*
-
-141
-144
-
-145
-146
-
-147
-148
-G
-12665*
-10® Æ(2*
-
-141
-149
-
-145
-150
-
-147
-151
-G
-12665*
-10Ø µ(2*
-
-141
-152
-
-145
-153
-
-147
-154
-G
-12665*
-10∂ Ω(2*
-
-141
-155
-
-145
-156
-
-147
-157
-G
-12665*
-10√ …(2*
-
-141
-158
-
-145
-159
-
-147
-160
-G
-12665*
-10  –(2*
-
-141
-161
-
-145
-162
-
-147
-163
-G
-12665*
-10— ◊(2*
-
-141
-164
-
-145
-165
-
-147
-166
-G
-12665*
-10› ‚(2*
-
-141
-167
-
-145
-168
-
-147
-169
-G
-12665*
-10„ Ë(2*
-
-141
-170
-
-145
-171
-
-147
-172
-G
-12665*
-10È ˝(2*
-
-141
-173
-
-145
-174
-
-147
-175
-
-12625*
-10˘ ˘(1
-G
-12665*
-10É â(2*
-
-141
-176
-
-145
-177
-
-147
-178
-G
-12665*
-10ä ê(2*
-
-141
-179
-
-145
-180
-
-147
-181
-G
-12665*
-10ë ñ(2*
-
-141
-182
-
-145
-183
-
-147
-184
-
-981285*
-10ù ù(
-
-1001305*
-10© ©(
--
-1001325*
-10´ ≠(
-2
-
-141
-185
-
-1001345*
-10¨= ¨(^
-
-100985*
-10¨G ¨(]
-
-100645*
-10Ø
- Ø(E
-
-1001365*
-10≥	 ª(
-
-
-100685*
-10¥ ∫(
-
-100705*
-10º √(
-
-100355*
-10ø ø(#
-
-102725*
-10»	 »(
-;
-1021385*
-10ÿ ÿ(,2
-
-141
-186
-
-145
-187
--
-1021365*
-10Ÿ	 Ÿ(L2
-
-141
-188
-
-1021345*
-10‡ ‡(

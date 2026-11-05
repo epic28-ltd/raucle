@@ -1,77 +1,0 @@
-
-»±"Canonical form so attenuation comparisons are exact.
-
-    Raises
-    ------
-    ValueError
-        If ``c`` contains an unrecognised constraint key. This is a guard
-        against silently dropping a rule because of a typo or wrong case
-        (e.g. ``allowedValues`` instead of ``allowed_values``) â€” an unknown
-        key would otherwise be ignored, minting a token that enforces less
-        than the operator intended.
-    "str
-
-"forbidden_values"str
-Š€"unknown constraint key(s): {sorted(unknown)}. Constraint keys are snake_case; valid keys are {sorted(_KNOWN_CONSTRAINT_KEYS)}."str
-"allowed_values"str
-"max_value"str
-"min_value"strc
-ž ž(,"Ô,
-*
-
-ª ª("
-builtinsset*:Bset#
-!
-
-ª ª(-"#unknown-value#0
-.
-
-ª ª(-unknown"	#binop -#*2-:+
-)
-
-« «("
-__bool__*:BboolH "
-
-« «( *
-« «("F0
-.
-
-¬ °(	"
-ValueError*:B
-ValueError2
-
-¬ °(	"À+
-)
-
-± ±(	out"#new-object#BdictL
-J
-
-² ²(@"5
-raucle.capability _normalise_value_list_constraint:
-	L
-J
-
-³ ³(>"5
-raucle.capability _normalise_value_list_constraint:	A
-?
-
-´ ´(""+
-raucle.capability_normalise_starts_with:	@
->
-
-µ µ(-")
-raucle.capability_normalise_int_bound:	@
->
-
-¶ ¶(-")
-raucle.capability_normalise_int_bound:	F
-D
-
-· ·('"0
-raucle.capability_normalise_required_present:	R
-P
-
-¸ ¸(3"<
-raucle.capability'_normalise_forbidden_field_combinations:	
-
-¹ ¹(	*4/home/craigamcw/Projects/raucle/raucle/capability.py

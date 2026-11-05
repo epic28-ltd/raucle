@@ -1,29 +1,0 @@
-
-@7"receipt has not been signed yet â€” call sign() first"strself
-† †("¤&
-$
-
-‡ ‡("#get-field# jws:+
-)
-
-‡ ‡("
-__bool__*:BboolH+
-)
-
-‡ ‡("#unaryop !#2!:Bbool "
-
-‡ ‡( *
-‡ ‡(
-"F0
-.
-
-ˆ ˆ(S"
-ValueError*:B
-ValueError2
-
-ˆ ˆ(S"<&
-$
-
-‰ ‰("#get-field# jws:
-
-‰ ‰(*4/home/craigamcw/Projects/raucle/raucle/provenance.py

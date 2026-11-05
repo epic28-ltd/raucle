@@ -1,44 +1,0 @@
-
--$"no gated tool calls in this chain."str
-
-0int
-ª	 "Capability tokens enforce per-call tool authorization at the gate ({ev.deny} call(s) denied across {ev.distinct_tools} tool(s), {ev.distinct_agents} agent identit(y/ies)). This is the tool-call access-control layer; identity provisioning, human IAM, and network access are out of scope."strev
-   (%#raucle.compliance.ControlStatus"|,
-*
-
-¡ ¡("#get-field# decisions:*
-(
-
-¡ ¡("	#binop >#2>:Bbool "
-
-¡ ¡( *
-¡ ¡("À*
-(
-
-¢ §(	"#unknown-value#Btuple*
-(
-
-¢ ¢($"#get-field# PARTIAL:(
-&
-
-¢ §(	"#array-add-last#:(
-&
-
-¢ §(	
-"#array-add-last#:	
-
-¢ §(	"Å*
-(
-
-¨ ¨(K"#unknown-value#Btuple/
--
-
-¨ ¨(%"#get-field# OUT_OF_SCOPE:(
-&
-
-¨ ¨(K"#array-add-last#:(
-&
-
-¨ ¨(K"#array-add-last#:
-
-¨ ¨(K*4/home/craigamcw/Projects/raucle/raucle/compliance.py

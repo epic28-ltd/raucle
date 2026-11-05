@@ -1,602 +1,0 @@
-
-Ž"EdDSA"str
-)"model"str
-
-y2int
-("output_hash"str
-˜"ml-dsa-65"str
-°"public_key_pem"str
-º"issuer"str
-J¥@"^agent:[a-z0-9](?:[a-z0-9_\-]|\.(?=[a-z0-9])){0,126}[a-z0-9]?$"str
-"input_hash"str
-¼"issued_at"str
-š
-"removed:"str
-–"raucle/pq1"str
-NoneNoneType
-²"allowed_models"str
-©Ÿ"AI Provenance Graph â€” cryptographic chain-of-custody for the agentic stack.
-
-Every step in a multi-agent / multi-tool workflow emits a signed receipt
-binding ``(agent_id, parent_receipts, operation, input_hash, output_hash,
-taint, timestamp)``.  Receipts compose into a Merkle DAG so that given any
-output one can reconstruct the entire causal chain back to the original
-user input and verify that nothing in the chain has been tampered with.
-
-This is the LLM-equivalent of certificate transparency + SBOM + DNSSEC,
-fused for AI workflows.
-
-Usage::
-
-    from raucle.provenance import (
-        AgentIdentity, ProvenanceLogger, Operation
-    )
-
-    identity = AgentIdentity.generate(
-        agent_id="agent:billing-summariser",
-        allowed_models=["claude-sonnet-4-6"],
-        allowed_tools=["lookup_invoice", "send_email"],
-    )
-    logger = ProvenanceLogger(agent=identity, sink_path="chain.jsonl")
-
-    # Root: untrusted user input enters the chain
-    h1 = logger.record_user_input(
-        text="Summarise May invoices and email the finance team.",
-        taint={"external_user"},
-    )
-
-    # Model call, descends from user input â€” inherits taint
-    h2 = logger.record_model_call(
-        parents=[h1],
-        model="claude-sonnet-4-6",
-        input_text="...",
-        output_text="...",
-    )
-
-    # Tool call, descends from the model call
-    h3 = logger.record_tool_call(
-        parents=[h2],
-        tool="send_email",
-        input_args={"to": "finance@â€¦", "body": "â€¦"},
-        output={"status": "queued", "id": "msg_123"},
-    )
-
-    # Walk the DAG later
-    from raucle.provenance import ProvenanceVerifier
-    v = ProvenanceVerifier(public_keys={identity.key_id: identity.public_key_pem()})
-    report = v.verify_chain("chain.jsonl")
-    print(report.valid, report.errors)
-
-Design notes
-------------
-- Hashes only, never content. Receipts never embed the raw prompt/output â€”
-  only ``sha256(text)``. Privacy by default.
-- Taint is a monotonic string set. Once a chain carries ``external_user``
-  taint, every descendant carries it unless an explicit ``sanitisation``
-  operation removes specific tags.
-- Receipts are compact JWS (EdDSA, Ed25519). Same crypto as the v0.4.0
-  verdict-receipt and audit-checkpoint primitives.
-- The receipt's own *hash* (sha256 of the compact JWS string) is what
-  descendants cite in their ``parents`` list. Hashes are deterministic
-  given the signed bytes, so the DAG is content-addressed.
-"str
-®"key_id"str
-5"tool"str
-z53int
-œ"JSON object"str
-"¸"sanitisation_authority"str
-N"guardrail_verdict"str
-¬
-"agent_id"str
-A"corpus"str
-M"ruleset_hash"str
-À"signature"str
-’"raucle/v1"str
-
-|1int
-!"provenance-receipt/v1"str
- ¶"data_classifications"str
-
-!0int
-´"allowed_tools"str
-¾"expires_at"str
-	"sha256:"str	tuple"·>#
-!
-
- (l"#unknown-value##
-!
-
-Ž Ž(`"#unknown-value##
-!
-
- (W"#unknown-value##
-!
-
-Œ Œ(J"#unknown-value##
-!
-
-‹ ‹(>"#unknown-value##
-!
-
-Š Š(2"#unknown-value##
-!
-
-‰ ‰(%"#unknown-value##
-!
-
-ˆ ˆ("#unknown-value##
-!
-
-ƒ- ƒ(6"#unknown-value##
-!
-
-ƒ ƒ("#unknown-value#-
-+
-C C("annotations"?python-unknown?+
-)
-K K((	dataclass"?python-unknown?'
-%
-K K((field"?python-unknown?&
-$
-L L(Enum"?python-unknown?&
-$
-M M(Path"?python-unknown?%
-#
-N N(Any"?python-unknown?*
-(
-P P(#registry"?python-unknown?=
-;
-Q Q(O	make_duplicate_key_rejecter"?python-unknown?8
-6
-R R(E
-reject_lone_surrogates"?python-unknown?4
-2
-S S(=reorder_keys_utf16"?python-unknown?+
-)
-T T(+	utf16_key"?python-unknown?!
-
-V V(#"#unknown-value#?
-=
-V	 V($logger"
-logging	getLogger:Blogging.Logger4
-2
-
-ƒ ƒ(L_ROOTABLE_OPS"#new-object#Bset-
-+
-
-ƒ ƒ(%"#get-field# USER_INPUT:(
-&
-
-ƒ ƒ(+"#get-field# value:(
-&
-
-ƒ ƒ(L"#array-add-last#:1
-/
-
-ƒ- ƒ(E"#get-field# GUARDRAIL_SCAN:(
-&
-
-ƒ- ƒ(K"#get-field# value:(
-&
-
-ƒ ƒ(L"#array-add-last#:>
-<
-
-‡5 (_REQUIRED_FIELDS_BY_OP"#new-object#Bdict-
-+
-
-ˆ ˆ("#get-field# USER_INPUT:(
-&
-
-ˆ ˆ("#get-field# value:*
-(
-
-ˆ  ˆ(/"#unknown-value#Btuple(
-&
-
-ˆ  ˆ(/"
-#is-exact#:Bbool
-
-
-ˆ  ˆ(/ "
-#assume#::
-8
-
-ˆ  ˆ(/""#set-field# __collection_size:!Bint(
-&
-
-ˆ  ˆ(/#"#array-add-last#:"
- 
-
-ˆ ˆ(/$"	#map-set#:-
-+
-
-‰ ‰(&"#get-field# MODEL_CALL:%(
-&
-
-‰ ‰('"#get-field# value:&*
-(
-
-‰  ‰(F*"#unknown-value#Btuple(
-&
-
-‰  ‰(F+"
-#is-exact#:*Bbool
-
-
-‰  ‰(F,"
-#assume#:+:
-8
-
-‰  ‰(F-"#set-field# __collection_size:*!Bint(
-&
-
-‰  ‰(F."#array-add-last#:*(
-&
-
-‰  ‰(F/"#array-add-last#:*((
-&
-
-‰  ‰(F0"#array-add-last#:*)"
- 
-
-‰ ‰(F1"	#map-set#:'*,
-*
-
-Š Š(3"#get-field# TOOL_CALL:2(
-&
-
-Š Š(4"#get-field# value:3*
-(
-
-Š Š(D6"#unknown-value#Btuple(
-&
-
-Š Š(D7"
-#is-exact#:6Bbool
-
-
-Š Š(D8"
-#assume#:7:
-8
-
-Š Š(D9"#set-field# __collection_size:6!Bint(
-&
-
-Š Š(D:"#array-add-last#:6(
-&
-
-Š Š(D;"#array-add-last#:6((
-&
-
-Š Š(D<"#array-add-last#:65"
- 
-
-Š Š(D="	#map-set#:46,
-*
-
-‹ ‹(?"#get-field# RETRIEVAL:>(
-&
-
-‹ ‹(@"#get-field# value:?*
-(
-
-‹ ‹(FB"#unknown-value#Btuple(
-&
-
-‹ ‹(FC"
-#is-exact#:BBbool
-
-
-‹ ‹(FD"
-#assume#:C:
-8
-
-‹ ‹(FE"#set-field# __collection_size:B!Bint(
-&
-
-‹ ‹(FF"#array-add-last#:B(
-&
-
-‹ ‹(FG"#array-add-last#:B((
-&
-
-‹ ‹(FH"#array-add-last#:BA"
- 
-
-‹ ‹(FI"	#map-set#:@B1
-/
-
-Œ Œ(K"#get-field# GUARDRAIL_SCAN:J(
-&
-
-Œ Œ("L"#get-field# value:K*
-(
-
-Œ$ Œ(WO"#unknown-value#Btuple(
-&
-
-Œ$ Œ(WP"
-#is-exact#:OBbool
-
-
-Œ$ Œ(WQ"
-#assume#:P:
-8
-
-Œ$ Œ(WR"#set-field# __collection_size:O!Bint(
-&
-
-Œ$ Œ(WS"#array-add-last#:O(
-&
-
-Œ$ Œ(WT"#array-add-last#:OM(
-&
-
-Œ$ Œ(WU"#array-add-last#:ON"
- 
-
-Œ Œ(WV"	#map-set#:LO0
-.
-
- (X"#get-field# AGENT_HANDOFF:W(
-&
-
- (!Y"#get-field# value:X*
-(
-
-# (3Z"#unknown-value#Btuple(
-&
-
-# (3["
-#is-exact#:ZBbool
-
-
-# (3\"
-#assume#:[:
-8
-
-# (3]"#set-field# __collection_size:Z!Bint(
-&
-
-# (3^"#array-add-last#:Z("
- 
-
- (3_"	#map-set#:YZ/
--
-
-Ž Ž(a"#get-field# SANITISATION:`(
-&
-
-Ž Ž( b"#get-field# value:a*
-(
-
-Ž" Ž(Qc"#unknown-value#Btuple(
-&
-
-Ž" Ž(Qd"
-#is-exact#:cBbool
-
-
-Ž" Ž(Qe"
-#assume#:d:
-8
-
-Ž" Ž(Qf"#set-field# __collection_size:c!Bint(
-&
-
-Ž" Ž(Qg"#array-add-last#:c(
-&
-
-Ž" Ž(Qh"#array-add-last#:c((
-&
-
-Ž" Ž(Qi"#array-add-last#:c5(
-&
-
-Ž" Ž(Qj"#array-add-last#:cA"
- 
-
-Ž Ž(Qk"	#map-set#:bc(
-&
-
- (m"#get-field# MERGE:l(
-&
-
- (n"#get-field# value:m*
-(
-
- (+o"#unknown-value#Btuple(
-&
-
- (+p"
-#is-exact#:oBbool
-
-
- (+q"
-#assume#:p:
-8
-
- (+r"#set-field# __collection_size:o!Bint(
-&
-
- (+s"#array-add-last#:o("
- 
-
- (+t"	#map-set#:no&
-$
-“ ¶u%closure"#new-object#-
-+
-“ ¶v"#set-field# _ROOTABLE_OPS:u6
-4
-“ ¶w"$"#set-field# _REQUIRED_FIELDS_BY_OP:u)
-'
-“ ¶x"?python-partial-apply?:u)
-'
-
-ñ ñ({"
-#binop **#*2**:yz6
-4
-
-ñ ñ(}_MAX_SAFE_INT"	#binop -#*2-:{|)
-'
-
-ò ò(~"
-#binop **#*2**:yz'
-%
-
-ò ò("	#binop -#*2-:~|5
-3
-
-ò ò(€_MIN_SAFE_INT"#unaryop -#2-:0
-.
-ó ó(‚_SHA256_PREFIX"#id#:Bstr'
-%
-ö šƒ%closure"#new-object#%
-#
-ö š„"#set-field# Any:ƒ0
-.
-ö š…"#set-field# _MIN_SAFE_INT:ƒ€/
--
-ö š†"#set-field# _MAX_SAFE_INT:ƒ}+
-)
-ö š‡"?python-partial-apply?:ƒ'
-%
-š ­ˆ%closure"#new-object#%
-#
-š ­‰"#set-field# Any:ˆ+
-)
-š ­Š"?python-partial-apply?:ˆ'
-%
-­ Ã‹%closure"#new-object#%
-#
-­ ÃŒ"#set-field# Any:‹+
-)
-­ Ã"?python-partial-apply?:‹/
--
-È È(_EXPECTED_ALG"#id#:ŽBstr/
--
-Ê Ê('‘_EXPECTED_TYP"#id#:Bstr,
-*
-Í Í(“
-_RAUCLE_V1"#id#:’Bstr8
-6
-
-Î Î(”_UNDERSTOOD_CRIT"#new-object#Bset+
-)
-
-Î Î(•"#array-add-last#:”“.
-,
-Ó Ó(—_PQ1_PROFILE"#id#:–Bstr*
-(
-Ô Ô(™_PQ1_ALG"#id#:˜Bstr1
-/
-ã ã(›_REMOVED_PREFIX"#id#:šBstr[
-Y
-
-ç ç(D_reject_duplicate_keys",
-raucle._canonmake_duplicate_key_rejecter:œ'
-%
-ê ïž%closure"#new-object#1
-/
-ê ïŸ"#set-field# _SHA256_PREFIX:ž‚+
-)
-ê ï "?python-partial-apply?:ž'
-%
-ï ÷¡%closure"#new-object#%
-#
-ï ÷¢"#set-field# Any:¡1
-/
-ï ÷£"#set-field# _SHA256_PREFIX:¡‚+
-)
-ï ÷¤"?python-partial-apply?:¡>
-<
-
-÷ ÷(\¦_AGENT_ID_RE"
-recompile:¥B
-re.Pattern'
-%
-ú ‡§%closure"#new-object#/
--
-ú ‡¨"#set-field# _AGENT_ID_RE:§¦+
-)
-ú ‡©"?python-partial-apply?:§D
-B
-
-‡ •(ª_CAP_STMT_KNOWN_FIELDS"#new-object#B	frozenset&
-$
-
-ˆ ”(«"#new-object#Bset+
-)
-
-ˆ ”(­"#array-add-last#:«¬+
-)
-
-ˆ ”(¯"#array-add-last#:«®+
-)
-
-ˆ ”(±"#array-add-last#:«°+
-)
-
-ˆ ”(³"#array-add-last#:«²+
-)
-
-ˆ ”(µ"#array-add-last#:«´+
-)
-
-ˆ ”(·"#array-add-last#:«¶+
-)
-
-ˆ ”(¹"#array-add-last#:«¸+
-)
-
-ˆ ”(»"#array-add-last#:«º+
-)
-
-ˆ ”(½"#array-add-last#:«¼+
-)
-
-ˆ ”(¿"#array-add-last#:«¾+
-)
-
-ˆ ”(Á"#array-add-last#:«À?
-=
-
-‡ •(Â"
-	frozenset__init__* :ª«BNoneTypeH'
-%
-˜ ¡Ã%closure"#new-object#%
-#
-˜ ¡Ä"#set-field# Any:Ã+
-)
-˜ ¡Å"?python-partial-apply?:Ã'
-%
-¡ ªÆ%closure"#new-object#%
-#
-¡ ªÇ"#set-field# Any:Æ+
-)
-¡ ªÈ"?python-partial-apply?:Æ'
-%
-ª µÉ%closure"#new-object#%
-#
-ª µÊ"#set-field# Any:É+
-)
-ª µË"?python-partial-apply?:É'
-%
-µ ÀÌ%closure"#new-object#%
-#
-µ ÀÍ"#set-field# Any:Ì+
-)
-µ ÀÎ"?python-partial-apply?:Ì'
-%
-À ÏÏ%closure"#new-object#%
-#
-À ÏÐ"#set-field# Any:Ï+
-)
-À ÏÑ"?python-partial-apply?:Ï'
-%
-… ÈÒ%closure"#new-object#9
-7
-… ÈÓ"$"#set-field# _reject_duplicate_keys:Ò+
-)
-… ÈÔ"?python-partial-apply?:Ò *4/home/craigamcw/Projects/raucle/raucle/provenance.py

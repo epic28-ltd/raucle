@@ -1,94 +1,0 @@
-
-"description"str
-"issuer"str
-"issued_at"str
-"kind"str
-	
-"severity"str
-"key_id"str
-""expires_at"str
-	"revokes"str
-"categories"str
-	"pattern"strself
-å å("í&
-$
-
-ç ò(	"#new-object#Bdict'
-%
-
-é é("#get-field# kind:"
- 
-
-é é("	#map-set#:*
-(
-
-è è(#"#get-field# pattern:"
- 
-
-è è(#"	#map-set#:+
-)
-
-ê ê(%
-"#get-field# severity:"
- 
-
-ê ê(%"	#map-set#:	
--
-+
-
-ë! ë(0"#get-field# categories:#
-!
-
-ë6 ë(:"#unknown-value#1
-/
-
-ë ë(;"
-builtinssorted*:Blist"
- 
-
-ë ë(;"	#map-set#:.
-,
-
-í í(+"#get-field# description:"
- 
-
-í í(+"	#map-set#:)
-'
-
-ì ì(!"#get-field# issuer:"
- 
-
-ì ì(!"	#map-set#:)
-'
-
-î î(!"#get-field# key_id:"
- 
-
-î î(!"	#map-set#:,
-*
-
-ï ï('"#get-field# issued_at:"
- 
-
-ï ï('"	#map-set#:*
-(
-
-ñ ñ(*"#get-field# revokes:#
-!
-
-ñ0 ñ(4"#unknown-value#1
-/
-
-ñ ñ(5 "
-builtinssorted*:Blist"
- 
-
-ñ ñ(5!"	#map-set#: -
-+
-
-ó ó()#"#get-field# expires_at:"
- 
-
-ó ó()$"	#map-set#:"#
-
-ç ò(	*./home/craigamcw/Projects/raucle/raucle/feed.py

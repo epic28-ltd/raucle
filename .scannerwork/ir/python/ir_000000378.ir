@@ -1,8 +1,0 @@
-
-;2"True when *agent_id* holds an active credential."strself\ \(agent_id\ \("h*
-(
-^ ^()"#get-field# _by_agent:*
-(
-^ ^()"
-#binop in#2in:Bbool
-^ ^()*;/home/craigamcw/Projects/raucle/raucle/agent_credentials.py

@@ -1,24 +1,0 @@
-
-"="str
-
-4intdata7
- 7("¼*
-(
-8 8(#"
-builtinslen*:Bint%
-#
-8 8('"	#binop %#*2%:%
-#
-8 8('"	#binop -#*2-:%
-#
-8 8(,"	#binop %#*2%:.
-,
-8 8(-padding"	#binop *#*2*:"
- 
-9% 9(3	"	#binop +#2+:5
-3
-9 9(4
-"
-base64urlsafe_b64decode:	Bbytes
-9 9(4
-*2/home/craigamcw/Projects/raucle/raucle/passport.py

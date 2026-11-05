@@ -1,17 +1,0 @@
-
-D;"SHA-256 of canonical-JSON-serialised tool-call arguments."str
-	"sha256:"strargs
-¾ ¾(#" 4
-2
-
-À# À(8"
-raucle.audit_canonical_json:0
-.
-
-À À(9"
-raucle.audit_sha256_hex:$
-"
-
-À À(9"	#binop +#2+:
-
-À À(9*F/home/craigamcw/Projects/raucle/raucle/integrations/agent_framework.py

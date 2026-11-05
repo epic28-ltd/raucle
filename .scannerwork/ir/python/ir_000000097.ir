@@ -1,31 +1,0 @@
-
-"nonce"str
-"caller_agent_id"str
-"capability_token"str
-	"args"str
-"tool"strselfO O("»$
-"
-P V(	"#new-object#Bdict1
-/
-Q  Q(5"#get-field# capability_token: 
-
-Q Q(5"	#map-set#:%
-#
-R R("#get-field# tool: 
-
-R R("	#map-set#:%
-#
-S S(
-"#get-field# args: 
-
-S S("	#map-set#:	
-0
-.
-T T(3"#get-field# caller_agent_id: 
-
-T T(3"	#map-set#:&
-$
-U U("#get-field# nonce: 
-
-U U("	#map-set#:
-P V(	*3/home/craigamcw/Projects/raucle/raucle/handshake.py

@@ -1,59 +1,0 @@
-
-1("no decision events found in the chain."str
-
-0int
-µ«"{ev.decisions} identity-attributed decision events logged ({ev.allow} allow, {ev.deny} deny) across {ev.distinct_tools} tools and {ev.distinct_agents} acting identities."str
-±§"RTS 2024/1774 Article 12(2)(c): logging of access-control, identity
-    and ICT operations events. Every gate decision IS such an event for a
-    non-human identity."strev
-Ô Ô(#	
-tuple#raucle.compliance.ControlStatus"|,
-*
-
-Ø Ø("#get-field# decisions:*
-(
-
-Ø Ø("	#binop >#2>:Bbool "
-
-Ø Ø( *
-Ø Ø("É,
-*
-
-Ú Ú(#"#get-field# SATISFIED:*
-(
-
-Ù Þ(		"#unknown-value#Btuple(
-&
-
-Ù Þ(	"
-#is-exact#:	
-Bbool
-
-
-Ù Þ(	"
-#assume#::
-8
-
-Ù Þ(	"#set-field# __collection_size:	Bint(
-&
-
-Ù Þ(	"#array-add-last#:	(
-&
-
-Ù Þ(	"#array-add-last#:	
-
-Ù Þ(		"À*
-(
-
-ß ß(J"#unknown-value#Btuple*
-(
-
-ß ß( "#get-field# PARTIAL:(
-&
-
-ß ß(J"#array-add-last#:(
-&
-
-ß ß(J"#array-add-last#:
-
-ß ß(J*4/home/craigamcw/Projects/raucle/raucle/compliance.py

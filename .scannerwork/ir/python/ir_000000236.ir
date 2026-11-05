@@ -1,35 +1,0 @@
-
-"id"str
-"code"str
-"2.0"str
-	"message"str
-
-"error"str
-	"jsonrpc"strmsg_id
-á á(#code
-á% á(.message
-á0 á(<"–&
-$
-
-â æ(	"#new-object#Bdict"
- 
-
-ã ã("	#map-set#:"
- 
-
-ä ä(	"	#map-set#:&
-$
-
-å å(7"#new-object#Bdict"
- 
-
-å å(""	#map-set#:"
- 
-
-å$ å(6"	#map-set#:"
- 
-
-å å(7"	#map-set#:
-
-
-â æ(	*4/home/craigamcw/Projects/raucle/raucle/mcp_server.py

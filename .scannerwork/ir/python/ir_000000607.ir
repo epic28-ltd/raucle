@@ -1,37 +1,0 @@
-
-"npx"str
-"tsx"str
-"provenance-ts"str
-"--no-install"str
-"src/emit-cli.ts"str
-
-
-0intreqs{ {(list"Û'
-%
-} }(9"#unknown-value#Blist&
-$
-} }(9"
-#is-exact#:Bbool
-
-} }(9	"
-#assume#:8
-6
-} }(9"#set-field# __collection_size:
-Bint&
-$
-} }(9"#array-add-last#:&
-$
-} }(9"#array-add-last#:&
-$
-} }(9"#array-add-last#:&
-$
-} }(9"#array-add-last#:!
-
-~ ~("#unknown-value#*
-(
-~ ~("#dependent-value#*:/
--
-	| €("
-conformance
-_run_lines:
-	| €(*8/home/craigamcw/Projects/raucle/reference/conformance.py

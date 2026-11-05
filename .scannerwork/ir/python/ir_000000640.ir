@@ -1,34 +1,0 @@
-
-truebool
-ßÕ"Whether this key is authorised to clear taint *tag*.
-
-        Unlike :meth:`permits_model` / :meth:`permits_tool`, an empty
-        ``sanitisation_authority`` is *deny-all*, not allow-all: clearing a
-        taint tag is a privileged act and must be explicitly granted. A
-        literal ``"*"`` entry authorises clearing any tag.
-        "str
-"*"strself
-« «(tag
-«! «()"‹9
-7
-
-³ ³(-"$"#get-field# sanitisation_authority:,
-*
-
-³ ³(-"
-#binop in#2in:Bbool "
-
-³ ³(- *
-³ ³(
-"
-
-´ ´("}9
-7
-
-µ µ(1"$"#get-field# sanitisation_authority:,
-*
-
-µ µ(1	"
-#binop in#2in:Bbool
-
-µ µ(1	*4/home/craigamcw/Projects/raucle/raucle/provenance.py

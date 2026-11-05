@@ -1,39 +1,0 @@
-
-"receipt_version"str
-"iss"str
-"1"str
-ùì"The Agent Card ``metadata`` entry keyed by the extension URI: the issuer
-    public key verifiers pin, plus optional per-skill capability hashes."str
-"skill_capabilities"str
-"key_id"str
-"public_key"str
-
-"issuer"strissP P(key_idQ Q(public_key_b64R R( skill_capabilitiesS S(4"∆+
-)
-W Z(entry"#new-object#Bdict 
-
-X X(	"	#map-set#:$
-"
-Y Y(N"#new-object#Bdict 
-
-Y Y("	#map-set#: 
-
-Y Y(/"	#map-set#: 
-
-Y1 Y(M"	#map-set#: 
-
-Y Y(N"	#map-set#:
-)
-'
-[ [("
-__bool__*:BboolH"
-[ [( *[ [(".$
-"
-\ \(8"#array-write#:"}$
-"
-] ](,"#new-object#Bdict!
-
-] ]($"#unknown-value# 
-
-] ](+"	#map-set#:
-] ](,*-/home/craigamcw/Projects/raucle/raucle/a2a.py

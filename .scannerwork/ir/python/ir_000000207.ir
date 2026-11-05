@@ -1,93 +1,0 @@
-
-"missed"str
-"sample_misses"str
-"coverage_pct"str
-
-1int
-"missed_strategies"str
-100int
-	"rule_id"str
-"total_variants"str
-
-0int
-	"caught"str
-
-!2intself
-ò ò("ç&
-$
-
-ó û(	"#new-object#Bdict*
-(
-
-ô ô(#"#get-field# rule_id:"
- 
-
-ô ô(#"	#map-set#:(
-&
-
-õ õ(("#get-field# total:"
- 
-
-õ õ(("	#map-set#:)
-'
-
-ö ö(!
-"#get-field# caught:"
- 
-
-ö ö(!"	#map-set#:	
-)
-'
-
-÷ ÷(!"#get-field# missed:"
- 
-
-÷ ÷(!"	#map-set#:+
-)
-
-ø" ø(/"#get-field# coverage:'
-%
-
-ø" ø(5"	#binop *#*2*:*
-(
-
-ø ø(9"
-builtinsround*:"
- 
-
-ø ø(9"	#map-set#:4
-2
-
-ù! ù(7"#get-field# missed_strategies:"
- 
-
-ù ù(7"	#map-set#:0
-.
-
-ú ú(/"#get-field# sample_misses:)
-'
-
-ú ú(3"#unknown-value#Blist$
-"
-
-ú ú(3"#array-read#:(
-&
-
-ú ú(3"#array-add-last#:$
-"
-
-ú ú(3"#array-read#:(
-&
-
-ú ú(3 "#array-add-last#:$
-"
-
-ú ú(3""#array-read#:!(
-&
-
-ú ú(3#"#array-add-last#:""
- 
-
-ú ú(3$"	#map-set#:
-
-ó û(	*1/home/craigamcw/Projects/raucle/raucle/mutator.py

@@ -1,66 +1,0 @@
-
-YP"Return True if the request is allowed (token consumed), False if rate-limited."str
-1.0float
-falsebool
-trueboolself
-¥ ¥(capacity
-¥ ¥(%refill_rate
-¥' ¥(9"ß/
--
-
-§ §(now"
-time	monotonicBfloat.
-,
-
-¨ ¨(("#get-field# last_refill:<
-:
-
-¨ ¨((elapsed"#dependent-value#*:Bfloat)
-'
-
-©$ ©(/"#get-field# tokens:3
-1
-
-©2 ©(G	"#dependent-value#*:Bfloat0
-.
-
-©$ ©(G
-"#dependent-value#:	Bfloat(
-&
-
-© ©(H"
-builtinsmin*:
-*
-(
-
-© ©("#set-field# tokens:/
--
-
-ª ª("#set-field# last_refill:)
-'
-
-« «("#get-field# tokens:+
-)
-
-« «("?python-unknown?*:+
-)
-
-« «("
-__bool__*:BboolH "
-
-« «( *
-« «(
-" )
-'
-
-¬ ¬("#get-field# tokens:3
-1
-
-¬ ¬("#dependent-value#*:Bfloat*
-(
-
-¬ ¬("#set-field# tokens:
-
-­ ­("
-
-® ®(*0/home/craigamcw/Projects/raucle/raucle/server.py

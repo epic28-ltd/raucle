@@ -1,65 +1,0 @@
-
-!"counterfactual_verdict"str
-"original_verdict"str
-	"input_hash"str
-"explanation"str
-"original_action"str
-"operation"str
-"receipt_hash"str
- "counterfactual_action"strself
-Ñ Ñ("ˆ&
-$
-
-Ö é(	"#new-object#Bdict/
--
-
-Ü Ü(-"#get-field# receipt_hash:"
- 
-
-Ü Ü(-"	#map-set#:,
-*
-
-á á('"#get-field# operation:"
- 
-
-á á('"	#map-set#:-
-+
-
-à à()
-"#get-field# input_hash:"
- 
-
-à à()"	#map-set#:	
-3
-1
-
-â  â(5"#get-field# original_verdict:"
- 
-
-â â(5"	#map-set#:9
-7
-
-ä& ä(A"$"#get-field# counterfactual_verdict:"
- 
-
-ä ä(A"	#map-set#:2
-0
-
-ã ã(3"#get-field# original_action:"
- 
-
-ã ã(3"	#map-set#:8
-6
-
-å% å(?"#!#get-field# counterfactual_action:"
- 
-
-å å(?"	#map-set#:.
-,
-
-ç ç(+"#get-field# explanation:"
- 
-
-ç ç(+"	#map-set#:
-
-Ö é(	*0/home/craigamcw/Projects/raucle/raucle/replay.py

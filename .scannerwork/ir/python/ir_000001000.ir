@@ -1,43 +1,0 @@
-
-"ok"str
-"No changes detected"str
-falsebool
-G>"Response body for a config update with no effective changes."str
-"status"str
-	"changed"str
-	"message"str
-"restart_needed"str
-
-0intlist"ü&
-$
-
-’ —("#new-object#Bdict"
- 
-
-“ “("	#map-set#:)
-'
-
-” ”("#unknown-value#Blist(
-&
-
-” ”(	"
-#is-exact#:Bbool
-
-
-” ”(
-"
-#assume#:	:
-8
-
-” ”("#set-field# __collection_size:Bint"
- 
-
-” ”("	#map-set#:"
- 
-
-• •("	#map-set#:"
- 
-
-– –(("	#map-set#:
-
-’ —(*5/home/craigamcw/Projects/raucle/raucle/gateway_app.py

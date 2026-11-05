@@ -1,59 +1,0 @@
-
-	
-"agent_id"str
-"args_hash"str
-"reason"str
-"expires_at"str
-
-"approver"str
-
-"trace_id"str
-"tool"str
-"created_at"str
-"status"str
-"request_id"strself3 3("·$
-"
-4 ?(	"#new-object#Bdict+
-)
-5 5()"#get-field# request_id: 
-
-5 5()"	#map-set#:%
-#
-6 6("#get-field# tool: 
-
-6 6("	#map-set#:)
-'
-7 7(%
-"#get-field# agent_id: 
-
-7 7(%"	#map-set#:	
-*
-(
-8 8('"#get-field# args_hash: 
-
-8 8('"	#map-set#:'
-%
-9 9(!"#get-field# reason: 
-
-9 9(!"	#map-set#:)
-'
-: :(%"#get-field# trace_id: 
-
-: :(%"	#map-set#:+
-)
-; ;()"#get-field# created_at: 
-
-; ;()"	#map-set#:+
-)
-< <()"#get-field# expires_at: 
-
-< <()"	#map-set#:'
-%
-= =(!"#get-field# status: 
-
-= =(!"	#map-set#:)
-'
-> >(%"#get-field# approver: 
-
-> >(% "	#map-set#:
-4 ?(	*3/home/craigamcw/Projects/raucle/raucle/approvals.py

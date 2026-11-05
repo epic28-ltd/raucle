@@ -1,34 +1,0 @@
-
-óé"Re-check gate constraints against cryptographically disclosed fields.
-
-    Returns a per-constraint-kind result:
-
-    - ``SATISFIED``: every field the constraint touches was disclosed and
-      the values pass.
-    - ``VIOLATED``: at least one disclosed value fails the constraint.
-    - ``UNKNOWN``: the constraint touches at least one undisclosed field.
-      Fail-closed: never counted as conformance.
-
-    This re-derives decisions from the constraint spec independently of the
-    operator's runtime, mirroring the verifier-side checks the receipt
-    verifier already performs for capability conformance.
-    "strconstraints
-ß ß( disclosed_fields
-à à($" /
--
-
-ð ð( results"#new-object#BdictE
-C
-
-ò ò(D".
-raucle.conformance_recheck_evaluated_kinds:F
-D
-
-ó ó(E"/
-raucle.conformance_recheck_required_present:L
-J
-
-ô ô(K"5
-raucle.conformance_recheck_forbidden_combinations:
-
-ö ö(*5/home/craigamcw/Projects/raucle/raucle/conformance.py

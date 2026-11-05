@@ -1,69 +1,0 @@
-
-	"version"str
-"merkle_root"str
-"key_id"str
-"issued_at"str
-"ioc_count"str
-	"issuer"str
-"public_key_pem"str
-	"feed_id"strself
-Ú Ú("ð&
-$
-
-Û ä(	"#new-object#Bdict*
-(
-
-Ü Ü(#"#get-field# version:"
- 
-
-Ü Ü(#"	#map-set#:*
-(
-
-Ý Ý(#"#get-field# feed_id:"
- 
-
-Ý Ý(#"	#map-set#:)
-'
-
-Þ Þ(!
-"#get-field# issuer:"
- 
-
-Þ Þ(!"	#map-set#:	
-)
-'
-
-ß ß(!"#get-field# key_id:"
- 
-
-ß ß(!"	#map-set#:1
-/
-
-à à(1"#get-field# public_key_pem:"
- 
-
-à à(1"	#map-set#:,
-*
-
-á á('"#get-field# issued_at:"
- 
-
-á á('"	#map-set#:.
-,
-
-â â(+"#get-field# merkle_root:"
- 
-
-â â(+"	#map-set#:'
-%
-
-ã ã(&"#get-field# iocs:,
-*
-
-ã ã('"
-builtinslen*:Bint"
- 
-
-ã ã('"	#map-set#:
-
-Û ä(	*./home/craigamcw/Projects/raucle/raucle/feed.py
