@@ -1,104 +1,0 @@
-
-
-"division by zero"bool
-"avg_latency_us"str
-
-0int
-"total_requests"str
-"S3518"bool
-	"a"bool
-"uptime_since"str
-"escalated"str
-"denied"str
-#"tools"str
-	"allowed"str
-
- 1intself
-À À("3
-1
-
-Â= Â(R"#get-field# latency_us_count:*
-(
-
-Â= Â(V"	#binop >#2>:Bbool,"*
-
-Â= Â(V *
-Â: Â(<2
-ÂW Â(["þ3
-1
-
-Â Â(!"#get-field# latency_us_total:3
-1
-
-Â$ Â(9"#get-field# latency_us_count:,
-*
-
-Â Â(9"
-#binop !=#2!=:Bbool"
- 
-
-Â Â(9"
-#assert#:	
-,
-*
-
-Â Â(9"#dependent-value#*:
-
-Â Â(]"
-
-Â Â(]"ã*(
-&
-
-Á Ã(	avg_latency"#id#:&
-$
-
-Ä Ì(	"#new-object#Bdict-
-+
-
-Å Å(+"#get-field# start_time:"
- 
-
-Å Å(+"	#map-set#:1
-/
-
-Æ Æ(1"#get-field# total_requests:"
- 
-
-Æ Æ(1"	#map-set#:*
-(
-
-Ç Ç(#"#get-field# allowed:"
- 
-
-Ç Ç(#"	#map-set#:)
-'
-
-È È(!"#get-field# denied:"
- 
-
-È È(!"	#map-set#:,
-*
-
-É É('"#get-field# escalated:"
- 
-
-É É('"	#map-set#:*
-(
-
-Ê Ê(3!"
-builtinsround*: "
- 
-
-Ê Ê(3""	#map-set#:!*
-(
-
-Ë Ë(&$"#get-field# by_tool:.
-,
-
-Ë Ë('%"
-builtinsdict*:$Bdict"
- 
-
-Ë Ë('&"	#map-set#:#%
-
-Ä Ì(	*1/home/craigamcw/Projects/raucle/raucle/gateway.py

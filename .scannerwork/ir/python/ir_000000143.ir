@@ -1,17 +1,0 @@
-
-óé"The gate is the enforcement point where a human-set authorization policy is applied; DENY decisions are the structural oversight mechanism. Interactive human-in-the-loop approval UX is out of scope (pair with an approval workflow)."str_ev
-¿ ¿('#raucle.compliance.ControlStatus"¾*
-(
-
-À Ä("#unknown-value#Btuple*
-(
-
-À À( "#get-field# PARTIAL:(
-&
-
-À Ä("#array-add-last#:(
-&
-
-À Ä("#array-add-last#:
-
-À Ä(*4/home/craigamcw/Projects/raucle/raucle/compliance.py

@@ -1,68 +1,0 @@
-
-128int
-"big"str
-
-1int
-
-	2int
-=4"Strip one TLV header, returning the content bytes."str
-"empty DER chunk"str
-127intcontent_bytes
-∆ ∆( "|+
-)
-
-» »("
-__bool__*:BboolH+
-)
-
-» »("#unaryop !#2!:Bbool "
-
-» »( *
-» »("\F
-D
-
-… …(/"TimestampError:Braucle.timestamp.TimestampError2
-
-… …(/"…'
-%
-
-   (n"#array-read#:(
-&
-
-À À(
-header"#id#:	Bint#
-!
-
-Ã Ã("#unknown-value#+
-)
-
-Ã Ã("
-__bool__*:BboolH "
-
-Ã Ã( *
-Ã Ã("ê,
-*
-
-Õ Õ(n_bytes"#unknown-value#)
-'
-
-Œ Œ(A"#unknown-value#Btype#
-!
-
-Œ Œ(9"#unknown-value#)
-'
-
-Œ Œ(A"#unknown-value#Bbool/
--
-
-Œ Œ(An"
-int
-from_bytes*:,
-*
-
-œ œ(header"	#binop +#2+:	"9#
-!
-
-– –(-"#unknown-value#
-
-– –(-*3/home/craigamcw/Projects/raucle/raucle/timestamp.py

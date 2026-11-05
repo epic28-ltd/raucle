@@ -1,34 +1,0 @@
-
-îä"the pack's retention.json records the observed span; the retention period remains the entity's ICT risk-assessment decision per the RTS."str
-
-
-0int
-íà"RTS Article 12(4): the retention period is the entity's own risk
-    decision; the pack records the observed span and states the duty."str_ev
-Å Å(&#raucle.compliance.ControlStatus	tuple"≈*
-(
-
-Ö Ö("#get-field# PARTIAL:*
-(
-
-Ñ à("#unknown-value#Btuple(
-&
-
-Ñ à("
-#is-exact#:Bbool
-
-
-Ñ à(	"
-#assume#::
-8
-
-Ñ à("#set-field# __collection_size:
-Bint(
-&
-
-Ñ à("#array-add-last#:(
-&
-
-Ñ à("#array-add-last#:
-
-Ñ à(*4/home/craigamcw/Projects/raucle/raucle/compliance.py

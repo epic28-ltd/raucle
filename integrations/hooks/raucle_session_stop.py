@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -89,13 +88,11 @@ def main(argv: list[str] | None = None) -> int:
     # Pass the evidence to the signing CLI through a temp file so the
     # evidence never rides in command-line arguments or the shell.
     receipt_path = Path(out)
-    raucle_bin = shutil.which("raucle")
-    if not raucle_bin and Path(sys.executable).name.startswith("python"):
-        # Fallback when the entrypoint script is not on PATH (venv
-        # contexts): run the module directly.
-        cmd = [sys.executable, "-m", "raucle"]
-    else:
-        cmd = [raucle_bin or "raucle"]
+    # ALWAYS run the same interpreter that runs this hook: its environment
+    # is the one that installed raucle. A PATH lookup can resolve to an
+    # unrelated environment's raucle (observed: the hermes tools env
+    # without cryptography), producing silent sign failures.
+    cmd = [sys.executable, "-m", "raucle"]
     cmd += [
         "authorship",
         "sign",

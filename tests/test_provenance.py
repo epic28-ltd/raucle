@@ -468,7 +468,7 @@ class TestCapabilityStatementSignature:
 
 class TestHashHelpers:
     def test_hash_text_deterministic(self):
-        assert hash_text("hello") == "sha256:" + hashlib.sha256("hello".encode("utf-8")).hexdigest()
+        assert hash_text("hello") == "sha256:" + hashlib.sha256(b"hello").hexdigest()
         assert hash_text("hello") != hash_text("world")
         assert hash_text("x").startswith("sha256:")
 

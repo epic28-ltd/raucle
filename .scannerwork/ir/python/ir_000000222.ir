@@ -1,649 +1,0 @@
-
-ˇÁÙ"Verify a signed raucle provenance/verdict receipt (compact JWS). Returns the verified payload, the signing key id, and whether the receipt is quantum-hybrid (raucle/pq1). Use this to check agent evidence independently, without the raucle CLI."str
- ("Detection sensitivity"str
-+~""Optional list of tool calls made"str
-æ
-"semantic"str
-Ω"zero_width"str
-
-"standard"str
-"permissive"str
-"prompt"str
-b‘X"Check an LLM output for leakage of canary tokens previously embedded via embed_canary."str
-X"tool_name"str
-$ô"Parsed MCP manifest JSON"str
-Ï	"receipt"str
-v
-"response"str
-?"LLM response text"str
-‘±…"Embed an invisible canary token in a system prompt so that system-prompt leaks can be detected when the model regurgitates the watermarked text. Returns the watermarked prompt and the token to track."str
-l"verify_outcome"str
-,
-"required"str
-z"tool_calls"str
-≤S®"Validate the arguments of a planned tool/function call for shell injection, path traversal, SQL injection, or SSRF. Use this BEFORE executing a tool call from an LLM."str
-"enum"str
-"object"str
-"string"str
-¯"expected_input"str
-"Text to scan"str
-∫
-"strategy"str
-Â"verify_receipt"str
-ø	"comment"str
-µ´"Scan a prompt for prompt-injection attacks, jailbreaks, data exfiltration attempts, and other adversarial inputs. Use this BEFORE sending untrusted user input to an LLM."str
-JA"Return the list of MCP tool definitions exposed by this server."str
-0E'"Optional: original prompt for context"str
-"properties"str
-∂"system_prompt"str
-“"check_canary_leak"str
-ƒn∫"Classify whether a likely-malicious prompt actually landed: did the model refuse, comply, or is the outcome uncertain? Use this AFTER receiving a model response to a suspicious prompt."str
-Æ7§"Scan an LLM-generated response for system-prompt leakage, credential exfiltration, or hidden instructions. Use this BEFORE returning a model response to the user."str
-è"scan_mcp_manifest"str
-*Ô "The compact JWS receipt string"str
-ñ
-"manifest"str
-<˚2"Optional original input the receipt must bind to"str
-”ë»"Static analysis of another MCP server's manifest JSON. Detects tool poisoning, hidden instructions, rug-pull indicators, credential exposure, SSRF targets, and prompt injection in tool descriptions."str
-"name"str
-Bß8"List the active detection rules loaded by the scanner."str
-"detect_injection"str
-"mode"str
-\"arguments"str
-"type"str
-"description"str
-B"original_prompt"str
-"strict"str
-|"array"str
-
-"0int
-)_ "Tool call arguments to inspect"str
-Q"scan_tool_call"str
-Ä"items"str
-Ú"pubkey_pem"str
-<"output"str
-*ı "Ed25519 public key in PEM form"str
-5"scan_output"str
-	"inputSchema"str
-•"list_rules"str
-Ø"embed_canary"strlist"∂B$
-"
-G Z(	"#new-object#Bdict 
-
-H H(&"	#map-set#: 
-
-I M("	#map-set#:$
-"
-N Y(
-"#new-object#Bdict 
-
-O O( "	#map-set#:
-$
-"
-P W("#new-object#Bdict$
-"
-Q Q(O"#new-object#Bdict 
-
-Q Q(/"	#map-set#: 
-
-Q1 Q(N"	#map-set#: 
-
-Q Q(O"	#map-set#:$
-"
-R V("#new-object#Bdict 
-
-S S(("	#map-set#:'
-%
-T  T(D"#unknown-value#Blist&
-$
-T  T(D "
-#is-exact#:Bbool
-
-T  T(D!"
-#assume#: 8
-6
-T  T(D#"#set-field# __collection_size:"Bint&
-$
-T  T(D$"#array-add-last#:&
-$
-T  T(D%"#array-add-last#:&
-$
-T  T(D&"#array-add-last#: 
-
-T T(D'"	#map-set#: 
-
-U U(>)"	#map-set#:( 
-
-R V(*"	#map-set#: 
-
-P W(+"	#map-set#:
-'
-%
-X X(&-"#unknown-value#Blist&
-$
-X X(&."
-#is-exact#:-Bbool
-
-X X(&/"
-#assume#:.8
-6
-X X(&0"#set-field# __collection_size:-"Bint&
-$
-X X(&1"#array-add-last#:- 
-
-X X(&2"	#map-set#:
-,- 
-
-N Y(3"	#map-set#:	
-$
-"
-[ m(	4"#new-object#Bdict 
-
-\ \(!6"	#map-set#:45 
-
-] a(8"	#map-set#:47$
-"
-b l(9"#new-object#Bdict 
-
-c c( :"	#map-set#:9$
-"
-d j(;"#new-object#Bdict$
-"
-e e(T="#new-object#Bdict 
-
-e e(/>"	#map-set#:= 
-
-e1 e(S@"	#map-set#:=? 
-
-e e(TA"	#map-set#:;<=$
-"
-f' i(C"#new-object#Bdict 
-
-g g((D"	#map-set#:C 
-
-h h(NF"	#map-set#:CE 
-
-f i(G"	#map-set#:;BC 
-
-d j(H"	#map-set#:9;'
-%
-k k(&I"#unknown-value#Blist&
-$
-k k(&J"
-#is-exact#:IBbool
-
-k k(&K"
-#assume#:J8
-6
-k k(&L"#set-field# __collection_size:I"Bint&
-$
-k k(&M"#array-add-last#:I< 
-
-k k(&N"	#map-set#:9,I 
-
-b l(O"	#map-set#:4	9%
-#
-	n Ä(	P"#new-object#Bdict 
-
-o o($R"	#map-set#:PQ 
-
-p t(T"	#map-set#:PS$
-"
-u (U"#new-object#Bdict 
-
-v v( V"	#map-set#:U$
-"
-w }(W"#new-object#Bdict$
-"
-x! x(3Y"#new-object#Bdict 
-
-x" x(2Z"	#map-set#:Y 
-
-x x(3["	#map-set#:WXY$
-"
-y! |(]"#new-object#Bdict 
-
-z z((^"	#map-set#:] 
-
-{ {(G`"	#map-set#:]_ 
-
-y |(a"	#map-set#:W\] 
-
-w }(b"	#map-set#:UW'
-%
-~ ~(6c"#unknown-value#Blist&
-$
-~ ~(6d"
-#is-exact#:cBbool
-
-~ ~(6e"
-#assume#:d8
-6
-~ ~(6f"#set-field# __collection_size:c"Bint&
-$
-~ ~(6g"#array-add-last#:cX&
-$
-~ ~(6h"#array-add-last#:c\ 
-
-~ ~(6i"	#map-set#:U,c 
-
-u (j"	#map-set#:P	U&
-$
-
-Å ï(	k"#new-object#Bdict"
- 
-
-Ç Ç($m"	#map-set#:kl"
- 
-
-É á(o"	#map-set#:kn&
-$
-
-à î(p"#new-object#Bdict"
- 
-
-â â( q"	#map-set#:p&
-$
-
-ä í(r"#new-object#Bdict&
-$
-
-ã ã(0s"#new-object#Bdict"
- 
-
-ã ã(/t"	#map-set#:s"
- 
-
-ã ã(0u"	#map-set#:rs&
-$
-
-å  å(2w"#new-object#Bdict"
- 
-
-å! å(1x"	#map-set#:w"
- 
-
-å å(2y"	#map-set#:rvw&
-$
-
-ç" ë({"#new-object#Bdict"
- 
-
-é é('}"	#map-set#:{|"
- 
-
-è è(I"	#map-set#:{~'
-%
-
-ê! ê(3Å"#new-object#Bdict$
-"
-
-ê" ê(2Ç"	#map-set#:Å%
-#
-
-ê ê(3É"	#map-set#:{ÄÅ#
-!
-
-ç ë(Ñ"	#map-set#:rz{#
-!
-
-ä í(Ö"	#map-set#:pr*
-(
-
-ì ì(2Ü"#unknown-value#Blist*
-(
-
-ì ì(2á"
-#is-exact#:ÜBbool!
-
-
-ì ì(2à"
-#assume#:á<
-:
-
-ì ì(2â"#set-field# __collection_size:Ü"Bint*
-(
-
-ì ì(2ä"#array-add-last#:Ü*
-(
-
-ì ì(2ã"#array-add-last#:Üv$
-"
-
-ì ì(2å"	#map-set#:p,Ü#
-!
-
-à î(ç"	#map-set#:k	p'
-%
-
-ñ ®(	é"#new-object#Bdict%
-#
-
-ó ó('ê"	#map-set#:éè%
-#
-
-ò ù(í"	#map-set#:éë'
-%
-
-û ß(ì"#new-object#Bdict$
-"
-
-ü ü( î"	#map-set#:ì'
-%
-
-† •(ï"#new-object#Bdict'
-%
-
-°  §(ó"#new-object#Bdict$
-"
-
-¢ ¢((ò"	#map-set#:ó%
-#
-
-£ £(Aö"	#map-set#:óô&
-$
-
-° §(õ"	#map-set#:ïñó%
-#
-
-† •(ú"	#map-set#:ìï*
-(
-
-¶ ¶((ù"#unknown-value#Blist*
-(
-
-¶ ¶((û"
-#is-exact#:ùBbool!
-
-
-¶ ¶((ü"
-#assume#:û<
-:
-
-¶ ¶((†"#set-field# __collection_size:ù"Bint+
-)
-
-¶ ¶((°"#array-add-last#:ùñ%
-#
-
-¶ ¶((¢"	#map-set#:ì,ù%
-#
-
-û ß(£"	#map-set#:é	ì'
-%
-
-© ≠(	§"#new-object#Bdict%
-#
-
-™ ™( ¶"	#map-set#:§•%
-#
-
-´ ´(S®"	#map-set#:§ß'
-%
-
-¨ ¨(?©"#new-object#Bdict$
-"
-
-¨ ¨(,™"	#map-set#:©'
-%
-
-¨< ¨(>´"#new-object#Bdict%
-#
-
-¨. ¨(>¨"	#map-set#:©´%
-#
-
-¨ ¨(?≠"	#map-set#:§	©'
-%
-
-Æ ¡(	Æ"#new-object#Bdict%
-#
-
-Ø Ø("∞"	#map-set#:ÆØ%
-#
-
-∞ µ(≤"	#map-set#:Æ±'
-%
-
-∂ ¿(≥"#new-object#Bdict$
-"
-
-∑ ∑( ¥"	#map-set#:≥'
-%
-
-∏ æ(µ"#new-object#Bdict'
-%
-
-π% π(7∑"#new-object#Bdict$
-"
-
-π& π(6∏"	#map-set#:∑&
-$
-
-π π(7π"	#map-set#:µ∂∑'
-%
-
-∫  Ω(ª"#new-object#Bdict$
-"
-
-ª ª((º"	#map-set#:ª*
-(
-
-º  º(E¿"#unknown-value#Blist*
-(
-
-º  º(E¡"
-#is-exact#:¿Bbool!
-
-
-º  º(E¬"
-#assume#:¡<
-:
-
-º  º(E√"#set-field# __collection_size:¿"Bint+
-)
-
-º  º(Eƒ"#array-add-last#:¿Ω+
-)
-
-º  º(E≈"#array-add-last#:¿æ+
-)
-
-º  º(E∆"#array-add-last#:¿ø%
-#
-
-º º(E«"	#map-set#:ª¿&
-$
-
-∫ Ω(»"	#map-set#:µ∫ª%
-#
-
-∏ æ(…"	#map-set#:≥µ*
-(
-
-ø ø(- "#unknown-value#Blist*
-(
-
-ø ø(-À"
-#is-exact#: Bbool!
-
-
-ø ø(-Ã"
-#assume#:À<
-:
-
-ø ø(-Õ"#set-field# __collection_size: "Bint+
-)
-
-ø ø(-Œ"#array-add-last#: ∂%
-#
-
-ø ø(-œ"	#map-set#:≥, %
-#
-
-∂ ¿(–"	#map-set#:Æ	≥'
-%
-
-¬ œ(	—"#new-object#Bdict%
-#
-
-√ √('”"	#map-set#:—“%
-#
-
-ƒ «(’"	#map-set#:—‘'
-%
-
-» Œ(÷"#new-object#Bdict$
-"
-
-… …( ◊"	#map-set#:÷'
-%
-
-  Ã(ÿ"#new-object#Bdict'
-%
-
-À À(0Ÿ"#new-object#Bdict$
-"
-
-À À(/⁄"	#map-set#:Ÿ%
-#
-
-À À(0€"	#map-set#:ÿ<Ÿ%
-#
-
-  Ã(‹"	#map-set#:÷ÿ*
-(
-
-Õ Õ(&›"#unknown-value#Blist*
-(
-
-Õ Õ(&ﬁ"
-#is-exact#:›Bbool!
-
-
-Õ Õ(&ﬂ"
-#assume#:ﬁ<
-:
-
-Õ Õ(&‡"#set-field# __collection_size:›"Bint*
-(
-
-Õ Õ(&·"#array-add-last#:›<%
-#
-
-Õ Õ(&‚"	#map-set#:÷,›%
-#
-
-» Œ(„"	#map-set#:—	÷'
-%
-
-– Í(	‰"#new-object#Bdict%
-#
-
-— —($Ê"	#map-set#:‰Â%
-#
-
-“ ◊(Ë"	#map-set#:‰Á'
-%
-
-ÿ È(È"#new-object#Bdict$
-"
-
-Ÿ Ÿ( Í"	#map-set#:È'
-%
-
-⁄ Á(Î"#new-object#Bdict'
-%
-
-€ ﬁ(Ì"#new-object#Bdict$
-"
-
-‹ ‹((Ó"	#map-set#:Ì%
-#
-
-› ›(G"	#map-set#:ÌÔ&
-$
-
-€ ﬁ(Ò"	#map-set#:ÎÏÌ'
-%
-
-ﬂ" ‚(Û"#new-object#Bdict$
-"
-
-‡ ‡((Ù"	#map-set#:Û%
-#
-
-· ·(Gˆ"	#map-set#:Ûı&
-$
-
-ﬂ ‚(˜"	#map-set#:ÎÚÛ'
-%
-
-„& Ê(˘"#new-object#Bdict$
-"
-
-‰ ‰((˙"	#map-set#:˘%
-#
-
-Â Â(Y¸"	#map-set#:˘˚&
-$
-
-„ Ê(˝"	#map-set#:Î¯˘%
-#
-
-⁄ Á(˛"	#map-set#:ÈÎ*
-(
-
-Ë Ë(5ˇ"#unknown-value#Blist*
-(
-
-Ë Ë(5Ä"
-#is-exact#:ˇBbool!
-
-
-Ë Ë(5Å"
-#assume#:Ä<
-:
-
-Ë Ë(5Ç"#set-field# __collection_size:ˇ"Bint+
-)
-
-Ë Ë(5É"#array-add-last#:ˇÏ+
-)
-
-Ë Ë(5Ñ"#array-add-last#:ˇÚ%
-#
-
-Ë Ë(5Ö"	#map-set#:È,ˇ%
-#
-
-ÿ È(Ü"	#map-set#:‰	È)
-'
-	F Î(á"#unknown-value#Blist)
-'
-	F Î(à"
-#is-exact#:áBbool 
-
-	F Î(â"
-#assume#:à;
-9
-	F Î(ä"#set-field# __collection_size:á"Bint)
-'
-	F Î(ã"#array-add-last#:á)
-'
-	F Î(å"#array-add-last#:á4)
-'
-	F Î(ç"#array-add-last#:áP)
-'
-	F Î(é"#array-add-last#:ák*
-(
-	F Î(è"#array-add-last#:áé*
-(
-	F Î(ê"#array-add-last#:á§*
-(
-	F Î(ë"#array-add-last#:áÆ*
-(
-	F Î(í"#array-add-last#:á—*
-(
-	F Î(ì"#array-add-last#:á‰
-	F Î(á*4/home/craigamcw/Projects/raucle/raucle/mcp_server.py

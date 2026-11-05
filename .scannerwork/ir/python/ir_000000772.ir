@@ -1,59 +1,0 @@
-
-"policy_registry"str
-"lean_development"str
-"issuer_pubkey"strself
-Ë Ë("–0
-.
-
-Ì Ï(	pointers"#new-object#Bdict(
-&
-
-Í Í('"#get-field# _base:6
-4
-
-Í* Í(B"!#get-field# _issuer_pubkey_path:$
-"
-
-Í Í(B"	#binop +#2+:"
- 
-
-Í Í(B"	#map-set#:(
-&
-
-Î Î()	"#get-field# _base:8
-6
-
-Î, Î(F
-"#!#get-field# _policy_registry_path:$
-"
-
-Î Î(F"	#binop +#2+:	
-"
- 
-
-Î Î(F"	#map-set#:9
-7
-
-Ð Ð(&"$"#get-field# _lean_development_path:+
-)
-
-Ð Ð(&"
-__bool__*:BboolH "
-
-Ð Ð(& *
-Ð Ð(
-"»(
-&
-
-Ñ+ Ñ(5"#get-field# _base:9
-7
-
-Ñ8 Ñ(S"$"#get-field# _lean_development_path:$
-"
-
-Ñ+ Ñ(S"	#binop +#2+:&
-$
-
-Ñ Ñ(S"#array-write#:"
-
-Ò Ò(*B/home/craigamcw/Projects/raucle/raucle/integrations/agt_backend.py

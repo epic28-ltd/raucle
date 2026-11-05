@@ -1,33 +1,0 @@
-
-"="str
-
-4intdata
-ß
- ß("Ì,
-*
-
-à à(#"
-builtinslen*:Bint'
-%
-
-à à('"	#binop %#*2%:'
-%
-
-à à('"	#binop -#*2-:'
-%
-
-à à(,"	#binop %#*2%:0
-.
-
-à à(-padding"	#binop *#*2*:$
-"
-
-á% á(3	"	#binop +#2+:7
-5
-
-á á(4
-"
-base64urlsafe_b64decode:	Bbytes
-
-á á(4
-*8/home/craigamcw/Projects/raucle/raucle/trust_registry.py

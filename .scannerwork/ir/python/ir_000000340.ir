@@ -1,42 +1,0 @@
-
-"value"str
-
-"metadata"str
-
-"created_at"str
-
-"strategy"strself
-† †("§&
-$
-
-‡ Œ(	"#new-object#Bdict(
-&
-
-ˆ ˆ("#get-field# value:"
- 
-
-ˆ ˆ("	#map-set#:+
-)
-
-‰ ‰(%"#get-field# strategy:(
-&
-
-‰ ‰(+"#get-field# value:"
- 
-
-‰ ‰(+	"	#map-set#:-
-+
-
-Š Š()"#get-field# created_at:"
- 
-
-Š Š()"	#map-set#:
-+
-)
-
-‹ ‹(%"#get-field# metadata:"
- 
-
-‹ ‹(%"	#map-set#:
-
-‡ Œ(	*0/home/craigamcw/Projects/raucle/raucle/canary.py

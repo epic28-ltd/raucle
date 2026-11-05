@@ -1,20 +1,0 @@
-
-À¶"Return the policy keys the prover does NOT model (â†’ forces UNDECIDED).
-
-    This is the registry-driven check that closes the "decorative proof inputs"
-    hole (Â§8.2): the prover calls this and, if the result is non-empty, returns
-    UNDECIDED rather than a PROVEN that silently ignored those keys.
-    "strpolicy_keys
-Õ Õ(A"Ž,
-*
-
-Ü Ü("
-builtinsset*:Bset#
-!
-
-Ü Ü(3"#unknown-value#'
-%
-
-Ü Ü(3"	#binop -#*2-:
-
-Ü Ü(3*2/home/craigamcw/Projects/raucle/raucle/registry.py

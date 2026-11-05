@@ -1,56 +1,0 @@
-
-"revoked_reason"str
-
-"metadata"str
-	"revoked"str
-"created_at"str
-"public_key_pem"str
-	"issuer"str
-"key_id"strselff f("§'
-%
-g m(	d"#new-object#Bdict'
-%
-h h(!"#get-field# key_id: 
-
-h h(!"	#map-set#:/
--
-i i(1"#get-field# public_key_pem: 
-
-i i(1"	#map-set#:'
-%
-j j(!
-"#get-field# issuer: 
-
-j j(!"	#map-set#:	
-+
-)
-k k()"#get-field# created_at: 
-
-k k()"	#map-set#:(
-&
-l l(#"#get-field# revoked: 
-
-l l(#"	#map-set#:/
--
-n n("#get-field# revoked_reason:)
-'
-n n("
-__bool__*:BboolH"
-n n( *n n(
-"_/
--
-o" o(5"#get-field# revoked_reason:$
-"
-o o(5"#array-write#:"v)
-'
-p p("#get-field# metadata:)
-'
-p p("
-__bool__*:BboolH"
-p p( *p p(
-"Y)
-'
-q q()"#get-field# metadata:$
-"
-q q()"#array-write#:"
-r r(*8/home/craigamcw/Projects/raucle/raucle/trust_registry.py

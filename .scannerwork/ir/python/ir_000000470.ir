@@ -1,12 +1,0 @@
-
-,#"Generate a fresh Ed25519 keypair."strclsb b("¶5
-3
-d d(WEd25519PrivateKey"?python-unknown?'
-%
-f f(/"#unknown-value#Btype¨
-¥
-f f(/"O
-Ccryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PrivateKeygenerate:BCcryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PrivateKey
-
-f f(0"cls:
-f f(0*//home/craigamcw/Projects/raucle/raucle/audit.py

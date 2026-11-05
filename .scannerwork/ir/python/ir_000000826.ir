@@ -1,27 +1,0 @@
-
-kb"Fetch a feed over HTTPS (SSRF-guarded). The caller MUST then verify
-    against a pinned pubkey."strurl
-è è(timeout
-è è(1"†)
-'
-
-í í(O"#unknown-value#Btype#
-!
-
-ﬂ9 ﬂ(H"#unknown-value#8
-6
-
-í% í(M"!
-raucle.feedfetch_https_pinned:#
-!
-
-í í("#unknown-value#(
-&
-
-í í(N"?python-unknown?:3
-1
-
-í í(O	"
-raucle.feed.Feed	from_dict:
-
-í í(O	*./home/craigamcw/Projects/raucle/raucle/feed.py

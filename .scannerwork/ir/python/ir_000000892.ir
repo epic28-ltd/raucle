@@ -1,60 +1,0 @@
-
-¿µ"{kind}[{field!r}] must be a list (JSON array) of values, got {type(v).__name__} {v!r} â€” wrap a single value in a list, e.g. [{v!r}] (sets/tuples/strings are not accepted; Â§8.5)"str
-¥›"Validate that a value-set constraint is a real list/tuple, not a scalar.
-
-    A bare string would otherwise be ``sorted()`` into its characters â€” e.g.
-    ``forbidden_values={'role': 'admin'}`` becomes ``['a','d','i','m','n']`` and
-    the intended value ``'admin'`` is no longer blacklisted. Reject the malformed
-    shape at mint/normalise rather than silently weakening (and signing) the
-    policy.
-    "strkind
-‡ ‡(field
-‡ ‡((v
-‡* ‡(0list"|+
-)
-
-“ “("#is-instance#:Bbool+
-)
-
-“ “("#unaryop !#2!:Bbool "
-
-“ “( *
-“ “("F0
-.
-
-” ˜(		"
-ValueError*:B
-ValueError2
-
-” ˜(		"O9
-7
-
-™ ™(
-"
-builtinsiter*:Btyping.Iterator
-
-™ ™("¢*v*field*kind4
-2
-
-™ ™("
-builtins
-__has_next*:
-Bbool"" 
-
-™ ™( *
-™ ™(H"|0
-.
-
-š š(1member"
-builtinsnext*:
-@
->
-
-š š(1")
-raucle.capability_require_json_scalar:"D.
-,
-
-› ›("
-builtinslist*:Blist
-
-› ›(*4/home/craigamcw/Projects/raucle/raucle/capability.py

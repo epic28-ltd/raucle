@@ -1,413 +1,0 @@
-
-1.0PythonFrontend*py2.BÛ
-
-imports1
-
-extends2
-
-returns3
-
-	has param4
-
-
-calls5
-
-module6
-
-
-class7
-
-method8
-
-function9
-#
-raucle/integrations/crewai.py11
- 
-raucle.integrations.crewai13
-
-
-__future__14
-
-contextvars16
-
-logging18
-
-typing20
-
-raucle.audit22
-
-raucle.capability24
-
-crewai.tools.BaseTool26
-
-crewai.tools28
-1
-+raucle.integrations.crewai.CapabilityDenied30
-
-	Exception32
-:
-4raucle.integrations.crewai.CapabilityDenied.__init__34
-
-NoneType36
-	
-str38
-3
--raucle.integrations.crewai.set_in_force_token40
-3
--raucle.integrations.crewai.get_in_force_token42
-+
-%raucle.integrations.crewai._hash_args44
-
-
-dict46
-.
-(raucle.integrations.crewai._emit_receipt48
-$
-raucle.capability.GateDecision50
-+
-%raucle.integrations.crewai.guard_tool52
-&
- raucle.capability.CapabilityGate54
-,
-&raucle.integrations.crewai.guard_tools56
-
-
-list58
-
-logging.getLogger60
-
-BaseException.__init__62
-
-super64
-
-contextvars.ContextVar66
- 
-contextvars.ContextVar.set68
- 
-contextvars.ContextVar.get70
-
-raucle.audit._sha256_hex72
-"
-raucle.audit._canonical_json74
-
-
-str.encode76
-
-
-repr78
-
-sorted80
-
-
-dict.items82
-
-logging.Logger.exception84
-
-RuntimeError86
-
-getattr88
-,
-&raucle.capability.CapabilityGate.check90
-
-
-type92
-8
-2raucle.integrations.crewai.guard_tool._GuardedTool94
-
-ARG_096
-
-raucle denied ï¿¿: ï¿¿97
-"
-raucle_crewai_in_force_token98
-
-utf-899
-/
-(failed to emit capability receipt for %s100
-M
-Fguard_tool requires crewai. Install with: pip install 'raucle[crewai]'101
-
-ARG_1102
-
-name103J
-
-10
-
-1011 jÞ
-!
-12
-12136 *
-10 (
-
-15
-15146
-
-17
-17166
-
-19
-19186
-
-21
-21206
-
-23
-23226
-
-25
-25246
-
-27
-27266
-
-29
-29286
-
-31
-31307 212
-
-33
-33327
-
-35
-35348 231
-
-37
-37367
-
-39
-39387
-
-41
-41409 212
-
-43
-43429 212
-
-45
-45449 212
-
-47
-47467
-
-49
-49489 212
-
-51
-51507
-
-53
-53529 212
-
-55
-55547
-
-57
-57569 212
-
-59
-59587
-
-61
-61609
-
-63
-63628
-
-65
-65647
-
-67
-67667
-
-69
-69689
-
-71
-71709
-
-73
-73729
-
-75
-75749
-
-77
-77768
-
-79
-79789
-
-81
-81809
-
-83
-83828
-
-85
-85848
-
-87
-87867
-
-89
-89889
-
-91
-91908
-
-93
-93927
-
-95
-95947ró	
-
-12151*
-100 0(#
-
-12171*
-102 2(
-
-12191*
-103 3(
-
-12211*
-104 4(
-
-12231*
-106 :(
-
-12251*
-10< <(G
-
-12271*
-10A A(&
-
-12291*
-10A A(&
-
-31332*
-10I I(
-
-35373*
-10Q	 Q(
-
-35394*
-10Q	 Q(
-
-35394*
-10Q	 Q(
-
-41373*
-10^ ^(
-
-45393*
-10h h(
-
-45474*
-10h h(
-
-49373*
-10o o(
-
-49394*
-10o o(
-
-49394*
-10o o(
-
-49474*
-10o o(
-
-49514*
-10o o(
-
-53554*
-10Œ Œ(
-
-57593*
-10è è(
-
-57594*
-10è è(
-
-57554*
-10è è(
-
-12615*
-10>
- >(%
-'
-35635*
-10R	 R(>2
-
-
-96
-97
-
-35655*
-10R	 R(
-'
-12675*
-10Y> [(2
-
-
-96
-98
-
-41695*
-10` `(
-
-43715*
-10e e(!
-
-45735*
-10j j(2
-
-45755*
-10j j(1
-
-45735*
-10l l(G
-'
-45775*
-10l l(F2
-
-
-96
-99
-
-45795*
-10l l(6
-
-45815*
-10l! l(5
-
-45835*
-10l( l(4
-
-49455*
-10~ ~(+
-*
-49855*
-10ˆ	 ˆ(K2
-
-96
-100
-*
-53875*
-10£ £(e2
-
-96
-101
-+
-53895*
-10¦ ¦(,2
-
-102
-103
-
-53955*
-10å å(
-
-57535*
-10ð ð(C

@@ -138,10 +138,10 @@ def main() -> int:
     # key in the first probe is U+E000 (BMP private-use): code point orders it
     # before the non-BMP key, UTF-16 orders the non-BMP key first.
     probes = [
-        {"name": "probe_non_bmp_key_ordering", "obj": {"a": "x", "\U0001f511": "y", "": "z"}},
+        {"name": "probe_non_bmp_key_ordering", "obj": {"a": "x", "\U0001f511": "y", "\uE000": "z"}},
         {
             "name": "probe_non_bmp_keys_only",
-            "obj": {"\U0001f600": "a", "￿": "b", "\U00010000": "c"},
+            "obj": {"\U0001f600": "a", "\uFFFF": "b", "\U00010000": "c"},
         },
     ]
     # Valid-vector requests: every published canon vector (with its expected

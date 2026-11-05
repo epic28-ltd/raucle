@@ -1,62 +1,0 @@
-
-"issuer_pubkey"str
-˜Ž"Compose the verification-pointers dict; omits the Lean
-        development URL when the deploying organisation does not
-        publish one."str
-	"policy_registry"str
-"lean_development"strself
-é é("–0
-.
-
-í ð(	pointers"#new-object#Bdict(
-&
-
-î î('"#get-field# _base:6
-4
-
-î* î(B"!#get-field# _issuer_pubkey_path:$
-"
-
-î î(B"	#binop +#2+:"
- 
-
-î î(B"	#map-set#:(
-&
-
-ï ï()
-"#get-field# _base:8
-6
-
-ï, ï(F"#!#get-field# _policy_registry_path:$
-"
-
-ï ï(F"	#binop +#2+:
-"
- 
-
-ï ï(F"	#map-set#:	9
-7
-
-ñ ñ(&"$"#get-field# _lean_development_path:+
-)
-
-ñ ñ(&"
-__bool__*:BboolH "
-
-ñ ñ(& *
-ñ ñ(
-"»(
-&
-
-ò+ ò(5"#get-field# _base:9
-7
-
-ò8 ò(S"$"#get-field# _lean_development_path:$
-"
-
-ò+ ò(S"	#binop +#2+:&
-$
-
-ò ò(S"#array-write#:"
-
-ó ó(*:/home/craigamcw/Projects/raucle/raucle/integrations/agt.py

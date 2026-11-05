@@ -1,32 +1,0 @@
-
-C:"Observed-but-unauthorised traffic summary (counts only)."str
-
-"tools"str
-falsebool
-"learn_mode"strself
-¼ ¼("¾&
-$
-
-¾ È(	"#new-object#Bdict)
-'
-
-¿' ¿(2"#get-field# config:-
-+
-
-¿ ¿(H"
-builtinsgetattr*:1
-/
-
-¿ ¿(I"#dependent-value#*:Bbool"
- 
-
-¿ ¿(I	"	#map-set#:-
-+
-
-À Ç("?python-unknown?:Bdict"
- 
-
-À Ç("	#map-set#:
-
-
-¾ È(	*1/home/craigamcw/Projects/raucle/raucle/gateway.py

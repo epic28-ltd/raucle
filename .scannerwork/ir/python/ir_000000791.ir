@@ -1,52 +1,0 @@
-
-	
-"severity"str
-"tool"str
-
-"category"str
-"field"str
-	"rule_id"str
-
-"location"str
-
-"evidence"str
-	"message"strselfB B("½$
-"
-C L(	"#new-object#Bdict(
-&
-D D(#"#get-field# rule_id: 
-
-D D(#"	#map-set#:)
-'
-E E(%"#get-field# category: 
-
-E E(%"	#map-set#:)
-'
-F F(%
-"#get-field# severity:&
-$
-F F(+"#get-field# value:
- 
-
-F F(+"	#map-set#:	%
-#
-G G("#get-field# tool: 
-
-G G("	#map-set#:&
-$
-H H("#get-field# field: 
-
-H H("	#map-set#:(
-&
-I I(#"#get-field# message: 
-
-I I(#"	#map-set#:)
-'
-J J(%"#get-field# evidence: 
-
-J J(%"	#map-set#:)
-'
-K K(%"#get-field# location: 
-
-K K(%"	#map-set#:
-C L(	*5/home/craigamcw/Projects/raucle/raucle/mcp_scanner.py

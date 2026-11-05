@@ -1,13 +1,0 @@
-
-ËÁ"Default resolver: read the in-force token from the asyncio context.
-
-    Deployers can substitute a custom resolver by passing
-    ``token_resolver=...`` to ``RaucleFunctionMiddleware``.
-    "str_context
-ˆ ˆ(#"_K
-I
-
-Ž Ž("9
-#raucle.integrations.agent_frameworkget_in_force_token
-
-Ž Ž(*F/home/craigamcw/Projects/raucle/raucle/integrations/agent_framework.py

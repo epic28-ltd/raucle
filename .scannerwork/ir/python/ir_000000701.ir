@@ -1,100 +1,0 @@
-
-
-3int
-"S3518"bool
-"division by zero"bool
-"declining"str
-0.05float
-"a"bool
-"rising"str
-"stable"str
-
-0int
-G>"Determine the risk trend based on recent vs overall average."strself
-ï ï("©+
-)
-
-ñ ñ("#get-field# _history:,
-*
-
-ñ ñ("
-builtinslen*:Bint*
-(
-
-ñ ñ(!"	#binop <#2<:Bbool "
-
-ñ ñ(! *
-ñ ñ(
-"
-
-ò ò("ó5
-3
-
-ô ô(6scores"?python-unknown?:Blist'
-%
-
-õ õ(!	"
-builtinssum*:,
-*
-
-õ$ õ(/
-"
-builtinslen*:Bint,
-*
-
-õ õ(/"
-#binop !=#2!=:
-Bbool"
- 
-
-õ õ(/"
-#assert#:@
->
-
-õ õ(/overall_avg"#dependent-value#*:	
-Bfloat)
-'
-
-ö ö($"#unknown-value#Blist'
-%
-
-ö ö(%"
-builtinssum*:?
-=
-
-ö ö()
-last_3_avg"#dependent-value#*:Bfloat0
-.
-
-ø ø(*"#dependent-value#:Bfloat+
-)
-
-ø ø(*"?python-unknown?*:+
-)
-
-ø ø(*"
-__bool__*:BboolH,"*
-
-ø ø(* *
-ø ø(
-2
-ú ú("
-
-ù ù("³3
-1
-
-ú ú(,"#dependent-value#*:Bfloat+
-)
-
-ú ú(,"?python-unknown?*:+
-)
-
-ú ú(,"
-__bool__*:BboolH "
-
-ú ú(, *
-ú ú("
-
-û û("
-
-ü ü(*1/home/craigamcw/Projects/raucle/raucle/session.py

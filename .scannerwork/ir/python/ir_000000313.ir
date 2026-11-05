@@ -1,8 +1,0 @@
-
-;2"Return the number of currently tracked sessions."strselfW W(!"h*
-(
-Y Y(!"#get-field# _sessions:*
-(
-Y Y(""
-builtinslen*:Bint
-Y Y("*4/home/craigamcw/Projects/raucle/raucle/middleware.py

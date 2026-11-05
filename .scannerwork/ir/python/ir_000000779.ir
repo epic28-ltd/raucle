@@ -1,19 +1,0 @@
-
-"%Y-%m-%dT%H:%M:%S"str
-0'".{int((time.time() % 1) * 1000):03d}Z"str"»#
-!
-
-Á. Á(;"#unknown-value#*
-(
-
-Á. Á(;"
-timegmtime:Btuple+
-)
-
-Á Á(<"
-timestrftime:Bstr)
-'
-
-Á Ã("	#binop +#2+:Bstr
-
-Á Ã(*@/home/craigamcw/Projects/raucle/raucle/integrations/langchain.py
