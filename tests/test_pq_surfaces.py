@@ -170,11 +170,10 @@ class TestTrustRegistryHybrid:
     def test_wrong_operator_pq_key_rejected(self, hybrid_signer, pq_keys):
         reg, reg_path, pq_kid, pq_pub = self._build(hybrid_signer, pq_keys)
         other_pub = pq_generate()[1]
+        op_pem = hybrid_signer.public_key_pem()
+        bad_pq_pem = pq_public_key_pem(other_pub)
         with pytest.raises(RegistryIntegrityError):
-            reg.verify_integrity(
-                operator_public_pem=hybrid_signer.public_key_pem(),
-                operator_pq_public_pem=pq_public_key_pem(other_pub),
-            )
+            reg.verify_integrity(operator_public_pem=op_pem, operator_pq_public_pem=bad_pq_pem)
         os.unlink(reg_path)
 
     def test_issuer_uniqueness_allows_hybrid_pair(self, hybrid_signer, pq_keys):
@@ -298,9 +297,6 @@ class TestHybridCapabilityTokens:
             issuer.mint(agent_id="agent:x", tool="t_tool", quantum=True)
 
     def test_foreign_pq_key_type_rejected(self, pq_keys):
+        ed_key = Ed25519PrivateKey.generate()
         with pytest.raises(TypeError, match="MLDSA65PrivateKey"):
-            CapabilityIssuer(
-                issuer="bad.type",
-                private_key=Ed25519PrivateKey.generate(),
-                pq_private=Ed25519PrivateKey.generate(),
-            )
+            CapabilityIssuer(issuer="bad.type", private_key=ed_key, pq_private=ed_key)
