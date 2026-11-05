@@ -110,37 +110,51 @@ def diff_policy_rules(baseline: Any, candidate: Any) -> dict[str, Any]:
     return {"opened": opened, "closed": closed, "changed": changed}
 
 
+def _constraint_widens(
+    base_rule_constraints: dict[str, Any], cand_rule_constraints: dict[str, Any], fld: str
+) -> bool:
+    """Whether one changed constraint field moved the bound outwards.
+
+    Conservative: any widening direction marks the rule; the receipt
+    evidence still governs the sentence.
+    """
+    if fld == "forbidden_values":
+        base_bads = base_rule_constraints.get("forbidden_values", {})
+        cand_bads = cand_rule_constraints.get("forbidden_values", {})
+        if any(
+            set(base_bads.get(f, [])) - set(cand_bads.get(f, []))
+            for f in set(base_bads) | set(cand_bads)
+        ):
+            return True
+    return any(
+        c > b if bigger_widens else c < b
+        for key, bigger_widens in _WIDEN_FIELDS
+        if fld == key
+        for f in set(base_rule_constraints.get(key, {})) & set(cand_rule_constraints.get(key, {}))
+        for b, c in (
+            (base_rule_constraints.get(key, {})[f], cand_rule_constraints.get(key, {})[f]),
+        )
+        if isinstance(b, (int, float)) and isinstance(c, (int, float))
+    )
+
+
 def _widened_tools(rule_diff: dict[str, Any]) -> list[dict[str, Any]]:
     """Rules whose change plausibly WIDENS the authority: a bound moved
     outwards or a forbidden value was removed. Conservative: a change in
     any widening direction marks the rule; the receipt evidence still
     governs the sentence."""
-    widened: list[dict[str, Any]] = []
-    for row in rule_diff["changed"]:
-        base_rule_constraints = row.get("_baseline_constraints", {})
-        cand_rule_constraints = row.get("_candidate_constraints", {})
-        widens = False
-        for fld in row["changed_constraint_fields"]:
-            if fld == "forbidden_values":
-                base_bads = base_rule_constraints.get("forbidden_values", {})
-                cand_bads = cand_rule_constraints.get("forbidden_values", {})
-                if any(
-                    set(base_bads.get(f, [])) - set(cand_bads.get(f, []))
-                    for f in set(base_bads) | set(cand_bads)
-                ):
-                    widens = True
-            for key, bigger_widens in _WIDEN_FIELDS:
-                if fld != key:
-                    continue
-                base_bounds = base_rule_constraints.get(key, {})
-                cand_bounds = cand_rule_constraints.get(key, {})
-                for f in set(base_bounds) & set(cand_bounds):
-                    b, c = base_bounds[f], cand_bounds[f]
-                    if isinstance(b, (int, float)) and isinstance(c, (int, float)):
-                        widens = widens or (c > b if bigger_widens else c < b)
-        if widens:
-            widened.append(row)
-    return widened
+    return [
+        row
+        for row in rule_diff["changed"]
+        if any(
+            _constraint_widens(
+                row.get("_baseline_constraints", {}),
+                row.get("_candidate_constraints", {}),
+                fld,
+            )
+            for fld in row["changed_constraint_fields"]
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -253,17 +267,13 @@ def _z3_check_negation(assertion_builder: Any) -> bool | None:
     return str(solver.check()) == "unsat"
 
 
-def _check_threshold_invariant_z3(
-    baseline_c: dict[str, Any], candidate_c: dict[str, Any]
-) -> tuple[bool, list[str]]:
-    """Every shared numeric bound only tightens baseline -> candidate."""
-    widenings = _threshold_widenings(baseline_c, candidate_c)
+def _make_threshold_negation(baseline_c: dict[str, Any], candidate_c: dict[str, Any]):
+    """Negation builder for the threshold invariant: assert SOME shared
+    bound moved outwards; unsat proves tightening. The widenings above
+    are the concrete witnesses; the solver run certifies the general
+    claim for the modelled kinds actually present."""
 
     def _negation(z3: Any, solver: Any) -> None:
-        # Real check over symbolic bounds: assert SOME shared bound moved
-        # outwards; unsat proves tightening. The widenings above are the
-        # concrete witnesses; the solver run certifies the general claim
-        # for the modelled kinds actually present.
         terms = []
         counter = 0
         for key, bigger_widens in _WIDEN_FIELDS:
@@ -283,7 +293,15 @@ def _check_threshold_invariant_z3(
         else:
             solver.add(z3.BoolVal(False))
 
-    holds = _z3_check_negation(_negation)
+    return _negation
+
+
+def _check_threshold_invariant_z3(
+    baseline_c: dict[str, Any], candidate_c: dict[str, Any]
+) -> tuple[bool, list[str]]:
+    """Every shared numeric bound only tightens baseline -> candidate."""
+    widenings = _threshold_widenings(baseline_c, candidate_c)
+    holds = _z3_check_negation(_make_threshold_negation(baseline_c, candidate_c))
     if holds is None:
         return False, ["z3 unavailable"]
     notes = (
@@ -297,16 +315,13 @@ def _check_threshold_invariant_z3(
     return not widenings and holds, notes
 
 
-def _check_denylist_invariant_z3(
-    baseline_c: dict[str, Any], candidate_c: dict[str, Any]
-) -> tuple[bool, list[str]]:
-    """Every value forbidden at baseline stays forbidden under candidate."""
-    dropped = _denylist_widenings(baseline_c, candidate_c)
+def _make_denylist_negation(baseline_c: dict[str, Any], candidate_c: dict[str, Any]):
+    """Negation builder for the deny-list invariant: model every forbidden
+    value across both versions as a distinct Int index; assert exists a
+    value forbidden at baseline whose candidate-membership is absent.
+    Unsat proves the superset."""
 
     def _negation(z3: Any, solver: Any) -> None:
-        # Model every forbidden value across both versions as a distinct
-        # Int index; assert exists a value forbidden at baseline whose
-        # candidate-membership is absent. Unsat proves the superset.
         terms, counter = [], 0
         for f in set(baseline_c.get("forbidden_values", {})) & set(
             candidate_c.get("forbidden_values", {})
@@ -331,7 +346,15 @@ def _check_denylist_invariant_z3(
         else:
             solver.add(z3.BoolVal(False))
 
-    holds = _z3_check_negation(_negation)
+    return _negation
+
+
+def _check_denylist_invariant_z3(
+    baseline_c: dict[str, Any], candidate_c: dict[str, Any]
+) -> tuple[bool, list[str]]:
+    """Every value forbidden at baseline stays forbidden under candidate."""
+    dropped = _denylist_widenings(baseline_c, candidate_c)
+    holds = _z3_check_negation(_make_denylist_negation(baseline_c, candidate_c))
     if holds is None:
         return False, ["z3 unavailable"]
     notes = [
@@ -339,6 +362,98 @@ def _check_denylist_invariant_z3(
         for w in dropped[:3]
     ]
     return not dropped and holds, notes
+
+
+def _receipt_receipts_for_tool(flipped_rows: list[dict[str, Any]], tool: str) -> list[str]:
+    """Sorted receipt hashes the sampled evidence contributes for a tool."""
+    return sorted({str(d.get("receipt_hash", "")) for d in flipped_rows if d.get("tool") == tool})
+
+
+def _pair_rule_rows(
+    base_rules: list[Any], cand_rules: list[Any]
+) -> list[tuple[Any, Any, str, str]]:
+    """Pair rules by identity where rule IDs match, else pairwise in stable order."""
+    cand_by_id = {r.id: r for r in cand_rules}
+    seen: set[str] = set()
+    pairs: list[tuple[Any, Any, str, str]] = []
+    for b in base_rules:
+        c = cand_by_id.get(b.id)
+        if c is not None:
+            seen.add(c.id)
+            pairs.append((b, c, b.id, c.id))
+    pairs.extend((c, c, c.id, c.id) for c in cand_rules if c.id not in seen)
+    return pairs
+
+
+def _append_invariant_rows(
+    invariants: list[dict[str, Any]],
+    pairs: list[tuple[Any, Any, str, str]],
+    tool: str,
+    checkers: tuple[Any, Any],
+    mode: str,
+    receipts: list[str],
+) -> None:
+    """Check each baseline/candidate pair and append the invariant rows."""
+    for b, c, b_id, c_id in pairs:
+        bc = b.to_mint_kwargs()["constraints"]
+        cc = c.to_mint_kwargs()["constraints"]
+        if not bc or not cc:
+            continue
+        for name_index, name in enumerate(("threshold-tightening", "deny-list-superset")):
+            try:
+                holds, notes = checkers[name_index](bc, cc)
+            except Exception as exc:  # prover grammar errors stay honest
+                holds, notes = False, [f"checker error: {exc}"]
+            invariants.append(
+                {
+                    "invariant": name,
+                    "tool": tool,
+                    "baseline_rule_id": b_id,
+                    "candidate_rule_id": c_id,
+                    "holds_in_both": bool(holds),
+                    "mode": mode,
+                    "notes": notes,
+                    "receipt_ids": list(receipts),
+                }
+            )
+
+
+def _withdrawn_invariant_rows(
+    tool: str, base_rules: list[Any], mode: str, receipts: list[str]
+) -> list[dict[str, Any]]:
+    """Rows for rules present only at baseline: the path closes."""
+    return [
+        {
+            "invariant": "path-closed-conservatively",
+            "tool": tool,
+            "baseline_rule_id": b.id,
+            "candidate_rule_id": None,
+            "holds_in_both": True,
+            "mode": mode,
+            "notes": ["rule withdrawn under candidate: the authority path closes"],
+            "receipt_ids": receipts,
+        }
+        for b in base_rules
+    ]
+
+
+def _opened_invariant_rows(
+    tool: str, cand_rules: list[Any], mode: str, receipts: list[str]
+) -> list[dict[str, Any]]:
+    """Rows for rules present only under candidate: the path opens."""
+    return [
+        {
+            "invariant": "path-opened",
+            "tool": tool,
+            "baseline_rule_id": None,
+            "candidate_rule_id": c.id,
+            "holds_in_both": False,
+            "mode": mode,
+            "notes": ["new grant under candidate: the authority path opens"],
+            "receipt_ids": receipts,
+        }
+        for c in cand_rules
+    ]
 
 
 def invariant_diff(
@@ -374,95 +489,30 @@ def invariant_diff(
     for r in candidate.policies:
         cand_by_tool.setdefault(r.tool, []).append(r)
 
+    if z3_available:
+        checkers = (_check_threshold_invariant_z3, _check_denylist_invariant_z3)
+    else:
+        checkers = (
+            lambda b, c: (not _threshold_widenings(b, c), []),
+            lambda b, c: (not _denylist_widenings(b, c), []),
+        )
+
     invariants: list[dict[str, Any]] = []
     for tool in sorted(set(base_by_tool) | set(cand_by_tool)):
         base_rules = base_by_tool.get(tool)
         cand_rules = cand_by_tool.get(tool)
-        # Receipts the sampled evidence contributes for this tool.
-        affected_receipts = sorted(
-            {str(d.get("receipt_hash", "")) for d in flipped_rows if d.get("tool") == tool}
-        )
         if not base_rules and not cand_rules:
             continue
-
-        checker = (
-            (_check_threshold_invariant_z3, _check_denylist_invariant_z3)
-            if z3_available
-            else (
-                lambda b, c: (not _threshold_widenings(b, c), []),
-                lambda b, c: (not _denylist_widenings(b, c), []),
-            )
-        )
-
-        def _pair_rows(
-            pairs: list[tuple[Any, Any, str, str]],
-            pair_tool: str = tool,
-            pair_checkers: tuple[Any, Any] = (checker[0], checker[1]),
-            pair_receipts: list[str] = affected_receipts,
-        ) -> None:
-            for b, c, b_id, c_id in pairs:
-                bc, cc = b.to_mint_kwargs()["constraints"], c.to_mint_kwargs()["constraints"]
-                if not bc or not cc:
-                    continue
-                for name_index, name in enumerate(("threshold-tightening", "deny-list-superset")):
-                    try:
-                        holds, notes = pair_checkers[name_index](bc, cc)
-                    except Exception as exc:  # prover grammar errors stay honest
-                        holds, notes = False, [f"checker error: {exc}"]
-                    invariants.append(
-                        {
-                            "invariant": name,
-                            "tool": pair_tool,
-                            "baseline_rule_id": b_id,
-                            "candidate_rule_id": c_id,
-                            "holds_in_both": bool(holds),
-                            "mode": mode,
-                            "notes": notes,
-                            "receipt_ids": list(pair_receipts),
-                        }
-                    )
-
+        # Receipts the sampled evidence contributes for this tool.
+        receipts = _receipt_receipts_for_tool(flipped_rows, tool)
         if base_rules and cand_rules:
-            # Pair rules by identity where rule IDs match, else pairwise
-            # in stable order.
-            cand_by_id = {r.id: r for r in cand_rules}
-            seen: set[str] = set()
-            pairs: list[tuple[Any, Any, str, str]] = []
-            for b in base_rules:
-                c = cand_by_id.get(b.id)
-                if c is not None:
-                    seen.add(c.id)
-                    pairs.append((b, c, b.id, c.id))
-            pairs.extend((c, c, c.id, c.id) for c in cand_rules if c.id not in seen)
-            _pair_rows(pairs)
+            _append_invariant_rows(
+                invariants, _pair_rule_rows(base_rules, cand_rules), tool, checkers, mode, receipts
+            )
         elif base_rules:
-            for b in base_rules:
-                invariants.append(
-                    {
-                        "invariant": "path-closed-conservatively",
-                        "tool": tool,
-                        "baseline_rule_id": b.id,
-                        "candidate_rule_id": None,
-                        "holds_in_both": True,
-                        "mode": mode,
-                        "notes": ["rule withdrawn under candidate: the authority path closes"],
-                        "receipt_ids": affected_receipts,
-                    }
-                )
+            invariants.extend(_withdrawn_invariant_rows(tool, base_rules, mode, receipts))
         else:
-            for c in cand_rules:
-                invariants.append(
-                    {
-                        "invariant": "path-opened",
-                        "tool": tool,
-                        "baseline_rule_id": None,
-                        "candidate_rule_id": c.id,
-                        "holds_in_both": False,
-                        "mode": mode,
-                        "notes": ["new grant under candidate: the authority path opens"],
-                        "receipt_ids": affected_receipts,
-                    }
-                )
+            invariants.extend(_opened_invariant_rows(tool, cand_rules or [], mode, receipts))
     return {"mode": mode, "z3_invoked": z3_available, "invariants": invariants}
 
 
@@ -521,6 +571,51 @@ class DeltaReport:
         return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
 
 
+def _collect_receipt_tools(
+    chain_graphs: dict[str, dict[str, Any]] | None,
+) -> dict[str, str]:
+    """The original per-receipt tool, from the batch's scanner-side record:
+    BatchReport.decisions does NOT carry the tool, so rule <-> receipt
+    association falls back to chain-graph receipt nodes when present."""
+    receipt_tools: dict[str, str] = {}
+    for graph in (chain_graphs or {}).values():
+        root = graph.get("root", "")
+        for n in graph.get("nodes", []):
+            if n.get("id") == root and n.get("kind") == "receipt":
+                receipt_tools[root] = str(n.get("tool", ""))
+    return receipt_tools
+
+
+def _register_sentence(
+    flips: list[dict[str, Any]],
+    denied_receipts: list[str],
+    widened_tools: list[dict[str, Any]],
+    invariants: dict[str, Any],
+) -> str:
+    """The board-pack register sentence. Only numbers with traceable
+    objects beside them are quoted."""
+    if not flips:
+        sentence = "this change would flip no sampled receipts"
+    else:
+        sentence = (
+            f"this change would have denied {len(denied_receipts)} of {len(flips)} flipped receipts"
+        )
+    widened_named = sorted({r["tool"] for r in widened_tools})
+    if widened_named:
+        sentence += (
+            f", widened {', '.join(widened_named)}'s scope "
+            f"(rules: {', '.join(sorted(r['rule_id'] for r in widened_tools))})"
+        )
+    preserved = sorted(
+        {inv["invariant"] for inv in invariants["invariants"] if inv["holds_in_both"]}
+    )
+    if preserved:
+        sentence += f", invariant {' and '.join(preserved)} preserved"
+    if not invariants["z3_invoked"]:
+        sentence += " (heuristic invariant diff (z3 not invoked))"
+    return sentence
+
+
 def build_delta_report(
     batch: Any,
     *,
@@ -562,12 +657,7 @@ def build_delta_report(
     # The original per-receipt tool, from the batch's scanner-side record:
     # BatchReport.decisions does NOT carry the tool, so rule <-> receipt
     # association falls back to chain-graph policy nodes when present.
-    receipt_tools: dict[str, str] = {}
-    for graph in (chain_graphs or {}).values():
-        root = graph.get("root", "")
-        for n in graph.get("nodes", []):
-            if n.get("id") == root and n.get("kind") == "receipt":
-                receipt_tools[root] = str(n.get("tool", ""))
+    receipt_tools = _collect_receipt_tools(chain_graphs)
 
     # 2. Authority paths opened / closed (policy diff), with receipt trace.
     rule_diff = diff_policy_rules(baseline_policy, candidate_policy)
@@ -609,29 +699,11 @@ def build_delta_report(
     # objects beside them are quoted.
     gaps: list[str] = []
     if not flips:
-        sentence = "this change would flip no sampled receipts"
         gaps.append(
             "the bounded sample produced no flips: the register entry "
             "reflects the bounded sample only"
         )
-    else:
-        sentence = (
-            f"this change would have denied {len(denied_receipts)} of "
-            f"{len(flipped_ids)} flipped receipts"
-        )
-    widened_named = sorted({r["tool"] for r in widened_tools})
-    if widened_named:
-        sentence += (
-            f", widened {', '.join(widened_named)}'s scope "
-            f"(rules: {', '.join(sorted(r['rule_id'] for r in widened_tools))})"
-        )
-    preserved = sorted(
-        {inv["invariant"] for inv in invariants["invariants"] if inv["holds_in_both"]}
-    )
-    if preserved:
-        sentence += f", invariant {' and '.join(preserved)} preserved"
-    if not invariants["z3_invoked"]:
-        sentence += " (heuristic invariant diff (z3 not invoked))"
+    sentence = _register_sentence(flips, denied_receipts, widened_tools, invariants)
 
     if not invariants["z3_invoked"]:
         gaps.append("z3 not installed: invariant section is heuristic, not a proof")
