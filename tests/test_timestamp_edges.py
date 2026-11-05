@@ -474,7 +474,8 @@ def test_verify_anchor_standalone_ok(tmp_path, mock_tsa):
 
 def test_verify_anchor_bad_operator_signature(tmp_path, mock_tsa):
     _, res = _mint_anchor(tmp_path, mock_tsa, name="c4")
-    doc = json.loads(open(res["anchor"], encoding="utf-8").read())
+    with open(res["anchor"], encoding="utf-8") as fh:
+        doc = json.load(fh)
     doc["jws"] = doc["jws"][:-2] + ("AA" if doc["jws"][-2:] != "AA" else "BB")
     p = tmp_path / "tampered.json"
     p.write_text(json.dumps(doc), encoding="utf-8")
@@ -587,7 +588,8 @@ def test_verify_anchor_unsupported_mode_named(tmp_path):
 
 def test_verify_anchor_standalone_token_invalid(tmp_path, mock_tsa):
     _, res = _mint_anchor(tmp_path, mock_tsa, name="c6")
-    doc = json.loads(open(res["anchor"], encoding="utf-8").read())
+    with open(res["anchor"], encoding="utf-8") as fh:
+        doc = json.load(fh)
     b64u = base64.urlsafe_b64encode
     payload = json.loads(base64.urlsafe_b64decode(doc["jws"].split(".")[1] + "=="))
     token_b64 = payload["x_timestamp"]["token"]
@@ -613,7 +615,8 @@ def test_verify_anchor_gen_time_disagreement(tmp_path, mock_tsa):
     from cryptography.hazmat.primitives import serialization
 
     _, res = _mint_anchor(tmp_path, mock_tsa, name="c7")
-    doc = json.loads(open(res["anchor"], encoding="utf-8").read())
+    with open(res["anchor"], encoding="utf-8") as fh:
+        doc = json.load(fh)
     payload = json.loads(base64.urlsafe_b64decode(doc["jws"].split(".")[1] + "=="))
     x_ts = dict(payload["x_timestamp"])
     x_ts["gen_time"] = "1999-12-31T23:59:59+00:00"
@@ -654,7 +657,8 @@ def test_verify_anchor_token_copy_disagreement(tmp_path, mock_tsa):
     from raucle.timestamp import anchor_payload
 
     chain, res = _mint_anchor(tmp_path, mock_tsa, name="c8")
-    doc = json.loads(open(res["anchor"], encoding="utf-8").read())
+    with open(res["anchor"], encoding="utf-8") as fh:
+        doc = json.load(fh)
     parent, digest = chain_head_digest(chain)
     payload = anchor_payload(
         digest=digest,
