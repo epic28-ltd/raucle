@@ -373,3 +373,28 @@ def test_projection_reports_input_digests(tmp_path, gw):
     assert summary["receipts_digest"] == prefix + hashlib.sha256(receipts.read_bytes()).hexdigest()
     assert summary["audit_chain_digest"] == prefix + hashlib.sha256(audit.read_bytes()).hexdigest()
     assert summary["out"] == str(out)
+
+
+# ------------------------------------------------ bug-hunt round 1 fuzz ---
+def test_projection_envelope_with_nonstring_jws_counts_malformed(tmp_path):
+    """A receipt envelope whose jws is not a string (e.g. a null entry or the
+    number 123) is a malformed line: counted and skipped, never an
+    AttributeError from the tamper check reading into a non-string."""
+    p = tmp_path / "receipts.jsonl"
+    p.write_text(
+        json.dumps({"receipt_hash": "sha256:" + "0" * 64, "jws": 123}) + "\nnull\n",
+        encoding="utf-8",
+    )
+    summary = project_pack_chain(p, out_path=tmp_path / "proj1.jsonl")
+    assert summary["malformed_receipt_lines"] == 2
+    assert summary["projected_receipts"] == 0
+
+
+def test_projection_envelope_without_compact_jws_counts_malformed(tmp_path):
+    """A jws that is a string but not a compact JWS (no dot-separated
+    segments) is a malformed line; the projection completes instead of
+    crashing in the tamper check or payload decoder."""
+    p = tmp_path / "receipts.jsonl"
+    p.write_text(json.dumps({"receipt_hash": "x", "jws": "not-a-jws"}) + "\n")
+    summary = project_pack_chain(p, out_path=tmp_path / "proj2.jsonl")
+    assert summary["malformed_receipt_lines"] == 1

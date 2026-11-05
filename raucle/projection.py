@@ -128,6 +128,13 @@ def _receipt_rows(
         except (json.JSONDecodeError, KeyError, TypeError):
             malformed += 1
             continue
+        # An envelope whose jws is not a compact JWS string (a non-string, an
+        # empty string, or a non-dot-separated one) is a malformed line, the
+        # same as an unparseable line: named skip, not a crash from the
+        # tamper check or the payload decoder reaching into a non-string.
+        if not (isinstance(jws, str) and jws.count(".") == 2 and receipt_hash):
+            malformed += 1
+            continue
         try:
             rows.append(_receipt_row(jws, receipt_hash, line_no, public_pem, verifiers))
         except _MalformedReceipt:
