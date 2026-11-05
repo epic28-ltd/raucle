@@ -119,10 +119,13 @@ class TestCompleteCorpusResolution:
     def test_deterministic_output(self, gw: RaucleGateway) -> None:
         r0 = _emit(gw)
         r1 = _emit(gw, parents=[r0])
+        # S5863: compare a baseline snapshot against repeat calls so the assertion
+        # has a distinct actual expression; the determinism guarantee is unchanged.
+        baseline = resolve_chain_graph(r1, _load_records(gw), public_keys=_keys(gw))
         for _ in range(2):
             assert resolve_chain_graph(
                 r1, _load_records(gw), public_keys=_keys(gw)
-            ) == resolve_chain_graph(r1, _load_records(gw), public_keys=_keys(gw))
+            ) == baseline
 
 
 class TestSignatureStates:
