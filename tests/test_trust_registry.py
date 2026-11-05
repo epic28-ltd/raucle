@@ -31,7 +31,9 @@ class TestPublishResolve:
         iss = _issuer("org-a")
         kid = reg.publish(iss.public_key_pem, issuer="Org A")
         rec = reg.resolve(kid)
-        assert rec is not None and rec.issuer == "Org A" and not rec.revoked
+        assert rec is not None
+        assert rec.issuer == "Org A"
+        assert not rec.revoked
         assert reg.public_key(kid) == iss.public_key_pem
 
     def test_unknown_key_is_none_fail_closed(self, tmp_path):
@@ -50,7 +52,8 @@ class TestRevocation:
         assert reg.is_revoked(kid)
         # history preserved: the record is still resolvable, marked revoked
         rec = reg.resolve(kid)
-        assert rec.revoked and rec.revoked_reason == "compromised"
+        assert rec.revoked
+        assert rec.revoked_reason == "compromised"
 
     def test_republish_reactivates(self, tmp_path):
         reg = TrustRegistry(tmp_path / "r.jsonl")
@@ -143,7 +146,8 @@ class TestPersistenceRoundTrip:
         reg2 = TrustRegistry(path)  # reopen
         k2 = reg2.publish(_issuer("b").public_key_pem, issuer="B")
         reg3 = TrustRegistry(path)
-        assert reg3.public_key(k1) and reg3.public_key(k2)
+        assert reg3.public_key(k1)
+        assert reg3.public_key(k2)
 
 
 def test_duplicate_issuer_name_rejected(tmp_path):

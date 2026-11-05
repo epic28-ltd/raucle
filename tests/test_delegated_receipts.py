@@ -35,7 +35,7 @@ policies:
 """
 
 
-@pytest.fixture()
+@pytest.fixture
 def setup(tmp_path):
     base_config = GatewayConfig(
         host="127.0.0.1",
@@ -154,9 +154,12 @@ def test_delegation_ledger_registers_and_resolves(tmp_path):
     hash1 = ledger.register(root, "agent:svc", verifying_key=issuer)
     child = issuer.attenuate(root, extra_constraints={"max_calls_per_hour": 5})
     hash2 = ledger.register(child, "agent:svc", verifying_key=issuer)
-    assert len(hash1) == 64 and len(hash2) == 64 and hash1 != hash2
+    assert len(hash1) == 64
+    assert len(hash2) == 64
+    assert hash1 != hash2
     resolved = ledger.resolver()(child.parent_id)
-    assert resolved is not None and resolved.token_id == root.token_id
+    assert resolved is not None
+    assert resolved.token_id == root.token_id
 
 
 def test_delegated_token_allows_through_gate_with_ledger(tmp_path):
