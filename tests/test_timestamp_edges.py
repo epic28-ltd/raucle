@@ -590,7 +590,6 @@ def test_verify_anchor_standalone_token_invalid(tmp_path, mock_tsa):
     _, res = _mint_anchor(tmp_path, mock_tsa, name="c6")
     with open(res["anchor"], encoding="utf-8") as fh:
         doc = json.load(fh)
-    b64u = base64.urlsafe_b64encode
     payload = json.loads(base64.urlsafe_b64decode(doc["jws"].split(".")[1] + "=="))
     token_b64 = payload["x_timestamp"]["token"]
     tok = bytearray(base64.b64decode(token_b64))
@@ -602,7 +601,9 @@ def test_verify_anchor_standalone_token_invalid(tmp_path, mock_tsa):
         json.dumps(
             {
                 **doc,
-                "jws": f"{hdr}.{base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b'=').decode()}.{sig}",
+                "jws": (
+                    f"{hdr}.{base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b'=').decode()}.{sig}"
+                ),
             }
         ),
         encoding="utf-8",
@@ -713,14 +714,16 @@ def test_retimestamp_plan_ledger_edges(tmp_path, mock_tsa):
 def test_retimestamp_plan_unanchored_tail(tmp_path, mock_tsa):
     chain = _mint_receipt_chain(tmp_path, rows=2, retention_days=3650, name="r2")
     res = _append_anchor_line(tmp_path, chain, mock_tsa, "r2-out")
-    anchor_doc = json.loads(open(res["anchor"], encoding="utf-8").read())
+    with open(res["anchor"], encoding="utf-8") as fh:
+        anchor_doc = json.load(fh)
     extra = _mint_receipt_chain(tmp_path, rows=2, retention_days=3650, name="r3")
     with open(chain, "a", encoding="utf-8") as fh:
         fh.write(
             json.dumps({"receipt_hash": anchor_doc["receipt_hash"], "jws": anchor_doc["jws"]})
             + "\n"
         )
-        fh.writelines(open(extra, encoding="utf-8").readlines())
+        with open(extra, encoding="utf-8") as efh:
+            fh.writelines(efh.readlines())
     plan = retimestamp_plan(chain)
     assert plan["anchors"], "the appended anchor must register"
     assert plan["anchors"][-1]["token_valid"] is True
@@ -731,10 +734,12 @@ def test_retimestamp_plan_unanchored_tail(tmp_path, mock_tsa):
 def test_retimestamp_plan_invalid_token_needs_restamp(tmp_path, mock_tsa):
     chain = _mint_receipt_chain(tmp_path, rows=2, retention_days=3650, name="r4")
     res = _append_anchor_line(tmp_path, chain, mock_tsa, "r4-out")
-    tamper = json.loads(open(res["anchor"], encoding="utf-8").read())
+    with open(res["anchor"], encoding="utf-8") as fh:
+        tamper = json.load(fh)
     tok = bytearray(base64.b64decode(tamper["token_der"]))
     tok[-3] ^= 0xFF
-    lines = open(chain, encoding="utf-8").readlines()
+    with open(chain, encoding="utf-8") as cfh:
+        lines = cfh.readlines()
     # rebuild the anchor line with a corrupted token signed by a throwaway key
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
