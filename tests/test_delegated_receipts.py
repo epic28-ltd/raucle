@@ -35,7 +35,7 @@ policies:
 """
 
 
-@pytest.fixture()
+@pytest.fixture
 def setup(tmp_path):
     base_config = GatewayConfig(
         host="127.0.0.1",

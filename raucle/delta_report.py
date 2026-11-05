@@ -281,7 +281,7 @@ def _make_threshold_negation(baseline_c: dict[str, Any], candidate_c: dict[str, 
             cand_bounds = candidate_c.get(key, {})
             for f in set(base_bounds) & set(cand_bounds):
                 b, c = base_bounds[f], cand_bounds[f]
-                if not isinstance(b, (int, float)) or not isinstance(c, (int, float)):
+                if not _numeric_pair(b, c):
                     continue
                 vb = z3.Real(f"__base_{counter}")
                 vc = z3.Real(f"__cand_{counter}")
@@ -294,6 +294,32 @@ def _make_threshold_negation(baseline_c: dict[str, Any], candidate_c: dict[str, 
             solver.add(z3.BoolVal(False))
 
     return _negation
+
+
+def _numeric_pair(b: Any, c: Any) -> bool:
+    """Whether both bounds are numeric (comparable by the solver)."""
+    return isinstance(b, (int, float)) and isinstance(c, (int, float))
+
+
+def _denied_baseline_indexes(baseline_c: dict[str, Any], candidate_c: dict[str, Any]) -> list[int]:
+    """Int indexes of values forbidden at baseline whose candidate
+    membership is absent (the denied-model witnesses)."""
+    out: list[int] = []
+    counter = 0
+    for f in set(baseline_c.get("forbidden_values", {})) & set(
+        candidate_c.get("forbidden_values", {})
+    ):
+        base_vals = baseline_c["forbidden_values"][f]
+        cand_vals = candidate_c["forbidden_values"][f]
+        base_idx, cand_idx = {}, {}
+        for val in {*base_vals, *cand_vals}:
+            if val not in base_idx and val not in cand_idx:
+                idx = counter
+                counter += 1
+                base_idx[val] = idx
+                cand_idx.setdefault(val, idx)
+        out.extend(base_idx[v] for v in base_idx if v not in cand_idx)
+    return out
 
 
 def _check_threshold_invariant_z3(
@@ -322,25 +348,11 @@ def _make_denylist_negation(baseline_c: dict[str, Any], candidate_c: dict[str, A
     Unsat proves the superset."""
 
     def _negation(z3: Any, solver: Any) -> None:
-        terms, counter = [], 0
-        for f in set(baseline_c.get("forbidden_values", {})) & set(
-            candidate_c.get("forbidden_values", {})
-        ):
-            base_vals = baseline_c["forbidden_values"][f]
-            cand_vals = candidate_c["forbidden_values"][f]
-            base_idx, cand_idx = {}, {}
-            for val in {*base_vals, *cand_vals}:
-                if val not in base_idx and val not in cand_idx:
-                    idx = counter
-                    counter += 1
-                    base_idx[val] = idx
-                    cand_idx.setdefault(val, idx)
-            missing = [base_idx[v] for v in base_idx if v not in cand_idx]
-            for m in missing:
-                v = z3.Int(f"__val_{counter}")
-                counter += 1
-                solver.add(v == m)
-                terms.append(z3.BoolVal(True))
+        terms = []
+        for i, m in enumerate(_denied_baseline_indexes(baseline_c, candidate_c)):
+            v = z3.Int(f"__deny_{i}")
+            solver.add(v == m)
+            terms.append(z3.BoolVal(True))
         if terms:
             solver.add(z3.Or(*terms))
         else:
@@ -456,6 +468,41 @@ def _opened_invariant_rows(
     ]
 
 
+def _z3_available(use_z3: bool) -> bool:
+    """Whether the z3 prover may be invoked for this diff."""
+    try:
+        import z3  # noqa: F401, PLC0415
+
+        return use_z3
+    except ImportError:
+        return False
+
+
+def _invariant_checkers(z3_available: bool) -> tuple[tuple[Any, Any], str]:
+    """Checkers and mode label for the invariant diff: solver-backed when
+    z3 is available, explicitly labelled heuristic otherwise."""
+    if z3_available:
+        return (
+            (_check_threshold_invariant_z3, _check_denylist_invariant_z3),
+            "z3-checked invariant diff",
+        )
+    return (
+        (
+            lambda b, c: (not _threshold_widenings(b, c), []),
+            lambda b, c: (not _denylist_widenings(b, c), []),
+        ),
+        "heuristic invariant diff (z3 not invoked)",
+    )
+
+
+def _policies_by_tool(policies: list[Any]) -> dict[str, list[Any]]:
+    """Group policy rules by tool, in insertion order."""
+    by_tool: dict[str, list[Any]] = {}
+    for r in policies:
+        by_tool.setdefault(r.tool, []).append(r)
+    return by_tool
+
+
 def invariant_diff(
     baseline: Any,
     candidate: Any,
@@ -470,32 +517,10 @@ def invariant_diff(
     never claimed. Without z3 the section is the explicitly labelled
     heuristic comparison — never presented as a proof.
     """
-    try:
-        import z3  # noqa: F401, PLC0415
-
-        z3_available = use_z3
-    except ImportError:
-        z3_available = False
-
-    if z3_available:
-        mode = "z3-checked invariant diff"
-    else:
-        mode = "heuristic invariant diff (z3 not invoked)"
-
-    base_by_tool: dict[str, list[Any]] = {}
-    cand_by_tool: dict[str, list[Any]] = {}
-    for r in baseline.policies:
-        base_by_tool.setdefault(r.tool, []).append(r)
-    for r in candidate.policies:
-        cand_by_tool.setdefault(r.tool, []).append(r)
-
-    if z3_available:
-        checkers = (_check_threshold_invariant_z3, _check_denylist_invariant_z3)
-    else:
-        checkers = (
-            lambda b, c: (not _threshold_widenings(b, c), []),
-            lambda b, c: (not _denylist_widenings(b, c), []),
-        )
+    z3_available = _z3_available(use_z3)
+    checkers, mode = _invariant_checkers(z3_available)
+    base_by_tool = _policies_by_tool(baseline.policies)
+    cand_by_tool = _policies_by_tool(candidate.policies)
 
     invariants: list[dict[str, Any]] = []
     for tool in sorted(set(base_by_tool) | set(cand_by_tool)):
