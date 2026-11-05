@@ -80,28 +80,32 @@ def test_rejects_unadvertised_skill():
     orch, caller, callee = _cards(skill_caps={"transfer": CAP})
     jws = _handoff(orch, callee, skill="drain_account")
     v = a2a.verify_handoff(jws, caller, callee)
-    assert not v.ok and "not advertised" in v.reason
+    assert not v.ok
+    assert "not advertised" in v.reason
 
 
 def test_rejects_missing_capability_when_required():
     orch, caller, callee = _cards(skill_caps={"transfer": CAP})
     jws = _handoff(orch, callee, cap=None)  # required by the callee, not cited
     v = a2a.verify_handoff(jws, caller, callee)
-    assert not v.ok and "capability" in v.reason
+    assert not v.ok
+    assert "capability" in v.reason
 
 
 def test_rejects_wrong_capability_hash():
     orch, caller, callee = _cards(skill_caps={"transfer": CAP})
     jws = _handoff(orch, callee, cap="sha256:" + "cd" * 32)
     v = a2a.verify_handoff(jws, caller, callee)
-    assert not v.ok and "capability" in v.reason
+    assert not v.ok
+    assert "capability" in v.reason
 
 
 def test_rejects_wrong_target_agent():
     orch, caller, callee = _cards()
     jws = _handoff(orch, callee, target="https://evil.example/pay")
     v = a2a.verify_handoff(jws, caller, callee)
-    assert not v.ok and "target" in v.reason
+    assert not v.ok
+    assert "target" in v.reason
 
 
 def test_rejects_signature_from_key_not_in_caller_card():
@@ -109,7 +113,8 @@ def test_rejects_signature_from_key_not_in_caller_card():
     evil = AgentIdentity.generate(agent_id="agent:attacker")
     jws = _handoff(evil, callee)  # signed by a key NOT published in caller_card
     v = a2a.verify_handoff(jws, caller, callee)
-    assert not v.ok and "signature" in v.reason
+    assert not v.ok
+    assert "signature" in v.reason
 
 
 def test_rejects_non_canonical_payload():
@@ -148,7 +153,8 @@ def test_rejects_input_substitution():
     ok = a2a.verify_handoff(jws, caller, callee, expected_input={"amount": 100})
     assert ok.ok
     bad = a2a.verify_handoff(jws, caller, callee, expected_input={"amount": 999999})
-    assert not bad.ok and "input" in bad.reason
+    assert not bad.ok
+    assert "input" in bad.reason
 
 
 def test_rejects_replay_of_seen_receipt():
@@ -158,7 +164,8 @@ def test_rejects_replay_of_seen_receipt():
     seen: set[str] = set()
     assert a2a.verify_handoff(jws, caller, callee, seen_receipt_ids=seen).ok
     replay = a2a.verify_handoff(jws, caller, callee, seen_receipt_ids=seen)
-    assert not replay.ok and "replay" in replay.reason
+    assert not replay.ok
+    assert "replay" in replay.reason
 
 
 def test_rejects_tampered_header_kid():
@@ -229,7 +236,8 @@ def test_verifier_rejects_parentless_handoff(monkeypatch):
         public_key_b64=a2a.issuer_public_b64(orch.public_key_pem()),
     )
     v = a2a.verify_handoff(jws, caller, callee)
-    assert not v.ok and "parent" in v.reason
+    assert not v.ok
+    assert "parent" in v.reason
 
 
 def test_verifier_rejects_extra_header_member():
@@ -246,7 +254,8 @@ def test_verifier_rejects_extra_header_member():
     }
     jws = _sign_custom(orch, _base_payload(orch, callee), extra_header={"x_extra": "smuggled"})
     v = a2a.verify_handoff(jws, caller, callee)
-    assert not v.ok and "header" in v.reason
+    assert not v.ok
+    assert "header" in v.reason
 
 
 def test_demo_runs_and_exits_zero(tmp_path):

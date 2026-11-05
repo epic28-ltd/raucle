@@ -112,7 +112,7 @@ class PortalKey:
         return signing + "." + _b64url(sig), payload
 
 
-@pytest.fixture()
+@pytest.fixture
 def env(tmp_path):
     portal = PortalKey()
     keyfile = tmp_path / "portal-public.pem"
