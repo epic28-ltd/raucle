@@ -221,11 +221,8 @@ class GatewayConfig:
                 "RAUCLE_AGENT_CREDENTIALS", "/data/agent-credentials.jsonl"
             ),
             agent_registry_file=os.environ.get("RAUCLE_AGENT_REGISTRY_FILE", ""),
-            agent_registry_public_key=os.environ.get(
-                "RAUCLE_AGENT_REGISTRY_PUBLIC_KEY", ""
-            ),
-            admission_enforce=os.environ.get("RAUCLE_ADMISSION_ENFORCE", "")
-            .lower()
+            agent_registry_public_key=os.environ.get("RAUCLE_AGENT_REGISTRY_PUBLIC_KEY", ""),
+            admission_enforce=os.environ.get("RAUCLE_ADMISSION_ENFORCE", "").lower()
             in ("1", "true", "yes"),
             signer_key_path=os.environ.get("RAUCLE_SIGNER_KEY_PATH", ""),
             emit_receipts=os.environ.get("RAUCLE_EMIT_RECEIPTS", "1") not in ("0", "false", "no"),
@@ -802,9 +799,7 @@ class RaucleGateway:
         from raucle.approvals import ApprovalManager
 
         self._approvals = ApprovalManager(ttl_seconds=config.approval_ttl_seconds)
-        self._activations = ActivationApprovalManager(
-            ttl_seconds=config.approval_ttl_seconds
-        )
+        self._activations = ActivationApprovalManager(ttl_seconds=config.approval_ttl_seconds)
         self._policy_ledger_head = _HASH_PREFIX + "0" * 64
 
     def _init_gate_identity(self) -> None:
@@ -1432,7 +1427,10 @@ class RaucleGateway:
         try:
             verdict = self.admission_check_agent(agent_id)
         except Exception:
-            logger.exception("admission check failed; refusing agent %s", agent_id)
+            logger.exception(
+                "admission check failed; refusing agent %r",
+                agent_id,
+            )
             return "admission check failed"
         return "" if verdict.allowed else f"admission refused: {verdict.reason}"
 
@@ -1470,9 +1468,7 @@ class RaucleGateway:
         else:
             record_dict = {}
         agent_id = agent_id or record_dict.get("agent_id", "")
-        descriptor_hash = (
-            _sha256_hex(_canonical_json(record_dict)) if record_dict else ""
-        )
+        descriptor_hash = _sha256_hex(_canonical_json(record_dict)) if record_dict else ""
         receipt_id = self._emit_authority_receipt(
             verdict="allow" if verdict.allowed else "deny",
             extension_key="x_admission",
@@ -2148,9 +2144,7 @@ class RaucleGateway:
         bools and lists of strings only (strict envelope: no floats)."""
         safe: dict[str, Any] = {}
         for key, value in summary.items():
-            is_list_of_str = isinstance(value, list) and all(
-                isinstance(v, str) for v in value
-            )
+            is_list_of_str = isinstance(value, list) and all(isinstance(v, str) for v in value)
             if isinstance(value, (str, int, bool)) or is_list_of_str:
                 safe[key] = value
             elif isinstance(value, dict):

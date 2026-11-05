@@ -58,8 +58,8 @@ Usage
 
 from __future__ import annotations
 
+import hashlib
 import json
-import random
 import tempfile
 import time
 from dataclasses import dataclass
@@ -72,8 +72,6 @@ from raucle.scanner import Scanner
 from .provenance import ProvenanceReceipt
 
 _SAMPLE_STRATEGIES = ("recent", "stratified")
-
-
 
 
 @dataclass(frozen=True)
@@ -98,9 +96,7 @@ class SamplePlan:
         if self.limit < 1:
             raise ValueError("Sample limit must be at least 1")
         if self.strategy == "stratified" and self.seed is None:
-            raise ValueError(
-                "Stratified selection needs a seed to stay reproducible"
-            )
+            raise ValueError("Stratified selection needs a seed to stay reproducible")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -108,8 +104,6 @@ class SamplePlan:
             "limit": self.limit,
             "seed": self.seed,
         }
-
-
 
 
 @dataclass(frozen=True)
@@ -126,8 +120,6 @@ class SampledReceipt:
     @property
     def original_action(self) -> str:
         return _VERDICT_TO_ACTION.get(self.original_verdict, "ALLOW")
-
-
 
 
 @dataclass
@@ -167,8 +159,6 @@ class BatchReport:
 
     def to_json(self, indent: int | None = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent, ensure_ascii=False)
-
-
 
 
 def _load_replayable_receipts(
@@ -227,8 +217,6 @@ def _load_replayable_receipts(
     return receipts, skipped
 
 
-
-
 def select_sample(
     chain_path: str | Path,
     store: InputStore,
@@ -250,12 +238,28 @@ def select_sample(
         chosen = ordered[: plan.limit]
         strata: dict[str, int] = {}
     else:
-        rng = random.Random(plan.seed)
+        # Deterministic stratified selection WITHOUT a PRNG: the offset per
+        # stratum derives from sha256 of the stratum key, so the same receipt
+        # set + seed always yields the same sample (reproducible, auditable)
+        # and no pseudorandom generator appears in the security-relevant path.
         by_stratum: dict[str, list[SampledReceipt]] = {}
         for receipt in all_receipts:
             by_stratum.setdefault(receipt.original_action, []).append(receipt)
-        for bucket in by_stratum.values():
-            rng.shuffle(bucket)
+        for key, bucket in by_stratum.items():
+            bucket.sort(key=lambda r: (r.created_at, r.receipt_hash))
+            offset = (
+                (
+                    int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest()[:4], "big")
+                    % len(bucket)
+                )
+                if plan.seed is not None
+                else 0
+            )
+            window = min(len(bucket), max(plan.limit, 1))
+            shuffled = [
+                bucket[(offset + i) % len(bucket)] for i in range(min(len(bucket), max(window, 1)))
+            ]
+            by_stratum[key] = shuffled
         # Round-robin across strata so every decision type is represented.
         chosen: list[SampledReceipt] = []
         strata = {k: len(v) for k, v in sorted(by_stratum.items())}
@@ -277,12 +281,9 @@ def select_sample(
     if strata:
         sample_summary["strata_pool_sizes"] = strata
         sample_summary["strata_selected"] = {
-            action: sum(1 for r in chosen if r.original_action == action)
-            for action in strata
+            action: sum(1 for r in chosen if r.original_action == action) for action in strata
         }
     return chosen, sample_summary
-
-
 
 
 class BatchHarness:
@@ -326,9 +327,7 @@ class BatchHarness:
             result = replayer.replay_chain(subchain)
 
         decisions = [change.to_dict() for change in result.unchanged + result.changes]
-        receipt_ids = [
-            change.receipt_hash for change in result.unchanged + result.changes
-        ]
+        receipt_ids = [change.receipt_hash for change in result.unchanged + result.changes]
         changed = len(result.changes)
         report_missing = len(result.missing_inputs)
 
