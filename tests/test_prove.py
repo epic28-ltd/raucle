@@ -95,8 +95,9 @@ def test_jsonschema_trivial_policy_proven_with_note():
 
 
 def test_jsonschema_unsupported_grammar_raises():
+    prover = JSONSchemaProver()
     with pytest.raises(UnsupportedGrammar):
-        JSONSchemaProver().prove({"type": "array"}, {})
+        prover.prove({"type": "array"}, {})
 
 
 def test_jsonschema_hash_is_deterministic():
