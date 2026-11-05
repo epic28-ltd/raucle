@@ -23,7 +23,7 @@ policies:
 """
 
 
-@pytest.fixture()
+@pytest.fixture
 def base_config(tmp_path):
     return GatewayConfig(
         host="127.0.0.1",
@@ -37,7 +37,7 @@ def base_config(tmp_path):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def policy_file(tmp_path):
     path = tmp_path / "policies.yaml"
     path.write_text(POLICY)
