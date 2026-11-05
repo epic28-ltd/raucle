@@ -391,17 +391,17 @@ class TestGatewayReceiptedActivation:
         assert decision.json()["status"] == "approved"
 
     def test_bad_artefact_name_rejected_in_pack(self):
+        import tempfile
+        from pathlib import Path as _P
+
         from raucle.compliance_pack import build_pack  # noqa: F401
 
-        with pytest.raises(ValueError, match="artefact name rejected"):
-            # build_pack validates names even before writing: exercise via
-            # a minimal temp dir with an empty chain to fail fast on the guard
-            import tempfile
-            from pathlib import Path as _P
-
-            with tempfile.TemporaryDirectory() as td:
-                chain = _P(td) / "chain.jsonl"
-                chain.write_text("", encoding="utf-8")
+        # build_pack validates names even before writing: exercise via
+        # a minimal temp dir with an empty chain to fail fast on the guard
+        with tempfile.TemporaryDirectory() as td:
+            chain = _P(td) / "chain.jsonl"
+            chain.write_text("", encoding="utf-8")
+            with pytest.raises(ValueError, match="artefact name rejected"):
                 build_pack(
                     chain,
                     framework="eu-ai-act",

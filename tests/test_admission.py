@@ -152,8 +152,9 @@ class TestEnrolFromDescriptor:
         and nothing lands in the registry."""
         path = tmp_path / "agents.jsonl"
         reg = AgentRegistry(path=path)
+        tampered = _tampered_record(operator)
         with pytest.raises(DescriptorError, match="admission refused"):
-            reg.enrol_from_descriptor(_tampered_record(operator), operator_pem)
+            reg.enrol_from_descriptor(tampered, operator_pem)
         assert not path.exists()
         assert reg.agent_ids() == []
         # a re-opened store has nothing to fold either
