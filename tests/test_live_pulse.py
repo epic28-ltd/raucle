@@ -37,7 +37,7 @@ PAYLOAD = {
 }
 
 
-@pytest.fixture()
+@pytest.fixture
 def gw(tmp_path):
     policy = tmp_path / "policies.yaml"
     policy.write_text(POLICY)
@@ -54,7 +54,7 @@ def gw(tmp_path):
     return RaucleGateway(config)
 
 
-@pytest.fixture()
+@pytest.fixture
 def client(gw) -> TestClient:
     return TestClient(create_gateway_app(gw))
 

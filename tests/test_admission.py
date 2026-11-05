@@ -46,12 +46,12 @@ def _attest() -> Attestation:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def operator():
     return Ed25519Signer.generate()
 
 
-@pytest.fixture()
+@pytest.fixture
 def operator_pem(operator):
     return operator.public_key_pem().decode("ascii")
 
@@ -105,7 +105,7 @@ class TestAdmissionCheck:
         verdict = admission_check(record, operator_pem)
         assert not verdict.allowed
 
-    @pytest.fixture()
+    @pytest.fixture
     def other(self):
         return Ed25519Signer.generate()
 
@@ -152,8 +152,9 @@ class TestEnrolFromDescriptor:
         and nothing lands in the registry."""
         path = tmp_path / "agents.jsonl"
         reg = AgentRegistry(path=path)
+        tampered = _tampered_record(operator)
         with pytest.raises(DescriptorError, match="admission refused"):
-            reg.enrol_from_descriptor(_tampered_record(operator), operator_pem)
+            reg.enrol_from_descriptor(tampered, operator_pem)
         assert not path.exists()
         assert reg.agent_ids() == []
         # a re-opened store has nothing to fold either
@@ -163,7 +164,7 @@ class TestEnrolFromDescriptor:
 # -- Gateway receipting ------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def gw(tmp_path, operator_pem):
     policy = tmp_path / "policies.yaml"
     policy.write_text(POLICY)
@@ -229,7 +230,7 @@ class TestEnrolmentReceipting:
 # -- Gate enforcement --------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def enforced_gw(tmp_path, operator, operator_pem):
     policy = tmp_path / "policies.yaml"
     policy.write_text(POLICY)

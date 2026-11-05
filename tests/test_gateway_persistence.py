@@ -5,7 +5,7 @@ import pytest
 from raucle.gateway import GatewayConfig, RaucleGateway, UserManager
 
 
-@pytest.fixture()
+@pytest.fixture
 def base_config(tmp_path):
     return GatewayConfig(
         host="127.0.0.1",
