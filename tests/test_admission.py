@@ -46,12 +46,12 @@ def _attest() -> Attestation:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def operator():
     return Ed25519Signer.generate()
 
 
-@pytest.fixture()
+@pytest.fixture
 def operator_pem(operator):
     return operator.public_key_pem().decode("ascii")
 
@@ -105,7 +105,7 @@ class TestAdmissionCheck:
         verdict = admission_check(record, operator_pem)
         assert not verdict.allowed
 
-    @pytest.fixture()
+    @pytest.fixture
     def other(self):
         return Ed25519Signer.generate()
 
@@ -163,7 +163,7 @@ class TestEnrolFromDescriptor:
 # -- Gateway receipting ------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def gw(tmp_path, operator_pem):
     policy = tmp_path / "policies.yaml"
     policy.write_text(POLICY)
@@ -229,7 +229,7 @@ class TestEnrolmentReceipting:
 # -- Gate enforcement --------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def enforced_gw(tmp_path, operator, operator_pem):
     policy = tmp_path / "policies.yaml"
     policy.write_text(POLICY)

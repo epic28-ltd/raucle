@@ -31,7 +31,7 @@ ATT = Attestation(
 CEIL = DelegationCeilings(max_hops=3, max_scope=4, lease_ceilings={"max_ttl_seconds": 600})
 
 
-@pytest.fixture()
+@pytest.fixture
 def signer():
     return Ed25519Signer.generate()
 
