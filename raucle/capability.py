@@ -2222,14 +2222,62 @@ def _check_allowed_values(c: dict[str, Any], args: dict[str, Any]) -> str | None
     return None
 
 
+def _canonical_file_uri(value: str) -> str | None:
+    """Canonicalise a file:// URI's path, or None when not a file URI.
+
+    Percent-decodes the path and resolves "."/".." dot segments so a
+    traversal escape the policy's literal prefix never sees is visible
+    to the prefix check (RED-017). Malformed URIs canonicalise to
+    "" (guaranteed mismatch) — fail-closed.
+    """
+    if not (isinstance(value, str) and value.startswith("file://")):
+        return None
+    from urllib.parse import unquote, urlsplit
+
+    try:
+        path = unquote(urlsplit(value).path)
+    except ValueError:
+        return ""
+    segments: list[str] = []
+    for seg in path.split("/"):
+        if seg == ".":
+            continue
+        if seg == "..":
+            if len(segments) > 1:  # keep the leading "", never escape above root
+                segments.pop()
+            continue
+        segments.append(seg)
+    resolved = "/".join(segments)
+    while "//" in resolved:
+        resolved = resolved.replace("//", "/")
+    return f"file://{resolved}"
+
+
 def _check_starts_with(c: dict[str, Any], args: dict[str, Any]) -> str | None:
     """starts_with — STRING_ONLY: field MUST be present and be a string with the
-    prefix. Any non-string (including any collection) is denied."""
+    prefix. Any non-string (including any collection) is denied.
+
+    file:// URIs are canonicalised before the prefix match (RED-017):
+    the URI layer resolves dot segments and percent-encoding the policy
+    text never sees, so a traversal-shaped escape cannot ride a
+    literal-prefix match past its scope.
+    """
     for fld, prefix in c.get("starts_with", {}).items():
         if fld not in args:
             return f"starts_with field {fld!r} is absent from the call"
-        if not (isinstance(args[fld], str) and args[fld].startswith(prefix)):
+        if not isinstance(args[fld], str):
             return f"{fld}={args[fld]!r} does not start with {prefix!r}"
+        value = args[fld]
+        canon_prefix = _canonical_file_uri(prefix)
+        canon_value = _canonical_file_uri(value)
+        if canon_prefix is not None and canon_value is not None:
+            if not canon_value.startswith(canon_prefix):
+                return (
+                    f"{fld}={value!r} does not start with {prefix!r} "
+                    f"(file:// canonical path resolves to {canon_value})"
+                )
+        elif not value.startswith(prefix):
+            return f"{fld}={value!r} does not start with {prefix!r}"
     return None
 
 
