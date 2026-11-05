@@ -27,7 +27,7 @@ policies:
 """
 
 
-@pytest.fixture()
+@pytest.fixture
 def gw(tmp_path):
     policy = tmp_path / "policies.yaml"
     policy.write_text(POLICY)
@@ -47,7 +47,7 @@ def gw(tmp_path):
     return RaucleGateway(config)
 
 
-@pytest.fixture()
+@pytest.fixture
 def admin(gw):
     users = UserManager()
     users.add_user("admin-key", "admin", "Admin")

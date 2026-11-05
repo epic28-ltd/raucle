@@ -71,7 +71,8 @@ def _incident(tmp_path):
                 "/gate",
                 json={"tool": "export_records", "args": args, "agent_id": "agent:svc"},
             )
-            assert resp.status_code == 200 and resp.json()["decision"] == "allow"
+            assert resp.status_code == 200
+            assert resp.json()["decision"] == "allow"
             # record the args in the store under the SAME digest the
             # receipt binds (canonical json form)
             store.add(_canonical_json(args).decode("utf-8"))
@@ -218,7 +219,8 @@ def _incident_two_field(tmp_path):
             "/gate",
             json={"tool": "export_records", "args": args, "agent_id": "agent:svc"},
         )
-        assert resp.status_code == 200 and resp.json()["decision"] == "allow"
+        assert resp.status_code == 200
+        assert resp.json()["decision"] == "allow"
         store.add(_canonical_json(args).decode("utf-8"))
     return tmp_path / "receipts.jsonl", store_path
 

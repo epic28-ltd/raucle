@@ -31,7 +31,7 @@ ATT = Attestation(
 CEIL = DelegationCeilings(max_hops=3, max_scope=4, lease_ceilings={"max_ttl_seconds": 600})
 
 
-@pytest.fixture()
+@pytest.fixture
 def signer():
     return Ed25519Signer.generate()
 
@@ -55,7 +55,8 @@ def test_descriptor_verifies_offline(signer, tmp_path):
     loaded = json.loads(path.read_text(encoding="utf-8"))
     verdict = verify_descriptor(loaded, signer.public_key_pem())
     assert verdict.valid
-    assert verdict.valid and verdict.descriptor
+    assert verdict.valid
+    assert verdict.descriptor
     assert verdict.descriptor.agent_id == "agent:svc"
     assert verdict.descriptor.version == DESCRIPTOR_VERSION
     assert verdict.descriptor.ceilings.max_hops == 3
@@ -165,7 +166,8 @@ def test_registry_enrol_update_retire_append_only(signer, tmp_path):
     assert current.attestation.attested_manifest_hash == "sha256:" + "0" * 64
     reloaded = AgentRegistry(reg_path)
     current2 = reloaded.resolve("agent:a")
-    assert current2 is not None and current2.status == "retired"
+    assert current2 is not None
+    assert current2.status == "retired"
     assert len(reloaded.agent_ids()) == 1
 
 
@@ -202,7 +204,8 @@ def test_credential_store_integration(signer, tmp_path):
         credential_store=creds,
     )
     assert record["status"] == "enrolled"
-    assert key is not None and key.startswith("rak_")
+    assert key is not None
+    assert key.startswith("rak_")
     assert creds.verify(key) == "agent:new"
     # Second enrolment rotates nothing: the agent already holds a key.
     record2, key2 = reg.enrol(
