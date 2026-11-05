@@ -65,6 +65,12 @@ _DRAFT_POLICY_HEADER: tuple[str, ...] = (
 # ---------------------------------------------------------------------------
 
 
+def _log_safe(value: object) -> str:
+    """Collapse control characters out of an untrusted value so nothing
+    newline-bearing reaches a log line (S5145)."""
+    return "".join(ch if ch.isprintable() and ch not in "\r\n\t\x1b" else "?" for ch in str(value))
+
+
 def _deployment_trust_from_env() -> dict:
     """Load the pinned deployment trust root from the environment.
 
@@ -1427,9 +1433,12 @@ class RaucleGateway:
         try:
             verdict = self.admission_check_agent(agent_id)
         except Exception:
+            # Log a sanitised identifier only: agent ids arrive on the wire
+            # and could carry control characters; neither the raw value nor
+            # the exception text goes to the log file unescaped.
             logger.exception(
-                "admission check failed; refusing agent %r",
-                agent_id,
+                "admission check failed; refusing agent with sanitised id %r",
+                _log_safe(agent_id),
             )
             return "admission check failed"
         return "" if verdict.allowed else f"admission refused: {verdict.reason}"
