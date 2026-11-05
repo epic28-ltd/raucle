@@ -40,13 +40,15 @@ class TestStripInvisibleUnicode:
         assert "×4" in hidden[0]
 
     def test_bidi_override_detected(self):
-        # Right-to-left override + Pop directional formatting. The raw bidi characters
-        # on this payload line are accepted by design: the test needs a real attack
-        # string to prove detection and stripping (Sonar acceptance, owner Craig).
-        payload = "hello\u202eworld\u202c"  # NOSONAR: intentional bidi bait, rationale above
+        # Right-to-left override + Pop directional formatting. The payload is
+        # accepted by design: the test needs a real U+202E/U+202C attack string
+        # to prove detection and stripping (Sonar acceptance, owner Craig).
+        # Source uses \u escape literals so no raw bidi characters appear in
+        # the file; the runtime payload is unchanged.
+        payload = "hello\u202eworld\u202c"
         scrubbed, hidden = strip_invisible_unicode(payload)
-        assert "‮" not in scrubbed
-        assert "‬" not in scrubbed
+        assert "\u202e" not in scrubbed
+        assert "\u202c" not in scrubbed
         assert any("U+202E" in h for h in hidden)
         assert any("U+202C" in h for h in hidden)
 
