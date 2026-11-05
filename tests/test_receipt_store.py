@@ -7,7 +7,7 @@ import pytest
 from raucle.receipt_store import SegmentedReceiptStore
 
 
-@pytest.fixture()
+@pytest.fixture
 def store_dir(tmp_path):
     return tmp_path / "receipts"
 
@@ -69,7 +69,8 @@ class TestSegmentedReceiptStore:
         for line in sealed.read_text().splitlines():
             if line.strip():
                 rec = json.loads(line)
-                assert "receipt_hash" in rec and "jws" in rec
+                assert "receipt_hash" in rec
+                assert "jws" in rec
 
     def test_flush_durability(self, store_dir):
         store = SegmentedReceiptStore(base_dir=store_dir, max_segment_bytes=1024)
