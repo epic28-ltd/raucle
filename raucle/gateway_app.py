@@ -25,6 +25,27 @@ from raucle.gateway import (
 
 _BEARER_PREFIX = "Bearer "
 
+# RED-013: a request-size bound enforced pre-gate. An oversized payload
+# is REJECTED (HTTP 413) before any verdict processing — it never reaches
+# the policy layer, emits no receipt and costs no gate latency. Override
+# for large-args deployments with RAUCLE_GATE_MAX_PAYLOAD_CHARS.
+_MAX_GATE_PAYLOAD_CHARS = 1_000_000
+
+
+def _gate_payload_limit() -> int:
+    import os
+
+    raw = os.environ.get("RAUCLE_GATE_MAX_PAYLOAD_CHARS")
+    if raw:
+        try:
+            value = int(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return _MAX_GATE_PAYLOAD_CHARS
+
+
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
@@ -247,6 +268,15 @@ def _handle_gate_tool_call(
     authority chain: who tried what is evidence, not noise.
     """
     import json as _json
+
+    if len(_json.dumps(req.args, ensure_ascii=False)) > _gate_payload_limit():
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"request payload exceeds {_gate_payload_limit()} "
+                "canonical-argument characters (RED-013 size bound)"
+            ),
+        )
 
     token_dict = None
     if x_capability_token:
