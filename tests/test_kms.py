@@ -225,3 +225,309 @@ class TestEndToEndWithKMS:
             args={"from_account": "ACC-001", "to_account": "ACC-999", "amount": 100},
         )
         assert not d3.allowed
+
+
+# ---------------------------------------------------------------------------
+# Backend signers via fake SDK modules (no network, no real cloud account)
+# ---------------------------------------------------------------------------
+
+import base64
+import sys
+import types
+
+
+class _FakeKMSClient:
+    """Records KMS API shapes and returns KMS-shaped responses."""
+
+    def __init__(self):
+        self.sign_calls: list[dict] = []
+        self.get_public_key_calls = 0
+
+    def sign(self, **kwargs):
+        self.sign_calls.append(kwargs)
+        return {"Signature": b"\x02" * 64}
+
+    def get_public_key(self, KeyId):
+        self.get_public_key_calls += 1
+        assert KeyId == "alias/raucle-issuing-key"
+        # Minimal DER SubjectPublicKeyInfo for an Ed25519 key
+        return {"PublicKey": bytes.fromhex("302a300506032b6570032100" + "ab" * 32)}
+
+
+_boto3_state: dict = {}
+
+
+def _fake_boto3_client(service, region_name):
+    """boto3.client('kms', region_name=...) → a recording fake KMS client."""
+    assert service == "kms"
+    _boto3_state["region"] = region_name
+    _boto3_state.setdefault("clients", []).append(_FakeKMSClient())
+    return _boto3_state["clients"][-1]
+
+
+def _install_boto3(monkeypatch) -> None:
+    _boto3_state.clear()
+    mod = types.ModuleType("boto3")
+    mod.client = _fake_boto3_client
+    monkeypatch.setitem(sys.modules, "boto3", mod)
+
+
+def _make_fake_key(id: str, pub32: bytes):
+    key = types.SimpleNamespace()
+    key.id = id
+    key.key = types.SimpleNamespace(x=base64.urlsafe_b64encode(pub32).decode("ascii").rstrip("="))
+    return key
+
+
+class _FakeKeyClient:
+    def __init__(self, vault_url, credential):
+        assert vault_url == "https://vault.example.net"
+        self.credential = credential
+
+    def get_key(self, name):
+        assert name == "raucle-issuing-key"
+        return _make_fake_key(
+            "https://vault.example.net/keys/raucle-issuing-key/ver1", b"\x11" * 32
+        )
+
+
+class _FakeCryptographyClient:
+    def __init__(self, key, credential):
+        self.key = key
+
+    def sign(self, *, algorithm, data):
+        assert data == b"payload"
+        return types.SimpleNamespace(signature=b"\x03" * 64)
+
+
+class _FakeCryptoModule(types.ModuleType):
+    class SignatureAlgorithm:
+        es256k = "ES256K"
+
+
+class _FakeTransit:
+    def __init__(self):
+        self.sign_kwargs = None
+        self.read_key_calls = 0
+
+    def sign_data(self, *, name, hash_input, algorithm):
+        self.sign_kwargs = {"name": name, "hash_input": hash_input, "algorithm": algorithm}
+        b64 = base64.b64encode(b"\x04" * 64).decode()
+        return {"data": {"signature": f"vault:v1:{b64}"}}
+
+    def read_key(self, *, name):
+        self.read_key_calls += 1
+        assert name == "raucle-transit-key"
+        return {
+            "data": {
+                "latest_version": 2,
+                "keys": {
+                    "1": {"public_key": base64.b64encode(b"\x00" * 32).decode()},
+                    "2": {"public_key": base64.b64encode(b"\x0f" * 32).decode()},
+                },
+            }
+        }
+
+
+class _FakeHvacClient:
+    transit = None
+
+
+def _install_fake_azure(monkeypatch) -> None:
+    identity = types.ModuleType("azure.identity")
+    identity.DefaultAzureCredential = lambda: "cred"
+    keys = types.ModuleType("azure.keyvault.keys")
+    keys.KeyClient = _FakeKeyClient
+    crypto = types.ModuleType("azure.keyvault.keys.crypto")
+    crypto.CryptographyClient = _FakeCryptographyClient
+    crypto.SignatureAlgorithm = _FakeCryptoModule.SignatureAlgorithm
+    azure = types.ModuleType("azure")
+    azure.__path__ = []  # package
+    azure_keys = types.ModuleType("azure.keyvault")
+    azure_keys.__path__ = []
+    monkeypatch.setitem(sys.modules, "azure", azure)
+    monkeypatch.setitem(sys.modules, "azure.identity", identity)
+    monkeypatch.setitem(sys.modules, "azure.keyvault", azure_keys)
+    monkeypatch.setitem(sys.modules, "azure.keyvault.keys", keys)
+    monkeypatch.setitem(sys.modules, "azure.keyvault.keys.crypto", crypto)
+
+
+class TestAWSSigner:
+    def test_requires_key_id_from_arg_or_env(self, monkeypatch):
+        from raucle.kms import AWSSigner
+
+        monkeypatch.delenv("RAUCLE_KMS_KEY_ID", raising=False)
+        _install_boto3(monkeypatch)
+        with pytest.raises(ValueError, match="key_id is required"):
+            AWSSigner()
+
+    def test_signs_via_kms_and_caches_public_pem(self, monkeypatch):
+        from raucle.kms import AWSSigner
+
+        _install_boto3(monkeypatch)
+        sig = AWSSigner(key_id="alias/raucle-issuing-key", region="eu-central-1")
+        assert _boto3_state["region"] == "eu-central-1"
+        out = sig.sign(b"canonical bytes")
+        assert out == b"\x02" * 64
+        client = sig._client
+        assert client.sign_calls[0]["SigningAlgorithm"] == "ED25519"
+        assert client.sign_calls[0]["MessageType"] == "RAW"
+        assert client.sign_calls[0]["Message"] == b"canonical bytes"
+
+        pem = sig.public_key_pem()
+        assert pem.startswith(b"-----BEGIN PUBLIC KEY-----\n")
+        assert pem.endswith(b"-----END PUBLIC KEY-----\n")
+        # cached: second read must not re-fetch
+        assert sig.public_key_pem() == pem
+        assert client.get_public_key_calls == 1
+
+    def test_signs_with_key_id_from_environment(self, monkeypatch):
+        from raucle.kms import AWSSigner
+
+        monkeypatch.setenv("RAUCLE_KMS_KEY_ID", "alias/from-env")
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        _install_boto3(monkeypatch)
+        s = AWSSigner()
+        assert s._key_id == "alias/from-env"
+        assert s._region == "eu-west-1"
+        assert s.sign(b"x") == b"\x02" * 64
+
+
+class TestAzureSigner:
+    def test_requires_boto3_like_sdk_when_missing(self, monkeypatch):
+        from raucle.kms import AzureSigner
+
+        monkeypatch.setitem(sys.modules, "azure.identity", None)  # import fails
+        with pytest.raises(ImportError, match="AzureSigner requires"):
+            AzureSigner(vault_url="https://vault.example.net", key_name="k")
+
+    def test_env_required_errors(self, monkeypatch):
+        from raucle.kms import AzureSigner
+
+        _install_fake_azure(monkeypatch)
+        monkeypatch.delenv("RAUCLE_KV_URL", raising=False)
+        monkeypatch.delenv("RAUCLE_KV_KEY_NAME", raising=False)
+        with pytest.raises(ValueError, match="vault_url is required"):
+            AzureSigner(key_name="k")
+        with pytest.raises(ValueError, match="key_name is required"):
+            AzureSigner(vault_url="https://vault.example.net")
+
+    def test_sign_and_pem_from_jwk_x(self, monkeypatch):
+        from raucle.kms import AzureSigner
+
+        _install_fake_azure(monkeypatch)
+        s = AzureSigner(vault_url="https://vault.example.net", key_name="raucle-issuing-key")
+        assert s._key_id.endswith("ver1")
+        assert s._crypto.key.id.endswith("ver1")
+        assert s.sign(b"payload") == b"\x03" * 64
+        pem = s.public_key_pem()
+        assert b"BEGIN PUBLIC KEY" in pem
+        der = pem.split(b"-----BEGIN PUBLIC KEY-----\n")[1].split(b"-----END")[0]
+        body = base64.b64decode(der)
+        # Ed25519 SPKI: OID 1.3.101.112 present, key material is the 32 bytes
+        assert b"\x2b\x65\x70" in body and b"\x11" * 32 in body
+
+
+def _install_hvac(monkeypatch):
+    hvac = types.ModuleType("hvac")
+    transit = _FakeTransit()
+
+    def client(url, token):
+        c = types.SimpleNamespace()
+        c.secrets = types.SimpleNamespace(transit=transit)
+        assert url.startswith("https://vault.")
+        assert token == "s-token"
+        return c
+
+    hvac.Client = client
+    monkeypatch.setitem(sys.modules, "hvac", hvac)
+    return transit
+
+
+class TestVaultSigner:
+    def test_requires_hvac_when_missing(self, monkeypatch):
+        from raucle.kms import VaultSigner
+
+        monkeypatch.setitem(sys.modules, "hvac", None)
+        with pytest.raises(ImportError, match="VaultSigner requires"):
+            VaultSigner(vault_url="https://vault.x", token="t", key_name="k")
+
+    def test_env_required_errors(self, monkeypatch):
+        from raucle.kms import VaultSigner
+
+        _install_hvac(monkeypatch)
+        monkeypatch.delenv("RAUCLE_VAULT_URL", raising=False)
+        monkeypatch.delenv("RAUCLE_VAULT_KEY_NAME", raising=False)
+        with pytest.raises(ValueError, match="vault_url is required"):
+            VaultSigner(token="s-token", key_name="k")
+        with pytest.raises(ValueError, match="key_name is required"):
+            VaultSigner(vault_url="https://vault.x", token="s-token")
+
+    def test_sign_strips_vault_sealed_prefix(self, monkeypatch):
+        from raucle.kms import VaultSigner
+
+        transit = _install_hvac(monkeypatch)
+        s = VaultSigner(vault_url="https://vault.p", token="s-token", key_name="raucle-transit-key")
+        out = s.sign(b"bytes")
+        assert transit.sign_kwargs == {
+            "name": "raucle-transit-key",
+            "hash_input": base64.b64encode(b"bytes").decode("ascii"),
+            "algorithm": "ed25519",
+        }
+        assert out == b"\x04" * 64
+
+    def test_public_pem_uses_latest_version_key(self, monkeypatch):
+        from raucle.kms import VaultSigner
+
+        _install_hvac(monkeypatch)
+        s = VaultSigner(vault_url="https://vault.p", token="s-token", key_name="raucle-transit-key")
+        pem = s.public_key_pem()
+        assert pem.startswith(b"-----BEGIN PUBLIC KEY-----")
+        body = base64.b64decode(pem.split(b"-----BEGIN PUBLIC KEY-----\n")[1].split(b"-----END")[0])
+        assert b"\x0f" * 32 in body  # version 2 key material
+        s._public_pem = None
+        s.public_key_pem()
+        # second call uses cache — transit.read_key still once? cache means one fetch
+        assert s._public_pem is not None
+
+
+class TestCreateSignerBackends:
+    def test_aws_backend(self, monkeypatch):
+        _install_boto3(monkeypatch)
+        from raucle.kms import AWSSigner, create_signer
+
+        s = create_signer(backend="aws", key_id="alias/k", region="eu-west-2")
+        assert isinstance(s, AWSSigner)
+
+    def test_azure_backend(self, monkeypatch):
+        _install_fake_azure(monkeypatch)
+        from raucle.kms import AzureSigner, create_signer
+
+        s = create_signer(
+            backend="azure", vault_url="https://vault.example.net", key_name="raucle-issuing-key"
+        )
+        assert isinstance(s, AzureSigner)
+
+    def test_vault_backend(self, monkeypatch):
+        _install_hvac(monkeypatch)
+        from raucle.kms import VaultSigner, create_signer
+
+        s = create_signer(
+            backend="vault", vault_url="https://vault.p", token="s-token", key_name="k"
+        )
+        assert isinstance(s, VaultSigner)
+
+    def test_raucle_signer_env_selects_aws(self, monkeypatch):
+        _install_boto3(monkeypatch)
+        monkeypatch.setenv("RAUCLE_SIGNER", "aws")
+        monkeypatch.setenv("RAUCLE_KMS_KEY_ID", "alias/env-key")
+        from raucle.kms import AWSSigner, create_signer
+
+        assert isinstance(create_signer(), AWSSigner)
+
+    def test_boto3_missing_raises_import_error_with_pip_hint(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "boto3", None)
+        from raucle.kms import AWSSigner
+
+        with pytest.raises(ImportError, match="pip install boto3"):
+            AWSSigner(key_id="alias/k")
