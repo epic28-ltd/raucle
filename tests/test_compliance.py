@@ -109,8 +109,9 @@ class TestReports:
         assert "EVIDENCE MAP, not a conformance attestation" in report.to_dict()["disclaimer"]
 
     def test_unknown_framework_rejected(self, tmp_path):
+        chain = _chain(tmp_path)[0]
         with pytest.raises(ValueError, match="unknown framework"):
-            build_report(_chain(tmp_path)[0], framework="hipaa")
+            build_report(chain, framework="hipaa")
 
     def test_markdown_renders_table_and_disclaimer(self, tmp_path):
         md = render_markdown(build_report(_chain(tmp_path)[0], framework="eu-ai-act"))
