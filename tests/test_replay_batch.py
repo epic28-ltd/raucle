@@ -61,12 +61,10 @@ class TestSamplePlan:
         assert plan.seed is None
 
     def test_harness_requires_explicit_policy_label(self, tmp_path):
+        scanner = Scanner(mode="strict")
+        input_store = InputStore.open(tmp_path / "empty.jsonl")
         with pytest.raises(ValueError, match="policy label"):
-            BatchHarness(
-                scanner=Scanner(mode="strict"),
-                input_store=InputStore.open(tmp_path / "empty.jsonl"),
-                policy_label="",
-            )
+            BatchHarness(scanner=scanner, input_store=input_store, policy_label="")
 
 
 class TestSampleSelection:
