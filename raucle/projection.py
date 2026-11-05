@@ -104,20 +104,25 @@ def _receipt_row(
 
 def _receipt_rows(
     receipts_path: Path, public_pem: bytes | None
-) -> tuple[list[tuple[str, str, dict[str, Any]]], int, int]:
+) -> tuple[list[tuple[str, str, dict[str, Any]]], int, int, str]:
     """The gate decision rows in the receipt chain, in order.
 
-    Returns (rows, non_decision_receipts, malformed_lines). A row is
-    (timestamp, receipt_hash, x_gate block). Fails closed on tampering: an envelope whose
-    receipt_hash does not bind its JWS raises (the source chain is
-    tampered and must not be laundered into a pack).
+    Returns (rows, non_decision_receipts, malformed_lines, receipts_digest).
+    A row is (timestamp, receipt_hash, x_gate block). Fails closed on
+    tampering: an envelope whose receipt_hash does not bind its JWS raises
+    (the source chain is tampered and must not be laundered into a pack).
+    The digest is computed from the SAME bytes the rows were parsed from,
+    so the caller's summary can never describe bytes it did not project
+    (the chain file changing between a row read and a separate digest read).
     """
     rows: list[tuple[str, str, dict[str, Any]]] = []
     non_decisions = 0
     malformed = 0
     verifiers: dict[str, Any] = {}
+    raw = receipts_path.read_bytes()
+    digest = _HASH_PREFIX + hashlib.sha256(raw).hexdigest()
 
-    for line_no, line in enumerate(receipts_path.read_text(encoding="utf-8").splitlines(), 1):
+    for line_no, line in enumerate(raw.decode("utf-8").splitlines(), 1):
         line = line.strip()
         if not line:
             continue
@@ -141,7 +146,7 @@ def _receipt_rows(
             malformed += 1
         except _NonDecisionReceipt:
             non_decisions += 1
-    return rows, non_decisions, malformed
+    return rows, non_decisions, malformed, digest
 
 
 def _iso_timestamp(iat: Any) -> str:
@@ -198,12 +203,18 @@ def _audit_row(line: str) -> tuple[str, dict[str, Any]] | None:
     return timestamp, dict(event)
 
 
-def _audit_rows(audit_path: Path) -> tuple[list[tuple[str, dict[str, Any]]], set[str]]:
+def _audit_rows(audit_path: Path) -> tuple[list[tuple[str, dict[str, Any]]], set[str], str]:
     """The event rows in an audit chain (meta and checkpoint records aside),
-    plus the receipt ids its decision rows already cite."""
+    the receipt ids its decision rows already cite, and the chain's digest.
+
+    The digest is computed from the SAME bytes the rows were parsed from
+    (a second read could describe different bytes than those projected).
+    """
     rows: list[tuple[str, dict[str, Any]]] = []
     cited: set[str] = set()
-    for line in audit_path.read_text(encoding="utf-8").splitlines():
+    raw = audit_path.read_bytes()
+    digest = _HASH_PREFIX + hashlib.sha256(raw).hexdigest()
+    for line in raw.decode("utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -214,13 +225,7 @@ def _audit_rows(audit_path: Path) -> tuple[list[tuple[str, dict[str, Any]]], set
         event = row[1]
         if str(event.get("decision", "")).upper() in {"ALLOW", "DENY"} and event.get("receipt_id"):
             cited.add(str(event["receipt_id"]))
-    return rows, cited
-
-
-def _digest(path: Path) -> str | None:
-    if not path.is_file():
-        return None
-    return _HASH_PREFIX + hashlib.sha256(path.read_bytes()).hexdigest()
+    return rows, cited, digest
 
 
 def project_pack_chain(
@@ -265,14 +270,18 @@ def project_pack_chain(
     projected: list[tuple[str, str, dict[str, Any]]] = []
     non_decisions = 0
     malformed = 0
+    receipts_digest: str | None = None
+    audit_digest: str | None = None
     if receipts_path.is_file():
-        rows, non_decisions, malformed = _receipt_rows(receipts_path, gateway_public_key_pem)
+        rows, non_decisions, malformed, receipts_digest = _receipt_rows(
+            receipts_path, gateway_public_key_pem
+        )
         projected = rows
 
     audit_events: list[tuple[str, dict[str, Any]]] = []
     cited: set[str] = set()
     if audit_path is not None and audit_path.is_file():
-        audit_events, cited = _audit_rows(audit_path)
+        audit_events, cited, audit_digest = _audit_rows(audit_path)
 
     duplicates = 0
     merged: list[tuple[str, int, int, dict[str, Any]]] = []
@@ -297,8 +306,8 @@ def project_pack_chain(
         "duplicates_skipped": duplicates,
         "non_decision_receipts": non_decisions,
         "malformed_receipt_lines": malformed,
-        "receipts_digest": _digest(receipts_path),
-        "audit_chain_digest": _digest(audit_path) if audit_path is not None else None,
+        "receipts_digest": receipts_digest,
+        "audit_chain_digest": audit_digest,
     }
 
 

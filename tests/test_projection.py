@@ -398,3 +398,33 @@ def test_projection_envelope_without_compact_jws_counts_malformed(tmp_path):
     p.write_text(json.dumps({"receipt_hash": "x", "jws": "not-a-jws"}) + "\n")
     summary = project_pack_chain(p, out_path=tmp_path / "proj2.jsonl")
     assert summary["malformed_receipt_lines"] == 1
+
+
+def test_projection_summary_digest_binds_the_bytes_actually_projected(tmp_path, monkeypatch):
+    """TOCTOU: the summary digests must describe the SAME bytes the rows
+    were parsed from. Old code read the chain once for rows and again
+    (via _digest) for the summary, so a file replaced between the two
+    reads made the receipts_digest attest bytes that were never projected."""
+    from hashlib import sha256
+
+    import raucle.projection as pr
+
+    p = tmp_path / "receipts.jsonl"
+    p.write_text(json.dumps({"receipt_hash": "x", "jws": "a b"}) + "\n", encoding="utf-8")
+    first_read: dict[str, bytes] = {}
+    real_read_bytes = Path.read_bytes
+
+    def one_read_then_mutate(self):
+        b = real_read_bytes(self)
+        if "done" not in first_read:
+            first_read["done"] = b
+            # Simulate a second read seeing different bytes: any
+            # subsequent read would find a mutated chain.
+            p.write_text('{"receipt_hash": "y", "jws": "c d"}\n', encoding="utf-8")
+        return b
+
+    monkeypatch.setattr(Path, "read_bytes", one_read_then_mutate)
+    summary = pr.project_pack_chain(p, out_path=tmp_path / "proj.jsonl")
+    monkeypatch.undo()
+    assert summary["receipts_digest"] == "sha256:" + sha256(first_read["done"]).hexdigest()
+    assert summary["receipts_digest"] != "sha256:" + sha256(p.read_bytes()).hexdigest()
