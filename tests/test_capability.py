@@ -350,16 +350,18 @@ def test_strict_mint_refuses_undecided():
     from raucle.errors import PolicyUnproven
 
     iss = CapabilityIssuer.generate(issuer="p.x", require_proof=True)
+    proof = _undecided_proof()
     with pytest.raises(PolicyUnproven, match="PROVEN.*UNDECIDED"):
-        iss.mint(agent_id="agent:x", tool="t", proof_result=_undecided_proof())
+        iss.mint(agent_id="agent:x", tool="t", proof_result=proof)
 
 
 def test_strict_mint_refuses_refuted():
     from raucle.errors import PolicyUnproven
 
     iss = CapabilityIssuer.generate(issuer="p.x", require_proof=True)
+    proof = _refuted_proof()
     with pytest.raises(PolicyUnproven, match="PROVEN.*REFUTED"):
-        iss.mint(agent_id="agent:x", tool="t", proof_result=_refuted_proof())
+        iss.mint(agent_id="agent:x", tool="t", proof_result=proof)
 
 
 def test_strict_mint_binds_proven_hashes_into_token():

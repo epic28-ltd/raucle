@@ -228,8 +228,10 @@ class TestMCPVerifyReceipt:
         assert res["valid"] is False
 
     def test_missing_args_rejected(self):
+        server = MCPServer()
+        payload = {"receipt": "", "pubkey_pem": ""}
         with pytest.raises(ValueError, match="receipt and pubkey_pem"):
-            MCPServer()._t_verify_receipt({"receipt": "", "pubkey_pem": ""})
+            server._t_verify_receipt(payload)
 
     def test_advertised_in_tools_list(self):
         server = MCPServer()
