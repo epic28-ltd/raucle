@@ -123,9 +123,7 @@ class TestCompleteCorpusResolution:
         # has a distinct actual expression; the determinism guarantee is unchanged.
         baseline = resolve_chain_graph(r1, _load_records(gw), public_keys=_keys(gw))
         for _ in range(2):
-            assert resolve_chain_graph(
-                r1, _load_records(gw), public_keys=_keys(gw)
-            ) == baseline
+            assert resolve_chain_graph(r1, _load_records(gw), public_keys=_keys(gw)) == baseline
 
 
 class TestSignatureStates:
