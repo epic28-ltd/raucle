@@ -40,7 +40,7 @@ policies:
 """
 
 
-@pytest.fixture()
+@pytest.fixture
 def delegated_gateway(tmp_path):
     from raucle.capability import DelegationLedger
 

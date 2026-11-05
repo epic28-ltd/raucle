@@ -160,7 +160,8 @@ class TestAuthorityPaths:
             ]
         )
         diff = diff_policy_rules(base, cand)
-        assert diff["opened"] == [] and diff["closed"] == []
+        assert diff["opened"] == []
+        assert diff["closed"] == []
         assert diff["changed"][0]["changed_constraint_fields"] == ["min_value"]
 
 
@@ -227,7 +228,8 @@ class TestInvariantDiff:
         assert inv["z3_invoked"] is True
         assert inv["mode"] == "z3-checked invariant diff"
         threshold = [i for i in inv["invariants"] if i["invariant"] == "threshold-tightening"]
-        assert threshold and all(i["holds_in_both"] for i in threshold)
+        assert threshold
+        assert all(i["holds_in_both"] for i in threshold)
 
     def test_z3_refutes_invariant_when_constraint_widens(self, tmp_path):
         pytest.importorskip("z3")
@@ -257,7 +259,8 @@ class TestInvariantDiff:
         threshold = next(i for i in rows if i["invariant"] == "threshold-tightening")
         deny = next(i for i in rows if i["invariant"] == "deny-list-superset")
         assert threshold["holds_in_both"] is False
-        assert threshold["notes"] and "witness" in threshold["notes"][0]
+        assert threshold["notes"]
+        assert "witness" in threshold["notes"][0]
         assert deny["holds_in_both"] is False
 
     def test_heuristic_label_without_z3(self, tmp_path):

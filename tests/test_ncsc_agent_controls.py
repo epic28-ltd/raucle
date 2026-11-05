@@ -283,4 +283,5 @@ class TestNCSCAgentControlMatrix:
 
     def test_control_8_policy_ledger(self, gw, admin):
         ev = _evidence_policy_ledger(gw, admin)
-        assert ev["actor"] == "Admin" and ev["integrity"] is True
+        assert ev["actor"] == "Admin"
+        assert ev["integrity"] is True

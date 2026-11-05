@@ -18,14 +18,14 @@ from raucle.verdicts import VerdictSigner, hash_ruleset
 audit_pq = pytest.mark.skipif(not pq_available(), reason="ML-DSA-65 unavailable")
 
 
-@pytest.fixture()
+@pytest.fixture
 def tmp():
     d = Path(tempfile.mkdtemp())
     yield d
     shutil.rmtree(d, ignore_errors=True)
 
 
-@pytest.fixture()
+@pytest.fixture
 def audit_key(tmp):
     key = Ed25519PrivateKey.generate()
     pem = key.private_bytes(
@@ -37,7 +37,7 @@ def audit_key(tmp):
     return key
 
 
-@pytest.fixture()
+@pytest.fixture
 def hybrid_chain(tmp):
     ident = AgentIdentity.generate(agent_id="agent:pack")
     pq_priv, pq_pub, pq_kid = pq_generate()
@@ -228,8 +228,10 @@ class TestMCPVerifyReceipt:
         assert res["valid"] is False
 
     def test_missing_args_rejected(self):
+        server = MCPServer()
+        payload = {"receipt": "", "pubkey_pem": ""}
         with pytest.raises(ValueError, match="receipt and pubkey_pem"):
-            MCPServer()._t_verify_receipt({"receipt": "", "pubkey_pem": ""})
+            server._t_verify_receipt(payload)
 
     def test_advertised_in_tools_list(self):
         server = MCPServer()

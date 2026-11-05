@@ -40,9 +40,13 @@ def _chain(tmp_path, *, signed=True, allow=5, deny=2, scans=1, flagged=1, _name=
 class TestEvidenceExtraction:
     def test_counts_decisions_and_scans(self, tmp_path):
         ev = extract_evidence(_chain(tmp_path, allow=5, deny=2, scans=3, flagged=2)[0])
-        assert ev.decisions == 7 and ev.allow == 5 and ev.deny == 2
-        assert ev.scans == 3 and ev.flagged_scans == 2
-        assert ev.signed is True and ev.checkpoints >= 1
+        assert ev.decisions == 7
+        assert ev.allow == 5
+        assert ev.deny == 2
+        assert ev.scans == 3
+        assert ev.flagged_scans == 2
+        assert ev.signed is True
+        assert ev.checkpoints >= 1
 
     def test_unsigned_chain_flagged(self, tmp_path):
         ev = extract_evidence(_chain(tmp_path, signed=False)[0])
@@ -105,8 +109,9 @@ class TestReports:
         assert "EVIDENCE MAP, not a conformance attestation" in report.to_dict()["disclaimer"]
 
     def test_unknown_framework_rejected(self, tmp_path):
+        chain = _chain(tmp_path)[0]
         with pytest.raises(ValueError, match="unknown framework"):
-            build_report(_chain(tmp_path)[0], framework="hipaa")
+            build_report(chain, framework="hipaa")
 
     def test_markdown_renders_table_and_disclaimer(self, tmp_path):
         md = render_markdown(build_report(_chain(tmp_path)[0], framework="eu-ai-act"))
@@ -127,7 +132,8 @@ class TestCLI:
         rc = main(["compliance", "report", str(_chain(tmp_path)[0]), "--framework", "eu-ai-act"])
         out = capsys.readouterr().out
         assert rc == 0
-        assert "Compliance evidence map" in out and "Art.12" in out
+        assert "Compliance evidence map" in out
+        assert "Art.12" in out
 
     def test_cli_report_json_to_file(self, tmp_path):
         from raucle.cli import main
@@ -148,7 +154,9 @@ class TestCLI:
         )
         assert rc == 0
         doc = json.loads(out.read_text())
-        assert doc["framework"] == "soc2" and "controls" in doc and doc["summary"]
+        assert doc["framework"] == "soc2"
+        assert "controls" in doc
+        assert doc["summary"]
 
     def test_cli_unknown_framework_errors(self, tmp_path, capsys):
         from raucle.cli import main
