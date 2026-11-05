@@ -19,8 +19,9 @@ from raucle.canary import (
 class TestZeroWidthEncoding:
     def test_encode_deterministic_and_round_trips(self):
         token = "cafe1234"
-        assert _token_to_zw(token) == _token_to_zw(token)
-        assert _zw_to_token(_token_to_zw(token)) == token
+        encoded = _token_to_zw(token)
+        assert encoded == _token_to_zw(token)  # deterministic output
+        assert _zw_to_token(encoded) == token
 
     def test_round_trip_binary_and_unicode(self):
         for token in ["abcd1234", "token with spaces", "ünïcode"]:
@@ -99,7 +100,9 @@ class TestLeakDetection:
         cm = CanaryManager()
         prompt, token = cm.embed("P.", strategy=EmbedStrategy.SEMANTIC)
         r = cm.check_output(f"leaked! {token.value}", token)
-        assert r.leaked and r.confidence == 0.98 and r.strategy is EmbedStrategy.SEMANTIC
+        assert r.leaked
+        assert r.confidence == 0.98
+        assert r.strategy is EmbedStrategy.SEMANTIC
 
     def test_comment_raw_value_leak_confidence(self):
         cm = CanaryManager()
