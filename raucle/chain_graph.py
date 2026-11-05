@@ -30,6 +30,7 @@ _DEFAULT_BREADTH = 200
 _MAX_DEPTH = 20
 _MAX_BREADTH = 1000
 _HASH_PREFIX = "sha256:"
+_DELEGATION_PREFIX = "delegation:"
 
 # Receipt extensions the resolver treats as inline chain events.
 _LEASE_KEY = "x_lease"
@@ -76,7 +77,7 @@ def _ed25519_verify(jws: str, key: Any) -> bool:
             key = serialization.load_pem_public_key(key)
         key.verify(_b64d(jws.split(".")[2]), _signing_input(jws))
         return True
-    except (InvalidSignature, ValueError, TypeError, UnicodeDecodeError):
+    except (InvalidSignature, ValueError, TypeError):
         return False
     except Exception:
         # Decode errors fail closed with the same explicit state.
@@ -134,7 +135,7 @@ def _decode_receipt(record: dict[str, Any]) -> Receipt | None:
     try:
         header = json.loads(_b64d(parts[0]))
         payload = json.loads(_b64d(parts[1]))
-    except (ValueError, TypeError, UnicodeDecodeError):
+    except (ValueError, TypeError):
         return None
     if not isinstance(payload, dict) or not isinstance(header, dict):
         return None
@@ -382,7 +383,7 @@ def _delegation_node(rec: dict[str, Any]) -> dict[str, Any]:
     cap = cap if isinstance(cap, dict) else {}
     exp = cap.get("exp")
     return {
-        "id": "delegation:" + str(cap.get("token_id", "")),
+        "id": _DELEGATION_PREFIX + str(cap.get("token_id", "")),
         "kind": "delegation",
         "token_id": str(cap.get("token_id", "")),
         "issuer": str(cap.get("issuer", "")),
@@ -459,7 +460,7 @@ def _walk_delegation(
     while current is not None:
         node = _delegation_node(current)
         token_id = node["token_id"]
-        edge_dst = "delegation:" + token_id
+        edge_dst = _DELEGATION_PREFIX + token_id
         if hops <= 0 and token_id not in state.visited:
             state.prune("delegation", token_id, "depth_limit_exceeded")
             state.add_edge(kind, src, edge_dst, found=True)
@@ -475,7 +476,9 @@ def _walk_delegation(
         parent_rec = delegations.get(parent_id)
         if parent_rec is None:
             state.unknown_ref("delegation", parent_id)
-            state.add_edge("delegation_parent", node["id"], "delegation:" + parent_id, found=False)
+            state.add_edge(
+                "delegation_parent", node["id"], _DELEGATION_PREFIX + parent_id, found=False
+            )
             return
         src, kind, current, hops = node["id"], "delegation_parent", parent_rec, hops - 1
 
@@ -526,7 +529,9 @@ def _process_receipt_node(
         rec = delegations.get(auth["token_id"])
         if rec is None:
             state.unknown_ref("delegation", str(auth["token_id"]))
-            state.add_edge("delegation", current, "delegation:" + auth["token_id"], found=False)
+            state.add_edge(
+                "delegation", current, _DELEGATION_PREFIX + auth["token_id"], found=False
+            )
         else:
             _walk_delegation(state, rec, current, hop, depth, delegations)
     policy_node = _receipt_policy_node(receipt.payload, receipt.receipt_hash, audits)

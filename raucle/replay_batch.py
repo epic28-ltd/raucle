@@ -217,6 +217,53 @@ def _load_replayable_receipts(
     return receipts, skipped
 
 
+def _sample_recent(
+    all_receipts: list[SampledReceipt], plan: SamplePlan
+) -> tuple[list[SampledReceipt], dict[str, int]]:
+    """Take the most recent ``limit`` receipts, newest first."""
+    ordered = sorted(
+        all_receipts,
+        key=lambda r: (r.created_at, r.receipt_hash),
+        reverse=True,
+    )
+    return ordered[: plan.limit], {}
+
+
+def _sample_stratified(
+    all_receipts: list[SampledReceipt], plan: SamplePlan
+) -> tuple[list[SampledReceipt], dict[str, int]]:
+    """Deterministic stratified selection WITHOUT a PRNG: the offset per
+    stratum derives from sha256 of the stratum key, so the same receipt
+    set + seed always yields the same sample (reproducible, auditable)
+    and no pseudorandom generator appears in the security-relevant path."""
+    by_stratum: dict[str, list[SampledReceipt]] = {}
+    for receipt in all_receipts:
+        by_stratum.setdefault(receipt.original_action, []).append(receipt)
+    for key, bucket in by_stratum.items():
+        bucket.sort(key=lambda r: (r.created_at, r.receipt_hash))
+        offset = (
+            int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest()[:4], "big") % len(bucket)
+            if plan.seed is not None
+            else 0
+        )
+        window = min(len(bucket), max(plan.limit, 1))
+        by_stratum[key] = [
+            bucket[(offset + i) % len(bucket)] for i in range(min(len(bucket), max(window, 1)))
+        ]
+    # Round-robin across strata so every decision type is represented.
+    chosen: list[SampledReceipt] = []
+    strata = {k: len(v) for k, v in sorted(by_stratum.items())}
+    buckets = [bucket for _, bucket in sorted(by_stratum.items())]
+    while len(chosen) < plan.limit and any(buckets):
+        for bucket in buckets:
+            if bucket and len(chosen) < plan.limit:
+                chosen.append(bucket.pop())
+    # Round-robin picks strata in sorted order; re-sort the sample for
+    # a stable presentation.
+    chosen.sort(key=lambda r: (r.created_at, r.receipt_hash))
+    return chosen, strata
+
+
 def select_sample(
     chain_path: str | Path,
     store: InputStore,
@@ -230,47 +277,9 @@ def select_sample(
     all_receipts, skipped = _load_replayable_receipts(chain_path, store)
 
     if plan.strategy == "recent":
-        ordered = sorted(
-            all_receipts,
-            key=lambda r: (r.created_at, r.receipt_hash),
-            reverse=True,
-        )
-        chosen = ordered[: plan.limit]
-        strata: dict[str, int] = {}
+        chosen, strata = _sample_recent(all_receipts, plan)
     else:
-        # Deterministic stratified selection WITHOUT a PRNG: the offset per
-        # stratum derives from sha256 of the stratum key, so the same receipt
-        # set + seed always yields the same sample (reproducible, auditable)
-        # and no pseudorandom generator appears in the security-relevant path.
-        by_stratum: dict[str, list[SampledReceipt]] = {}
-        for receipt in all_receipts:
-            by_stratum.setdefault(receipt.original_action, []).append(receipt)
-        for key, bucket in by_stratum.items():
-            bucket.sort(key=lambda r: (r.created_at, r.receipt_hash))
-            offset = (
-                (
-                    int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest()[:4], "big")
-                    % len(bucket)
-                )
-                if plan.seed is not None
-                else 0
-            )
-            window = min(len(bucket), max(plan.limit, 1))
-            shuffled = [
-                bucket[(offset + i) % len(bucket)] for i in range(min(len(bucket), max(window, 1)))
-            ]
-            by_stratum[key] = shuffled
-        # Round-robin across strata so every decision type is represented.
-        chosen: list[SampledReceipt] = []
-        strata = {k: len(v) for k, v in sorted(by_stratum.items())}
-        buckets = [bucket for _, bucket in sorted(by_stratum.items())]
-        while len(chosen) < plan.limit and any(buckets):
-            for bucket in buckets:
-                if bucket and len(chosen) < plan.limit:
-                    chosen.append(bucket.pop())
-        # Round-robin picks strata in sorted order; re-sort the sample for
-        # a stable presentation.
-        chosen.sort(key=lambda r: (r.created_at, r.receipt_hash))
+        chosen, strata = _sample_stratified(all_receipts, plan)
 
     sample_summary: dict[str, Any] = {
         **plan.to_dict(),

@@ -158,16 +158,10 @@ class TestCreateSignerFactory:
         assert isinstance(signer, Ed25519Signer)
         assert signer.public_key_pem()
 
-    def test_default_is_local(self):
-        import os
-
-        old = os.environ.pop("RAUCLE_SIGNER", None)
-        try:
-            signer = create_signer()
-            assert isinstance(signer, Ed25519Signer)
-        finally:
-            if old is not None:
-                os.environ["RAUCLE_SIGNER"] = old
+    def test_default_is_local(self, monkeypatch):
+        monkeypatch.delenv("RAUCLE_SIGNER", raising=False)
+        signer = create_signer()
+        assert isinstance(signer, Ed25519Signer)
 
     def test_kms_backend(self):
         sign_fn = MagicMock(return_value=b"\x00" * 64)

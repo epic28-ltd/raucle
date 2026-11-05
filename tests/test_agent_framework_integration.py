@@ -116,8 +116,9 @@ async def test_no_token_in_force_denies(gate, captured_events):
     invoked: list[bool] = []
     context = _make_context(function_name="lookup_customer", arguments={"customer_id": "C-1042"})
 
+    call_next = await _consume_call_next(invoked)
     with pytest.raises(MiddlewareTermination):
-        await mw.process(context, await _consume_call_next(invoked))
+        await mw.process(context, call_next)
 
     assert invoked == [], "tool must not be invoked when no token is in force"
     assert len(events) == 1
@@ -177,8 +178,9 @@ async def test_wrong_tool_denies(issuer, gate, captured_events):
         arguments={"to": "GB29NWBK60161331926819", "amount": 4.00},
     )
 
+    call_next = await _consume_call_next(invoked)
     with pytest.raises(MiddlewareTermination):
-        await mw.process(context, await _consume_call_next(invoked))
+        await mw.process(context, call_next)
 
     assert invoked == [], "tool must NOT be invoked when wrong tool"
     assert len(events) == 1
