@@ -28,7 +28,7 @@ issuer: bank
 """
 
 
-@pytest.fixture()
+@pytest.fixture
 def gw(tmp_path: Path) -> RaucleGateway:
     policy = tmp_path / "policies.yaml"
     policy.write_text(POLICY)
@@ -380,7 +380,7 @@ class TestGatewayResolution:
 
 
 class TestChainGraphHTTP:
-    @pytest.fixture()
+    @pytest.fixture
     def admin(self, gw: RaucleGateway) -> TestClient:
         users = UserManager()
         users.add_user("admin-key", "admin", "Admin")
