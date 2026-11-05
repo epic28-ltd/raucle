@@ -77,7 +77,8 @@ class TestVerifyAnnotation:
             },
         }
         ok, reason = verify_tool_annotation(tool, trusted_key_ids={"trusted-key"})
-        assert ok and "trusted issuer" in reason
+        assert ok
+        assert "trusted issuer" in reason
 
     def test_gated_by_untrusted_anchor_rejected(self):
         tool = {
@@ -89,16 +90,19 @@ class TestVerifyAnnotation:
             },
         }
         ok, reason = verify_tool_annotation(tool, trusted_key_ids={"trusted-key"})
-        assert not ok and "untrusted" in reason
+        assert not ok
+        assert "untrusted" in reason
 
     def test_malformed_gated_annotation_rejected_fail_closed(self):
         tool = {"_meta": {"raucle": {"version": MCP_CAP_VERSION, "gated": True}}}  # no key_id
         ok, reason = verify_tool_annotation(tool, trusted_key_ids={"k"})
-        assert not ok and "issuer_key_id" in reason
+        assert not ok
+        assert "issuer_key_id" in reason
 
     def test_unknown_binding_version_rejected(self):
         tool = {
             "_meta": {"raucle": {"version": "mcp-cap:v99", "gated": True, "issuer_key_id": "k"}}
         }
         ok, reason = verify_tool_annotation(tool, trusted_key_ids={"k"})
-        assert not ok and "unknown binding version" in reason
+        assert not ok
+        assert "unknown binding version" in reason
