@@ -404,6 +404,137 @@ def _delegation_record_key(rec: dict[str, Any]) -> str:
     return str(cap.get("token_id", ""))
 
 
+class _GraphState:
+    """Mutable working state for one chain-graph resolution."""
+
+    def __init__(self, breadth: int) -> None:
+        self.breadth = breadth
+        self.nodes: dict[str, dict[str, Any]] = {}
+        self.edges: list[dict[str, Any]] = []
+        self.unknown: list[dict[str, Any]] = []
+        self.pruned: list[dict[str, Any]] = []
+        self.visited: set[str] = set()
+        self.truncated = False
+
+    def add_node(self, node: dict[str, Any]) -> bool:
+        node_id = str(node["id"])
+        if node_id in self.visited:
+            return True
+        if len(self.nodes) >= self.breadth:
+            self.pruned.append(
+                {"kind": node["kind"], "reference": node_id, "reason": "breadth_limit_exceeded"}
+            )
+            self.truncated = True
+            return False
+        self.visited.add(node_id)
+        self.nodes[node_id] = node
+        return True
+
+    def add_edge(self, kind: str, src: str, dst: str, found: bool | None = None) -> None:
+        edge: dict[str, Any] = {"kind": kind, "from": src, "to": dst}
+        if found is not None:
+            edge["found"] = found
+        self.edges.append(edge)
+
+    def prune(self, kind: str, reference: str, reason: str) -> None:
+        self.truncated = True
+        self.pruned.append({"kind": kind, "reference": reference, "reason": reason})
+
+    def unknown_ref(self, kind: str, reference: str, reason: str = "not_found") -> None:
+        self.unknown.append({"kind": kind, "reference": reference, "reason": reason})
+
+
+def _walk_delegation(
+    state: _GraphState,
+    rec: dict[str, Any],
+    src: str,
+    hop: int,
+    depth: int,
+    delegations: dict[str, dict[str, Any]],
+) -> None:
+    """Chain of ``parent_id`` hops, bounded: unresolved = unknown."""
+    kind = "delegation"  # receipt -> its capability; hops -> parent
+    hops = depth - hop  # delegation hops share the receipt depth budget
+    current: dict[str, Any] | None = rec
+    while current is not None:
+        node = _delegation_node(current)
+        token_id = node["token_id"]
+        edge_dst = "delegation:" + token_id
+        if hops <= 0 and token_id not in state.visited:
+            state.prune("delegation", token_id, "depth_limit_exceeded")
+            state.add_edge(kind, src, edge_dst, found=True)
+            return
+        if not state.add_node(node):
+            state.add_edge(kind, src, edge_dst, found=True)
+            return
+        if src != node["id"]:
+            state.add_edge(kind, src, edge_dst, found=True)
+        parent_id = node["parent_token_id"]
+        if parent_id is None:
+            return
+        parent_rec = delegations.get(parent_id)
+        if parent_rec is None:
+            state.unknown_ref("delegation", parent_id)
+            state.add_edge("delegation_parent", node["id"], "delegation:" + parent_id, found=False)
+            return
+        src, kind, current, hops = node["id"], "delegation_parent", parent_rec, hops - 1
+
+
+def _bind_policy_deployments(state: _GraphState, current: str, policy_node: dict[str, Any]) -> None:
+    """Bind a receipt to its policy-digest-matched policy node and audits."""
+    state.add_edge("policy_binding", current, policy_node["id"], found=True)
+    state.add_node(policy_node)
+    for dep in policy_node["deployments"]:
+        audit_node = {
+            "id": "audit:" + str(dep["receipt_hash"]),
+            "kind": "audit_event",
+            "type": "policy_deployed",
+            "policy_digest": dep["policy_digest"],
+            "policy_id": dep["policy_id"],
+            "version": dep["version"],
+            "event_timestamp": dep["event_timestamp"],
+        }
+        state.add_node(audit_node)
+        state.add_edge("deployment", current, audit_node["id"], found=True)
+
+
+def _process_receipt_node(
+    state: _GraphState,
+    corpus: ReceiptCorpus,
+    current: str,
+    hop: int,
+    depth: int,
+    keys: dict[str, Any],
+    delegations: dict[str, dict[str, Any]],
+    audits: list[dict[str, Any]],
+) -> list[str]:
+    """Resolve one receipt node; return the parent hashes still to visit."""
+    receipt = corpus.decoded(current)
+    if receipt is None:
+        state.unknown_ref("receipt", current)
+        return []
+    node = _receipt_node(receipt, corpus.signatures(receipt, keys))
+    if not state.add_node(node):
+        return []
+    # Chain links (parent-receipt hashes): the edge is recorded for
+    # every cited link; its `found` state is settled after the walk -
+    # an unresolvable link is a `not_found` unknown, never inferred.
+    for parent in node["parents"]:
+        state.add_edge("parent", current, parent)
+    auth = node.get("delegation")
+    if auth and auth.get("token_id"):
+        rec = delegations.get(auth["token_id"])
+        if rec is None:
+            state.unknown_ref("delegation", str(auth["token_id"]))
+            state.add_edge("delegation", current, "delegation:" + auth["token_id"], found=False)
+        else:
+            _walk_delegation(state, rec, current, hop, depth, delegations)
+    policy_node = _receipt_policy_node(receipt.payload, receipt.receipt_hash, audits)
+    if policy_node is not None:
+        _bind_policy_deployments(state, current, policy_node)
+    return list(node["parents"])
+
+
 def resolve_chain_graph(
     receipt_hash: str,
     records: Iterable[dict[str, Any]],
@@ -452,12 +583,7 @@ def resolve_chain_graph(
     depth = max(0, min(int(depth), _MAX_DEPTH))
     breadth = max(1, min(int(breadth), _MAX_BREADTH))
 
-    nodes: dict[str, dict[str, Any]] = {}
-    edges: list[dict[str, Any]] = []
-    unknown: list[dict[str, Any]] = []
-    pruned: list[dict[str, Any]] = []
-    visited: set[str] = set()
-    truncated = False
+    state = _GraphState(breadth)
 
     root = corpus.decoded(receipt_hash)
     if root is None:
@@ -478,123 +604,33 @@ def resolve_chain_graph(
             "derived_only_from_verified_receipt_links": True,
         }
 
-    def add_node(node: dict[str, Any]) -> bool:
-        nonlocal truncated
-        node_id = str(node["id"])
-        if node_id in visited:
-            return True
-        if len(nodes) >= breadth:
-            pruned.append(
-                {"kind": node["kind"], "reference": node_id, "reason": "breadth_limit_exceeded"}
-            )
-            truncated = True
-            return False
-        visited.add(node_id)
-        nodes[node_id] = node
-        return True
-
-    def add_edge(kind: str, src: str, dst: str, found: bool | None = None) -> None:
-        edge: dict[str, Any] = {"from": src, "to": dst, "kind": kind}
-        if found is not None:
-            edge["found"] = found
-        edges.append(edge)
-
-    def walk_delegation(rec: dict[str, Any], src: str, hop: int) -> None:
-        """Chain of ``parent_id`` hops, bounded: unresolved = unknown."""
-        nonlocal truncated
-        kind = "delegation"  # receipt -> its capability; hops -> parent
-        hops = depth - hop  # delegation hops share the receipt depth budget
-        current: dict[str, Any] | None = rec
-        while current is not None:
-            node = _delegation_node(current)
-            token_id = node["token_id"]
-            if hops <= 0 and token_id not in visited:
-                truncated = True
-                pruned.append(
-                    {"kind": "delegation", "reference": token_id, "reason": "depth_limit_exceeded"}
-                )
-                add_edge(kind, src, "delegation:" + token_id, found=True)
-                return
-            if not add_node(node):
-                add_edge(kind, src, "delegation:" + token_id, found=True)
-                return
-            if src != node["id"]:
-                add_edge(kind, src, "delegation:" + token_id, found=True)
-            parent_id = node["parent_token_id"]
-            if parent_id is None:
-                return
-            parent_rec = delegations.get(parent_id)
-            if parent_rec is None:
-                unknown.append(
-                    {"kind": "delegation", "reference": parent_id, "reason": "not_found"}
-                )
-                add_edge("delegation_parent", node["id"], "delegation:" + parent_id, found=False)
-                return
-            src, kind, current, hops = node["id"], "delegation_parent", parent_rec, hops - 1
-
     queue: deque[tuple[str, int]] = deque([(receipt_hash, 0)])
     while queue:
         current, hop = queue.popleft()
         if hop > depth:
-            truncated = True
-            pruned.append(
-                {"kind": "receipt", "reference": current, "reason": "depth_limit_exceeded"}
+            state.prune("receipt", current, "depth_limit_exceeded")
+            continue
+        queue.extend(
+            (parent, hop + 1)
+            for parent in _process_receipt_node(
+                state, corpus, current, hop, depth, keys, delegations, audits
             )
-            continue
-        receipt = corpus.decoded(current)
-        if receipt is None:
-            unknown.append({"kind": "receipt", "reference": current, "reason": "not_found"})
-            continue
-        node = _receipt_node(receipt, corpus.signatures(receipt, keys))
-        if not add_node(node):
-            continue
-        # Chain links (parent-receipt hashes): the edge is recorded for
-        # every cited link; its `found` state is settled after the walk -
-        # an unresolvable link is a `not_found` unknown, never inferred.
-        for parent in node["parents"]:
-            add_edge("parent", current, parent)
-            queue.append((parent, hop + 1))
-        auth = node.get("delegation")
-        if auth and auth.get("token_id"):
-            rec = delegations.get(auth["token_id"])
-            if rec is None:
-                unknown.append(
-                    {"kind": "delegation", "reference": auth["token_id"], "reason": "not_found"}
-                )
-                add_edge("delegation", current, "delegation:" + auth["token_id"], found=False)
-            else:
-                walk_delegation(rec, current, hop)
-        policy_node = _receipt_policy_node(receipt.payload, receipt.receipt_hash, audits)
-        if policy_node is not None:
-            add_edge("policy_binding", current, policy_node["id"], found=True)
-            add_node(policy_node)
-            for dep in policy_node["deployments"]:
-                audit_node = {
-                    "id": "audit:" + str(dep["receipt_hash"]),
-                    "kind": "audit_event",
-                    "type": "policy_deployed",
-                    "policy_digest": dep["policy_digest"],
-                    "policy_id": dep["policy_id"],
-                    "version": dep["version"],
-                    "event_timestamp": dep["event_timestamp"],
-                }
-                add_node(audit_node)
-                add_edge("deployment", current, audit_node["id"], found=True)
+        )
 
     # Parent edges: `found` states whether the cited link resolves in the
     # corpus - pruned-by-cap links still resolve, broken links read False
     # and appear in `unknown` as not_found.
-    for edge in edges:
+    for edge in state.edges:
         if edge["kind"] == "parent":
             edge["found"] = corpus.decoded(edge["to"]) is not None
 
     return {
         "root": receipt_hash,
-        "nodes": sorted(nodes.values(), key=lambda n: (n["kind"], n["id"])),
-        "edges": sorted(edges, key=lambda e: (e["kind"], e["from"], e["to"])),
-        "unknown": _dedupe(sorted(unknown, key=lambda u: (u["kind"], u["reference"]))),
-        "pruned": _dedupe(sorted(pruned, key=lambda p: (p["reason"], p["reference"]))),
-        "truncated": truncated,
+        "nodes": sorted(state.nodes.values(), key=lambda n: (n["kind"], n["id"])),
+        "edges": sorted(state.edges, key=lambda e: (e["kind"], e["from"], e["to"])),
+        "unknown": _dedupe(sorted(state.unknown, key=lambda u: (u["kind"], u["reference"]))),
+        "pruned": _dedupe(sorted(state.pruned, key=lambda p: (p["reason"], p["reference"]))),
+        "truncated": state.truncated,
         "depth_limit": depth,
         "breadth_limit": breadth,
         "derived_only_from_verified_receipt_links": True,
