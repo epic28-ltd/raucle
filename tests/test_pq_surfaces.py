@@ -182,16 +182,16 @@ class TestTrustRegistryHybrid:
         two different classical keys under one name still collide."""
         reg, reg_path, pq_kid, pq_pub = self._build(hybrid_signer, pq_keys)
         reg.verify_integrity()  # classical + PQ under 'acme.bank' is fine
-        with pytest.raises(ValueError):
-            other = Ed25519PrivateKey.generate()
-            other_pem = (
-                other.public_key()
-                .public_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PublicFormat.SubjectPublicKeyInfo,
-                )
-                .decode()
+        other = Ed25519PrivateKey.generate()
+        other_pem = (
+            other.public_key()
+            .public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo,
             )
+            .decode()
+        )
+        with pytest.raises(ValueError):
             reg.publish(other_pem, issuer="acme.bank")
         os.unlink(reg_path)
 
