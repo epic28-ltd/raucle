@@ -13,6 +13,11 @@ import (
 	"testing"
 )
 
+const (
+	critKey     = "raucle/v1"
+	testModelV1 = "test-model-v1"
+)
+
 func parseEd25519PubPEM(p string) (ed25519.PublicKey, error) {
 	block, _ := pem.Decode([]byte(p))
 	if block == nil {
@@ -82,7 +87,7 @@ func TestVerifyRejectsWrongAlg(t *testing.T) {
 	parts := strings.Split(r.JWS, ".")
 	badHeader, _ := json.Marshal(map[string]any{
 		"alg": "HS256", "typ": jwsTyp, "kid": "k_test01",
-		"crit": []string{"raucle/v1"}, "raucle/v1": "provenance",
+		"crit": []string{critKey}, critKey: "provenance",
 	})
 	hb := base64.RawURLEncoding.EncodeToString(badHeader)
 	if _, err := Verify(hb+"."+parts[1]+"."+parts[2], pub); err == nil {
@@ -96,7 +101,7 @@ func TestVerifyRequiresCrit(t *testing.T) {
 	parts := strings.Split(r.JWS, ".")
 	badHeader, _ := json.Marshal(map[string]any{
 		"alg": "EdDSA", "typ": jwsTyp, "kid": "k_test01",
-		"crit": []string{}, "raucle/v1": "provenance",
+		"crit": []string{}, critKey: "provenance",
 	})
 	hb := base64.RawURLEncoding.EncodeToString(badHeader)
 	if _, err := Verify(hb+"."+parts[1]+"."+parts[2], pub); err == nil {
@@ -108,7 +113,7 @@ func TestNonUserInputRequiresParents(t *testing.T) {
 	_, priv := mustKeys(t)
 	p := basePayload()
 	p.Operation = "model_call"
-	p.Model = "test-model-v1"
+	p.Model = testModelV1
 	if _, err := Emit(p, priv); err == nil {
 		t.Fatal("expected parent requirement")
 	}
@@ -136,7 +141,7 @@ func TestChainTopoAndClosure(t *testing.T) {
 	p2 := basePayload()
 	p2.Operation = "model_call"
 	p2.Parents = []string{r1.ID}
-	p2.Model = "test-model-v1"
+	p2.Model = testModelV1
 	r2, _ := Emit(p2, priv)
 	c, err := BuildChain([]Receipt{r1, r2})
 	if err != nil {
@@ -153,7 +158,7 @@ func TestChainRejectsTopoBreak(t *testing.T) {
 	p2 := basePayload()
 	p2.Operation = "model_call"
 	p2.Parents = []string{r1.ID}
-	p2.Model = "test-model-v1"
+	p2.Model = testModelV1
 	r2, _ := Emit(p2, priv)
 	if _, err := BuildChain([]Receipt{r2, r1}); err == nil {
 		t.Fatal("expected topo violation")
@@ -167,7 +172,7 @@ func TestChainRejectsSilentTaintLoss(t *testing.T) {
 	p2.Operation = "model_call"
 	p2.Parents = []string{r1.ID}
 	p2.Taint = nil
-	p2.Model = "test-model-v1"
+	p2.Model = testModelV1
 	r2, _ := Emit(p2, priv)
 	if _, err := BuildChain([]Receipt{r1, r2}); err == nil {
 		t.Fatal("expected taint monotonicity violation")

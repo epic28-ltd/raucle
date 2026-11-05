@@ -20,7 +20,7 @@ function transferTool(): VercelTool {
   return {
     description: "Transfer funds",
     parameters: {},
-    execute: async (args: { amount: number; to: string }) => ({ ok: true, ...args }),
+    execute: (args: { amount: number; to: string }) => Promise.resolve({ ok: true, ...args }),
   };
 }
 
@@ -63,7 +63,7 @@ test("BLOCK throws, does not run the tool, and emits a BLOCK receipt", async () 
     onReceipt: (rec) => { receipts.push(rec); },
   });
   const tools = r.gateTools({
-    transfer: { ...transferTool(), execute: async (a: any) => { ran = true; return a; } },
+    transfer: { ...transferTool(), execute: (a: any) => { ran = true; return Promise.resolve(a); } },
   });
 
   await assert.rejects(
@@ -116,7 +116,7 @@ test("custom gate overrides the built-in policy evaluator", async () => {
     issuer: issuerFrom(privateKey),
     gate: (toolName) => { seen.push(toolName); return { decision: toolName === "ok" ? "ALLOW" : "BLOCK", reason: "custom" }; },
   });
-  const tools = r.gateTools({ ok: { execute: () => Promise.resolve(1) }, no: { execute: async () => 2 } });
+  const tools = r.gateTools({ ok: { execute: () => Promise.resolve(1) }, no: { execute: () => Promise.resolve(2) } });
   assert.equal(await tools.ok.execute!({}), 1);
   await assert.rejects(() => tools.no.execute!({}), RauclePolicyDenied);
   assert.deepEqual(seen, ["ok", "no"]);

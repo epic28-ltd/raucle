@@ -128,15 +128,16 @@ def _rejects_lang(lang: str, obj) -> bool:
     return _rejects(cmd, cwd, obj)
 
 
-def main() -> int:
-    vf = json.loads(VECTORS.read_text())
-    published = vf.get("canonicalization_vectors", [])
-    invalid = vf.get("invalid_canonicalization_vectors", [])
+def _vector_requests(published: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Valid-vector requests: every published canon vector (with its expected
+    hex) plus the extra non-BMP probes (cross-lang agreement only, no
+    published hex).
 
-    # Extra string-valued probes for the key-ordering property (value-
-    # independent), kept alongside the published vectors. The empty-looking
-    # key in the first probe is U+E000 (BMP private-use): code point orders it
-    # before the non-BMP key, UTF-16 orders the non-BMP key first.
+    The extra string-valued probes exercise the key-ordering property
+    (value-independent). The empty-looking key in the first probe is
+    U+E000 (BMP private-use): code point orders it before the non-BMP
+    key, UTF-16 orders the non-BMP key first.
+    """
     probes = [
         {"name": "probe_non_bmp_key_ordering", "obj": {"a": "x", "\U0001f511": "y", "\uE000": "z"}},
         {
@@ -144,14 +145,18 @@ def main() -> int:
             "obj": {"\U0001f600": "a", "\uFFFF": "b", "\U00010000": "c"},
         },
     ]
-    # Valid-vector requests: every published canon vector (with its expected
-    # hex) plus the probes (cross-lang agreement only, no published hex).
-    valid = [
+    return [
         {"name": v["name"], "obj": v["input_object"], "expected_hex": v["expected_canonical_hex"]}
         for v in published
     ] + probes
 
-    all_langs = [l for l, _ in LANGS]
+
+def _build_available_langs() -> "tuple[list[str], list[str]] | int":
+    """Build every available language toolchain.
+
+    Returns either ``(ran, skipped)`` on success, or the integer exit code
+    when a build fails.
+    """
     ran, skipped = [], []
     for lang, avail in LANGS:
         if not avail():
@@ -164,8 +169,15 @@ def main() -> int:
             print(f"FAIL {lang} build: {exc}")
             return 2
         ran.append(lang)
+    return ran, skipped
 
-    ok = True
+
+def _hexes_for_langs(ran: list[str], valid: list[dict[str, Any]]) -> "dict[str, list[str]] | int":
+    """Run the canon binary for each language over all valid requests.
+
+    Returns the hexes per language on success, or the integer exit code
+    when a canon run fails.
+    """
     hexes_by_lang: dict[str, list[str]] = {}
     for lang in ran:
         try:
@@ -173,25 +185,46 @@ def main() -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"FAIL {lang} canon: {exc}")
             return 2
+    return hexes_by_lang
 
+
+def _check_valid_vectors(
+    ran: list[str], valid: list[dict[str, Any]], hexes_by_lang: dict[str, list[str]]
+) -> bool:
+    """Cross-language agreement + published-hex match for every request."""
+    ok = True
     print("\n=== valid vectors: cross-language agreement + published-hex match ===")
     for i, req in enumerate(valid):
-        hexes = {lang: hexes_by_lang[lang][i] for lang in ran}
-        uniq = set(hexes.values())
-        agree = len(uniq) == 1
-        exp = req.get("expected_hex")
-        hex_ok = (exp is None) or all(h == exp for h in hexes.values())
-        status = "AGREE" if agree else "DIVERGE"
-        if exp is not None:
-            status += " + HEX-OK" if hex_ok else " + HEX-MISMATCH"
-        ok = ok and agree and hex_ok
-        print(f"  {req['name']}: {status}")
-        if not agree:
-            for lang, h in hexes.items():
-                print(f"      {lang}: {h}")
-        if exp is not None and not hex_ok:
-            print(f"      expected: {exp}")
+        ok = ok and _check_valid_request(ran, req, i, hexes_by_lang)
+    return ok
 
+
+def _check_valid_request(
+    ran: list[str],
+    req: dict[str, Any],
+    index: int,
+    hexes_by_lang: dict[str, list[str]],
+) -> bool:
+    """One vector: agreement across languages and published-hex match."""
+    hexes = {lang: hexes_by_lang[lang][index] for lang in ran}
+    agree = len(set(hexes.values())) == 1
+    exp = req.get("expected_hex")
+    hex_ok = (exp is None) or all(h == exp for h in hexes.values())
+    status = "AGREE" if agree else "DIVERGE"
+    if exp is not None:
+        status += " + HEX-OK" if hex_ok else " + HEX-MISMATCH"
+    print(f"  {req['name']}: {status}")
+    if not agree:
+        for lang, h in hexes.items():
+            print(f"      {lang}: {h}")
+    if exp is not None and not hex_ok:
+        print(f"      expected: {exp}")
+    return agree and hex_ok
+
+
+def _check_invalid_vectors(ran: list[str], invalid: list[dict[str, Any]]) -> bool:
+    """Every language MUST reject every invalid vector."""
+    ok = True
     print("\n=== invalid vectors: every language MUST reject ===")
     for v in invalid:
         verdicts = {lang: _rejects_lang(lang, v["input_object"]) for lang in ran}
@@ -202,15 +235,19 @@ def main() -> int:
             for lang, rej in verdicts.items():
                 if not rej:
                     print(f"      {lang}: ACCEPTED (must reject)")
+    return ok
 
-    n_ran, n_total = len(ran), len(all_langs)
+
+def _final_status(ok: bool, ran: list[str], skipped: list[str]) -> int:
+    """Print the parity verdict and map it to the exit code."""
+    n_total = len(LANGS)
     print()
     if not ok:
         print("RESULT: FAIL — canonicalisation drift / hex mismatch / invalid accepted")
         return 1
-    if n_ran < n_total:
+    if len(ran) < n_total:
         print(
-            f"RESULT: PASS ({n_ran}/{n_total}: {', '.join(ran)}) — agree for languages "
+            f"RESULT: PASS ({len(ran)}/{n_total}: {', '.join(ran)}) — agree for languages "
             f"that ran; SKIPPED: {', '.join(skipped)}. Full parity NOT proven."
         )
         return 3
@@ -219,6 +256,25 @@ def main() -> int:
         f"(published vectors + non-BMP probes + invalid-rejection)"
     )
     return 0
+
+
+def main() -> int:
+    vf = json.loads(VECTORS.read_text())
+    invalid = vf.get("invalid_canonicalization_vectors", [])
+    valid = _vector_requests(vf.get("canonicalization_vectors", []))
+
+    built = _build_available_langs()
+    if isinstance(built, int):
+        return built
+    ran, skipped = built
+
+    hexes = _hexes_for_langs(ran, valid)
+    if isinstance(hexes, int):
+        return hexes
+
+    ok = _check_valid_vectors(ran, valid, hexes)
+    ok = _check_invalid_vectors(ran, invalid) and ok
+    return _final_status(ok, ran, skipped)
 
 
 if __name__ == "__main__":
