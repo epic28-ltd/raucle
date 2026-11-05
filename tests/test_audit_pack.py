@@ -261,15 +261,18 @@ def test_pinned_signer_anchor(tmp_path):
 
     # No anchor → ok, but signer_trusted is None (consistency only).
     v0 = verify_pack(out)
-    assert v0.ok and v0.signer_trusted is None
+    assert v0.ok
+    assert v0.signer_trusted is None
 
     # Wrong anchor → REJECT even though everything else is valid.
     v1 = verify_pack(out, expected_signer="deadbeefdeadbeef")
-    assert not v1.ok and v1.signer_trusted is False
+    assert not v1.ok
+    assert v1.signer_trusted is False
 
     # Correct anchor → PASS and signer_trusted True.
     v2 = verify_pack(out, expected_signer=real_signer)
-    assert v2.ok and v2.signer_trusted is True
+    assert v2.ok
+    assert v2.signer_trusted is True
 
 
 def test_index_signature_binds_the_member_set(tmp_path):

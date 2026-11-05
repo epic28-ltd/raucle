@@ -417,7 +417,7 @@ class AgentRegistry:
                 continue
             try:
                 self._entries.append(json.loads(line, object_pairs_hook=_reject_duplicate_keys))
-            except (json.JSONDecodeError, ValueError) as exc:
+            except ValueError as exc:
                 raise DescriptorError(
                     f"agent registry {self._path} is corrupt (line {lineno})"
                 ) from exc

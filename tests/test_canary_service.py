@@ -14,7 +14,7 @@ from raucle.canary_service import (
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def paths(tmp_path):
     return {
         "store": tmp_path / "agent-credentials.jsonl",
@@ -23,7 +23,7 @@ def paths(tmp_path):
     }
 
 
-@pytest.fixture()
+@pytest.fixture
 def make_service(paths):
     def factory() -> CanaryService:
         return CanaryService(

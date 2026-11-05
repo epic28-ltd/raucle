@@ -139,4 +139,5 @@ class TestKeyRotationE2E:
             jws = _json.loads(line)["jws"]
             header = _json.loads(_b64.urlsafe_b64decode(jws.split(".")[0] + "=="))
             kids.add(header["kid"])
-        assert kid1 in kids and kid2 in kids  # both generations present, both verifiable
+        assert kid1 in kids
+        assert kid2 in kids  # both generations present, both verifiable

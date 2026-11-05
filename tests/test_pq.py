@@ -53,7 +53,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def hybrid_signer():
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -127,13 +127,10 @@ class TestHybridSignVerify:
     def test_tampered_message_rejected(self, hybrid_signer):
         msg = b"original"
         slot = hybrid_signer.sign_both(msg)
+        ed_pub = hybrid_signer.ed25519_private.public_key()
+        pq_pub = hybrid_signer.pq_private.public_key()
         with pytest.raises(HybridVerificationError):
-            verify_hybrid(
-                b"tampered",
-                slot,
-                hybrid_signer.ed25519_private.public_key(),
-                hybrid_signer.pq_private.public_key(),
-            )
+            verify_hybrid(b"tampered", slot, ed_pub, pq_pub)
 
     def test_pq_component_tamper_rejected(self, hybrid_signer):
         """Ed25519 valid + ML-DSA flipped byte -> the AND fails."""
@@ -145,13 +142,10 @@ class TestHybridSignVerify:
         pq_bytes = bytearray(_b64url_decode(pq_b64))
         pq_bytes[5] ^= 0xFF
         bad_slot = ed_b64 + "." + _b64url(bytes(pq_bytes))
+        ed_pub = hybrid_signer.ed25519_private.public_key()
+        pq_pub = hybrid_signer.pq_private.public_key()
         with pytest.raises(HybridVerificationError):
-            verify_hybrid(
-                msg,
-                bad_slot,
-                hybrid_signer.ed25519_private.public_key(),
-                hybrid_signer.pq_private.public_key(),
-            )
+            verify_hybrid(msg, bad_slot, ed_pub, pq_pub)
 
     def test_ed_component_tamper_rejected(self, hybrid_signer):
         """Ed25519 flipped byte + ML-DSA untouched -> the AND fails."""
@@ -163,13 +157,10 @@ class TestHybridSignVerify:
         ed_bytes = bytearray(_b64url_decode(ed_b64))
         ed_bytes[3] ^= 0xFF
         bad_slot = _b64url(bytes(ed_bytes)) + "." + pq_b64
+        ed_pub = hybrid_signer.ed25519_private.public_key()
+        pq_pub = hybrid_signer.pq_private.public_key()
         with pytest.raises(HybridVerificationError):
-            verify_hybrid(
-                msg,
-                bad_slot,
-                hybrid_signer.ed25519_private.public_key(),
-                hybrid_signer.pq_private.public_key(),
-            )
+            verify_hybrid(msg, bad_slot, ed_pub, pq_pub)
 
     def test_single_segment_rejected(self, hybrid_signer):
         """The downgrade attack: ML-DSA segment stripped entirely."""
@@ -189,25 +180,18 @@ class TestHybridSignVerify:
 
         msg = b"m"
         slot = hybrid_signer.sign_both(msg)
+        foreign_ed_pub = Ed25519PrivateKey.generate().public_key()
+        pq_pub = hybrid_signer.pq_private.public_key()
         with pytest.raises(HybridVerificationError):
-            verify_hybrid(
-                msg,
-                slot,
-                Ed25519PrivateKey.generate().public_key(),
-                hybrid_signer.pq_private.public_key(),
-            )
+            verify_hybrid(msg, slot, foreign_ed_pub, pq_pub)
 
     def test_wrong_pq_key_rejected(self, hybrid_signer):
         other_priv, other_pub, _ = pq_generate()
         msg = b"m"
         slot = hybrid_signer.sign_both(msg)
+        ed_pub = hybrid_signer.ed25519_private.public_key()
         with pytest.raises(HybridVerificationError):
-            verify_hybrid(
-                msg,
-                slot,
-                hybrid_signer.ed25519_private.public_key(),
-                other_pub,
-            )
+            verify_hybrid(msg, slot, ed_pub, other_pub)
 
 
 class TestPQ1Header:
@@ -474,8 +458,9 @@ class TestPQ1TestVectors:
         )
         jws = downgrade["input_jws"]
         # Shape layer: three segments are not a pq1 receipt
+        middle_segment = jws.split(".")[2]
         with pytest.raises(HybridVerificationError):
-            parse_hybrid_signature(jws.split(".")[2])
+            parse_hybrid_signature(middle_segment)
 
     def test_receipt_hash_matches_reference_jws(self):
         data = json.loads(self.VECTOR_PATH.read_text())
