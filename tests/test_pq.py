@@ -53,7 +53,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def hybrid_signer():
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 

@@ -34,7 +34,7 @@ policies:
 _OLD_TS = "2020-01-01T00:00:00+00:00"
 
 
-@pytest.fixture()
+@pytest.fixture
 def gw(tmp_path):
     config = GatewayConfig(
         host="127.0.0.1",

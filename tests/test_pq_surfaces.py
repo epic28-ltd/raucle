@@ -40,12 +40,12 @@ def _fresh_path(suffix: str = ".jsonl") -> str:
     return p
 
 
-@pytest.fixture()
+@pytest.fixture
 def hybrid_signer():
     return HybridRecordSigner(Ed25519Signer.generate(), pq_generate()[0])
 
 
-@pytest.fixture()
+@pytest.fixture
 def pq_keys():
     priv, pub, kid = pq_generate()
     return priv, pub, kid
@@ -252,7 +252,8 @@ class TestHybridCapabilityTokens:
         issuer, gate, _ = self._issuer_and_gate(pq_keys)
         cap = self._hybrid_token(issuer)
         d = cap.to_dict()
-        assert "pq_key_id" in d and "pq_signature" in d
+        assert "pq_key_id" in d
+        assert "pq_signature" in d
         cap2 = type(cap).from_dict(d)
         assert cap2.pq_key_id == cap.pq_key_id
         decision = gate.check(
