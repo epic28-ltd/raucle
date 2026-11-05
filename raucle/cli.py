@@ -1194,7 +1194,14 @@ def _passport_verify(args, agent_passport, verify_passport, trust_registry_cls) 
     except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    passport = agent_passport.load(args.passport)
+    try:
+        passport = agent_passport.load(args.passport)
+    except (ValueError, OSError, TypeError) as exc:
+        # A passport file that is missing, is not JSON, or is not a JSON
+        # object is a named CLI error, never a traceback (verify_passport's
+        # fail-closed shape rule does not reach a file that never parsed).
+        print(f"error: cannot load passport {args.passport}: {exc}", file=sys.stderr)
+        return 1
     v = verify_passport(passport.to_dict(), registry=reg)
     if v.valid:
         print(f"VALID  {v.agent_id}  (issuer: {v.issuer})")

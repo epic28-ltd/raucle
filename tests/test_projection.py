@@ -373,3 +373,58 @@ def test_projection_reports_input_digests(tmp_path, gw):
     assert summary["receipts_digest"] == prefix + hashlib.sha256(receipts.read_bytes()).hexdigest()
     assert summary["audit_chain_digest"] == prefix + hashlib.sha256(audit.read_bytes()).hexdigest()
     assert summary["out"] == str(out)
+
+
+# ------------------------------------------------ bug-hunt round 1 fuzz ---
+def test_projection_envelope_with_nonstring_jws_counts_malformed(tmp_path):
+    """A receipt envelope whose jws is not a string (e.g. a null entry or the
+    number 123) is a malformed line: counted and skipped, never an
+    AttributeError from the tamper check reading into a non-string."""
+    p = tmp_path / "receipts.jsonl"
+    p.write_text(
+        json.dumps({"receipt_hash": "sha256:" + "0" * 64, "jws": 123}) + "\nnull\n",
+        encoding="utf-8",
+    )
+    summary = project_pack_chain(p, out_path=tmp_path / "proj1.jsonl")
+    assert summary["malformed_receipt_lines"] == 2
+    assert summary["projected_receipts"] == 0
+
+
+def test_projection_envelope_without_compact_jws_counts_malformed(tmp_path):
+    """A jws that is a string but not a compact JWS (no dot-separated
+    segments) is a malformed line; the projection completes instead of
+    crashing in the tamper check or payload decoder."""
+    p = tmp_path / "receipts.jsonl"
+    p.write_text(json.dumps({"receipt_hash": "x", "jws": "not-a-jws"}) + "\n")
+    summary = project_pack_chain(p, out_path=tmp_path / "proj2.jsonl")
+    assert summary["malformed_receipt_lines"] == 1
+
+
+def test_projection_summary_digest_binds_the_bytes_actually_projected(tmp_path, monkeypatch):
+    """TOCTOU: the summary digests must describe the SAME bytes the rows
+    were parsed from. Old code read the chain once for rows and again
+    (via _digest) for the summary, so a file replaced between the two
+    reads made the receipts_digest attest bytes that were never projected."""
+    from hashlib import sha256
+
+    import raucle.projection as pr
+
+    p = tmp_path / "receipts.jsonl"
+    p.write_text(json.dumps({"receipt_hash": "x", "jws": "a b"}) + "\n", encoding="utf-8")
+    first_read: dict[str, bytes] = {}
+    real_read_bytes = Path.read_bytes
+
+    def one_read_then_mutate(self):
+        b = real_read_bytes(self)
+        if "done" not in first_read:
+            first_read["done"] = b
+            # Simulate a second read seeing different bytes: any
+            # subsequent read would find a mutated chain.
+            p.write_text('{"receipt_hash": "y", "jws": "c d"}\n', encoding="utf-8")
+        return b
+
+    monkeypatch.setattr(Path, "read_bytes", one_read_then_mutate)
+    summary = pr.project_pack_chain(p, out_path=tmp_path / "proj.jsonl")
+    monkeypatch.undo()
+    assert summary["receipts_digest"] == "sha256:" + sha256(first_read["done"]).hexdigest()
+    assert summary["receipts_digest"] != "sha256:" + sha256(p.read_bytes()).hexdigest()
