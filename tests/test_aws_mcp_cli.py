@@ -26,7 +26,8 @@ def test_keygen_mint_serve_roundtrip(tmp_path):
 
     # keygen
     assert cli.main(["keygen", "--issuer", "acme.bank", "--key", str(key), "--pub", str(pub)]) == 0
-    assert key.exists() and pub.exists()
+    assert key.exists()
+    assert pub.exists()
     # private key is owner-only
     assert (key.stat().st_mode & 0o077) == 0
 

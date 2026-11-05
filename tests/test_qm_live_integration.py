@@ -65,7 +65,7 @@ def _free_port() -> int:
     return port
 
 
-@pytest.fixture()
+@pytest.fixture
 def live_gate(tmp_path):
     issuer = CapabilityIssuer.generate(issuer="test-issuer")
     ledger = DelegationLedger(tmp_path / "delegations.jsonl")

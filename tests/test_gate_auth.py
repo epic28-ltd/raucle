@@ -5,7 +5,7 @@ import pytest
 from raucle.agent_credentials import AgentCredentialStore
 
 
-@pytest.fixture()
+@pytest.fixture
 def store_path(tmp_path):
     return tmp_path / "agent-credentials.jsonl"
 

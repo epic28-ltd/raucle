@@ -186,7 +186,8 @@ def test_prove_and_prove_exclusion_are_dual_queries():
     some_violate = {"forbidden_values": {"a": ["x"]}}
     p = JSONSchemaProver().prove(schema, some_violate)
     e = JSONSchemaProver().prove_exclusion(schema, some_violate)
-    assert p.status == "REFUTED" and e.status == "REFUTED"
+    assert p.status == "REFUTED"
+    assert e.status == "REFUTED"
 
     # A ban no class member escapes: REFUTED for prove() (a violator exists)
     # and PROVEN for prove_exclusion() (no satisfier exists).

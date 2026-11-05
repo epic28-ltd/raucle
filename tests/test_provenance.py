@@ -496,12 +496,14 @@ def test_verifier_enforces_capability_statement(tmp_path):
 
     # Without statements: signature/DAG/taint only — passes, no capability check.
     rep = ProvenanceVerifier(keys).verify_chain(chain)
-    assert rep.valid and rep.capability_violations == 0
+    assert rep.valid
+    assert rep.capability_violations == 0
 
     # With an authoritative, stricter statement (only m1): the m2 receipt is flagged.
     strict_stmt = dataclasses.replace(idy.statement, allowed_models=["m1"])
     rep2 = ProvenanceVerifier(keys, capabilities={idy.key_id: strict_stmt}).verify_chain(chain)
-    assert not rep2.valid and rep2.capability_violations >= 1
+    assert not rep2.valid
+    assert rep2.capability_violations >= 1
 
 
 class TestEnvelopeAndIntegerDomain:
