@@ -179,7 +179,7 @@ def _delegation_hops(graph: dict[str, Any]) -> tuple[int, list[str]]:
             current = parents[current]
             hops += 1
         deepest = max(deepest, hops)
-    return len(token_ids), sorted(set(t for t in token_ids if t))
+    return len(token_ids), sorted({t for t in token_ids if t})
 
 
 def delegation_hop_impact(
@@ -274,26 +274,33 @@ def _make_threshold_negation(baseline_c: dict[str, Any], candidate_c: dict[str, 
     claim for the modelled kinds actually present."""
 
     def _negation(z3: Any, solver: Any) -> None:
-        terms = []
-        counter = 0
-        for key, bigger_widens in _WIDEN_FIELDS:
-            base_bounds = baseline_c.get(key, {})
-            cand_bounds = candidate_c.get(key, {})
-            for f in set(base_bounds) & set(cand_bounds):
-                b, c = base_bounds[f], cand_bounds[f]
-                if not _numeric_pair(b, c):
-                    continue
-                vb = z3.Real(f"__base_{counter}")
-                vc = z3.Real(f"__cand_{counter}")
-                counter += 1
-                solver.add(vb == b, vc == c)
-                terms.append(vc > vb if bigger_widens else vc < vb)
-        if terms:
-            solver.add(z3.Or(*terms))
-        else:
-            solver.add(z3.BoolVal(False))
+        _threshold_negation_terms(z3, solver, baseline_c, candidate_c)
 
     return _negation
+
+
+def _threshold_negation_terms(
+    z3: Any, solver: Any, baseline_c: dict[str, Any], candidate_c: dict[str, Any]
+) -> None:
+    """Assert SOME shared bound moved outwards; unsat proves tightening."""
+    terms = []
+    counter = 0
+    for key, bigger_widens in _WIDEN_FIELDS:
+        base_bounds = baseline_c.get(key, {})
+        cand_bounds = candidate_c.get(key, {})
+        for f in set(base_bounds) & set(cand_bounds):
+            b, c = base_bounds[f], cand_bounds[f]
+            if not _numeric_pair(b, c):
+                continue
+            vb = z3.Real(f"__base_{counter}")
+            vc = z3.Real(f"__cand_{counter}")
+            counter += 1
+            solver.add(vb == b, vc == c)
+            terms.append(vc > vb if bigger_widens else vc < vb)
+    if terms:
+        solver.add(z3.Or(*terms))
+    else:
+        solver.add(z3.BoolVal(False))
 
 
 def _numeric_pair(b: Any, c: Any) -> bool:
