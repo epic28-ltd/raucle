@@ -136,7 +136,7 @@ def _widened_tools(rule_diff: dict[str, Any]) -> list[dict[str, Any]]:
                 cand_bounds = cand_rule_constraints.get(key, {})
                 for f in set(base_bounds) & set(cand_bounds):
                     b, c = base_bounds[f], cand_bounds[f]
-                    if (isinstance(b, (int, float)) and isinstance(c, (int, float))):
+                    if isinstance(b, (int, float)) and isinstance(c, (int, float)):
                         widens = widens or (c > b if bigger_widens else c < b)
         if widens:
             widened.append(row)
@@ -151,14 +151,10 @@ def _widened_tools(rule_diff: dict[str, Any]) -> list[dict[str, Any]]:
 def _delegation_hops(graph: dict[str, Any]) -> tuple[int, list[str]]:
     """Hop depth and token IDs along the graph's delegation path."""
     token_ids = [
-        str(n.get("token_id", ""))
-        for n in graph.get("nodes", [])
-        if n.get("kind") == "delegation"
+        str(n.get("token_id", "")) for n in graph.get("nodes", []) if n.get("kind") == "delegation"
     ]
     parents: dict[str, str] = {
-        e["from"]: e["to"]
-        for e in graph.get("edges", [])
-        if e.get("kind") == "delegation_parent"
+        e["from"]: e["to"] for e in graph.get("edges", []) if e.get("kind") == "delegation_parent"
     }
     deepest = 0
     for token in token_ids:
@@ -187,9 +183,7 @@ def delegation_hop_impact(
         if graph is None:
             continue
         hop_count, token_ids = _delegation_hops(graph)
-        policy_nodes = [
-            n for n in graph.get("nodes", []) if n.get("kind") == "policy"
-        ]
+        policy_nodes = [n for n in graph.get("nodes", []) if n.get("kind") == "policy"]
         affected_rule_ids = sorted(
             {
                 str(n.get("rule_id", ""))
@@ -292,11 +286,14 @@ def _check_threshold_invariant_z3(
     holds = _z3_check_negation(_negation)
     if holds is None:
         return False, ["z3 unavailable"]
-    notes = [] if not widenings else [
-        f"witness: field {w['field']!r} ({w['kind']}) moved "
-        f"{w['baseline']} -> {w['candidate']}"
-        for w in widenings[:3]
-    ]
+    notes = (
+        []
+        if not widenings
+        else [
+            f"witness: field {w['field']!r} ({w['kind']}) moved {w['baseline']} -> {w['candidate']}"
+            for w in widenings[:3]
+        ]
+    )
     return not widenings and holds, notes
 
 
@@ -383,11 +380,7 @@ def invariant_diff(
         cand_rules = cand_by_tool.get(tool)
         # Receipts the sampled evidence contributes for this tool.
         affected_receipts = sorted(
-            {
-                str(d.get("receipt_hash", ""))
-                for d in flipped_rows
-                if d.get("tool") == tool
-            }
+            {str(d.get("receipt_hash", "")) for d in flipped_rows if d.get("tool") == tool}
         )
         if not base_rules and not cand_rules:
             continue
@@ -411,9 +404,7 @@ def invariant_diff(
                 bc, cc = b.to_mint_kwargs()["constraints"], c.to_mint_kwargs()["constraints"]
                 if not bc or not cc:
                     continue
-                for name_index, name in enumerate(
-                    ("threshold-tightening", "deny-list-superset")
-                ):
+                for name_index, name in enumerate(("threshold-tightening", "deny-list-superset")):
                     try:
                         holds, notes = pair_checkers[name_index](bc, cc)
                     except Exception as exc:  # prover grammar errors stay honest
@@ -442,9 +433,7 @@ def invariant_diff(
                 if c is not None:
                     seen.add(c.id)
                     pairs.append((b, c, b.id, c.id))
-            pairs.extend(
-                (c, c, c.id, c.id) for c in cand_rules if c.id not in seen
-            )
+            pairs.extend((c, c, c.id, c.id) for c in cand_rules if c.id not in seen)
             _pair_rows(pairs)
         elif base_rules:
             for b in base_rules:
@@ -568,9 +557,7 @@ def build_delta_report(
         if d["original_action"] != d["counterfactual_action"]
     ]
     flipped_ids = [f["receipt_id"] for f in flips]
-    denied_receipts = [
-        f["receipt_id"] for f in flips if f["counterfactual_action"] == "BLOCK"
-    ]
+    denied_receipts = [f["receipt_id"] for f in flips if f["counterfactual_action"] == "BLOCK"]
 
     # The original per-receipt tool, from the batch's scanner-side record:
     # BatchReport.decisions does NOT carry the tool, so rule <-> receipt
@@ -584,9 +571,7 @@ def build_delta_report(
 
     # 2. Authority paths opened / closed (policy diff), with receipt trace.
     rule_diff = diff_policy_rules(baseline_policy, candidate_policy)
-    flipped_tool_data = [
-        {**f, "tool": receipt_tools.get(f["receipt_id"], "")} for f in flips
-    ]
+    flipped_tool_data = [{**f, "tool": receipt_tools.get(f["receipt_id"], "")} for f in flips]
     for path in rule_diff["opened"] + rule_diff["closed"] + rule_diff["changed"]:
         path["receipt_ids"] = sorted(
             f["receipt_id"] for f in flipped_tool_data if f["tool"] == path["tool"]
@@ -641,11 +626,7 @@ def build_delta_report(
             f"(rules: {', '.join(sorted(r['rule_id'] for r in widened_tools))})"
         )
     preserved = sorted(
-        {
-            inv["invariant"]
-            for inv in invariants["invariants"]
-            if inv["holds_in_both"]
-        }
+        {inv["invariant"] for inv in invariants["invariants"] if inv["holds_in_both"]}
     )
     if preserved:
         sentence += f", invariant {' and '.join(preserved)} preserved"
@@ -655,9 +636,7 @@ def build_delta_report(
     if not invariants["z3_invoked"]:
         gaps.append("z3 not installed: invariant section is heuristic, not a proof")
     if not chain_graphs:
-        gaps.append(
-            "no chain graphs supplied: delegation-hop impact not evaluated"
-        )
+        gaps.append("no chain graphs supplied: delegation-hop impact not evaluated")
     if batch.missing_inputs:
         gaps.append(
             f"{batch.missing_inputs} sampled receipts had no stored input and "
@@ -729,11 +708,7 @@ def activation_artefact(report: DeltaReport) -> dict[str, Any]:
         "authority_paths_changed": _bounded_section(report.authority_paths_changed),
         "delegation_hop_impact": report.delegation_hops,
         "invariants_preserved": sorted(
-            {
-                inv["invariant"]
-                for inv in report.invariants["invariants"]
-                if inv["holds_in_both"]
-            }
+            {inv["invariant"] for inv in report.invariants["invariants"] if inv["holds_in_both"]}
         ),
         "invariants_mode": report.invariants["mode"],
         "register_sentence": report.register_sentence,

@@ -54,10 +54,10 @@ logger = logging.getLogger(__name__)
 INJECAGENT_DATA_DIR = Path(__file__).parent.parent.parent / "external" / "InjecAgent" / "data"
 
 CORPUS_FILES = {
-    "dh_base":      "test_cases_dh_base.json",
-    "dh_enhanced":  "test_cases_dh_enhanced.json",
-    "ds_base":      "test_cases_ds_base.json",
-    "ds_enhanced":  "test_cases_ds_enhanced.json",
+    "dh_base": "test_cases_dh_base.json",
+    "dh_enhanced": "test_cases_dh_enhanced.json",
+    "ds_base": "test_cases_ds_base.json",
+    "ds_enhanced": "test_cases_ds_enhanced.json",
 }
 
 
@@ -68,8 +68,8 @@ CORPUS_FILES = {
 
 @dataclass
 class TaskResult:
-    case_id: str       # corpus + index
-    mode: str          # dh_base, dh_enhanced, ds_base, ds_enhanced
+    case_id: str  # corpus + index
+    mode: str  # dh_base, dh_enhanced, ds_base, ds_enhanced
     user_tool: str
     attacker_tools: list[str]
     attack_success: bool
@@ -123,24 +123,31 @@ def run_static(
             )
         cases = json.loads(path.read_text())
         corp = CorpusResult(
-            corpus=cname, total_cases=len(cases),
-            attack_successes=0, tool_mediated_attacks=0,
+            corpus=cname,
+            total_cases=len(cases),
+            attack_successes=0,
+            tool_mediated_attacks=0,
         )
         for idx, case in enumerate(cases):
             attack_success = _eval_case_static(case, defence)
-            corp.per_task.append(TaskResult(
-                case_id=f"{cname}:{idx}",
-                mode=cname,
-                user_tool=case["User Tool"],
-                attacker_tools=case["Attacker Tools"],
-                attack_success=attack_success,
-            ))
+            corp.per_task.append(
+                TaskResult(
+                    case_id=f"{cname}:{idx}",
+                    mode=cname,
+                    user_tool=case["User Tool"],
+                    attacker_tools=case["Attacker Tools"],
+                    attack_success=attack_success,
+                )
+            )
             if attack_success:
                 corp.attack_successes += 1
                 corp.tool_mediated_attacks += 1
         logger.info(
             "[%s/%s] ASR=%.1f%%  n=%d",
-            defence, cname, 100 * corp.asr, corp.total_cases,
+            defence,
+            cname,
+            100 * corp.asr,
+            corp.total_cases,
         )
         out.append(corp)
     return out
@@ -192,9 +199,7 @@ def _eval_case_static(case: dict, defence: str) -> bool:
     # If the chain had any non-user steps, all were allowed => attack succeeds.
     # If the chain was *only* the user's tool, the attacker didn't actually
     # need to escalate beyond what the user authorised — vacuous "success".
-    chain_includes_escalation = any(
-        t != user_tool for t in case["Attacker Tools"]
-    )
+    chain_includes_escalation = any(t != user_tool for t in case["Attacker Tools"])
     return chain_includes_escalation
 
 
@@ -206,6 +211,7 @@ def _parse_tool_params(raw: Any) -> dict:
     if isinstance(raw, str):
         try:
             import ast
+
             return ast.literal_eval(raw)
         except Exception:
             return {}
@@ -276,24 +282,31 @@ def run_faithful(
         if case_limit:
             cases = cases[:case_limit]
         corp = CorpusResult(
-            corpus=cname, total_cases=len(cases),
-            attack_successes=0, tool_mediated_attacks=0,
+            corpus=cname,
+            total_cases=len(cases),
+            attack_successes=0,
+            tool_mediated_attacks=0,
         )
         for idx, case in enumerate(cases):
             attack_success = _eval_case_faithful(case, defence, client, model)
             if attack_success:
                 corp.attack_successes += 1
                 corp.tool_mediated_attacks += 1
-            corp.per_task.append(TaskResult(
-                case_id=f"{cname}:{idx}",
-                mode=cname,
-                user_tool=case["User Tool"],
-                attacker_tools=case["Attacker Tools"],
-                attack_success=attack_success,
-            ))
+            corp.per_task.append(
+                TaskResult(
+                    case_id=f"{cname}:{idx}",
+                    mode=cname,
+                    user_tool=case["User Tool"],
+                    attacker_tools=case["Attacker Tools"],
+                    attack_success=attack_success,
+                )
+            )
         logger.info(
             "[%s/%s] ASR=%.1f%%  n=%d  (faithful)",
-            defence, cname, 100 * corp.asr, corp.total_cases,
+            defence,
+            cname,
+            100 * corp.asr,
+            corp.total_cases,
         )
         out.append(corp)
     return out

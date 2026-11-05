@@ -13,6 +13,7 @@ Cloud:
 Per model: banking × {none, shields, vcd_full} = 3 cells.
 Total: 9 cells. Per-cell subprocess isolation; shields at RAUCLE_PARALLEL=2.
 """
+
 import json
 import os
 import subprocess
@@ -64,7 +65,8 @@ def run_cell(model, short, defence, parallel):
         [sys.executable, "-c", code],
         cwd="/root/raucle-paper/raucle",
         env={**os.environ, "PYTHONPATH": "."},
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     elapsed = time.time() - t0
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

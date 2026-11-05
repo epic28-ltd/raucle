@@ -116,8 +116,11 @@ def canonical_json(obj) -> bytes:
     token_ids/signatures are byte-identical and the same material is rejected."""
     _reject_floats(obj)
     return json.dumps(
-        _reorder_keys_utf16(obj), sort_keys=False, separators=(",", ":"),
-        ensure_ascii=False, allow_nan=False,
+        _reorder_keys_utf16(obj),
+        sort_keys=False,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
     ).encode("utf-8")
 
 
@@ -151,9 +154,19 @@ _TOOL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-./]{0,127}$")
 
 
 _BODY_FIELDS = (
-    "version", "agent_id", "tool", "constraints",
-    "issuer", "key_id", "issued_at", "not_before", "expires_at",
-    "parent_id", "policy_proof_hash", "grammar_hash", "policy_hash",
+    "version",
+    "agent_id",
+    "tool",
+    "constraints",
+    "issuer",
+    "key_id",
+    "issued_at",
+    "not_before",
+    "expires_at",
+    "parent_id",
+    "policy_proof_hash",
+    "grammar_hash",
+    "policy_hash",
 )
 
 
@@ -201,9 +214,7 @@ def _require_value_list(kind: str, fld: str, v):
         )
     for m in v:
         if not isinstance(m, (str, int)):  # bool is an int subclass (allowed)
-            raise ValueError(
-                f"{kind}[{fld!r}] member {m!r} is not a JSON scalar (str/int/bool)"
-            )
+            raise ValueError(f"{kind}[{fld!r}] member {m!r} is not a JSON scalar (str/int/bool)")
     return sorted(v, key=_value_sort_key)
 
 
@@ -337,6 +348,7 @@ def _verify_token_impl(
     now: int | None = None,
 ) -> tuple[bool, str, str | None]:
     from cryptography.hazmat.primitives import serialization
+
     ts = now if now is not None else int(time.time())
 
     # Field-shape sanity: the body fields the gate ALWAYS signs must be present
@@ -409,7 +421,11 @@ def _verify_token_impl(
         if not _AGENT_ID_RE.match(agent_id):
             return False, f"malformed caller agent_id {agent_id!r}", "agent_scope"
         if agent_id != token["agent_id"] and not agent_id.startswith(token["agent_id"] + "."):
-            return False, f"agent {agent_id!r} not a sub-scope of {token['agent_id']!r}", "agent_scope"
+            return (
+                False,
+                f"agent {agent_id!r} not a sub-scope of {token['agent_id']!r}",
+                "agent_scope",
+            )
 
     # Check 7 — chain resolution (fundamental, so checked before constraints).
     # This minimal verifier resolves single tokens only. A token that cites a
@@ -467,10 +483,17 @@ def _is_number(v) -> bool:
 # closed at the gate (defence in depth), mirroring CapabilityGate's registry
 # guard — an unmodelled kind that reached a signed token must DENY, not be
 # silently ignored.
-_KNOWN_CONSTRAINT_KINDS = frozenset({
-    "forbidden_values", "allowed_values", "starts_with",
-    "max_value", "min_value", "required_present", "forbidden_field_combinations",
-})
+_KNOWN_CONSTRAINT_KINDS = frozenset(
+    {
+        "forbidden_values",
+        "allowed_values",
+        "starts_with",
+        "max_value",
+        "min_value",
+        "required_present",
+        "forbidden_field_combinations",
+    }
+)
 
 
 def _check_constraints(c: dict, args: dict) -> str | None:

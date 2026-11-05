@@ -21,6 +21,7 @@ a non-zero exit). Python is driven in-process.
 Usage:  python reference/canon_conformance.py
 Exit 0 on full agreement, non-zero otherwise.
 """
+
 from __future__ import annotations
 
 import json
@@ -64,22 +65,36 @@ def _build(lang: str) -> None:
     if lang == "rust":
         subprocess.run(
             ["cargo", "build", "--quiet", "--example", "emit"],
-            cwd=REF / "provenance-rs", check=True, capture_output=True, text=True,
+            cwd=REF / "provenance-rs",
+            check=True,
+            capture_output=True,
+            text=True,
         )
     elif lang == "csharp":
         subprocess.run(
             ["dotnet", "build", "--nologo", "-v", "q", "interop/Interop.csproj"],
-            cwd=REF / "provenance-cs", check=True, capture_output=True, text=True,
+            cwd=REF / "provenance-cs",
+            check=True,
+            capture_output=True,
+            text=True,
         )
 
 
 # Per-language --canon invocation: (argv, cwd). Python is handled in-process.
 CANON_CMD = {
     "go": (["go", "run", "./cmd/emit", "--canon"], REF / "provenance-go"),
-    "rust": (["cargo", "run", "--quiet", "--example", "emit", "--", "--canon"], REF / "provenance-rs"),
-    "typescript": (["npx", "--no-install", "tsx", "src/emit-cli.ts", "--canon"], REF / "provenance-ts"),
-    "csharp": (["dotnet", "run", "--no-build", "--project", "interop/Interop.csproj", "--", "--canon"],
-               REF / "provenance-cs"),
+    "rust": (
+        ["cargo", "run", "--quiet", "--example", "emit", "--", "--canon"],
+        REF / "provenance-rs",
+    ),
+    "typescript": (
+        ["npx", "--no-install", "tsx", "src/emit-cli.ts", "--canon"],
+        REF / "provenance-ts",
+    ),
+    "csharp": (
+        ["dotnet", "run", "--no-build", "--project", "interop/Interop.csproj", "--", "--canon"],
+        REF / "provenance-cs",
+    ),
 }
 
 LANGS = [
@@ -94,6 +109,7 @@ LANGS = [
 def _hexes(lang: str, reqs: list[dict]) -> list[str]:
     if lang == "python":
         from raucle.provenance import _canonical_json
+
         return [_canonical_json(r["obj"]).hex() for r in reqs]
     cmd, cwd = CANON_CMD[lang]
     return [row["hex"] for row in _run_lines(cmd, cwd, reqs)]
@@ -102,6 +118,7 @@ def _hexes(lang: str, reqs: list[dict]) -> list[str]:
 def _rejects_lang(lang: str, obj) -> bool:
     if lang == "python":
         from raucle.provenance import _canonical_json
+
         try:
             _canonical_json(obj)
             return False
@@ -121,16 +138,18 @@ def main() -> int:
     # key in the first probe is U+E000 (BMP private-use): code point orders it
     # before the non-BMP key, UTF-16 orders the non-BMP key first.
     probes = [
-        {"name": "probe_non_bmp_key_ordering", "obj": {"a": "x", "\U0001F511": "y", "": "z"}},
-        {"name": "probe_non_bmp_keys_only", "obj": {"\U0001F600": "a", "￿": "b", "\U00010000": "c"}},
+        {"name": "probe_non_bmp_key_ordering", "obj": {"a": "x", "\U0001f511": "y", "": "z"}},
+        {
+            "name": "probe_non_bmp_keys_only",
+            "obj": {"\U0001f600": "a", "￿": "b", "\U00010000": "c"},
+        },
     ]
     # Valid-vector requests: every published canon vector (with its expected
     # hex) plus the probes (cross-lang agreement only, no published hex).
-    valid = (
-        [{"name": v["name"], "obj": v["input_object"], "expected_hex": v["expected_canonical_hex"]}
-         for v in published]
-        + probes
-    )
+    valid = [
+        {"name": v["name"], "obj": v["input_object"], "expected_hex": v["expected_canonical_hex"]}
+        for v in published
+    ] + probes
 
     all_langs = [l for l, _ in LANGS]
     ran, skipped = [], []
@@ -195,8 +214,10 @@ def main() -> int:
             f"that ran; SKIPPED: {', '.join(skipped)}. Full parity NOT proven."
         )
         return 3
-    print(f"RESULT: PASS — {n_total}-language canonicalisation parity proven "
-          f"(published vectors + non-BMP probes + invalid-rejection)")
+    print(
+        f"RESULT: PASS — {n_total}-language canonicalisation parity proven "
+        f"(published vectors + non-BMP probes + invalid-rejection)"
+    )
     return 0
 
 

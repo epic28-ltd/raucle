@@ -63,18 +63,18 @@ def main(argv: list[str] | None = None) -> int:
         subs["`[TBD ~1.2]` ms"] = f"`{fmt_ms(latency['gate_chain_3']['p50_ms'])}` ms"
         subs["`[TBD ~2.4]` ms"] = f"`{fmt_ms(latency['gate_chain_3']['p95_ms'])}` ms"
         subs["`[TBD ~3.6]` ms"] = f"`{fmt_ms(latency['gate_chain_3']['p99_ms'])}` ms"
-        subs["`[TBD ~18]` ms"]  = f"`{fmt_ms(latency['prove_cold']['p50_ms'])}` ms"
-        subs["`[TBD ~42]` ms"]  = f"`{fmt_ms(latency['prove_cold']['p95_ms'])}` ms"
-        subs["`[TBD ~88]` ms"]  = f"`{fmt_ms(latency['prove_cold']['p99_ms'])}` ms"
+        subs["`[TBD ~18]` ms"] = f"`{fmt_ms(latency['prove_cold']['p50_ms'])}` ms"
+        subs["`[TBD ~42]` ms"] = f"`{fmt_ms(latency['prove_cold']['p95_ms'])}` ms"
+        subs["`[TBD ~88]` ms"] = f"`{fmt_ms(latency['prove_cold']['p99_ms'])}` ms"
 
     # ASR headline table (§6.2). One column per benchmark, one row per defence.
     HEADLINE_CONFIGS = [
-        ("none",       "`[TBD ~47]%`", "`[TBD ~52]%`", "`[TBD ~89]%`"),
-        ("spotlight",  "`[TBD ~22]%`", "`[TBD ~28]%`", "`[TBD ~87]%`"),
-        ("struq",      "`[TBD ~14]%`", "`[TBD ~19]%`", "`[TBD ~84]%`"),
-        ("shields",    "`[TBD ~18]%`", "`[TBD ~23]%`", "`[TBD ~86]%`"),
-        ("vcd_text",   "`[TBD ~31]%`", "`[TBD ~34]%`", "`[TBD ~88]%`"),
-        ("vcd_full",   "`[TBD ≤ 0.5]%`", "`[TBD ≤ 0.5]%`", "`[TBD ~86]%`"),
+        ("none", "`[TBD ~47]%`", "`[TBD ~52]%`", "`[TBD ~89]%`"),
+        ("spotlight", "`[TBD ~22]%`", "`[TBD ~28]%`", "`[TBD ~87]%`"),
+        ("struq", "`[TBD ~14]%`", "`[TBD ~19]%`", "`[TBD ~84]%`"),
+        ("shields", "`[TBD ~18]%`", "`[TBD ~23]%`", "`[TBD ~86]%`"),
+        ("vcd_text", "`[TBD ~31]%`", "`[TBD ~34]%`", "`[TBD ~88]%`"),
+        ("vcd_full", "`[TBD ≤ 0.5]%`", "`[TBD ≤ 0.5]%`", "`[TBD ~86]%`"),
     ]
     for cfg, ad_tbd, ia_tbd, be_tbd in HEADLINE_CONFIGS:
         row = find_row(results, cfg)
@@ -85,7 +85,10 @@ def main(argv: list[str] | None = None) -> int:
             subs[ia_tbd] = fmt_pct(row["injecagent"]["asr"])
 
     # Ablation rows
-    for cfg, tag in [("vcd_cap_only", "Capability gate only"), ("vcd_proof_only", "SMT proof only")]:
+    for cfg, tag in [
+        ("vcd_cap_only", "Capability gate only"),
+        ("vcd_proof_only", "SMT proof only"),
+    ]:
         row = find_row(results, cfg)
         if row and row.get("agentdojo"):
             # The ablation table uses generic [TBD]% — we substitute the first

@@ -119,6 +119,7 @@ expires in 90 days:
 
 ```python
 import time
+
 users.add_user("temp-key", "operator", name="Temp", expires_at=time.time() + 86400 * 90)
 ```
 

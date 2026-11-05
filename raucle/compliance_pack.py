@@ -288,13 +288,9 @@ def build_pack(
             if not re.fullmatch(r"[a-z0-9._-]{1,64}", name):
                 raise ValueError(f"artefact name rejected: {name!r}")
             filename = f"artefact-{name}.json"
-            _bundle_file(out_dir, filename).write_text(
-                json.dumps(art, indent=2), encoding="utf-8"
-            )
+            _bundle_file(out_dir, filename).write_text(json.dumps(art, indent=2), encoding="utf-8")
             _hash_terms.append(_sha256_file(_bundle_file(out_dir, filename)))
-    pack_hash = _HASH_PREFIX + hashlib.sha256(
-        "".join(_hash_terms).encode("ascii")
-    ).hexdigest()
+    pack_hash = _HASH_PREFIX + hashlib.sha256("".join(_hash_terms).encode("ascii")).hexdigest()
     chain_digest = _sha256_file(chain_path)
 
     manifest: dict[str, Any] = {

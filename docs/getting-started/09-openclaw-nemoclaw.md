@@ -53,10 +53,12 @@ from raucle.siem import SIEMSink
 
 # Signed evidence chain (authoritative) + SIEM operational stream, one sink.
 sink = SIEMSink(
-    "/var/log/raucle/agent-siem.jsonl",                  # Splunk/Sentinel/Elastic tail this
-    inner=HashChainSink("/var/log/raucle/receipts.jsonl",  # tamper-evident, offline-verifiable
-                        signer=Ed25519Signer.generate()),
-    syslog_address=("siem.internal", 514),               # optional: also stream to a collector
+    "/var/log/raucle/agent-siem.jsonl",  # Splunk/Sentinel/Elastic tail this
+    inner=HashChainSink(
+        "/var/log/raucle/receipts.jsonl",  # tamper-evident, offline-verifiable
+        signer=Ed25519Signer.generate(),
+    ),
+    syslog_address=("siem.internal", 514),  # optional: also stream to a collector
 )
 ```
 

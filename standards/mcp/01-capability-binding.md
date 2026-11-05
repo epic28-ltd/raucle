@@ -118,9 +118,10 @@ error — the model should see it and may react, but it carries no signed materi
 
 ```python
 from raucle.mcp_auth import verify_tool_annotation
+
 ok, reason = verify_tool_annotation(tool, trusted_key_ids={"9f1c2a3b4d5e6f70"})
 if not ok:
-    raise PermissionError(reason)   # do not call a gated tool you cannot anchor
+    raise PermissionError(reason)  # do not call a gated tool you cannot anchor
 ```
 
 A conforming client MUST:

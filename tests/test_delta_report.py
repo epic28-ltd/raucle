@@ -30,9 +30,7 @@ def _build_chain(tmp_path, prompts, scanner_mode="standard", marker="agent:test-
         ProvenanceLogger(agent=identity, sink_path=chain_path) as logger_,
         InputStore.open(store_path) as store,
     ):
-        scanner = Scanner(
-            mode=scanner_mode, provenance_logger=logger_, input_store=store
-        )
+        scanner = Scanner(mode=scanner_mode, provenance_logger=logger_, input_store=store)
         for text in prompts:
             scanner.scan(text)
     return chain_path, store_path
@@ -49,9 +47,7 @@ def _make_batch(tmp_path, policy_label="candidate-strict-v2"):
             input_store=store,
             policy_label=policy_label,
         )
-        batch = harness.run(
-            chain_path, SamplePlan(strategy="recent", limit=5)
-        )
+        batch = harness.run(chain_path, SamplePlan(strategy="recent", limit=5))
     return batch
 
 
@@ -94,9 +90,7 @@ class TestFlipsAndDenials:
         flip_ids = {f["receipt_id"] for f in report.flips}
         assert flip_ids
         assert flip_ids <= set(batch.receipt_ids)
-        assert all(
-            f["original_action"] != f["counterfactual_action"] for f in report.flips
-        )
+        assert all(f["original_action"] != f["counterfactual_action"] for f in report.flips)
 
     def test_would_have_denied_traces_to_receipt_ids(self, tmp_path):
         batch = _make_batch(tmp_path)
@@ -142,12 +136,8 @@ class TestAuthorityPaths:
 
     def test_widened_tool_detected_and_named(self, tmp_path):
         batch = _make_batch(tmp_path)
-        base = _policy(
-            [_rule("transfer_money", "agent:pay", {"max": {"amount": 100}}, "r-w1")]
-        )
-        cand = _policy(
-            [_rule("transfer_money", "agent:pay", {"max": {"amount": 10000}}, "r-w2")]
-        )
+        base = _policy([_rule("transfer_money", "agent:pay", {"max": {"amount": 100}}, "r-w1")])
+        cand = _policy([_rule("transfer_money", "agent:pay", {"max": {"amount": 10000}}, "r-w2")])
         report = build_delta_report(
             batch, baseline_policy=base, candidate_policy=cand, use_z3=False
         )
@@ -158,9 +148,7 @@ class TestAuthorityPaths:
 
     def test_changed_rules_list_moved_fields(self, tmp_path):
         _make_batch(tmp_path)
-        base = _policy(
-            [_rule("transfer_money", "agent:pay", {"max": {"amount": 100}}, "r-chg")]
-        )
+        base = _policy([_rule("transfer_money", "agent:pay", {"max": {"amount": 100}}, "r-chg")])
         cand = _policy(
             [
                 _rule(
@@ -232,12 +220,8 @@ class TestInvariantDiff:
     def test_z3_checked_when_available_and_proves_tightening(self, tmp_path):
         pytest.importorskip("z3")
         batch = _make_batch(tmp_path)
-        base = _policy(
-            [_rule("transfer_money", "agent:pay", {"max": {"amount": 10000}}, "r-b")]
-        )
-        cand = _policy(
-            [_rule("transfer_money", "agent:pay", {"max": {"amount": 10}}, "r-c")]
-        )
+        base = _policy([_rule("transfer_money", "agent:pay", {"max": {"amount": 10000}}, "r-b")])
+        cand = _policy([_rule("transfer_money", "agent:pay", {"max": {"amount": 10}}, "r-c")])
         report = build_delta_report(batch, baseline_policy=base, candidate_policy=cand)
         inv = report.invariants
         assert inv["z3_invoked"] is True
@@ -278,12 +262,8 @@ class TestInvariantDiff:
 
     def test_heuristic_label_without_z3(self, tmp_path):
         batch = _make_batch(tmp_path)
-        base = _policy(
-            [_rule("transfer_money", "agent:pay", {"max": {"amount": 100}}, "r-b")]
-        )
-        cand = _policy(
-            [_rule("transfer_money", "agent:pay", {"max": {"amount": 100}}, "r-c")]
-        )
+        base = _policy([_rule("transfer_money", "agent:pay", {"max": {"amount": 100}}, "r-b")])
+        cand = _policy([_rule("transfer_money", "agent:pay", {"max": {"amount": 100}}, "r-c")])
         report = build_delta_report(
             batch, baseline_policy=base, candidate_policy=cand, use_z3=False
         )
@@ -330,8 +310,6 @@ class TestRegisterSentence:
 
 class TestConstraintLookup:
     def test_baseline_constraint_for_returns_compiled(self):
-        policy = _policy(
-            [_rule("t", "agent:x", {"max": {"amount": 50}}, "r1")]
-        )
+        policy = _policy([_rule("t", "agent:x", {"max": {"amount": 50}}, "r1")])
         assert baseline_constraint_for(policy, "t", "agent:x") == {"max_value": {"amount": 50}}
         assert baseline_constraint_for(policy, "other", "agent:x") == {}

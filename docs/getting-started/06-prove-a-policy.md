@@ -166,7 +166,7 @@ token = issuer.mint(
         "forbidden_values": {"tier": ["platinum"]},
     },
     ttl_seconds=300,
-    policy_proof_hash=result.hash,   # <— cites the proof
+    policy_proof_hash=result.hash,  # <— cites the proof
 )
 ```
 
@@ -189,7 +189,7 @@ For an auditor to do step 2 above, the proof has to be reachable. Dump the full 
 ```python
 import json
 
-artefact = result.to_dict()          # status, prover, hashes, counterexample, content-address
+artefact = result.to_dict()  # status, prover, hashes, counterexample, content-address
 with open(f"{result.hash.replace(':', '_')}.json", "w") as f:
     json.dump(artefact, f, indent=2)
 

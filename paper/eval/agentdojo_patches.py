@@ -90,33 +90,33 @@ def _patch_model_names() -> None:
     additions = {
         # Anthropic 2026 generation
         "claude-sonnet-4-6": "Claude",
-        "claude-opus-4-7":   "Claude",
+        "claude-opus-4-7": "Claude",
         # Ollama Cloud catalogue
-        "deepseek-v4-pro":   "DeepSeek",
+        "deepseek-v4-pro": "DeepSeek",
         "deepseek-v4-flash": "DeepSeek",
-        "deepseek-v3.2":     "DeepSeek",
-        "deepseek-v3.1":     "DeepSeek",
-        "kimi-k2.6":         "Kimi",
-        "kimi-k2.5":         "Kimi",
-        "kimi-k2":           "Kimi",
-        "qwen3.5":           "Qwen",
-        "qwen3-coder":       "Qwen",
-        "qwen3-vl":          "Qwen",
-        "qwen3-next":        "Qwen",
-        "glm-5.1":           "GLM",
-        "glm-5":             "GLM",
-        "glm-4.7":           "GLM",
-        "glm-4.6":           "GLM",
-        "mistral-large-3":   "Mistral",
-        "gpt-oss":           "AI assistant",
-        "nemotron-3":        "Nemotron",
-        "gemma3":            "Gemma",
-        "gemma4":            "Gemma",
-        "minimax-m2":        "MiniMax",
-        "cogito-2":          "Cogito",
-        "devstral":          "AI assistant",
-        "ministral-3":       "Mistral",
-        "rnj-1":             "AI assistant",
+        "deepseek-v3.2": "DeepSeek",
+        "deepseek-v3.1": "DeepSeek",
+        "kimi-k2.6": "Kimi",
+        "kimi-k2.5": "Kimi",
+        "kimi-k2": "Kimi",
+        "qwen3.5": "Qwen",
+        "qwen3-coder": "Qwen",
+        "qwen3-vl": "Qwen",
+        "qwen3-next": "Qwen",
+        "glm-5.1": "GLM",
+        "glm-5": "GLM",
+        "glm-4.7": "GLM",
+        "glm-4.6": "GLM",
+        "mistral-large-3": "Mistral",
+        "gpt-oss": "AI assistant",
+        "nemotron-3": "Nemotron",
+        "gemma3": "Gemma",
+        "gemma4": "Gemma",
+        "minimax-m2": "MiniMax",
+        "cogito-2": "Cogito",
+        "devstral": "AI assistant",
+        "ministral-3": "Mistral",
+        "rnj-1": "AI assistant",
     }
     MODEL_NAMES.update(additions)
     logger.debug("extended MODEL_NAMES with %d entries", len(additions))
@@ -140,6 +140,7 @@ def _patch_get_llm() -> None:
             return original_get_llm(provider, model, model_id, tool_delimiter)
         import openai
         from agentdojo.agent_pipeline import OpenAILLM
+
         key = os.getenv("OLLAMA_API_KEY")
         if not key:
             raise RuntimeError(
@@ -177,6 +178,7 @@ def _coerce_param_value(raw: str) -> object:
     so booleans/numbers/objects round-trip; fall back to the raw string.
     """
     import json as _json
+
     s = raw.strip()
     try:
         return _json.loads(s)
@@ -246,9 +248,9 @@ def _patch_xml_tool_calls() -> None:
         if not synth:
             return result
         from agentdojo.functions_runtime import FunctionCall
+
         result["tool_calls"] = [
-            FunctionCall(id=c["id"], function=c["name"], args=c["args"])
-            for c in synth
+            FunctionCall(id=c["id"], function=c["name"], args=c["args"]) for c in synth
         ]
         # Blank the content so the agent harness doesn't double-process it.
         result["content"] = [{"type": "text", "content": ""}]

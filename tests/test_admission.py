@@ -237,9 +237,7 @@ def enforced_gw(tmp_path, operator, operator_pem):
     registry = AgentRegistry(path=agents)
     registry.enrol_from_descriptor(_signed_record(operator), operator_pem)
     # a retired agent too
-    registry.retire(
-        "agent:gone", operator="ops", operator_binding="rak:ops", signer=operator
-    )
+    registry.retire("agent:gone", operator="ops", operator_binding="rak:ops", signer=operator)
     config = GatewayConfig(
         host="127.0.0.1",
         admin_api_key="k",
@@ -311,7 +309,5 @@ class TestGateAdmission:
 
     def test_hook_unconfigured_leaves_gate_behaviour_unchanged(self, gw):
         """Without admission configured, calls behave exactly as before."""
-        result = gw.check_tool_call(
-            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc"
-        )
+        result = gw.check_tool_call("lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc")
         assert result["decision"] == "allow"

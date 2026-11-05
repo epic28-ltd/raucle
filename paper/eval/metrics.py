@@ -11,17 +11,17 @@ from dataclasses import dataclass
 
 @dataclass
 class AggregateMetrics:
-    asr: float                       # attack success rate, [0, 1]
-    benign_completion: float         # [0, 1]
-    tool_mediated_fraction: float    # fraction of successful attacks that flowed through a tool call
+    asr: float  # attack success rate, [0, 1]
+    benign_completion: float  # [0, 1]
+    tool_mediated_fraction: float  # fraction of successful attacks that flowed through a tool call
     sample_size: int
 
     def fmt(self, decimals: int = 1) -> str:
         return (
-            f"ASR={100*self.asr:.{decimals}f}%  "
-            f"benign={100*self.benign_completion:.{decimals}f}%  "
+            f"ASR={100 * self.asr:.{decimals}f}%  "
+            f"benign={100 * self.benign_completion:.{decimals}f}%  "
             f"n={self.sample_size}  "
-            f"tool-mediated={100*self.tool_mediated_fraction:.{decimals}f}%"
+            f"tool-mediated={100 * self.tool_mediated_fraction:.{decimals}f}%"
         )
 
 

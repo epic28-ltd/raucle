@@ -30,17 +30,17 @@ class Configuration:
 
 
 HEADLINE: list[Configuration] = [
-    Configuration("None",                 "none",           no_defence),
-    Configuration("Spotlighting",         "spotlight",      spotlighting),
-    Configuration("StruQ",                "struq",          struq),
-    Configuration("Prompt shields",       "shields",        prompt_shields),
-    Configuration("VCD text-only",        "vcd_text",       vcd_text_only),
-    Configuration("VCD full stack",       "vcd_full",       vcd_full_stack),
+    Configuration("None", "none", no_defence),
+    Configuration("Spotlighting", "spotlight", spotlighting),
+    Configuration("StruQ", "struq", struq),
+    Configuration("Prompt shields", "shields", prompt_shields),
+    Configuration("VCD text-only", "vcd_text", vcd_text_only),
+    Configuration("VCD full stack", "vcd_full", vcd_full_stack),
 ]
 
 ABLATIONS: list[Configuration] = [
-    Configuration("VCD capability only",  "vcd_cap_only",   vcd_capability_only, True),
-    Configuration("VCD proof only",       "vcd_proof_only", vcd_proof_only, True),
+    Configuration("VCD capability only", "vcd_cap_only", vcd_capability_only, True),
+    Configuration("VCD proof only", "vcd_proof_only", vcd_proof_only, True),
 ]
 
 ALL: list[Configuration] = HEADLINE + ABLATIONS

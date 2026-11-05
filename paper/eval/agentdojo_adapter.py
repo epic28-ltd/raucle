@@ -173,9 +173,7 @@ def _wrap_with_vcd(
     assert isinstance(loop, ToolsExecutionLoop), f"unexpected pipeline shape: {elements}"
     inner = list(loop.elements)
     assert isinstance(inner[0], ToolsExecutor), f"unexpected loop shape: {inner}"
-    inner[0] = build_gated_executor(
-        suite=suite, user_task_id=user_task_id, variant=variant
-    )
+    inner[0] = build_gated_executor(suite=suite, user_task_id=user_task_id, variant=variant)
     elements[3] = ToolsExecutionLoop(inner)
     # Preserve the pipeline name. The important_instructions attack template
     # reads pipeline.name to compose the injection prompt — see
@@ -229,15 +227,25 @@ def run(
             # buys us parallelism across user tasks. _build_pipeline accepts
             # suite/user_task_id for both paths; non-VCD ignores them.
             agg = _run_suite_per_task(
-                defence, model, suite, sname, attack_name,
-                user_tasks=user_tasks, injection_tasks=injection_tasks,
-                logdir=logdir, force_rerun=force_rerun,
+                defence,
+                model,
+                suite,
+                sname,
+                attack_name,
+                user_tasks=user_tasks,
+                injection_tasks=injection_tasks,
+                logdir=logdir,
+                force_rerun=force_rerun,
                 verbose=verbose,
             )
             elapsed = time.time() - t0
             logger.info(
                 "[%s] %s: ASR=%.1f%% benign=%.1f%% (%.0fs)",
-                defence, sname, 100 * agg.asr, 100 * agg.benign_completion, elapsed,
+                defence,
+                sname,
+                100 * agg.asr,
+                100 * agg.benign_completion,
+                elapsed,
             )
             out.append(agg)
     return out
@@ -262,6 +270,7 @@ def _run_one_user_task_subprocess(
     boundary, not AgentDojo objects.
     """
     from pathlib import Path
+
     # Re-apply the AgentDojo patches in the subprocess (ModelsEnum, providers,
     # MODEL_NAMES, get_llm). This import has side effects via its top-level
     # apply() call.
@@ -274,16 +283,20 @@ def _run_one_user_task_subprocess(
 
     suite = get_suites(SUITE_VERSION)[suite_name]
     ut = suite.get_user_task_by_id(ut_id)
-    agent = _build_pipeline(
-        defence, model, sys_msg, suite=suite_name, user_task_id=ut_id
-    )
+    agent = _build_pipeline(defence, model, sys_msg, suite=suite_name, user_task_id=ut_id)
     attack = load_attack(attack_name, suite, agent)
 
     logdir = Path(logdir_str) if logdir_str else None
     with OutputLogger(logdir=logdir_str):
         utility_map, security_map = run_task_with_injection_tasks(
-            suite, agent, ut, attack,
-            logdir, force_rerun, injection_tasks, SUITE_VERSION,
+            suite,
+            agent,
+            ut,
+            attack,
+            logdir,
+            force_rerun,
+            injection_tasks,
+            SUITE_VERSION,
         )
     return ut_id, utility_map, security_map
 
@@ -329,9 +342,7 @@ def _run_suite_per_task(
     # don't share mutable state.
     def _run_one_user_task(ut):
         ut_id = ut.ID
-        agent = _build_pipeline(
-            defence, model, sys_msg, suite=suite_name, user_task_id=ut_id
-        )
+        agent = _build_pipeline(defence, model, sys_msg, suite=suite_name, user_task_id=ut_id)
         attack = load_attack(attack_name, suite, agent)
         utility_map, security_map = run_task_with_injection_tasks(
             suite,
@@ -346,6 +357,7 @@ def _run_suite_per_task(
         return ut_id, utility_map, security_map
 
     import os
+
     if max_workers is None:
         env_workers = os.getenv("RAUCLE_PARALLEL")
         max_workers = int(env_workers) if env_workers else 1
@@ -355,9 +367,11 @@ def _run_suite_per_task(
         results_iter = (_run_one_user_task(ut) for ut in tasks_to_run)
     else:
         import concurrent.futures
+
         logger.info(
             "  parallel: %d workers (processes) across %d user tasks",
-            max_workers, len(tasks_to_run),
+            max_workers,
+            len(tasks_to_run),
         )
         # ProcessPoolExecutor not ThreadPoolExecutor: AgentDojo's
         # LOGGER_STACK is a ContextVar with a mutable list default, which
@@ -371,9 +385,15 @@ def _run_suite_per_task(
         futures = [
             pool.submit(
                 _run_one_user_task_subprocess,
-                ut_id, defence, model, sys_msg,
-                suite_name, attack_name,
-                injection_tasks, str(logdir) if logdir else None, force_rerun,
+                ut_id,
+                defence,
+                model,
+                sys_msg,
+                suite_name,
+                attack_name,
+                injection_tasks,
+                str(logdir) if logdir else None,
+                force_rerun,
             )
             for ut_id in ut_ids
         ]
@@ -387,14 +407,16 @@ def _run_suite_per_task(
                 aggregate.tool_mediated_attacks += 1
             if utility_map.get(key, False):
                 aggregate.benign_successes += 1
-            aggregate.per_task.append(TaskResult(
-                suite=suite_name,
-                user_task_id=key[0] if isinstance(key, tuple) else str(key),
-                injection_task_id=key[1] if isinstance(key, tuple) else "?",
-                attack_success=bool(attack_success),
-                benign_success=bool(utility_map.get(key, False)),
-                is_tool_mediated=True,
-            ))
+            aggregate.per_task.append(
+                TaskResult(
+                    suite=suite_name,
+                    user_task_id=key[0] if isinstance(key, tuple) else str(key),
+                    injection_task_id=key[1] if isinstance(key, tuple) else "?",
+                    attack_success=bool(attack_success),
+                    benign_success=bool(utility_map.get(key, False)),
+                    is_tool_mediated=True,
+                )
+            )
         if verbose:
             logger.info("  [%s/%s] %s done", defence, suite_name, ut_id)
     return aggregate
@@ -419,14 +441,16 @@ def _aggregate(suite_name: str, results: SuiteResults) -> SuiteAggregate:
         if results.utility_results.get(key, False):
             aggregate.benign_successes += 1
         ut, inj = key if isinstance(key, tuple) else (str(key), "?")
-        aggregate.per_task.append(TaskResult(
-            suite=suite_name,
-            user_task_id=str(ut),
-            injection_task_id=str(inj),
-            attack_success=bool(attack_success),
-            benign_success=bool(results.utility_results.get(key, False)),
-            is_tool_mediated=True,
-        ))
+        aggregate.per_task.append(
+            TaskResult(
+                suite=suite_name,
+                user_task_id=str(ut),
+                injection_task_id=str(inj),
+                attack_success=bool(attack_success),
+                benign_success=bool(results.utility_results.get(key, False)),
+                is_tool_mediated=True,
+            )
+        )
     return aggregate
 
 

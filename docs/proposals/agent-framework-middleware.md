@@ -53,17 +53,15 @@ from raucle.audit import HashChainSink
 from raucle.integrations.agent_framework import RaucleFunctionMiddleware
 
 issuer = CapabilityIssuer.load("issuer.key")
-gate   = CapabilityGate(issuer_pubkey=issuer.public_key)
-sink   = HashChainSink(path="./receipts.log")
+gate = CapabilityGate(issuer_pubkey=issuer.public_key)
+sink = HashChainSink(path="./receipts.log")
 
 agent = ChatAgent(
     chat_client=openai_client,
     instructions="...",
     tools=[lookup_customer, transfer_funds],
 )
-agent.middleware.add(
-    RaucleFunctionMiddleware(gate=gate, issuer=issuer, sink=sink)
-)
+agent.middleware.add(RaucleFunctionMiddleware(gate=gate, issuer=issuer, sink=sink))
 ```
 
 After this addition, every tool the agent invokes:

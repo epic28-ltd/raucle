@@ -29,9 +29,11 @@ from raucle.prove import JSONSchemaProver
 SCHEMA = {
     "type": "object",
     "properties": {
-        "to":       {"type": "string",
-                     "enum": ["alice@example.com", "bob@example.com", "finance@example.com"]},
-        "amount":   {"type": "number", "minimum": 0, "maximum": 100},
+        "to": {
+            "type": "string",
+            "enum": ["alice@example.com", "bob@example.com", "finance@example.com"],
+        },
+        "amount": {"type": "number", "minimum": 0, "maximum": 100},
         "currency": {"type": "string", "enum": ["USD", "EUR", "GBP"]},
     },
     "required": ["to", "amount", "currency"],
@@ -57,8 +59,10 @@ def percentiles(samples: list[float]) -> dict[str, float]:
 def bench_gate_check_no_chain(iters: int) -> dict:
     issuer = CapabilityIssuer.generate(issuer="bench.example")
     token = issuer.mint(
-        agent_id="agent:bench", tool="transfer_funds",
-        constraints=POLICY, ttl_seconds=3600,
+        agent_id="agent:bench",
+        tool="transfer_funds",
+        constraints=POLICY,
+        ttl_seconds=3600,
     )
     gate = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
     args = {"to": "alice@example.com", "amount": 50, "currency": "USD"}
@@ -75,8 +79,10 @@ def bench_gate_check_no_chain(iters: int) -> dict:
 def bench_gate_check_chain(iters: int, chain_len: int = 3) -> dict:
     issuer = CapabilityIssuer.generate(issuer="bench.example")
     root = issuer.mint(
-        agent_id="agent:bench", tool="transfer_funds",
-        constraints=POLICY, ttl_seconds=3600,
+        agent_id="agent:bench",
+        tool="transfer_funds",
+        constraints=POLICY,
+        ttl_seconds=3600,
     )
     current = root
     chain = [root]
@@ -145,15 +151,17 @@ def main(argv: list[str] | None = None) -> int:
         "python_version": platform.python_version(),
         "iters_gate": args.iters,
         "iters_prove": args.prove_iters,
-        "gate_no_chain":    bench_gate_check_no_chain(args.iters),
-        "gate_chain_3":     bench_gate_check_chain(args.iters, 3),
-        "prove_cold":       bench_prove_cold(args.prove_iters),
-        "prove_cached":     bench_prove_cached(args.prove_iters),
+        "gate_no_chain": bench_gate_check_no_chain(args.iters),
+        "gate_chain_3": bench_gate_check_chain(args.iters, 3),
+        "prove_cold": bench_prove_cold(args.prove_iters),
+        "prove_cached": bench_prove_cached(args.prove_iters),
     }
     Path(args.output).write_text(json.dumps(results, indent=2))
     for k, v in results.items():
         if isinstance(v, dict) and "p50_ms" in v:
-            print(f"  {k:18s} p50={v['p50_ms']:.2f}ms  p95={v['p95_ms']:.2f}ms  p99={v['p99_ms']:.2f}ms")
+            print(
+                f"  {k:18s} p50={v['p50_ms']:.2f}ms  p95={v['p95_ms']:.2f}ms  p99={v['p99_ms']:.2f}ms"
+            )
     print(f"\nWrote {args.output}.")
     return 0
 

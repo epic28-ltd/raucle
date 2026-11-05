@@ -8,6 +8,7 @@ Each cell as a fresh subprocess (per-cell memory reset). Shields excluded from K
 travel/workspace shields data on v4-flash is enough to establish the shields-collapse pattern
 across suites, and shields × cross-suite OOMs reliably at our hardware tier.
 """
+
 import json
 import os
 import subprocess
@@ -71,11 +72,15 @@ def run_cell(track, suite, model, defence, attack, parallel):
         [sys.executable, "-c", code],
         cwd="/root/raucle-paper/raucle",
         env={**os.environ, "PYTHONPATH": "."},
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     elapsed = time.time() - t0
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    print(f"[{stamp}] {track}/{suite}/{model_short}/{defence}/{attack} END rc={proc.returncode} wall={elapsed:.0f}s", flush=True)
+    print(
+        f"[{stamp}] {track}/{suite}/{model_short}/{defence}/{attack} END rc={proc.returncode} wall={elapsed:.0f}s",
+        flush=True,
+    )
     if proc.returncode != 0:
         print("STDERR TAIL:", proc.stderr[-1500:], flush=True)
     else:

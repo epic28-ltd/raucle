@@ -141,21 +141,24 @@ sink = HashChainSink("./receipts.log", signer=signer)
 # Hash the call args locally so the receipt records *what* was inspected
 # without leaking the argument values themselves.
 args = {"customer_id": "C-1042"}
-args_hash = "sha256:" + hashlib.sha256(
-    json.dumps(args, sort_keys=True, separators=(",", ":")).encode()
-).hexdigest()
+args_hash = (
+    "sha256:"
+    + hashlib.sha256(json.dumps(args, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+)
 
 # Append a receipt for the ALLOW above:
-record = sink.append({
-    "agent_id":          "agent:kyc-prod",
-    "tool":              "lookup_customer",
-    "decision":          "ALLOW" if decision.allowed else "DENY",
-    "reason":            decision.reason,
-    "args_hash":         args_hash,
-    "policy_proof_hash": token.policy_proof_hash,
-    "issuer":            issuer.issuer,
-    "key_id":            issuer.key_id,
-})
+record = sink.append(
+    {
+        "agent_id": "agent:kyc-prod",
+        "tool": "lookup_customer",
+        "decision": "ALLOW" if decision.allowed else "DENY",
+        "reason": decision.reason,
+        "args_hash": args_hash,
+        "policy_proof_hash": token.policy_proof_hash,
+        "issuer": issuer.issuer,
+        "key_id": issuer.key_id,
+    }
+)
 
 print(f"\nrecord index: {record['index']}")
 print(f"record hash : {record['hash']}")

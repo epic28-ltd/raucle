@@ -110,7 +110,7 @@ class BackendDecision:
     raw_result: Any = None
     evaluation_ms: float = 0.0
     error: Optional[str] = None
-    proof_artefact: Optional[str] = None                          # new
+    proof_artefact: Optional[str] = None  # new
     verification_pointers: dict[str, str] = field(default_factory=dict)  # new
 ```
 
@@ -131,10 +131,12 @@ return PolicyDecision(
         "timestamp": datetime.now(timezone.utc).isoformat(),
         # High-assurance backends may carry offline-verifiable evidence;
         # propagate when present.
-        **({"proof_artefact": result.proof_artefact}
-           if result.proof_artefact else {}),
-        **({"verification_pointers": dict(result.verification_pointers)}
-           if result.verification_pointers else {}),
+        **({"proof_artefact": result.proof_artefact} if result.proof_artefact else {}),
+        **(
+            {"verification_pointers": dict(result.verification_pointers)}
+            if result.verification_pointers
+            else {}
+        ),
     },
 )
 ```

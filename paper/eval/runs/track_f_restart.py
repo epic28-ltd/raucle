@@ -5,6 +5,7 @@ DeBERTa stays resident across cells and 8-way parallel workers multiply
 memory. Fix: one subprocess per cell so memory resets, and RAUCLE_PARALLEL=2
 for shields cells specifically.
 """
+
 import json
 import os
 import subprocess
@@ -16,10 +17,10 @@ ROOT = Path("/root/raucle-paper/raucle/runs")
 
 # (suite, defence, parallel) -- shields gets RAUCLE_PARALLEL=2 (memory-bound), others 8
 CELLS = [
-    ("slack",     "shields",  "2"),
-    ("slack",     "vcd_full", "8"),
-    ("travel",    "vcd_full", "8"),
-    ("workspace", "shields",  "2"),
+    ("slack", "shields", "2"),
+    ("slack", "vcd_full", "8"),
+    ("travel", "vcd_full", "8"),
+    ("workspace", "shields", "2"),
     ("workspace", "vcd_full", "8"),
 ]
 
@@ -57,7 +58,8 @@ def run_cell(suite, defence, parallel):
         [sys.executable, "-c", code],
         cwd="/root/raucle-paper/raucle",
         env={**os.environ, "PYTHONPATH": "."},
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     elapsed = time.time() - t0
     stamp = time.strftime("%H:%M:%S")

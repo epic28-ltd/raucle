@@ -78,7 +78,7 @@ from raucle.multimodal import MultimodalScanner
 mm = MultimodalScanner(Scanner(mode="standard"))
 result = mm.scan_image("uploaded.png")
 
-print(result.combined_verdict)   # CLEAN / SUSPICIOUS / MALICIOUS
+print(result.combined_verdict)  # CLEAN / SUSPICIOUS / MALICIOUS
 for f in result.findings:
     print(f.severity, f.kind, f.detail)
 ```
@@ -151,6 +151,7 @@ If you are running a gateway in front of an LLM and you accept anything other th
 
 ```python
 from raucle.multimodal import strip_invisible_unicode
+
 text, hidden = strip_invisible_unicode(user_input)
 if hidden:
     block_or_log_or_alert(...)

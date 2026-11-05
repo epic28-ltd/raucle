@@ -23,7 +23,10 @@ raucle passport issue agent-statement.json \
 
 ```python
 from raucle.passport import issue_passport
-passport = issue_passport(agent.statement, issuer_signer=org_signer, issuer="Org X", ttl_seconds=30*86400)
+
+passport = issue_passport(
+    agent.statement, issuer_signer=org_signer, issuer="Org X", ttl_seconds=30 * 86400
+)
 passport.save("agent.passport.json")
 ```
 
@@ -37,6 +40,7 @@ raucle passport verify agent.passport.json --registry https://trust.example.com/
 
 ```python
 from raucle.passport import verify_passport
+
 v = verify_passport(passport.to_dict(), registry=shared_registry)
 if v.valid:
     # trust v.agent_id <-> v.key_id, enforce v.allowed_tools / v.allowed_models

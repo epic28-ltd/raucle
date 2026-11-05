@@ -32,13 +32,15 @@ For comparison, here's a vanilla Agent Framework agent with one tool:
 ```python
 from agent_framework import ChatAgent, tool
 
+
 @tool(approval_mode="never_require")
 def lookup_customer(customer_id: str) -> str:
     # In production, this hits your customer DB.
     return f"Customer {customer_id}: name=Alice, status=active"
 
+
 agent = ChatAgent(
-    chat_client=...,           # your model client
+    chat_client=...,  # your model client
     tools=[lookup_customer],
 )
 ```
@@ -55,28 +57,30 @@ Five lines of changes:
 from agent_framework import ChatAgent, tool
 from raucle.capability import CapabilityIssuer, CapabilityGate
 from raucle.audit import HashChainSink, Ed25519Signer
-from raucle.integrations.agent_framework import (        # NEW
-    RaucleFunctionMiddleware,                                    # NEW
-    set_in_force_token,                                          # NEW
-)                                                                # NEW
+from raucle.integrations.agent_framework import (  # NEW
+    RaucleFunctionMiddleware,  # NEW
+    set_in_force_token,  # NEW
+)  # NEW
 
 # Issuer + gate. In production these are persisted; we generate
 # inline for the tutorial.
 issuer = CapabilityIssuer.generate(issuer="acme.bank.kyc")
-gate   = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
+gate = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
 
 # Receipt sink — signed, hash-chained log file.
 signer = Ed25519Signer.generate()
-sink   = HashChainSink("./receipts.log", signer=signer)
+sink = HashChainSink("./receipts.log", signer=signer)
+
 
 @tool(approval_mode="never_require")
 def lookup_customer(customer_id: str) -> str:
     return f"Customer {customer_id}: name=Alice, status=active"
 
+
 agent = ChatAgent(chat_client=..., tools=[lookup_customer])
-agent.middleware.add(                                            # NEW
-    RaucleFunctionMiddleware(gate=gate, sink=sink),              # NEW
-)                                                                # NEW
+agent.middleware.add(  # NEW
+    RaucleFunctionMiddleware(gate=gate, sink=sink),  # NEW
+)  # NEW
 ```
 
 That's the integration. The middleware sits between `agent.run()` and the tool dispatch; every tool call passes through it.
@@ -111,9 +115,11 @@ If your platform mints a fresh token per HTTP request, call `set_in_force_token`
 ```python
 import asyncio
 
+
 async def main():
     reply = await agent.run("Look up customer C-1042 for me, please.")
     print(reply)
+
 
 asyncio.run(main())
 ```
@@ -138,6 +144,7 @@ Ask for a customer ID that violates the constraint:
 async def main():
     reply = await agent.run("Look up customer X-9999.")
     print(reply)
+
 
 asyncio.run(main())
 ```

@@ -97,7 +97,9 @@ print(f"Newly alerted: {len(result.newly_alerted)}")
 print(f"Newly allowed: {len(result.newly_allowed)}")
 
 for change in result.newly_blocked:
-    print(f"{change.receipt_hash}: was {change.original_action}, now {change.counterfactual_action}")
+    print(
+        f"{change.receipt_hash}: was {change.original_action}, now {change.counterfactual_action}"
+    )
     print(f"  Explanation: {change.explanation}")
 ```
 

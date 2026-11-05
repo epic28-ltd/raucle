@@ -30,13 +30,15 @@ INJECAGENT_MODES = ["dh", "ds"]
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--models", nargs="+", default=["claude-sonnet-4-6"],
-                   help="Base models to evaluate.")
+    p.add_argument(
+        "--models", nargs="+", default=["claude-sonnet-4-6"], help="Base models to evaluate."
+    )
     p.add_argument("--output", default="results.json")
     p.add_argument("--skip-agentdojo", action="store_true")
     p.add_argument("--skip-injecagent", action="store_true")
-    p.add_argument("--configs", nargs="+", default=None,
-                   help="Optional subset of configuration short names.")
+    p.add_argument(
+        "--configs", nargs="+", default=None, help="Optional subset of configuration short names."
+    )
     args = p.parse_args(argv)
 
     selected = [c for c in ALL_CONFIGURATIONS if not args.configs or c.short in args.configs]
@@ -78,15 +80,17 @@ def main(argv: list[str] | None = None) -> int:
                 except NotImplementedError as exc:
                     logger.warning("InjecAgent adapter not yet wired: %s", exc)
 
-            out["results"].append({
-                "model": model,
-                "config": cfg.short,
-                "config_name": cfg.name,
-                "is_ablation": cfg.is_ablation,
-                "agentdojo": ad_result,
-                "injecagent": ia_result,
-                "wallclock_s": round(time.time() - t0, 1),
-            })
+            out["results"].append(
+                {
+                    "model": model,
+                    "config": cfg.short,
+                    "config_name": cfg.name,
+                    "is_ablation": cfg.is_ablation,
+                    "agentdojo": ad_result,
+                    "injecagent": ia_result,
+                    "wallclock_s": round(time.time() - t0, 1),
+                }
+            )
 
     Path(args.output).write_text(json.dumps(out, indent=2))
     logger.info("Wrote %s with %d rows.", args.output, len(out["results"]))

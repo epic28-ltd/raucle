@@ -56,11 +56,9 @@ def test_registry_and_chain_graph_resolve_against_each_other(tmp_path):
     assert r["enrol_allowed"]
     assert r["graph_node_signature"] == "verified"
     assert r["identity_match"], (
-        f"agent_id mismatch: registry={r['registry_agent_id']} "
-        f"extension={r['extension_agent_id']}"
+        f"agent_id mismatch: registry={r['registry_agent_id']} extension={r['extension_agent_id']}"
     )
     assert r["digest_match"], (
-        f"digest mismatch: registry={r['registry_digest']} "
-        f"receipt={r['extension_digest']}"
+        f"digest mismatch: registry={r['registry_digest']} receipt={r['extension_digest']}"
     )
     assert r["cross_check"]

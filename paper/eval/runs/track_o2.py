@@ -7,6 +7,7 @@ DeepSeek (MoE) + Qwen (MoE) + Kimi (MoE) + Gemma (dense).
 
 3 cells: banking × {none, shields, vcd_full} on gemma3:27b.
 """
+
 import json, os, subprocess, sys, time
 from pathlib import Path
 
@@ -15,8 +16,8 @@ MODEL = "gemma3:27b"
 SHORT = "gemma3-27b"
 
 CELLS = [
-    (MODEL, SHORT, "none",     "8"),
-    (MODEL, SHORT, "shields",  "2"),
+    (MODEL, SHORT, "none", "8"),
+    (MODEL, SHORT, "shields", "2"),
     (MODEL, SHORT, "vcd_full", "8"),
 ]
 
@@ -54,11 +55,14 @@ def run_cell(model, short, defence, parallel):
         [sys.executable, "-c", code],
         cwd="/root/raucle-paper/raucle",
         env={**os.environ, "PYTHONPATH": "."},
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     elapsed = time.time() - t0
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    print(f"[{stamp}] O2/{short}/{defence} END rc={proc.returncode} wall={elapsed:.0f}s", flush=True)
+    print(
+        f"[{stamp}] O2/{short}/{defence} END rc={proc.returncode} wall={elapsed:.0f}s", flush=True
+    )
     if proc.returncode != 0:
         print("STDERR TAIL:", proc.stderr[-1500:], flush=True)
     else:

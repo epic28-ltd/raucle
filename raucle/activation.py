@@ -85,9 +85,7 @@ def delta_summary_from_artefact(artefact: dict[str, Any]) -> dict[str, Any]:
         "register_sentence": artefact["register_sentence"],
         "flipped_decisions": {
             "count": artefact["flipped_decisions"]["count"],
-            "receipt_ids": [
-                str(r["receipt_id"]) for r in artefact["flipped_decisions"]["rows"]
-            ],
+            "receipt_ids": [str(r["receipt_id"]) for r in artefact["flipped_decisions"]["rows"]],
         },
         "authority_paths_opened": artefact["authority_paths_opened"],
         "authority_paths_closed": artefact["authority_paths_closed"],

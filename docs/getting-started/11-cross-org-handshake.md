@@ -15,13 +15,15 @@ pip install 'raucle[compliance]'
 from raucle.handshake import build_request, accept_call, verify_ack
 
 # Org A (initiator): present a minted capability token + the concrete call.
-request = build_request(token, tool="transfer_funds",
-                        args={"to": "acct:b-co", "amount": 50}, nonce="h1")
+request = build_request(
+    token, tool="transfer_funds", args={"to": "acct:b-co", "amount": 50}, nonce="h1"
+)
 
 # Org B (responder): resolve A's key_id from the SHARED registry (fail-closed on
 # unknown/revoked), capability-gate the call, return a SIGNED acknowledgement.
-result = accept_call(request, registry=shared_registry,
-                     responder_signer=org_b_signer, responder_id="org-b.gateway")
+result = accept_call(
+    request, registry=shared_registry, responder_signer=org_b_signer, responder_id="org-b.gateway"
+)
 
 # Org A: verify B's ack by resolving B's key from the SAME registry.
 ok, why = verify_ack(result.ack_receipt, registry=shared_registry, expected_nonce="h1")

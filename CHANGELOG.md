@@ -1106,7 +1106,7 @@ with (
     InputStore.open("audit/inputs.jsonl") as inputs,
 ):
     scanner = Scanner(mode="standard", provenance_logger=log, input_store=inputs)
-    scanner.scan(user_prompt)   # writes signed receipt + persists prompt
+    scanner.scan(user_prompt)  # writes signed receipt + persists prompt
 ```
 
 Then, days later, after a near-miss:

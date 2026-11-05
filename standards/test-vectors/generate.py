@@ -116,9 +116,8 @@ def proof_vectors() -> None:
     schema_basic = {
         "type": "object",
         "properties": {
-            "to":       {"type": "string",
-                         "enum": ["alice@example.com", "bob@example.com"]},
-            "amount":   {"type": "number", "minimum": 0, "maximum": 100},
+            "to": {"type": "string", "enum": ["alice@example.com", "bob@example.com"]},
+            "amount": {"type": "number", "minimum": 0, "maximum": 100},
             "currency": {"type": "string", "enum": ["USD", "EUR", "GBP"]},
         },
         "required": ["to", "amount", "currency"],
@@ -149,10 +148,23 @@ def gate_decision_vectors() -> None:
     schema = {
         "version": "gate-decision:v1",
         "fields": [
-            "event_id", "timestamp", "decision", "deny_reason", "deny_check",
-            "tool", "agent_id", "caller_session", "args_hash", "token_id",
-            "issuer_key_id", "policy_proof_hash", "gate_id", "gate_version",
-            "prev_event_hash", "chain_index", "signature",
+            "event_id",
+            "timestamp",
+            "decision",
+            "deny_reason",
+            "deny_check",
+            "tool",
+            "agent_id",
+            "caller_session",
+            "args_hash",
+            "token_id",
+            "issuer_key_id",
+            "policy_proof_hash",
+            "gate_id",
+            "gate_version",
+            "prev_event_hash",
+            "chain_index",
+            "signature",
         ],
         "notes": (
             "Event-body hashing excludes event_id and signature. "

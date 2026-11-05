@@ -508,4 +508,3 @@ def accept_deployment(
         "gate_receipt_hash": gate_receipt_hash,
         "audit_event_hash": event_hash,
     }
-

@@ -155,9 +155,7 @@ def run_demo(workdir: Path) -> dict[str, Any]:
         payload = _decode_payload(deny_rec)
         results["deny_verdict"] = payload.get("guardrail_verdict", "")
         results["deny_extension"] = payload.get("x_admission", {})
-        results["deny_descriptor_digest"] = results["deny_extension"].get(
-            "descriptor_hash", ""
-        )
+        results["deny_descriptor_digest"] = results["deny_extension"].get("descriptor_hash", "")
     else:
         results["deny_verdict"] = ""
         results["deny_extension"] = {}
@@ -240,9 +238,7 @@ def run_demo(workdir: Path) -> dict[str, Any]:
     results["cross_check"] = bool(identity_match and digest_match)
 
     results["receipts_total"] = len(_read_receipts(gw))
-    results["gate_public_keys"] = {
-        gw.gate_identity.key_id: gw.gate_identity.public_key_pem()
-    }
+    results["gate_public_keys"] = {gw.gate_identity.key_id: gw.gate_identity.public_key_pem()}
     results["artefacts"] = {
         "registry": str(reg_path),
         "receipts": str(gw.config.receipt_store),
@@ -285,12 +281,16 @@ def main() -> int:
     print(f"receipt reason:              {r['deny_extension'].get('reason', '')}")
     print(f"receipt descriptor hash:     {r['deny_descriptor_digest']}")
     print(f"receipt in store:            {_rstore_d}")
-    print(f"registry refused, nothing appended: "
-          f"{'VERIFIED' if r['registry_refused'] and r['registry_unchanged'] else 'NOT VERIFIED'}"
-          + (f" ({r['registry_error']})" if r["registry_error"] else ""))
-    print(f"store verifies with ProvenanceVerifier: "
-          f"{'VERIFIED' if r['store_verified'] else 'NOT VERIFIED'}"
-          + (f" errors={r['store_errors']}" if r["store_errors"] else ""))
+    print(
+        f"registry refused, nothing appended: "
+        f"{'VERIFIED' if r['registry_refused'] and r['registry_unchanged'] else 'NOT VERIFIED'}"
+        + (f" ({r['registry_error']})" if r["registry_error"] else "")
+    )
+    print(
+        f"store verifies with ProvenanceVerifier: "
+        f"{'VERIFIED' if r['store_verified'] else 'NOT VERIFIED'}"
+        + (f" errors={r['store_errors']}" if r["store_errors"] else "")
+    )
     print()
     print("-- registry x chain-graph cross-check --")
     print(f"graph node receipt present:  {_gnode}")
@@ -299,13 +299,16 @@ def main() -> int:
     print(f"x_admission agent_id:        {r['extension_agent_id']}")
     print(f"x_admission descriptor hash: {r['extension_digest']}")
     print(f"same agent_id both sides:    {'VERIFIED' if r['identity_match'] else 'NOT VERIFIED'}")
-    print(f"same descriptor digest both sides: "
-          f"{'VERIFIED' if r['digest_match'] else 'NOT VERIFIED'}")
+    print(
+        f"same descriptor digest both sides: {'VERIFIED' if r['digest_match'] else 'NOT VERIFIED'}"
+    )
     print()
     print("OVERALL: " + ("CONSISTENT" if r["cross_check"] else "INCONSISTENT"))
     if not r["cross_check"]:
-        print("Honest gaps: the cross-check did not hold for every side; "
-              "see the NOT VERIFIED lines above.")
+        print(
+            "Honest gaps: the cross-check did not hold for every side; "
+            "see the NOT VERIFIED lines above."
+        )
     return 0 if r["cross_check"] else 1
 
 

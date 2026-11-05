@@ -166,9 +166,10 @@ class TestDefaultPosture:
             registry_path=str(tmp_path / "reg.jsonl"),
         )
         client = _client(RaucleGateway(config))
-        assert client.post(
-            "/api/deployments/accept", json={"jws": "x", "artefact": "y"}
-        ).status_code == 404
+        assert (
+            client.post("/api/deployments/accept", json={"jws": "x", "artefact": "y"}).status_code
+            == 404
+        )
 
     def test_enabled_false_keeps_default_posture(self) -> None:
         assert resolve_deployment_trust({"enabled": False}) is None
@@ -203,8 +204,7 @@ class TestAccept:
 
         # The gate-issued receipt is a real store receipt.
         receipts = [
-            json.loads(line)
-            for line in (tmp_path / "receipts.jsonl").read_text().splitlines()
+            json.loads(line) for line in (tmp_path / "receipts.jsonl").read_text().splitlines()
         ]
         assert any(r["receipt_hash"] == body["gate_receipt_hash"] for r in receipts)
 
@@ -225,11 +225,7 @@ class TestRefusals:
         jws, payload = portal.jws()
         forged_payload = {**payload, "iss": "raucle-portal-impostor"}
         header_b64 = jws.split(".")[0]
-        signing = (
-            header_b64
-            + "."
-            + _b64url(json.dumps(forged_payload, sort_keys=True).encode())
-        )
+        signing = header_b64 + "." + _b64url(json.dumps(forged_payload, sort_keys=True).encode())
         sig = portal._private.sign(signing.encode("ascii"))  # noqa: SLF001
         forged = signing + "." + _b64url(sig)
         resp = _client(gateway).post("/api/deployments/accept", json=_accept_body(forged))
@@ -259,7 +255,8 @@ class TestRefusals:
         kinds = [e["event"].get("kind") for e in _audit_events(tmp_path / "audit.jsonl")]
         assert kinds.count("replayed_nonce") == 1
         deploy_events = [
-            e for e in _audit_events(tmp_path / "audit.jsonl")
+            e
+            for e in _audit_events(tmp_path / "audit.jsonl")
             if e["event"].get("kind") == "policy_deployed"
         ]
         assert len(deploy_events) == 1
@@ -339,8 +336,5 @@ class TestFailClosed:
         events = _audit_events(tmp_path / "audit.jsonl")
         for record in events:
             assert isinstance(record.get("hash"), str)
-        deploy = [
-            e for e in events if e["event"].get("kind") == "policy_deployed"
-        ][0]
+        deploy = [e for e in events if e["event"].get("kind") == "policy_deployed"][0]
         assert deploy["event"]["gate_receipt_hash"] == body["gate_receipt_hash"]
-

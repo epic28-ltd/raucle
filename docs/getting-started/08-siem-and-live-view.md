@@ -23,12 +23,16 @@ from raucle.siem import SIEMSink
 from raucle.scanner import Scanner
 
 sink = SIEMSink(
-    "raucle-siem.jsonl",                                   # SOC tails this (one ECS doc per line)
-    inner=HashChainSink("receipts.jsonl",                  # signed evidence chain
-                        signer=Ed25519Signer.generate()),
-    syslog_address=("siem.example", 514),                  # optional RFC 5424 / UDP mirror
+    "raucle-siem.jsonl",  # SOC tails this (one ECS doc per line)
+    inner=HashChainSink(
+        "receipts.jsonl",  # signed evidence chain
+        signer=Ed25519Signer.generate(),
+    ),
+    syslog_address=("siem.example", 514),  # optional RFC 5424 / UDP mirror
 )
-scanner = Scanner(audit_sink=sink)        # also works as the sink for the capability gate / LangChain handler
+scanner = Scanner(
+    audit_sink=sink
+)  # also works as the sink for the capability gate / LangChain handler
 ```
 
 Field mapping (the original event is preserved verbatim under `raucle.*`):

@@ -64,6 +64,7 @@ from typing import Mapping, Any
 @dataclass(frozen=True)
 class PolicyDecision:
     """Outcome of an external PDP consultation."""
+
     allowed: bool
     reason: str
     # Optional artefact id (e.g. SMT proof hash, content-address)
@@ -226,7 +227,7 @@ class RauclePolicyProvider(IPolicyProvider):
             reason=gd.reason,
             proof_artefact=token.policy_proof_hash,
             verification_pointers={
-                "issuer_pubkey":   f"{self._base}/.well-known/raucle-issuer.pub",
+                "issuer_pubkey": f"{self._base}/.well-known/raucle-issuer.pub",
                 "policy_registry": f"{self._base}/.well-known/raucle-policies/",
                 "lean_development": f"{self._base}/raucle-proofs",
             },

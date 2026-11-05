@@ -82,9 +82,7 @@ class GatedToolsExecutor(ToolsExecutor):
         self._read_only_tools = read_only_tools or set()
         self._variant = variant
         self._proof_hash = proof_hash if variant == "vcd_full" else None
-        self._gate = CapabilityGate(
-            trusted_issuers={issuer.key_id: issuer.public_key_pem}
-        )
+        self._gate = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
         self._tokens: dict[str, Capability] = {}
         self.denials = 0
         self.allows = 0
@@ -128,15 +126,14 @@ class GatedToolsExecutor(ToolsExecutor):
         approved_calls: list = []
         for tc in tool_calls:
             tool_name = tc.function
-            args_dict = (
-                dict(tc.args) if hasattr(tc, "args") else dict(tc.arguments or {})
-            )
+            args_dict = dict(tc.args) if hasattr(tc, "args") else dict(tc.arguments or {})
 
             # Read-only tools: pass through without a token.
             if tool_name in self._read_only_tools:
                 self.allows += 1
-                self.trace.append({"tool": tool_name, "args": args_dict,
-                                   "allowed": True, "reason": "read_only"})
+                self.trace.append(
+                    {"tool": tool_name, "args": args_dict, "allowed": True, "reason": "read_only"}
+                )
                 approved_calls.append(tc)
                 continue
 
@@ -145,8 +142,9 @@ class GatedToolsExecutor(ToolsExecutor):
                 # No policy authored for this tool in this user task → DENY.
                 self.denials += 1
                 reason = f"no token issued for tool {tool_name!r} in this user task"
-                self.trace.append({"tool": tool_name, "args": args_dict,
-                                   "allowed": False, "reason": reason})
+                self.trace.append(
+                    {"tool": tool_name, "args": args_dict, "allowed": False, "reason": reason}
+                )
                 logger.info("gate DENY %s — %s", tool_name, reason)
                 denied_results.append(self._denial_message(tc, reason))
                 continue
@@ -156,13 +154,20 @@ class GatedToolsExecutor(ToolsExecutor):
             )
             if decision.allowed:
                 self.allows += 1
-                self.trace.append({"tool": tool_name, "args": args_dict,
-                                   "allowed": True, "reason": "ok"})
+                self.trace.append(
+                    {"tool": tool_name, "args": args_dict, "allowed": True, "reason": "ok"}
+                )
                 approved_calls.append(tc)
             else:
                 self.denials += 1
-                self.trace.append({"tool": tool_name, "args": args_dict,
-                                   "allowed": False, "reason": decision.reason})
+                self.trace.append(
+                    {
+                        "tool": tool_name,
+                        "args": args_dict,
+                        "allowed": False,
+                        "reason": decision.reason,
+                    }
+                )
                 logger.info("gate DENY %s — %s", tool_name, decision.reason)
                 denied_results.append(self._denial_message(tc, decision.reason))
 
@@ -181,9 +186,7 @@ class GatedToolsExecutor(ToolsExecutor):
     def _denial_message(tc, reason: str) -> ChatToolResultMessage:
         return ChatToolResultMessage(
             role="tool",
-            content=[text_content_block_from_string(
-                f"[VCD gate denied this call: {reason}]"
-            )],
+            content=[text_content_block_from_string(f"[VCD gate denied this call: {reason}]")],
             tool_call_id=tc.id,
             tool_call=tc,
             error=f"capability gate denied: {reason}",
@@ -235,8 +238,7 @@ def build_gated_executor(
     """
     if variant == "vcd_proof_only":
         raise ValueError(
-            "vcd_proof_only does not mint tokens; "
-            "use build_runtime_check_only_executor"
+            "vcd_proof_only does not mint tokens; use build_runtime_check_only_executor"
         )
 
     suite_policy = load_suite_policy(suite)
@@ -248,10 +250,7 @@ def build_gated_executor(
         # This is the conservative default — only read_only tools pass.
         tool_policies: dict[str, dict] = {}
     else:
-        tool_policies = {
-            tool: pol for tool, pol in task_entry.items()
-            if not tool.startswith("_")
-        }
+        tool_policies = {tool: pol for tool, pol in task_entry.items() if not tool.startswith("_")}
 
     issuer = CapabilityIssuer.generate(issuer="eval.example")
     proof_hash = None
