@@ -36,7 +36,7 @@ policies:
 """
 
 
-@pytest.fixture()
+@pytest.fixture
 def config(tmp_path):
     return GatewayConfig(
         host="127.0.0.1",
@@ -54,7 +54,7 @@ def config(tmp_path):
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def gw(config, tmp_path):
     policy = tmp_path / "policies.yaml"
     policy.write_text(POLICY)
@@ -65,7 +65,7 @@ def gw(config, tmp_path):
     return g
 
 
-@pytest.fixture()
+@pytest.fixture
 def admin(gw):
     users = UserManager()
     users.add_user("admin-key", "admin", "Admin")
@@ -73,7 +73,7 @@ def admin(gw):
     return TestClient(create_admin_app(gw, users))
 
 
-@pytest.fixture()
+@pytest.fixture
 def gate(gw):
     return TestClient(create_gateway_app(gw))
 

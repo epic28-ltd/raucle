@@ -269,7 +269,7 @@ class TestPackEligibility:
 
 
 class TestGatewayReceiptedActivation:
-    @pytest.fixture()
+    @pytest.fixture
     def config(self, tmp_path):
         cfg = GatewayConfig(
             host="127.0.0.1",
