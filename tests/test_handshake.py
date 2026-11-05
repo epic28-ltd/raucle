@@ -54,7 +54,8 @@ def test_initiator_verifies_responder_ack_via_registry(two_orgs):
     )
     res = accept_call(req, registry=reg, responder_signer=resp_b, responder_id="org-b.gateway")
     ok, reason = verify_ack(res.ack_receipt, registry=reg, expected_nonce="n1")
-    assert ok and "ACCEPT" in reason
+    assert ok
+    assert "ACCEPT" in reason
 
 
 def test_injected_call_denied(two_orgs):
@@ -98,7 +99,8 @@ def test_ack_nonce_replay_rejected(two_orgs):
     )
     res = accept_call(req, registry=reg, responder_signer=resp_b, responder_id="org-b.gateway")
     ok, reason = verify_ack(res.ack_receipt, registry=reg, expected_nonce="DIFFERENT")
-    assert not ok and "nonce" in reason
+    assert not ok
+    assert "nonce" in reason
 
 
 def test_tampered_ack_signature_rejected(two_orgs):
@@ -127,7 +129,9 @@ def test_request_round_trip():
     token = reg_iss.mint(agent_id="agent:a", tool="t", constraints={})
     req = build_request(token, tool="t", args={"x": 1}, nonce="n")
     rebuilt = HandshakeRequest.from_dict(req.to_dict())
-    assert rebuilt.tool == "t" and rebuilt.nonce == "n" and rebuilt.args == {"x": 1}
+    assert rebuilt.tool == "t"
+    assert rebuilt.nonce == "n"
+    assert rebuilt.args == {"x": 1}
 
 
 def test_demo_script_passes_self_check():
@@ -144,7 +148,8 @@ def test_demo_script_passes_self_check():
         timeout=120,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "ACCEPT" in proc.stdout and "REJECT" in proc.stdout
+    assert "ACCEPT" in proc.stdout
+    assert "REJECT" in proc.stdout
     assert "revoked" in proc.stdout
 
 
@@ -186,18 +191,22 @@ def test_ack_bound_to_token_and_request(two_orgs):
     assert ok
     # A different token_id is rejected (replay into another capability context).
     ok2, why2 = verify_ack(res.ack_receipt, registry=reg, expected_token_id="cap:" + "0" * 24)
-    assert not ok2 and "token_id" in why2
+    assert not ok2
+    assert "token_id" in why2
     # A different request is rejected.
     other = build_request(token, tool="transfer_funds", args={"to": "acct:b-co", "amount": 99})
     ok3, why3 = verify_ack(res.ack_receipt, registry=reg, expected_request=other)
-    assert not ok3 and "request_hash" in why3
+    assert not ok3
+    assert "request_hash" in why3
 
 
 def test_default_nonce_is_random(two_orgs):
     _reg, _iss_a, _resp_b, token = two_orgs
     r1 = build_request(token, tool="transfer_funds", args={"to": "acct:b-co", "amount": 1})
     r2 = build_request(token, tool="transfer_funds", args={"to": "acct:b-co", "amount": 1})
-    assert r1.nonce and r2.nonce and r1.nonce != r2.nonce
+    assert r1.nonce
+    assert r2.nonce
+    assert r1.nonce != r2.nonce
 
 
 def test_responder_identity_impersonation_rejected(tmp_path):
@@ -213,7 +222,8 @@ def test_responder_identity_impersonation_rejected(tmp_path):
     # Attacker signs an ACCEPT but lies that it is org-b.gateway.
     res = accept_call(req, registry=reg, responder_signer=attacker, responder_id="org-b.gateway")
     ok, why = verify_ack(res.ack_receipt, registry=reg, require_binding=False)
-    assert not ok and "responder identity mismatch" in why
+    assert not ok
+    assert "responder identity mismatch" in why
     # Honest case: the responder_id matches the registry record -> verifies.
     res2 = accept_call(req, registry=reg, responder_signer=attacker, responder_id="evil.gateway")
     ok2, _ = verify_ack(res2.ack_receipt, registry=reg, require_binding=False)
@@ -226,7 +236,8 @@ def test_verify_ack_requires_binding_by_default(two_orgs):
     req = build_request(token, tool="transfer_funds", args={"to": "acct:b-co", "amount": 50})
     res = accept_call(req, registry=reg, responder_signer=resp_b, responder_id="org-b.gateway")
     ok, why = verify_ack(res.ack_receipt, registry=reg)  # no binding
-    assert not ok and "anti-replay binding" in why
+    assert not ok
+    assert "anti-replay binding" in why
     # With a binding it verifies.
     assert verify_ack(res.ack_receipt, registry=reg, expected_request=req)[0]
 
@@ -245,7 +256,8 @@ def test_responder_rejects_replayed_request(two_orgs):
     replay = accept_call(
         req, registry=reg, responder_signer=resp_b, responder_id="org-b.gateway", seen=seen
     )
-    assert not replay.accepted and "replay" in replay.reason
+    assert not replay.accepted
+    assert "replay" in replay.reason
     # A fresh request (new nonce) is accepted.
     req2 = build_request(token, tool="transfer_funds", args={"to": "acct:b-co", "amount": 50})
     assert accept_call(
@@ -270,6 +282,7 @@ def test_token_id_alone_is_not_replay_binding(two_orgs):
     ok, why = verify_ack(
         res.ack_receipt, registry=reg, expected_token_id=token.token_id, expected_decision="ACCEPT"
     )
-    assert not ok and "anti-replay binding" in why
+    assert not ok
+    assert "anti-replay binding" in why
     # request binding makes it valid.
     assert verify_ack(res.ack_receipt, registry=reg, expected_request=req)[0]
