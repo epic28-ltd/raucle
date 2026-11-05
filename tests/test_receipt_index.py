@@ -61,7 +61,7 @@ def _make_receipt(
     return {"receipt_hash": f"sha256:{i:064x}", "jws": jws}
 
 
-@pytest.fixture()
+@pytest.fixture
 def index(tmp_path):
     return ReceiptIndex(sqlite_path=tmp_path / "index.sqlite")
 
