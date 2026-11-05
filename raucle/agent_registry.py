@@ -468,6 +468,28 @@ class AgentRegistry:
         )
         return record, credential
 
+    def enrol_from_descriptor(
+        self,
+        record: dict[str, Any] | AgentDescriptor,
+        issuer_public_pem: bytes | str,
+    ) -> dict[str, Any]:
+        """Enrol an agent from an EXTERNALLY-presented signed descriptor.
+
+        The admission hook (P1.4c): the presented record is verified
+        offline first and its status must be admissible; anything that
+        fails verification (tampered manifest hash, bad signature, unknown
+        version, unknown fields, retired) is refused fail-closed and
+        NOTHING is appended. The caller receipts the refusal (e.g. the
+        gateway's authority-receipt emitter); the registry itself only
+        ever appends verified records.
+        """
+        from raucle.admission import admission_check
+
+        verdict = admission_check(record, issuer_public_pem)
+        if not verdict.allowed or verdict.descriptor is None:
+            raise DescriptorError(f"admission refused: {verdict.reason}")
+        return self._append(verdict.descriptor)
+
     def update(
         self,
         agent_id: str,

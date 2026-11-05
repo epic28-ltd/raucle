@@ -128,6 +128,16 @@ class GatewayConfig:
     # registry. Empty string = no token revocations configured.
     revocations_file: str = ""
     agent_credentials_file: str = "/data/agent-credentials.jsonl"
+    # Admission policy hooks (P1.4c): when admission_enforce is set and an
+    # agent registry is configured, a gate call for an agent whose signed
+    # descriptor is absent, unverified (tampered manifest, bad signature,
+    # unknown version) or retired is refused fail-closed, receipted like
+    # any other deny. agent_registry_file: append-only descriptor JSONL
+    # (raucle.agent_registry.AgentRegistry). agent_registry_public_key:
+    # operator public key as PEM text OR a path to a PEM file.
+    agent_registry_file: str = ""
+    agent_registry_public_key: str = ""
+    admission_enforce: bool = False
     # Receipts v1.1: append-only ledger of delegated capability records; when
     # set, gate auth token mode resolves attenuated chains against it.
     delegations_file: str = ""
@@ -210,6 +220,13 @@ class GatewayConfig:
             agent_credentials_file=os.environ.get(
                 "RAUCLE_AGENT_CREDENTIALS", "/data/agent-credentials.jsonl"
             ),
+            agent_registry_file=os.environ.get("RAUCLE_AGENT_REGISTRY_FILE", ""),
+            agent_registry_public_key=os.environ.get(
+                "RAUCLE_AGENT_REGISTRY_PUBLIC_KEY", ""
+            ),
+            admission_enforce=os.environ.get("RAUCLE_ADMISSION_ENFORCE", "")
+            .lower()
+            in ("1", "true", "yes"),
             signer_key_path=os.environ.get("RAUCLE_SIGNER_KEY_PATH", ""),
             emit_receipts=os.environ.get("RAUCLE_EMIT_RECEIPTS", "1") not in ("0", "false", "no"),
             trace_header=os.environ.get("RAUCLE_TRACE_HEADER", "X-Trace-Id"),
@@ -1371,6 +1388,103 @@ class RaucleGateway:
             revoked_token_ids=self._load_revoked_ids(),
         )
 
+    # -- Admission policy hooks (P1.4c) -------------------------------------
+
+    def _admission_public_key(self) -> str:
+        """The operator public key for descriptor verification: PEM text
+        inline, or the contents of a PEM file path. Missing/unreadable key
+        material raises; the callers turn any failure into a refusal."""
+        key = self.config.agent_registry_public_key
+        if not key:
+            raise ValueError("admission enforcement requires RAUCLE_AGENT_REGISTRY_PUBLIC_KEY")
+        path = Path(key)
+        return path.read_text(encoding="utf-8") if path.exists() else key
+
+    def admission_check_agent(self, agent_id: str):
+        """Admission verdict for one agent at the gate (P1.4c).
+
+        Fail-closed: admission off (unconfigured) admits only in the
+        legacy posture where the hook is not configured at all - once
+        ``admission_enforce`` and a registry file are both set, an agent
+        with no descriptor, an unverified descriptor or a retired
+        descriptor is refused. Verification itself delegates to
+        :func:`raucle.admission.admission_check` over the agent's latest
+        descriptor.
+        """
+        from raucle.admission import AdmissionVerdict, admission_check
+        from raucle.agent_registry import AgentRegistry
+
+        if not (self.config.admission_enforce and self.config.agent_registry_file):
+            return AdmissionVerdict(allowed=True, reason="admission hook not configured")
+        reg = AgentRegistry(path=self.config.agent_registry_file)
+        descriptor = reg.resolve(agent_id)
+        if descriptor is None:
+            return AdmissionVerdict(allowed=False, reason="no descriptor enrolled for agent")
+        return admission_check(descriptor, self._admission_public_key())
+
+    def _admission_refusal(self, agent_id: str) -> str:
+        """Refusal reason for a gate call, or empty when admitted.
+
+        Fail-closed on infrastructure failure too: an exception from the
+        registry or key material (corrupt file, unreadable key) is a
+        refusal, never a pass-through.
+        """
+        try:
+            verdict = self.admission_check_agent(agent_id)
+        except Exception:
+            logger.exception("admission check failed; refusing agent %s", agent_id)
+            return "admission check failed"
+        return "" if verdict.allowed else f"admission refused: {verdict.reason}"
+
+    def admit_enrolment(
+        self,
+        record: dict[str, Any] | Any,
+        issuer_public_pem: bytes | str,
+        *,
+        agent_id: str = "",
+    ) -> tuple[Any, str | None]:
+        """Evaluate an enrolment/activation attempt against admission policy
+        and receipt the outcome (P1.4c AC: a tampered-manifest refusal is
+        receipted).
+
+        The verdict comes from :func:`raucle.admission.admission_check` and
+        the receipt from the EXISTING authority-receipt machinery (the same
+        emitter as suspensions and approval decisions) with an ``x_admission``
+        extension binding agent_id, descriptor hash and refusal reason.
+
+        Returns ``(AdmissionVerdict, receipt_hash_or_None)``.
+        """
+        from raucle.admission import AdmissionVerdict, admission_check
+        from raucle.agent_registry import AgentDescriptor
+        from raucle.provenance import _canonical_json, _sha256_hex
+
+        try:
+            verdict = admission_check(record, issuer_public_pem)
+        except Exception:
+            logger.exception("admission check failed on enrolment")
+            verdict = AdmissionVerdict(allowed=False, reason="admission check failed")
+        if isinstance(record, AgentDescriptor):
+            record_dict: dict[str, Any] = record.to_dict()
+        elif isinstance(record, dict):
+            record_dict = dict(record)
+        else:
+            record_dict = {}
+        agent_id = agent_id or record_dict.get("agent_id", "")
+        descriptor_hash = (
+            _sha256_hex(_canonical_json(record_dict)) if record_dict else ""
+        )
+        receipt_id = self._emit_authority_receipt(
+            verdict="allow" if verdict.allowed else "deny",
+            extension_key="x_admission",
+            extension={
+                "agent_id": agent_id,
+                "decision_source": "admission",
+                "descriptor_hash": descriptor_hash,
+                "reason": verdict.reason,
+            },
+        )
+        return verdict, receipt_id
+
     def _fresh_check_result(
         self,
         tool: str,
@@ -1475,6 +1589,15 @@ class RaucleGateway:
                 _intent_hint=_intent_hint,
                 _acting_for=_acting_for,
             )
+
+        # Admission policy hooks (P1.4c): an agent whose enrolment fails
+        # admission (no descriptor, tampered manifest, bad signature,
+        # unknown version, retired) is refused at the gate, fail-closed,
+        # and the refusal is receipted like any other deny. Checked before
+        # any tool policy: an unadmitted agent reaches no policy at all.
+        admission_refusal = self._admission_refusal(agent_id)
+        if admission_refusal:
+            return self._deny_result(result, admission_refusal, start)
 
         if tool not in self._policy_rules or tool not in self._tokens:
             self._learn_observe(tool, args, agent_id, source, destination)
