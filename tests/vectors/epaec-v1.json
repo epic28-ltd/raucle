@@ -1,0 +1,346 @@
+{
+  "profile": "EP-AEC-v1",
+  "draft": "draft-schrock-ep-authorization-evidence-chain-00",
+  "digest_of_action": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2",
+  "action": {
+    "operation": "deploy",
+    "resource": "api://prod/payments",
+    "method": "POST"
+  },
+  "jwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "jOnqpUxNh71582BpxOn_qRKlgr3GP8FBlhcivMEnrm8",
+    "y": "lZDkgAdYPZHkNCDfM0_lHa_-EjFiYS3Fqs6h4vbdUzI"
+  },
+  "vectors": [
+    {
+      "name": "valid_e2e",
+      "note": "required components verify and bind the same canonical action digest (Section 4 step 3c)",
+      "chain": {
+        "@version": "EP-AEC-v1",
+        "action": {
+          "operation": "deploy",
+          "resource": "api://prod/payments",
+          "method": "POST"
+        },
+        "action_digest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2",
+        "components": [
+          {
+            "type": "ep-receipt",
+            "label": "ep proof receipt",
+            "evidence": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImVwLWFlYy1yZWNlaXB0Iiwia2lkIjoiZXAtYWVjLXRlc3QifQ.eyJhY3Rpb25EaWdlc3QiOiJzaGEyNTY6Mzg4MTE1MTllZGJiNDBlOWRmNGQ0NmJkMTYyNjVmYzRjZjQzYTBjZDQ1NTMwNmM1OTczYzE3ZTE1ZWMzNjVmMiIsInJlY2VpcHRJZCI6ImVwLXJlY2VpcHQ6dGVzdC0xIn0.dxae2pfTTtPEdi65HyO-9z6sMDrmfCwKrOlnmJTIGjXQ_stGRQbzIiXlmz_3Sp74f6IK47W0uxtdI4KCjxR9XA"
+          },
+          {
+            "type": "policy-permit",
+            "label": "policy permit",
+            "evidence": {
+              "permitId": "pp-1",
+              "actionDigest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2"
+            }
+          }
+        ],
+        "requirement": "ep-receipt AND policy-permit"
+      },
+      "expected": {
+        "decision": "ALLOW",
+        "overall": "PASS",
+        "statuses": [
+          "VALID",
+          "VALID"
+        ],
+        "reasons": [
+          null,
+          null
+        ],
+        "requirement_error": null
+      }
+    },
+    {
+      "name": "valid_or_expression",
+      "note": "parenthesised grouping, left-associative fold (Section 5)",
+      "chain": {
+        "@version": "EP-AEC-v1",
+        "action": {
+          "operation": "deploy",
+          "resource": "api://prod/payments",
+          "method": "POST"
+        },
+        "action_digest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2",
+        "components": [
+          {
+            "type": "ep-receipt",
+            "label": "ep proof receipt",
+            "evidence": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImVwLWFlYy1yZWNlaXB0Iiwia2lkIjoiZXAtYWVjLXRlc3QifQ.eyJhY3Rpb25EaWdlc3QiOiJzaGEyNTY6Mzg4MTE1MTllZGJiNDBlOWRmNGQ0NmJkMTYyNjVmYzRjZjQzYTBjZDQ1NTMwNmM1OTczYzE3ZTE1ZWMzNjVmMiIsInJlY2VpcHRJZCI6ImVwLXJlY2VpcHQ6dGVzdC0xIn0.dxae2pfTTtPEdi65HyO-9z6sMDrmfCwKrOlnmJTIGjXQ_stGRQbzIiXlmz_3Sp74f6IK47W0uxtdI4KCjxR9XA"
+          },
+          {
+            "type": "policy-permit",
+            "label": "policy permit",
+            "evidence": {
+              "permitId": "pp-1",
+              "actionDigest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2"
+            }
+          }
+        ],
+        "requirement": "(ep-receipt OR policy-permit) AND ep-receipt"
+      },
+      "expected": {
+        "decision": "ALLOW",
+        "overall": "PASS",
+        "statuses": [
+          "VALID",
+          "VALID"
+        ],
+        "reasons": [
+          null,
+          null
+        ],
+        "requirement_error": null
+      }
+    },
+    {
+      "name": "tampered_digest",
+      "note": "declared action_digest does not match recomputed digest -> DENY (Section 4 step 2)",
+      "chain": {
+        "@version": "EP-AEC-v1",
+        "action": {
+          "operation": "deploy",
+          "resource": "api://prod/payments",
+          "method": "POST"
+        },
+        "action_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "components": [
+          {
+            "type": "ep-receipt",
+            "label": "ep proof receipt",
+            "evidence": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImVwLWFlYy1yZWNlaXB0Iiwia2lkIjoiZXAtYWVjLXRlc3QifQ.eyJhY3Rpb25EaWdlc3QiOiJzaGEyNTY6Mzg4MTE1MTllZGJiNDBlOWRmNGQ0NmJkMTYyNjVmYzRjZjQzYTBjZDQ1NTMwNmM1OTczYzE3ZTE1ZWMzNjVmMiIsInJlY2VpcHRJZCI6ImVwLXJlY2VpcHQ6dGVzdC0xIn0.dxae2pfTTtPEdi65HyO-9z6sMDrmfCwKrOlnmJTIGjXQ_stGRQbzIiXlmz_3Sp74f6IK47W0uxtdI4KCjxR9XA"
+          },
+          {
+            "type": "policy-permit",
+            "label": "policy permit",
+            "evidence": {
+              "permitId": "pp-1",
+              "actionDigest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2"
+            }
+          }
+        ],
+        "requirement": "ep-receipt AND policy-permit"
+      },
+      "expected": {
+        "decision": "DENY",
+        "overall": "FAIL",
+        "statuses": [],
+        "reasons": [],
+        "requirement_error": "ACTION_DIGEST_MISMATCH"
+      }
+    },
+    {
+      "name": "cross_binding",
+      "note": "a valid receipt binding a different action is unsatisfied (Section 4 step 3c)",
+      "chain": {
+        "@version": "EP-AEC-v1",
+        "action": {
+          "operation": "deploy",
+          "resource": "api://prod/payments",
+          "method": "POST"
+        },
+        "action_digest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2",
+        "components": [
+          {
+            "type": "ep-receipt",
+            "evidence": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImVwLWFlYy1yZWNlaXB0Iiwia2lkIjoiZXAtYWVjLXRlc3QifQ.eyJhY3Rpb25EaWdlc3QiOiJzaGEyNTY6ZTMxMjlmNGZkZWNiY2IwNWJiOGU0NWE0YzRkZmEwMDdhMTg4OTIwMjI3YjNmMDg0NGJhOWU5YWJlN2Q3MDRkMCIsInJlY2VpcHRJZCI6ImVwLXJlY2VpcHQ6dGVzdC0xIn0.dO2JlaAuKHi5M9XZN9RAwSUx3sLfa5uf9faez4M-k9jOvCEjkGQikAG7vPSrnVZglbD2dmmgUIee2rqJ4UQ4HQ"
+          },
+          {
+            "type": "policy-permit",
+            "evidence": {
+              "permitId": "pp-1",
+              "actionDigest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2"
+            }
+          }
+        ],
+        "requirement": "ep-receipt AND policy-permit"
+      },
+      "expected": {
+        "decision": "DENY",
+        "overall": "FAIL",
+        "statuses": [
+          "INVALID",
+          "VALID"
+        ],
+        "reasons": [
+          "binds a different action",
+          null
+        ],
+        "requirement_error": null
+      }
+    },
+    {
+      "name": "unknown_operator",
+      "note": "token outside the Section 5 grammar (AND/OR/parens/IDENT only) after a term is unbalanced",
+      "chain": {
+        "@version": "EP-AEC-v1",
+        "action": {
+          "operation": "deploy",
+          "resource": "api://prod/payments",
+          "method": "POST"
+        },
+        "action_digest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2",
+        "components": [
+          {
+            "type": "ep-receipt",
+            "label": "ep proof receipt",
+            "evidence": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImVwLWFlYy1yZWNlaXB0Iiwia2lkIjoiZXAtYWVjLXRlc3QifQ.eyJhY3Rpb25EaWdlc3QiOiJzaGEyNTY6Mzg4MTE1MTllZGJiNDBlOWRmNGQ0NmJkMTYyNjVmYzRjZjQzYTBjZDQ1NTMwNmM1OTczYzE3ZTE1ZWMzNjVmMiIsInJlY2VpcHRJZCI6ImVwLXJlY2VpcHQ6dGVzdC0xIn0.dxae2pfTTtPEdi65HyO-9z6sMDrmfCwKrOlnmJTIGjXQ_stGRQbzIiXlmz_3Sp74f6IK47W0uxtdI4KCjxR9XA"
+          },
+          {
+            "type": "policy-permit",
+            "label": "policy permit",
+            "evidence": {
+              "permitId": "pp-1",
+              "actionDigest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2"
+            }
+          }
+        ],
+        "requirement": "ep-receipt NOT policy-permit"
+      },
+      "expected": {
+        "decision": "DENY",
+        "overall": "FAIL",
+        "statuses": [
+          "VALID",
+          "VALID"
+        ],
+        "reasons": [
+          null,
+          null
+        ],
+        "requirement_error": "REQUIREMENT_UNBALANCED"
+      }
+    },
+    {
+      "name": "unexpected_character",
+      "note": "character outside the token grammar -> named BAD_REQUIREMENT_TOKEN, fail-closed",
+      "chain": {
+        "@version": "EP-AEC-v1",
+        "action": {
+          "operation": "deploy",
+          "resource": "api://prod/payments",
+          "method": "POST"
+        },
+        "action_digest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2",
+        "components": [
+          {
+            "type": "ep-receipt",
+            "label": "ep proof receipt",
+            "evidence": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImVwLWFlYy1yZWNlaXB0Iiwia2lkIjoiZXAtYWVjLXRlc3QifQ.eyJhY3Rpb25EaWdlc3QiOiJzaGEyNTY6Mzg4MTE1MTllZGJiNDBlOWRmNGQ0NmJkMTYyNjVmYzRjZjQzYTBjZDQ1NTMwNmM1OTczYzE3ZTE1ZWMzNjVmMiIsInJlY2VpcHRJZCI6ImVwLXJlY2VpcHQ6dGVzdC0xIn0.dxae2pfTTtPEdi65HyO-9z6sMDrmfCwKrOlnmJTIGjXQ_stGRQbzIiXlmz_3Sp74f6IK47W0uxtdI4KCjxR9XA"
+          },
+          {
+            "type": "policy-permit",
+            "label": "policy permit",
+            "evidence": {
+              "permitId": "pp-1",
+              "actionDigest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2"
+            }
+          }
+        ],
+        "requirement": "ep-receipt AND policy-permit;"
+      },
+      "expected": {
+        "decision": "DENY",
+        "overall": "FAIL",
+        "statuses": [
+          "VALID",
+          "VALID"
+        ],
+        "reasons": [
+          null,
+          null
+        ],
+        "requirement_error": "BAD_REQUIREMENT_TOKEN"
+      }
+    },
+    {
+      "name": "unknown_identifier_falsy",
+      "note": "unregistered identifier evaluates false (Section 5), so an unknown requirement name DENYs",
+      "chain": {
+        "@version": "EP-AEC-v1",
+        "action": {
+          "operation": "deploy",
+          "resource": "api://prod/payments",
+          "method": "POST"
+        },
+        "action_digest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2",
+        "components": [
+          {
+            "type": "ep-receipt",
+            "label": "ep proof receipt",
+            "evidence": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImVwLWFlYy1yZWNlaXB0Iiwia2lkIjoiZXAtYWVjLXRlc3QifQ.eyJhY3Rpb25EaWdlc3QiOiJzaGEyNTY6Mzg4MTE1MTllZGJiNDBlOWRmNGQ0NmJkMTYyNjVmYzRjZjQzYTBjZDQ1NTMwNmM1OTczYzE3ZTE1ZWMzNjVmMiIsInJlY2VpcHRJZCI6ImVwLXJlY2VpcHQ6dGVzdC0xIn0.dxae2pfTTtPEdi65HyO-9z6sMDrmfCwKrOlnmJTIGjXQ_stGRQbzIiXlmz_3Sp74f6IK47W0uxtdI4KCjxR9XA"
+          },
+          {
+            "type": "policy-permit",
+            "label": "policy permit",
+            "evidence": {
+              "permitId": "pp-1",
+              "actionDigest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2"
+            }
+          }
+        ],
+        "requirement": "ep-receipt AND ep-quorum"
+      },
+      "expected": {
+        "decision": "DENY",
+        "overall": "FAIL",
+        "statuses": [
+          "VALID",
+          "VALID"
+        ],
+        "reasons": [
+          null,
+          null
+        ],
+        "requirement_error": null
+      }
+    },
+    {
+      "name": "missing_verifier",
+      "note": "ep-quorum has no registered verifier -> UNVERIFIED, requirement fails (Section 4 step 3a)",
+      "chain": {
+        "@version": "EP-AEC-v1",
+        "action": {
+          "operation": "deploy",
+          "resource": "api://prod/payments",
+          "method": "POST"
+        },
+        "action_digest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2",
+        "components": [
+          {
+            "type": "ep-receipt",
+            "label": "ep proof receipt",
+            "evidence": "eyJhbGciOiJFUzI1NiIsInR5cCI6ImVwLWFlYy1yZWNlaXB0Iiwia2lkIjoiZXAtYWVjLXRlc3QifQ.eyJhY3Rpb25EaWdlc3QiOiJzaGEyNTY6Mzg4MTE1MTllZGJiNDBlOWRmNGQ0NmJkMTYyNjVmYzRjZjQzYTBjZDQ1NTMwNmM1OTczYzE3ZTE1ZWMzNjVmMiIsInJlY2VpcHRJZCI6ImVwLXJlY2VpcHQ6dGVzdC0xIn0.dxae2pfTTtPEdi65HyO-9z6sMDrmfCwKrOlnmJTIGjXQ_stGRQbzIiXlmz_3Sp74f6IK47W0uxtdI4KCjxR9XA"
+          },
+          {
+            "type": "ep-quorum",
+            "label": "human quorum",
+            "evidence": {
+              "quorumId": "q-1",
+              "actionDigest": "sha256:38811519edbb40e9df4d46bd16265fc4cf43a0cd455306c5973c17e15ec365f2"
+            }
+          }
+        ],
+        "requirement": "ep-receipt AND ep-quorum"
+      },
+      "expected": {
+        "decision": "DENY",
+        "overall": "FAIL",
+        "statuses": [
+          "VALID",
+          "UNVERIFIED"
+        ],
+        "reasons": [
+          null,
+          "no verifier registered for type"
+        ],
+        "requirement_error": null
+      }
+    }
+  ]
+}
