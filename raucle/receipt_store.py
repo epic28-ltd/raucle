@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,11 @@ class SegmentedReceiptStore:
         max_segment_bytes: int = _DEFAULT_SEGMENT_BYTES,
     ) -> None:
         self._base = Path(base_dir)
+        # Write/seal mutual exclusion: a concurrent operator seal (or segment
+        # rollover) closes the active file; without this lock a racing append
+        # writes into the closed handle (ValueError: I/O operation on closed
+        # file) and the receipt is silently dropped.
+        self._lock = threading.Lock()
         # Floor at one minimal record so a misconfiguration cannot create
         # an infinite rollover loop.
         self._max_bytes = max(64, int(max_segment_bytes))
@@ -78,19 +84,21 @@ class SegmentedReceiptStore:
         """
         if not line.endswith("\n"):
             line += "\n"
-        if self._active_file is None:
-            self._start_segment(len(self.segments()))
-        assert self._active_file is not None
-        self._active_file.write(line)
-        self._active_file.flush()
-        os.fsync(self._active_file.fileno())
-        self._active_size += len(line.encode("utf-8"))
-        if self._active_size >= self._max_bytes:
-            self._seal_active()
+        with self._lock:
+            if self._active_file is None:
+                self._start_segment(len(self.segments()))
+            assert self._active_file is not None
+            self._active_file.write(line)
+            self._active_file.flush()
+            os.fsync(self._active_file.fileno())
+            self._active_size += len(line.encode("utf-8"))
+            if self._active_size >= self._max_bytes:
+                self._seal_active()
 
     def seal_now(self) -> str | None:
         """Operator action: seal the active segment immediately."""
-        return self._seal_active()
+        with self._lock:
+            return self._seal_active()
 
     # ------------------------------------------------------------------
     # Read path (bounded memory)
