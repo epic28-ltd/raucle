@@ -114,6 +114,13 @@ class GatewayConfig:
     policy_file: str = "/etc/raucle/policies.yaml"
     policy_dir: str = ""  # if set, loads all *.yaml files from this directory
 
+    # Policy-bytes tamper detection (threat-model residual 5, M2): when set,
+    # the gateway re-hashes the enforcement files at every gate entry against
+    # the receipted activation seal and denies fail-closed with the named
+    # policy_tampered status on divergence. Empty = unsealed (detection
+    # inactive; existing deployments unaffected).
+    policy_seal_file: str = ""
+
     # Learn mode: record unmatched tool calls so the operator can generate
     # a draft policy from observed traffic. Fail-closed: learning never
     # authorises anything; it only produces a reviewable draft.
@@ -217,6 +224,7 @@ class GatewayConfig:
             kms_region=os.environ.get("AWS_REGION", "eu-west-1"),
             policy_file=os.environ.get("RAUCLE_POLICY_FILE", "/etc/raucle/policies.yaml"),
             policy_dir=os.environ.get("RAUCLE_POLICY_DIR", ""),
+            policy_seal_file=os.environ.get("RAUCLE_POLICY_SEAL_FILE", ""),
             learn_mode=os.environ.get("RAUCLE_LEARN_MODE", "").lower() in ("1", "true", "yes"),
             receipt_store=os.environ.get("RAUCLE_RECEIPT_STORE", "/data/receipts.jsonl"),
             audit_chain=os.environ.get("RAUCLE_AUDIT_CHAIN", "/data/audit.jsonl"),
@@ -859,6 +867,91 @@ class RaucleGateway:
         self._approvals = ApprovalManager(ttl_seconds=config.approval_ttl_seconds)
         self._activations = ActivationApprovalManager(ttl_seconds=config.approval_ttl_seconds)
         self._policy_ledger_head = _HASH_PREFIX + "0" * 64
+
+        # Policy-bytes tamper detection (M2): verify the enforcement files
+        # against the receipted activation seal at gate start. A diverging
+        # or unreadable seal puts the gate in the named policy_tampered
+        # state and every call denies fail-closed until an explicit
+        # re-activation re-receipts the new bytes.
+        from raucle.policy_bytes import POLICY_STATUS_TAMPERED, PolicyBytesVerifier
+
+        if config.policy_seal_file:
+            self._policy_bytes = PolicyBytesVerifier(
+                policy_path=config.policy_file,
+                seal_path=config.policy_seal_file,
+                revocations_path=config.revocations_file,
+                emitter=self._emit_policy_bytes_receipt,
+            )
+            self._policy_bytes_status = self._policy_bytes.verify()
+            if self._policy_bytes_status["status"] == POLICY_STATUS_TAMPERED:
+                logger.error(
+                    "POLICY TAMPERED at gate start: %s",
+                    "; ".join(self._policy_bytes_status["divergences"]),
+                )
+        else:
+            self._policy_bytes = None
+            self._policy_bytes_status = None
+
+    def _emit_policy_bytes_receipt(self, verdict: str, extra: dict[str, Any]) -> str:
+        """The policy-bytes emitter: activation/re-activation digests ride
+        the signed authority-attribution stream (x_policy_bytes block)."""
+        receipt_id = self._emit_authority_receipt(
+            verdict=verdict, extension_key="x_policy_bytes", extension=extra
+        )
+        return receipt_id or ""
+
+    def _policy_tampered_reason(self) -> str | None:
+        """The fail-closed gate-entry check. Returns the deny reason or
+        None when the enforcement bytes match the receipted seal (or no
+        seal is configured)."""
+        if self._policy_bytes is None:
+            return None
+        status = self._policy_bytes.verify()
+        self._policy_bytes_status = status
+        if status["status"] != "policy_tampered":
+            return None
+        return "policy_tampered: " + "; ".join(status["divergences"])
+
+    def seal_policy_bytes(self, *, actor: str = "operator") -> dict[str, Any]:
+        """Receipt the current enforcement bytes into the activation seal
+        (threat-model residual 5, M2). The digests ride the signed
+        receipt stream (x_policy_bytes); the seal sidecar persists only
+        when the receipt emission succeeded."""
+        self._require_policy_bytes()
+        return self._policy_bytes.seal(actor=actor)
+
+    def reactivate_policy_bytes(
+        self, *, actor: str = "operator", reason: str = ""
+    ) -> dict[str, Any]:
+        """The explicit re-activation flow: re-receipt bytes that
+        diverged from the previous seal, then re-seal. Editing the
+        enforcement files is auditable, never blocked."""
+        self._require_policy_bytes()
+        return self._policy_bytes.reactivate(actor=actor, reason=reason)
+
+    def policy_bytes_status(self) -> dict[str, Any]:
+        """The current verification status (bounded: status + divergences)."""
+        if self._policy_bytes is None:
+            return {"status": "policy_ok", "sealed": False, "divergences": []}
+        return self._policy_bytes.verify()
+
+    def _require_policy_bytes(self):
+        if self._policy_bytes is None:
+            from raucle.policy_bytes import PolicyBytesError, PolicyBytesVerifier
+
+            config = self.config
+            if not config.policy_seal_file:
+                raise PolicyBytesError(
+                    "policy-bytes detection is not configured: set "
+                    "policy_seal_file (RAUCLE_POLICY_SEAL_FILE) first"
+                )
+            self._policy_bytes = PolicyBytesVerifier(
+                policy_path=config.policy_file,
+                seal_path=config.policy_seal_file,
+                revocations_path=config.revocations_file,
+                emitter=self._emit_policy_bytes_receipt,
+            )
+        return self._policy_bytes
 
     def _init_gate_identity(self) -> None:
         """Derive the gate's provenance identity (agent:gate) from the
@@ -1802,6 +1895,14 @@ class RaucleGateway:
         lease_refusal = self._lease_suspension_refusal(agent_id)
         if lease_refusal:
             return self._deny_result(result, lease_refusal, start)
+
+        # Policy-bytes tamper detection (M2): the enforcement files were
+        # receipted at activation; on-disk divergence (an out-of-band edit)
+        # denies fail-closed with the named status before any policy
+        # evaluation - no call is ever served under silently edited policy.
+        tampered_reason = self._policy_tampered_reason()
+        if tampered_reason:
+            return self._deny_result(result, tampered_reason, start)
 
         if _token_decision is not None and not _token_decision.allowed:
             # Attributable token denial (receipts v1.1): the caller is
