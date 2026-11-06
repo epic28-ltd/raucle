@@ -56,6 +56,11 @@ SCOPES = (SCOPE_GLOBAL, SCOPE_AGENT, SCOPE_CHAIN)
 
 VERDICT_HOLD = "containment_hold"
 VERDICT_RESUME = "containment_resume"
+VERDICT_HOLD_PENDING = "containment_hold_pending"
+VERDICT_HOLD_APPROVAL = "containment_hold_approval"
+VERDICT_HOLD_ABORT = "containment_hold_abort"
+
+_HOLD_PENDING_KIND = "hold_pending"
 
 # v1: targeted containment (per-trace / per-lease, two-sided receipts).
 VERDICT_TRACE_QUARANTINE = "containment_trace_quarantine"
@@ -126,12 +131,23 @@ class ContainmentConfig:
     #: directory for the state file + operator keypair
     state_dir: str = ""
     actor: str = "operator"
+    #: M-of-N containment authorisation (threat-model mitigation M3,
+    #: OPT-IN): the number of DISTINCT sequential approver receipts a
+    #: hold requires before the stop is applied. Default 1 keeps the v0
+    #: single-approver path byte-identical; > 1 turns ``hold`` into a
+    #: receipted pending state that each additional distinct approver
+    #: (``approve_hold``) advances until the quorum is met.
+    min_approvers: int = 1
 
 
 class ContainmentManager:
     """Hold/resume/status over the gate's existing enforcement surfaces."""
 
     def __init__(self, config: ContainmentConfig) -> None:
+        if config.min_approvers < 1:
+            raise ContainmentError(
+                f"minimal approver quorum must be >= 1, got {config.min_approvers}"
+            )
         self.config = config
         self.state_dir = Path(config.state_dir or "~/.raucle/containment").expanduser()
         self.state_path = self.state_dir / _STATE_FILE
@@ -314,7 +330,14 @@ class ContainmentManager:
     # -- transitions ---------------------------------------------------------
 
     def hold(self, *, scope: str, scope_id: str = "", reason: str = "") -> dict[str, Any]:
-        """Apply the stop for *scope* and receipt it. Fail-closed."""
+        """Apply the stop for *scope* and receipt it. Fail-closed.
+
+        With the default quorum (``min_approvers == 1``) the stop is
+        applied immediately. With an opt-in quorum above 1 the hold
+        enters a receipted *pending* state instead and only applies
+        once enough DISTINCT approvers have receipted it via
+        :meth:`approve_hold` (M-of-N, mitigation M3).
+        """
         if scope not in SCOPES:
             raise ContainmentError(
                 f"malformed scope: '{scope}' (expected one of {', '.join(SCOPES)})"
@@ -323,11 +346,198 @@ class ContainmentManager:
             self._validate_agent_id(scope_id)  # malformed scope: named, before anything else
         state = self._read_state()
         if state:
-            raise ContainmentError(
-                f"already held since {state.get('held_at', '?')} "
-                f"(scope {state.get('scope')}); resume first"
-            )
+            self._raise_state_busy(state)
+        if self.config.min_approvers > 1:
+            return self._open_pending_hold(scope, scope_id, reason)
         return self._hold_locked(scope, scope_id, reason)
+
+    def _raise_state_busy(self, state: dict[str, Any]) -> None:
+        """A named refusal for the two states that block a new hold."""
+        if state.get("kind") == _HOLD_PENDING_KIND:
+            received = len(state.get("approvers", []))
+            required = int(state.get("min_approvers", self.config.min_approvers))
+            raise ContainmentError(
+                f"a hold is already pending approval ({received}/{required} "
+                "approvers receipted): approve via approve_hold or abort "
+                "the pending hold first"
+            )
+        raise ContainmentError(
+            f"already held since {state.get('held_at', '?')} "
+            f"(scope {state.get('scope')}); resume first"
+        )
+
+    # -- M-of-N pending hold (opt-in quorum, mitigation M3) -------------------
+
+    def _open_pending_hold(self, scope: str, scope_id: str, reason: str) -> dict[str, Any]:
+        """Open the receipted pending state without touching enforcement
+        bytes: quorum not yet met, so nothing is stopped yet."""
+        fd_lock = None
+        try:
+            fd_lock = self._locked_state()
+            state = self._read_state()  # re-read under the lock
+            if state:
+                self._raise_state_busy(state)
+            actor = self.config.actor
+            required = self.config.min_approvers
+            receipt_id = self._emit_receipt(
+                verdict=VERDICT_HOLD_PENDING,
+                description=f"containment:hold-pending:{scope}:{scope_id}",
+                extra={
+                    "scope": scope,
+                    "scope_id": scope_id,
+                    "actor": actor,
+                    "reason": reason,
+                    "min_approvers": required,
+                    "approvers": [],
+                },
+            )
+            self._write_atomic(
+                self.state_path,
+                json.dumps(
+                    {
+                        "kind": _HOLD_PENDING_KIND,
+                        "scope": scope,
+                        "scope_id": scope_id,
+                        "reason": reason,
+                        "actor": actor,
+                        "min_approvers": required,
+                        "approvers": [],
+                        "approval_receipts": [],
+                        "pending_receipt_id": receipt_id,
+                        "requested_at": _now_iso(),
+                    },
+                    sort_keys=True,
+                ).encode("utf-8"),
+            )
+            return {
+                "status": "pending",
+                "scope": scope,
+                "scope_id": scope_id,
+                "min_approvers": required,
+                "approvers": [],
+                "receipt_id": receipt_id,
+            }
+        finally:
+            if fd_lock is not None:
+                try:
+                    fcntl.flock(fd_lock, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd_lock)
+
+    def approve_hold(self, *, approver: str) -> dict[str, Any]:
+        """Receipt one distinct approver against the pending hold.
+
+        Sequential by design: each call emits its own named approval
+        receipt and advances the quorum. The approver identity must be
+        fresh — repeat approvals by the same identity are refused
+        (N-of-M quorums collude nothing). When the quorum is met the
+        stop is applied and the hold receipt carries every approver.
+        """
+        if not isinstance(approver, str) or not approver.strip():
+            raise ContainmentError("approver identity is required for an M-of-N approval receipt")
+        approver = approver.strip()
+        fd_lock = None
+        try:
+            fd_lock = self._locked_state()
+            state = self._read_state()  # re-read under the lock
+            if state is None:
+                raise ContainmentError("no pending hold; nothing to approve")
+            if state.get("kind") != _HOLD_PENDING_KIND:
+                self._raise_state_busy(state)
+            required = int(state.get("min_approvers", self.config.min_approvers))
+            approvers = list(state.get("approvers", []))
+            if approver in approvers:
+                raise ContainmentError(
+                    f"approver '{approver}' has already receipted this pending "
+                    "hold (distinct approvers required)"
+                )
+            scope = str(state.get("scope", ""))
+            scope_id = str(state.get("scope_id", ""))
+            receipt_id = self._emit_receipt(
+                verdict=VERDICT_HOLD_APPROVAL,
+                description=f"containment:hold-approval:{scope}:{scope_id}:{approver}",
+                extra={
+                    "scope": scope,
+                    "scope_id": scope_id,
+                    "approver": approver,
+                    "approvers_before": approvers,
+                    "min_approvers": required,
+                },
+            )
+            approvers.append(approver)
+            state["approvers"] = approvers
+            receipts = list(state.get("approval_receipts", []))
+            receipts.append(receipt_id)
+            state["approval_receipts"] = receipts
+            if len(approvers) < required:
+                self._write_atomic(
+                    self.state_path,
+                    json.dumps(state, sort_keys=True).encode("utf-8"),
+                )
+                return {
+                    "status": "pending",
+                    "scope": scope,
+                    "scope_id": scope_id,
+                    "approvers": approvers,
+                    "min_approvers": required,
+                    "outstanding": required - len(approvers),
+                    "receipt_id": receipt_id,
+                }
+            # Quorum met: apply the stop, carrying the approver roll into
+            # the hold receipt and the persisted held state.
+            return self._apply_hold_locked(
+                scope,
+                scope_id,
+                str(state.get("reason", "")),
+                pending=state,
+            )
+        finally:
+            if fd_lock is not None:
+                try:
+                    fcntl.flock(fd_lock, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd_lock)
+
+    def abort_hold(self, *, approver: str) -> dict[str, Any]:
+        """Cancel a still-pending hold: receipted, never a silent clear."""
+        if not isinstance(approver, str) or not approver.strip():
+            raise ContainmentError("approver identity is required to abort a hold")
+        approver = approver.strip()
+        fd_lock = None
+        try:
+            fd_lock = self._locked_state()
+            state = self._read_state()  # re-read under the lock
+            if state is None:
+                raise ContainmentError("no pending hold; nothing to abort")
+            if state.get("kind") != _HOLD_PENDING_KIND:
+                raise ContainmentError("hold already applied: abort refused (resume instead)")
+            receipt_id = self._emit_receipt(
+                verdict=VERDICT_HOLD_ABORT,
+                description=(
+                    f"containment:hold-abort:{state.get('scope')}:{state.get('scope_id', '')}"
+                ),
+                extra={
+                    "scope": state.get("scope", ""),
+                    "scope_id": state.get("scope_id", ""),
+                    "actor": approver,
+                    "pending_receipt_id": state.get("pending_receipt_id", ""),
+                    "approvers_so_far": list(state.get("approvers", [])),
+                },
+            )
+            self._write_atomic(self.state_path, b"")
+            with contextlib.suppress(FileNotFoundError):
+                self.state_path.unlink()
+            return {
+                "status": "aborted",
+                "scope": state.get("scope", ""),
+                "receipt_id": receipt_id,
+            }
+        finally:
+            if fd_lock is not None:
+                try:
+                    fcntl.flock(fd_lock, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd_lock)
 
     def _open_hold_target(
         self, scope: str, scope_id: str
@@ -354,20 +564,42 @@ class ContainmentManager:
 
     def _hold_locked(self, scope: str, scope_id: str, reason: str) -> dict[str, Any]:
         """Apply the hold under the state lock, receipt it, and release
-        both locks in all paths."""
-        actor = self.config.actor
-        fd_target: int | None = None
-        fd_lock: int | None = None
-        ids: list[str] = []
+        the state lock in all paths (the target lock is taken and
+        released inside :meth:`_apply_hold_locked`)."""
+        fd_lock = None
         try:
             fd_lock = self._locked_state()
             state = self._read_state()  # re-read under the lock
             if state:
-                raise ContainmentError(
-                    f"already held since {state.get('held_at', '?')} "
-                    f"(scope {state.get('scope')}); resume first"
-                )
+                self._raise_state_busy(state)
+            return self._apply_hold_locked(scope, scope_id, reason)
+        finally:
+            if fd_lock is not None:
+                try:
+                    fcntl.flock(fd_lock, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd_lock)
 
+    def _apply_hold_locked(
+        self,
+        scope: str,
+        scope_id: str,
+        reason: str,
+        *,
+        pending: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Mutate the enforcement bytes, receipt the hold, and persist the
+        held state. The state lock must already be held by the caller.
+
+        ``pending`` is the M-of-N pending record when the stop is being
+        applied on quorum: the approver roll then rides the hold receipt
+        and the held state (the default single-approver path — pending
+        None — is byte-identical to v0: no extra keys anywhere).
+        """
+        actor = self.config.actor
+        fd_target = None
+        ids: list[str] = []
+        try:
             target, fd_target, original, ids = self._open_hold_target(scope, scope_id)
 
             original_sha = _sha256_bytes(original)
@@ -377,19 +609,29 @@ class ContainmentManager:
             else:
                 self._append_revocations(target, ids, reason=reason, actor=actor)
 
+            extra: dict[str, Any] = {
+                "scope": scope,
+                "scope_id": scope_id,
+                "actor": actor,
+                "reason": reason,
+                "target_file": str(target),
+                "sha256_before": original_sha,
+                "revoked_ids": ids if scope != SCOPE_GLOBAL else [],
+            }
+            if pending is not None:
+                # Quorum provenance rides the hold receipt: every approver
+                # that receipted the pending hold, and the pending
+                # receipt that opened it.
+                extra["approvers"] = list(pending.get("approvers", []))
+                extra["min_approvers"] = int(
+                    pending.get("min_approvers", self.config.min_approvers)
+                )
+                extra["pending_receipt_id"] = pending.get("pending_receipt_id", "")
             try:
                 receipt_id = self._emit_receipt(
                     verdict=VERDICT_HOLD,
                     description=f"containment:hold:{scope}:{scope_id}",
-                    extra={
-                        "scope": scope,
-                        "scope_id": scope_id,
-                        "actor": actor,
-                        "reason": reason,
-                        "target_file": str(target),
-                        "sha256_before": original_sha,
-                        "revoked_ids": ids if scope != SCOPE_GLOBAL else [],
-                    },
+                    extra=extra,
                 )
             except Exception as exc:
                 # Receipt failed: roll the hold back — no unreceipted halt.
@@ -398,27 +640,30 @@ class ContainmentManager:
                     f"hold receipt emission failed; hold rolled back: {exc}"
                 ) from exc
 
+            held_state: dict[str, Any] = {
+                "scope": scope,
+                "scope_id": scope_id,
+                "held_at": _now_iso(),
+                "actor": actor,
+                "reason": reason,
+                "target_file": str(target),
+                "target_existed": scope == SCOPE_GLOBAL or target.exists(),
+                "original_sha256": original_sha,
+                "held_sha256": _sha256_file(target),
+                "receipt_id": receipt_id,
+                "revoked_ids": ids if scope != SCOPE_GLOBAL else [],
+                "original_bytes_b64": base64.b64encode(original).decode("ascii"),
+            }
+            if pending is not None:
+                held_state["approvers"] = list(pending.get("approvers", []))
+                held_state["min_approvers"] = int(
+                    pending.get("min_approvers", self.config.min_approvers)
+                )
             self._write_atomic(
                 self.state_path,
-                json.dumps(
-                    {
-                        "scope": scope,
-                        "scope_id": scope_id,
-                        "held_at": _now_iso(),
-                        "actor": actor,
-                        "reason": reason,
-                        "target_file": str(target),
-                        "target_existed": scope == SCOPE_GLOBAL or target.exists(),
-                        "original_sha256": original_sha,
-                        "held_sha256": _sha256_file(target),
-                        "receipt_id": receipt_id,
-                        "revoked_ids": ids if scope != SCOPE_GLOBAL else [],
-                        "original_bytes_b64": base64.b64encode(original).decode("ascii"),
-                    },
-                    sort_keys=True,
-                ).encode("utf-8"),
+                json.dumps(held_state, sort_keys=True).encode("utf-8"),
             )
-            return {
+            held_result: dict[str, Any] = {
                 "status": "held",
                 "scope": scope,
                 "scope_id": scope_id,
@@ -426,17 +671,16 @@ class ContainmentManager:
                 "receipt_id": receipt_id,
                 "revoked_ids": ids if scope != SCOPE_GLOBAL else [],
             }
+            if pending is not None:
+                held_result["approvers"] = list(pending.get("approvers", []))
+                held_result["min_approvers"] = held_state["min_approvers"]
+            return held_result
         finally:
             if fd_target is not None:
                 try:
                     fcntl.flock(fd_target, fcntl.LOCK_UN)
                 finally:
                     os.close(fd_target)
-            if fd_lock is not None:
-                try:
-                    fcntl.flock(fd_lock, fcntl.LOCK_UN)
-                finally:
-                    os.close(fd_lock)
 
     def resume(self, *, reason: str = "") -> dict[str, Any]:
         """Restore the pre-hold enforcement bytes exactly and receipt it."""
@@ -448,6 +692,14 @@ class ContainmentManager:
             state = self._read_state()
             if not state:
                 raise ContainmentError("not held; nothing to resume")
+            if state.get("kind") == _HOLD_PENDING_KIND:
+                received = len(state.get("approvers", []))
+                required = int(state.get("min_approvers", self.config.min_approvers))
+                raise ContainmentError(
+                    f"the hold is still pending approval ({received}/{required} "
+                    "approvers receipted); nothing is held yet - approve to "
+                    "quorum or abort the pending hold"
+                )
             target = Path(state["target_file"])
             original = base64.b64decode(state["original_bytes_b64"])
             expected = state["original_sha256"]
@@ -802,6 +1054,22 @@ class ContainmentManager:
                 "quarantined_traces": self._active_quarantines(),
                 "suspended_leases": self._active_lease_suspensions(),
             }
+        if state.get("kind") == _HOLD_PENDING_KIND:
+            return {
+                "held": False,
+                "pending_hold": {
+                    "scope": state.get("scope", ""),
+                    "scope_id": state.get("scope_id", ""),
+                    "min_approvers": int(
+                        state.get("min_approvers", self.config.min_approvers)
+                    ),
+                    "approvers": list(state.get("approvers", [])),
+                    "receipt_id": state.get("pending_receipt_id", ""),
+                    "requested_at": state.get("requested_at", ""),
+                },
+                "quarantined_traces": self._active_quarantines(),
+                "suspended_leases": self._active_lease_suspensions(),
+            }
         return {
             "held": True,
             "scope": state.get("scope", ""),
@@ -885,6 +1153,9 @@ __all__ = [
     "VERDICT_HOLD",
     "VERDICT_LEASE_REINSTATE",
     "VERDICT_LEASE_SUSPEND",
+    "VERDICT_HOLD_ABORT",
+    "VERDICT_HOLD_APPROVAL",
+    "VERDICT_HOLD_PENDING",
     "VERDICT_RESUME",
     "VERDICT_TRACE_QUARANTINE",
     "VERDICT_TRACE_RELEASE",
