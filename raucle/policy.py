@@ -42,6 +42,21 @@ import yaml
 
 from raucle.capability import Capability, CapabilityIssuer
 
+
+def _validate_allow_destination_classes(allow_classes: Any) -> None:
+    """Fail-closed validation of the optional allow-list in
+    ``deny_from_chain_taint``: when set, it must be a non-empty list of
+    non-empty strings."""
+    if allow_classes is None:
+        return
+    if not isinstance(allow_classes, list) or not allow_classes:
+        raise ValueError("deny_from_chain_taint.allow_destination_classes must be a non-empty list")
+    if any(not isinstance(v, str) or not v for v in allow_classes):
+        raise ValueError(
+            "deny_from_chain_taint.allow_destination_classes must be non-empty strings"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------
@@ -77,15 +92,7 @@ class ChainTaintDeny:
         for name, values in (("taint_tags", tags), ("destination_classes", dest_classes)):
             if any(not isinstance(v, str) or not v for v in values):
                 raise ValueError(f"deny_from_chain_taint.{name} must be non-empty strings")
-        if allow_classes is not None:
-            if not isinstance(allow_classes, list) or not allow_classes:
-                raise ValueError(
-                    "deny_from_chain_taint.allow_destination_classes must be a non-empty list"
-                )
-            if any(not isinstance(v, str) or not v for v in allow_classes):
-                raise ValueError(
-                    "deny_from_chain_taint.allow_destination_classes must be non-empty strings"
-                )
+        _validate_allow_destination_classes(allow_classes)
         if not dest_classes and allow_classes is None:
             raise ValueError(
                 "deny_from_chain_taint requires 'destination_classes' or "

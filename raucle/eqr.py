@@ -174,6 +174,31 @@ class Evidence:
 # ---------------------------------------------------------------------------
 
 
+def _validate_reduced_constraints(on_degraded: str, reduced: Any) -> None:
+    """Validate the EQR reduced-scope DSL fail-closed at policy load."""
+    if on_degraded != "reduce":
+        if reduced is not None:
+            raise ValueError("eqr.reduced_constraints is only valid when on_degraded is 'reduce'")
+        return
+    if not isinstance(reduced, dict) or not reduced:
+        raise ValueError("eqr.reduced_constraints is required when on_degraded is 'reduce'")
+    # Fail-closed at load: an unknown DSL key must be rejected, not
+    # silently ignored by the compiler (a silently-dropped key would
+    # widen the reduced scope below what the operator declared).
+    unknown = set(reduced) - _CONSTRAINT_DSL_KEYS
+    if unknown:
+        raise ValueError(f"eqr.reduced_constraints has unknown constraint keys: {sorted(unknown)}")
+    # Validate the DSL here (a malformed reduced scope fails CLOSED
+    # at policy load, not at gate time) while storing the DSL-form
+    # dict verbatim, so YAML round-trips keep the authored syntax.
+    from raucle.policy import compile_constraint_dsl
+
+    try:
+        compile_constraint_dsl(reduced)
+    except ValueError as exc:
+        raise ValueError(f"eqr.reduced_constraints invalid: {exc}") from exc
+
+
 @dataclass
 class EQR:
     """Evidence Quality Requirement as a policy rule input.
@@ -208,7 +233,6 @@ class EQR:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | Any) -> EQR:
-        from raucle.policy import compile_constraint_dsl
 
         if not isinstance(data, dict):
             raise ValueError(f"eqr must be a mapping, got {type(data).__name__}")
@@ -235,26 +259,7 @@ class EQR:
             raise ValueError("eqr.confidence_floor must be an integer within 0..100")
         if on_degraded not in _ON_DEGRADED_ALLOWED:
             raise ValueError(f"eqr.on_degraded must be one of {list(_ON_DEGRADED_ALLOWED)!r}")
-        if on_degraded == "reduce":
-            if not isinstance(reduced, dict) or not reduced:
-                raise ValueError("eqr.reduced_constraints is required when on_degraded is 'reduce'")
-            # Fail-closed at load: an unknown DSL key must be rejected, not
-            # silently ignored by the compiler (a silently-dropped key would
-            # widen the reduced scope below what the operator declared).
-            unknown = set(reduced) - _CONSTRAINT_DSL_KEYS
-            if unknown:
-                raise ValueError(
-                    f"eqr.reduced_constraints has unknown constraint keys: {sorted(unknown)}"
-                )
-            # Validate the DSL here (a malformed reduced scope fails CLOSED
-            # at policy load, not at gate time) while storing the DSL-form
-            # dict verbatim, so YAML round-trips keep the authored syntax.
-            try:
-                compile_constraint_dsl(reduced)
-            except ValueError as exc:
-                raise ValueError(f"eqr.reduced_constraints invalid: {exc}") from exc
-        elif reduced is not None:
-            raise ValueError("eqr.reduced_constraints is only valid when on_degraded is 'reduce'")
+        _validate_reduced_constraints(on_degraded, reduced)
         return cls(
             evidence_kind=kind,
             max_age_seconds=max_age,

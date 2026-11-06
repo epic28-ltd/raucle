@@ -289,7 +289,6 @@ class ContainmentManager:
             raise ContainmentError(
                 f"malformed scope: '{scope}' (expected one of {', '.join(SCOPES)})"
             )
-        actor = self.config.actor
         if scope == SCOPE_AGENT:
             self._validate_agent_id(scope_id)  # malformed scope: named, before anything else
         state = self._read_state()
@@ -298,7 +297,12 @@ class ContainmentManager:
                 f"already held since {state.get('held_at', '?')} "
                 f"(scope {state.get('scope')}); resume first"
             )
+        return self._hold_locked(scope, scope_id, reason)
 
+    def _hold_locked(self, scope: str, scope_id: str, reason: str) -> dict[str, Any]:
+        """Apply the hold under the state lock, receipt it, and release
+        both locks in all paths."""
+        actor = self.config.actor
         fd_target: int | None = None
         fd_lock: int | None = None
         ids: list[str] = []
