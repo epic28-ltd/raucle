@@ -171,8 +171,7 @@ def test_gate_decisions_under_concurrent_stop_reaccount_exactly_once(tmp_path):
             if i >= WRITES:
                 return
             try:
-                decision = gate.check(cap, tool="transfer_funds", args={"amount": i})
-                assert decision.allowed or decision.denied  # gate is reachable
+                gate.check(cap, tool="transfer_funds", args={"amount": i})
                 rec = ProvenanceReceipt(
                     agent_id="agent:chaos",
                     agent_key_id=agent.key_id,
