@@ -1380,7 +1380,7 @@ class RaucleGateway:
         self._evidence_store.clear()
 
     def _evaluate_dataflow_rule(
-        self, matched_rule: Any, tool: str, trace_id: str, destination_class: str
+        self, matched_rule: Any, trace_id: str, destination_class: str
     ) -> str:
         """Evaluate the matched rule's data-flow kind against the chain.
 
@@ -1847,9 +1847,7 @@ class RaucleGateway:
         # deny_from_chain_taint kind is evaluated against the REPLAYED
         # chain state for this trace_id - deterministic, no side-channel.
         # Fail-closed: an unusable chain state (missing trace) denies too.
-        dataflow_reason = self._evaluate_dataflow_rule(
-            matched_rule, tool, trace_id, destination_class
-        )
+        dataflow_reason = self._evaluate_dataflow_rule(matched_rule, trace_id, destination_class)
         # Token TTL elapsed; re-mint under the matched rule (same issuer
         # key, same constraints) so short policy TTLs do not brick a
         # long-running gateway. Fail-closed if re-minting fails.
@@ -1859,7 +1857,39 @@ class RaucleGateway:
             logger.exception("Re-mint failed for %s", tool)
             return self._deny_result(result, "token expired and re-mint failed", start)
         self._bind_rule_metadata(result, matched_rule, tool)
+        return self._decide_and_finish(
+            result,
+            start,
+            matched_rule,
+            dataflow_reason,
+            token,
+            tool,
+            args,
+            actual_agent_id,
+            trace_id=trace_id,
+            approval_id=approval_id,
+            _intent_hint=_intent_hint,
+            _acting_for=_acting_for,
+        )
 
+    def _decide_and_finish(
+        self,
+        result: dict[str, Any],
+        start: float,
+        matched_rule: Any,
+        dataflow_reason: str,
+        token: Any,
+        tool: str,
+        args: dict[str, Any],
+        actual_agent_id: str,
+        *,
+        trace_id: str,
+        approval_id: str,
+        _intent_hint: dict[str, Any] | None,
+        _acting_for: str,
+    ) -> dict[str, Any]:
+        """Evaluate the matched rule against the call, then receipt,
+        log and forward the decision result."""
         # The data-flow deny fires before constraint evaluation: it only
         # ever denies, and ESCALATE must not bypass it (never widens
         # authority). The reason is named and cited by the receipt.

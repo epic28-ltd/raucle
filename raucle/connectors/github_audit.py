@@ -115,7 +115,7 @@ class GitHubAuditConnector(SourceConnector):
         self._order = order
         self._per_page = per_page
 
-    def url(self, after: str | None) -> str:
+    def url(self, _after: str | None) -> str:
         return f"https://api.github.com/orgs/{self._org}/audit-log"
 
     def page_params(self, after: str | None) -> dict[str, str]:

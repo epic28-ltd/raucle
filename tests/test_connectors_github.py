@@ -104,10 +104,12 @@ def test_github_rate_limit_403_with_zero_remaining_is_rate_limit(monkeypatch, co
         )
 
     connector._transport = throttled
+    stream = connector.fetch_all()
     with pytest.raises(RateLimitError) as exc:
-        next(connector.fetch_all())
+        next(stream)
     assert exc.value.status == 403
-    assert exc.value.retry_after is not None and exc.value.retry_after >= 0
+    assert exc.value.retry_after is not None
+    assert exc.value.retry_after >= 0
 
 
 def test_github_forbidden_403_is_not_a_rate_limit(monkeypatch, connector):
@@ -117,8 +119,9 @@ def test_github_forbidden_403_is_not_a_rate_limit(monkeypatch, connector):
         return 403, {"X-RateLimit-Remaining": "4996"}, b'{"message": "Not Found"}'
 
     connector._transport = forbidden
+    stream = connector.fetch_all()
     with pytest.raises(RuntimeError, match="returned 403") as exc:
-        next(connector.fetch_all())
+        next(stream)
     assert not isinstance(exc.value, RateLimitError)
 
 

@@ -124,8 +124,9 @@ def test_okta_rate_limit_surfaced_with_vendor_hint_not_slept(monkeypatch, connec
         return 429, {"X-Rate-Limit-Reset": "9999999999", "Retry-After": "42"}, b"[]"
 
     connector._transport = throttled
+    stream = connector.fetch_all()
     with pytest.raises(RateLimitError) as exc:
-        next(connector.fetch_all())
+        next(stream)
     assert exc.value.source == "okta"
     assert exc.value.status == 429
     assert exc.value.retry_after == 42.0  # parsed from the vendor header, not invented

@@ -110,7 +110,7 @@ class OktaConnector(SourceConnector):
         self._since = since
         self._limit = limit
 
-    def url(self, after: str | None) -> str:
+    def url(self, _after: str | None) -> str:
         return f"{self._base_url}/api/v1/logs"
 
     def page_params(self, after: str | None) -> dict[str, str]:

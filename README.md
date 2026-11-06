@@ -53,6 +53,8 @@ Every tool call your agent makes now appends a hash-chained receipt to `receipts
 
 **Deploy for real:** [`docs/getting-started/20-production-hardening.md`](docs/getting-started/20-production-hardening.md) — the 90-minute path: agent authentication, signed receipts with segmented storage, the restart test, offline verification, query + ancestry, and the security checklist. Architecture: [`docs/deployment-topologies.md`](docs/deployment-topologies.md); keys: [`docs/security/key-operations.md`](docs/security/key-operations.md); Helm: [`deploy/helm/raucle-gateway/`](deploy/helm/raucle-gateway/).
 
+**Trust boundaries:** [`docs/security-model.md`](docs/security-model.md) states the guarantees and depend-on assumptions; the STRIDE-style review of the suite's own trust boundaries — per-boundary assets, threats, controls and honest residual risks with a prioritised mitigation register — lives in [`docs/threat-model/v1.md`](docs/threat-model/v1.md).
+
 ---
 
 **Verifiable authorisation and provenance for production AI agents.** raucle produces a cryptographic record — the *capability receipt* — of every policy-gated action an AI agent takes: what it was authorised to do, by whose authority, against a policy proof that can be independently verified, and what action was executed. It proves exactly that and no more — not that the action was wise or safe, but that it was authorised and what was done. The receipt is content-addressed, Ed25519-signed, and verifiable by any third party — a regulator, an auditor, a downstream tool, a partner organisation — without contacting the vendor. Built for the *audit* problem regulated industries actually have, not just the *attack* problem the literature chases.

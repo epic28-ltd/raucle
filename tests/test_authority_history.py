@@ -93,7 +93,8 @@ def _fixture(tmp_path, *, store_all: bool = False):
                 "/gate",
                 json={"tool": "export_records", "args": args, "agent_id": "agent:svc"},
             )
-            assert resp.status_code == 200 and resp.json()["decision"] == "allow"
+            assert resp.status_code == 200
+            assert resp.json()["decision"] == "allow"
             store.add(_canonical_json(args).decode("utf-8"))
         if store_all:
             args = {"account": "ACC-777", "purpose": "audit"}
@@ -101,7 +102,8 @@ def _fixture(tmp_path, *, store_all: bool = False):
                 "/gate",
                 json={"tool": "export_records", "args": args, "agent_id": "agent:svc"},
             )
-            assert resp.status_code == 200 and resp.json()["decision"] == "deny"
+            assert resp.status_code == 200
+            assert resp.json()["decision"] == "deny"
             store.add(_canonical_json(args).decode("utf-8"))
         else:
             client.post(
@@ -117,7 +119,8 @@ def _fixture(tmp_path, *, store_all: bool = False):
             "/gate",
             json={"tool": "unmodelled_tool", "args": {"x": 1}, "agent_id": "agent:svc"},
         )
-        assert resp.status_code == 200 and resp.json()["decision"] == "deny"
+        assert resp.status_code == 200
+        assert resp.json()["decision"] == "deny"
         if store_all:
             # store_all means EVERYTHING stored: also the unmodelled call's
             # args, so the no-policy digest row is honestly resolvable
@@ -268,7 +271,8 @@ def test_missing_policy_artifact():
     for f in policy_dir.iterdir():
         f.unlink()
     report = replay()
-    assert report["verified"] == 0 and report["divergent"] == 0
+    assert report["verified"] == 0
+    assert report["divergent"] == 0
     # four receipts, none recomputable: the two stored args rows lose
     # their policy of record (artifact missing), the two unstored rows
     # are named at the args stage before the policy is even consulted
@@ -296,10 +300,12 @@ def _forge_decision(chain_path, gateway, index=0):
     lines = chain_path.read_text(encoding="utf-8").splitlines()
     envelope = json.loads(lines[index])
     header_b64, payload_b64, _ = envelope["jws"].split(".")
-    padding = "=" * (-len(payload_b64) % 4)
-    payload = json.loads(base64.urlsafe_b64decode(payload_b64 + padding))
+    # Each JWS segment carries its own modulo-4 remainder: pad each one
+    # independently (padding the header with the payload's remainder
+    # raises "Incorrect padding" whenever the header length mod 4 differs).
+    payload = json.loads(base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4)))
     payload["x_gate"]["decision"] = "deny"
-    header = json.loads(base64.urlsafe_b64decode(header_b64 + padding))
+    header = json.loads(base64.urlsafe_b64decode(header_b64 + "=" * (-len(header_b64) % 4)))
     signing_input = (
         _b64url_encode(_canonical_json(header)) + "." + _b64url_encode(_canonical_json(payload))
     ).encode("ascii")
@@ -324,7 +330,8 @@ def test_forged_receipt_decision_diverges():
     assert row["receipted_decision"] == "deny"
     assert row["recomputed_decision"] == "allow"
     assert report["verdict"].startswith("EVIDENCE DIVERGENCE:")
-    assert report["divergent"] == 1 and report["verified"] == 1
+    assert report["divergent"] == 1
+    assert report["verified"] == 1
 
 
 # --- vector: counterfactual join + bounded disclosure --------------------
