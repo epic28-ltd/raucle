@@ -173,7 +173,8 @@ def test_rules_list_json(capsys):
     code, out, _ = run(capsys, "rules", "list", "--format", "json")
     assert code == 0
     rules = json.loads(out)
-    assert isinstance(rules, list) and rules
+    assert isinstance(rules, list)
+    assert rules
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +189,8 @@ def test_agents_issue_list_revoke_roundtrip(tmp_path, capsys):
     )
     assert code == 0
     code, out, _err = run(capsys, "agents", "list", "--store", store)
-    assert code == 0 and "agent:pay" in out
+    assert code == 0
+    assert "agent:pay" in out
     code, _out, _err = run(
         capsys, "agents", "revoke-key", "--agent-id", "agent:pay", "--store", store
     )
@@ -198,7 +200,8 @@ def test_agents_issue_list_revoke_roundtrip(tmp_path, capsys):
     )
     assert code == 1
     code, _out, err = run(capsys, "agents", "list", "--store", store)
-    assert code == 0 and "no agents" in err
+    assert code == 0
+    assert "no agents" in err
 
 
 def test_canary_mint_then_observe_hits(tmp_path, capsys):
@@ -278,7 +281,9 @@ def test_serve_runs_uvicorn_happy_path(capsys, monkeypatch):
     monkeypatch.setitem(sys.modules, "uvicorn", _FakeUvicorn)
     code, _out, _ = run(capsys, "serve", "--host", "127.0.0.1", "--port", "65531")
     assert code == 0
-    assert calls and calls[0]["app"] == "raucle.server:app" and calls[0]["port"] == 65531
+    assert calls
+    assert calls[0]["app"] == "raucle.server:app"
+    assert calls[0]["port"] == 65531
 
 
 def test_mcp_serve_suppresses_keyboard_interrupt(capsys, monkeypatch):
@@ -319,7 +324,9 @@ def test_registry_init_publish_list_resolve_verify(tmp_path, capsys):
     assert code == 0
     _publish_key(registry, "acme", tmp_path, capsys)
     code, out, _ = run(capsys, "registry", "list", registry)
-    assert code == 0 and "acme" in out and "active issuer" in out
+    assert code == 0
+    assert "acme" in out
+    assert "active issuer" in out
     code, out, _err = run(capsys, "registry", "revoke", registry, "zzzz")
     assert code == 0  # revoking an unknown key_id is idempotent, not an error
     pem2 = _publish_key(registry, "other", tmp_path, capsys)
@@ -329,14 +336,17 @@ def test_registry_init_publish_list_resolve_verify(tmp_path, capsys):
     code, out, _ = run(capsys, "registry", "list", registry)
     assert "other" not in out
     code, _out, err = run(capsys, "registry", "resolve", registry, "zzzz")
-    assert code == 1 and "not in registry" in err
+    assert code == 1
+    assert "not in registry" in err
     code, out, _ = run(capsys, "registry", "verify", registry)
-    assert code == 0 and "Registry OK" in out
+    assert code == 0
+    assert "Registry OK" in out
 
 
 def test_registry_no_subcommand(capsys):
     code, _out, err = run(capsys, "registry")
-    assert code == 2 and "needs a subcommand" in err
+    assert code == 2
+    assert "needs a subcommand" in err
 
 
 def test_registry_published_key_resolves(tmp_path, capsys):
@@ -403,7 +413,9 @@ def test_watch_renders_chain_records_no_follow(tmp_path, capsys):
     )
     code, out, _err = run(capsys, "watch", str(f), "--no-follow")
     assert code == 0
-    assert "ALLOW" in out and "DENY" in out and "MALICIOUS" in out
+    assert "ALLOW" in out
+    assert "DENY" in out
+    assert "MALICIOUS" in out
 
 
 def test_watch_denies_only_filters_allows(tmp_path, capsys):
@@ -429,12 +441,14 @@ def test_watch_denies_only_filters_allows(tmp_path, capsys):
     )
     code, out, _err = run(capsys, "watch", str(f), "--no-follow", "--denies-only")
     assert code == 0
-    assert "ALLOW" not in out and "DENY" in out
+    assert "ALLOW" not in out
+    assert "DENY" in out
 
 
 def test_watch_missing_file(capsys, tmp_path):
     code, _out, err = run(capsys, "watch", str(tmp_path / "absent.jsonl"), "--no-follow")
-    assert code == 1 and "no such file" in err
+    assert code == 1
+    assert "no such file" in err
 
 
 def test_watch_follow_stops_on_interrupt(capsys, monkeypatch):
@@ -607,12 +621,14 @@ def test_passport_issue_and_verify(tmp_path, capsys):
     assert code == 0
     assert passport.exists()
     code, out, _ = run(capsys, "passport", "verify", str(passport), "--registry", str(reg))
-    assert code == 0 and "VALID" in out
+    assert code == 0
+    assert "VALID" in out
 
 
 def test_passport_missing_subcommand(capsys):
     code, _out, err = run(capsys, "passport")
-    assert code == 2 and "issue" in err
+    assert code == 2
+    assert "issue" in err
 
 
 def test_passport_verify_bad_registry(tmp_path, capsys):
@@ -668,7 +684,8 @@ def test_provenance_verify_json_and_failure(tmp_path, capsys):
     code, out, _ = run(
         capsys, "provenance", "verify", str(chain), "--pubkeys", str(stmt), "--format", "json"
     )
-    assert code == 0 and json.loads(out)["valid"] is True
+    assert code == 0
+    assert json.loads(out)["valid"] is True
     # missing pubkeys file: FileNotFoundError -> main-level error, exit 1
     code, _out, err = run(
         capsys, "provenance", "verify", str(chain), "--pubkeys", str(tmp_path / "gone")
@@ -685,7 +702,8 @@ def test_provenance_trace_and_graph(tmp_path, capsys):
     receipts = json.loads(out)
     assert {r["receipt_hash"] for r in receipts} >= {hashes["root"], hashes["t1"]}
     code, out, _ = run(capsys, "provenance", "graph", hashes["t1"], "--chain", str(chain))
-    assert code == 0 and out.startswith("digraph")
+    assert code == 0
+    assert out.startswith("digraph")
 
 
 def test_provenance_trace_unknown_hash(tmp_path, capsys):
@@ -741,7 +759,8 @@ def test_feed_keygen_sign_verify_list(tmp_path, capsys):
     )
     assert code == 0
     code, out, _ = run(capsys, "feed", "verify", str(feed_path), "--pubkey", str(pub))
-    assert code == 0 and "OK" in out
+    assert code == 0
+    assert "OK" in out
     # tampering is caught
     feed_path.write_text(
         feed_path.read_text(encoding="utf-8").replace("evil", "evil2"), encoding="utf-8"
@@ -750,7 +769,8 @@ def test_feed_keygen_sign_verify_list(tmp_path, capsys):
     assert code == 2
     # list over an empty store
     code, out, _ = run(capsys, "feed", "list", "--store", str(tmp_path / "store"))
-    assert code == 0 and "(empty)" in out
+    assert code == 0
+    assert "(empty)" in out
 
 
 def test_feed_pull_rejects_non_https_url(tmp_path, capsys):
@@ -789,11 +809,13 @@ def test_prove_json_proven_and_refuted(tmp_path, capsys):
     pol = tmp_path / "pol.json"
     pol.write_text(json.dumps({"max_value": {"amount": 1_000_000}}), encoding="utf-8")
     code, out, _ = run(capsys, "prove", "json", "--schema", str(schema), "--policy", str(pol))
-    assert code == 0 and "PROVEN" in out
+    assert code == 0
+    assert "PROVEN" in out
     strict = tmp_path / "strict.json"
     strict.write_text(json.dumps({"max_value": {"amount": 100}}), encoding="utf-8")
     code, _out, err = run(capsys, "prove", "json", "--schema", str(schema), "--policy", str(strict))
-    assert code == 2 and "REFUTED" in err
+    assert code == 2
+    assert "REFUTED" in err
 
 
 def test_prove_url_proven_and_refuted(tmp_path, capsys):
@@ -804,7 +826,8 @@ def test_prove_url_proven_and_refuted(tmp_path, capsys):
     pol = tmp_path / "p.json"
     pol.write_text(json.dumps({"require_https": True}), encoding="utf-8")
     code, out, _ = run(capsys, "prove", "url", "--grammar", str(grammar), "--policy", str(pol))
-    assert code == 0 and "PROVEN" in out
+    assert code == 0
+    assert "PROVEN" in out
     bad = tmp_path / "bad.json"
     bad.write_text(
         json.dumps({"schemes": ["https", "http"], "hosts": ["api.example.com"]}), encoding="utf-8"
@@ -830,7 +853,8 @@ def test_prove_sql_proven(tmp_path, capsys):
     pol = tmp_path / "p.json"
     pol.write_text(json.dumps({"allowed_tables": ["customers", "invoices"]}), encoding="utf-8")
     code, out, _ = run(capsys, "prove", "sql", "--grammar", str(grammar), "--policy", str(pol))
-    assert code == 0 and "PROVEN" in out
+    assert code == 0
+    assert "PROVEN" in out
 
 
 # ---------------------------------------------------------------------------
@@ -866,7 +890,8 @@ def test_cap_keygen_mint_verify_check_attenuate(tmp_path, capsys):
     )
     assert code == 0, out
     code, out, _err = run(capsys, "cap", "verify", str(token), "--pubkey", str(pub))
-    assert code == 0 and "OK" in out
+    assert code == 0
+    assert "OK" in out
     ok_args = tmp_path / "ok.json"
     ok_args.write_text(json.dumps({"account": "ACC-001"}), encoding="utf-8")
     code, out, _err = run(
@@ -881,7 +906,8 @@ def test_cap_keygen_mint_verify_check_attenuate(tmp_path, capsys):
         "--args",
         str(ok_args),
     )
-    assert code == 0 and "ALLOW" in out
+    assert code == 0
+    assert "ALLOW" in out
     bad_args = tmp_path / "bad.json"
     bad_args.write_text(json.dumps({"account": "ACC-999"}), encoding="utf-8")
     code, _out, err = run(
@@ -896,7 +922,8 @@ def test_cap_keygen_mint_verify_check_attenuate(tmp_path, capsys):
         "--args",
         str(bad_args),
     )
-    assert code == 2 and "DENY" in err
+    assert code == 2
+    assert "DENY" in err
     child = tmp_path / "child.json"
     code, _out, _ = run(
         capsys,
@@ -976,7 +1003,8 @@ def test_main_import_error_is_one_liner(capsys, monkeypatch):
     monkeypatch.setitem(sys.modules, "raucle.mutator", None)
     code, _out, err = run(capsys, "rules", "fuzz", "--samples", "1", "--seed", "0")
     assert code == 1
-    assert err.startswith("error:") and "Traceback" not in err
+    assert err.startswith("error:")
+    assert "Traceback" not in err
 
 
 def test_main_file_not_found_is_one_liner(capsys, tmp_path):
@@ -990,7 +1018,8 @@ def test_stonechat_and_bird_aliases(capsys):
     assert code == 0
     assert "stonechat" in out
     code, out, _ = run(capsys, "bird")
-    assert code == 0 and "stonechat" in out
+    assert code == 0
+    assert "stonechat" in out
 
 
 def test_no_command_prints_help(capsys):
@@ -1156,7 +1185,8 @@ def test_records_destroy_missing_chain(tmp_path, capsys):
 
 def test_records_missing_subcommand(capsys):
     code, _out, err = run(capsys, "records")
-    assert code == 2 and "destroy" in err
+    assert code == 2
+    assert "destroy" in err
 
 
 # ---------------------------------------------------------------------------
@@ -1223,7 +1253,8 @@ def test_timestamp_missing_chain(tmp_path, capsys, subcmd, receipt_chain):
             str(tmp_path / "a"),
         ]
     code, _out, err = run(capsys, *argv)
-    assert code == 1 and "no such chain file" in err
+    assert code == 1
+    assert "no such chain file" in err
 
 
 def test_timestamp_plan_lists_anchors(tmp_path, capsys, receipt_chain):
@@ -1314,7 +1345,8 @@ def test_counterfactual_missing_chain(tmp_path, capsys):
 
 def test_counterfactual_bad_subcommand(capsys):
     code, _out, err = run(capsys, "counterfactual")
-    assert code == 2 and "policy" in err
+    assert code == 2
+    assert "policy" in err
 
 
 # ---------------------------------------------------------------------------
@@ -1406,16 +1438,19 @@ def test_compliance_report_happy_and_errors(tmp_path, capsys, compliance_chain):
     assert code == 0
     assert out.startswith("#")
     code, _out, err = run(capsys, "compliance", "report", str(chain), "--framework", "fraud-scheme")
-    assert code == 2 and "supported:" in err
+    assert code == 2
+    assert "supported:" in err
     code, _out, err = run(
         capsys, "compliance", "report", str(tmp_path / "gone.jsonl"), "--framework", "eu-ai-act"
     )
-    assert code == 2 and "path does not exist" in err
+    assert code == 2
+    assert "path does not exist" in err
 
 
 def test_compliance_missing_subcommand(capsys):
     code, _out, err = run(capsys, "compliance")
-    assert code == 2 and "report" in err
+    assert code == 2
+    assert "report" in err
 
 
 # ---------------------------------------------------------------------------
@@ -1486,7 +1521,8 @@ def test_audit_pack_build_verify_pin_signer(tmp_path, capsys):
     assert (pack_dir / "PACK.json").is_file()
     # un-pinned verify passes
     code, _out, err = run(capsys, "audit-pack", "verify", str(pack_dir))
-    assert code == 0 and "RESULT: VERIFIED" in err
+    assert code == 0
+    assert "RESULT: VERIFIED" in err
     # failure: verify a non-existent pack
     code, _out, err = run(capsys, "audit-pack", "verify", str(tmp_path / "nope-pack"))
     assert code == 1
@@ -1517,7 +1553,8 @@ def test_verify_receipt_happy(tmp_path, capsys):
     code, _out, err = run(
         capsys, "verify-receipt", receipt, "--pubkey", str(pub), "--input", "different"
     )
-    assert code == 2 and "INVALID" in err
+    assert code == 2
+    assert "INVALID" in err
 
 
 # ---------------------------------------------------------------------------
@@ -1556,11 +1593,13 @@ def test_authorship_sign_and_verify(tmp_path, capsys):
     assert receipt.endswith(".jsonl")
     assert Path(receipt).exists()
     code, out, _ = run(capsys, "authorship", "verify", receipt, "--pubkey", str(pub))
-    assert code == 0 and "VALID" in out
+    assert code == 0
+    assert "VALID" in out
     code, out, _ = run(
         capsys, "authorship", "verify", receipt, "--pubkey", str(pub), "--format", "json"
     )
-    assert code == 0 and json.loads(out)["valid"] is True
+    assert code == 0
+    assert json.loads(out)["valid"] is True
 
 
 def test_authorship_sign_missing_repo(tmp_path, capsys):
@@ -1735,7 +1774,8 @@ def test_provenance_trace_table(tmp_path, capsys):
     chain, stmt, hashes, _id = _signed_chain(tmp_path)
     code, out, _ = run(capsys, "provenance", "trace", hashes["t0"], "--chain", str(chain))
     assert code == 0
-    assert "DAG ancestors" in out and "lookup" in out
+    assert "DAG ancestors" in out
+    assert "lookup" in out
 
 
 def test_provenance_migrate_legacy_chain_fails(tmp_path, capsys):
@@ -1832,7 +1872,8 @@ def test_feed_list_after_merge(tmp_path, capsys):
     store.merge(feed)
     code, out, _ = run(capsys, "feed", "list", "--store", str(store_dir))
     assert code == 0
-    assert "evil" in out and "live IOC" in out
+    assert "evil" in out
+    assert "live IOC" in out
 
 
 def test_feed_sign_rejects_non_list_drafts(tmp_path, capsys):
@@ -1852,7 +1893,8 @@ def test_feed_sign_rejects_non_list_drafts(tmp_path, capsys):
         "--out",
         str(tmp_path / "feed.json"),
     )
-    assert code == 1 and "JSON list" in err
+    assert code == 1
+    assert "JSON list" in err
 
 
 def test_raucle_detect_alias_warns(capsys, monkeypatch):
@@ -1936,7 +1978,8 @@ def test_audit_pack_pq_pubkeys_and_pinned_signer(tmp_path, capsys):
     code, _out, err = run(
         capsys, "audit-pack", "verify", str(pack_dir), "--signer", "aaaaaaaaaaaaaaaa"
     )
-    assert code == 1 and "RESULT: REJECTED" in err
+    assert code == 1
+    assert "RESULT: REJECTED" in err
 
 
 def test_authorship_sign_bad_key(tmp_path, capsys):
@@ -2037,7 +2080,8 @@ def test_feed_pull_happy_and_rejection(tmp_path, capsys, monkeypatch):
         "--store",
         store,
     )
-    assert code == 2 and "REJECTED" in err
+    assert code == 2
+    assert "REJECTED" in err
     # right pin -> merged
     code, out, _err = run(
         capsys,
@@ -2049,7 +2093,8 @@ def test_feed_pull_happy_and_rejection(tmp_path, capsys, monkeypatch):
         "--store",
         store,
     )
-    assert code == 0 and "Merged" in out
+    assert code == 0
+    assert "Merged" in out
 
 
 def test_provenance_require_pq_skips_malformed_lines(tmp_path, capsys):
