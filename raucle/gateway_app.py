@@ -71,6 +71,13 @@ class GateRequest(BaseModel):
     destination: str = Field(
         default="", description="Outbound destination (API endpoint, service, or tool target)"
     )
+    destination_class: str = Field(
+        default="",
+        description=(
+            "Class of the outbound destination (data-flow rules evaluate against this; "
+            "an unknown class fails closed when a deny_from_chain_taint rule is active)"
+        ),
+    )
 
 
 def _gate_deny_response(req: GateRequest, reason: str) -> dict[str, Any]:
@@ -313,6 +320,7 @@ def _handle_gate_tool_call(
         req.destination,
         trace_id=trace_id,
         approval_id=x_approval_id or "",
+        destination_class=req.destination_class,
         _authorization_hint=authorization,
         _token_decision=token_decision,
         _intent_hint=intent_hint,
