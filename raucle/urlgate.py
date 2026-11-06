@@ -54,6 +54,7 @@ from urllib.parse import urlsplit
 logger = logging.getLogger("raucle.urlgate")
 
 DEFAULT_UPSTREAM = "https://api.openai.com"
+DEFAULT_RECEIPT_STORE = "urlgate-receipts.jsonl"
 
 # Endpoints whose POST traffic is gated (policy + receipt). Everything
 # else passes through untouched.
@@ -113,7 +114,7 @@ class UrlGateConfig:
     listen_port: int = 8095
     # Gate policy + receipt plumbing (reuses the existing gate machinery).
     policy_file: str = ""
-    receipt_store: str = "urlgate-receipts.jsonl"
+    receipt_store: str = DEFAULT_RECEIPT_STORE
     receipt_store_dir: str = ""
     # Service-scoped tool + agent identity used at the gate.
     tool: str = "llm.chat"
@@ -131,7 +132,9 @@ def _upstream_hostport(upstream: str) -> tuple[str, int, bool]:
     parts = urlsplit(upstream)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ValueError(f"invalid upstream URL: {upstream!r}")
-    port = parts.port if parts.port is not None else (443 if parts.scheme == "https" else 80)
+    port = parts.port
+    if port is None:
+        port = 443 if parts.scheme == "https" else 80
     return parts.hostname, port, parts.scheme == "https"
 
 
@@ -237,7 +240,7 @@ class UrlGate:
             if isinstance(parsed, dict):
                 args = dict(self.config.extra_args)
                 args["model"] = str(parsed.get("model", "") or "")
-        except (ValueError, UnicodeDecodeError):
+        except ValueError:  # includes UnicodeDecodeError for non-UTF-8 bodies
             args = dict(self.config.extra_args)
             args["body_unparseable"] = True
         decision = self._gw.check_tool_call(
@@ -289,10 +292,24 @@ def _strip_hop_headers(headers: Any) -> list[tuple[str, str]]:
     return out
 
 
+def _is_origin_form(path: str) -> bool:
+    """True when ``path`` is an RFC 9112 origin-form request target.
+
+    Only origin-form targets (``/abs/path?query``) are proxied.  Absolute-form
+    targets (``http://evil.example/...``), authority-form and asterisk-form
+    targets are rejected: an attacker able to reach the proxy can otherwise
+    influence the request target, and the proxy must never let the client turn
+    it into a client-for-attacker request against a different destination.
+    The upstream host itself comes exclusively from ``UrlGateConfig.upstream``.
+    """
+    parts = urlsplit(path)
+    return not parts.netloc and parts.scheme not in ("http", "https")
+
+
 class _UrlGateHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "raucle-urlgate/1.0"
-    gate: UrlGate = None  # type: ignore[assignment]
+    gate: UrlGate | None = None  # set by make_server() before requests arrive
 
     # -- plumbing ------------------------------------------------------
     def log_message(self, fmt: str, *args: Any) -> None:  # keep CI logs clean
@@ -328,7 +345,22 @@ class _UrlGateHandler(BaseHTTPRequestHandler):
 
     # -- proxy core ----------------------------------------------------
     def _proxy(self, method: str) -> None:
+        if not _is_origin_form(self.path):
+            # RFC 9112 only permits origin-form targets here; anything else
+            # could steer the proxy at an attacker-chosen destination (SSRF).
+            self._respond_simple(
+                400,
+                _deny_body(self.path, "invalid request target: only origin-form is accepted"),
+                decision="deny",
+                receipt=None,
+            )
+            return
         gate = self.gate
+        if gate is None:  # defensive: handler wired before make_server() finished
+            self._respond_simple(
+                503, _deny_body(self.path, "gate not initialised"), decision="deny", receipt=None
+            )
+            return
         cfg = gate.config
         body = self._read_body()
 
@@ -475,7 +507,7 @@ def run_from_args(args: argparse.Namespace) -> int:
         listen_host=host,
         listen_port=int(port_s),
         policy_file=args.policy or "",
-        receipt_store=args.receipts or "urlgate-receipts.jsonl",
+        receipt_store=args.receipts or DEFAULT_RECEIPT_STORE,
         receipt_store_dir=args.receipts_dir or "",
         tool=args.tool,
         agent_id=args.agent_id,
@@ -490,7 +522,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--listen", default="127.0.0.1:8095", help="host:port to bind")
     p.add_argument("--upstream", default=DEFAULT_UPSTREAM, help="upstream base URL")
     p.add_argument("--policy", default="", help="gate policy YAML (default: urlgate-policies.yaml)")
-    p.add_argument("--receipts", default="urlgate-receipts.jsonl", help="receipt JSONL file")
+    p.add_argument("--receipts", default=DEFAULT_RECEIPT_STORE, help="receipt JSONL file")
     p.add_argument("--receipts-dir", default="", help="segmented receipt store dir")
     p.add_argument("--tool", default="llm.chat", help="gate tool name for chat traffic")
     p.add_argument("--agent-id", default="agent:urlgate-service", help="service agent id")

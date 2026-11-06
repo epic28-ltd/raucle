@@ -188,7 +188,8 @@ class TestAllowRoundTrip:
         assert data == OPENAI_CHAT_BODY
         assert hdrs.get("x-raucle-decision") == "allow"
         receipt = hdrs.get("x-raucle-receipt")
-        assert receipt and receipt.startswith("sha256:")
+        assert receipt is not None
+        assert receipt.startswith("sha256:")
         assert receipt in receipts_file.read_text()
 
     def test_receipts_deterministic_in_shape_for_identical_calls(self, proxy_factory):
@@ -202,9 +203,11 @@ class TestAllowRoundTrip:
         _, h1, _ = _request(port, "POST", "/v1/chat/completions", body)
         _, h2, _ = _request(port, "POST", "/v1/chat/completions", body)
         r1, r2 = h1["x-raucle-receipt"], h2["x-raucle-receipt"]
-        assert r1.startswith("sha256:") and r2.startswith("sha256:")
+        assert r1.startswith("sha256:")
+        assert r2.startswith("sha256:")
         digest1, digest2 = r1[len("sha256:") :], r2[len("sha256:") :]
-        assert len(digest1) == 64 and len(digest2) == 64
+        assert len(digest1) == 64
+        assert len(digest2) == 64
 
 
 class TestDeny:
@@ -219,7 +222,8 @@ class TestDeny:
         assert payload["error"]["type"] == "raucle_gate_deny"
         assert payload["error"]["message"]
         receipt = hdrs.get("x-raucle-receipt")
-        assert receipt and receipt.startswith("sha256:")
+        assert receipt is not None
+        assert receipt.startswith("sha256:")
         assert receipt in receipts_file.read_text()
         # SDK contract extras
         assert payload["error"]["code"] == "raucle_gate_deny"
@@ -258,7 +262,8 @@ class TestStreaming:
         assert status == 200
         assert data == SSE_BYTES, "SSE bytes must survive the proxy unchanged"
         receipt = hdrs.get("x-raucle-receipt")
-        assert receipt and receipt.startswith("sha256:")
+        assert receipt is not None
+        assert receipt.startswith("sha256:")
         assert receipt in receipts_file.read_text()
 
 
@@ -276,6 +281,28 @@ class TestPassthrough:
 
     def test_forwarded_headers_and_auth_survive(self, proxy_factory):
         pass  # covered implicitly by upstream routing (Authorization not stripped)
+
+
+class TestRequestTargetValidation:
+    """SSRF hardening: only origin-form targets are proxied."""
+
+    def test_absolute_form_target_is_rejected(self, proxy_factory, upstream):
+        port, _, receipts_file = proxy_factory()
+        # An attacker-controlled absolute-form target must never reach the
+        # proxy's forwarding path: the upstream is configured, not chosen.
+        status, hdrs, data = _request(port, "GET", "http://169.254.169.254/latest/meta-data")
+        assert status == 400
+        payload = json.loads(data)
+        assert payload["error"]["type"] == "raucle_gate_deny"
+        assert "invalid request target" in payload["error"]["message"]
+        assert hdrs.get("x-raucle-receipt") is None
+        assert receipts_file.read_text() == ""
+
+    def test_origin_form_targets_still_forward(self, proxy_factory, upstream):
+        port, _, _ = proxy_factory()
+        status, hdrs, _ = _request(port, "GET", "/v1/models")
+        assert status == 200
+        assert hdrs.get("x-raucle-receipt") is None
 
 
 class TestAnthropicAllow:
@@ -382,15 +409,18 @@ class TestOptionalOpenAiSdk:
         )
         assert completion.model == "gpt-ok"
         assert completion.choices[0].message.content == "hi"
-        assert receipts_file.exists() and receipts_file.read_text().startswith("{")
+        assert receipts_file.exists()
+        assert receipts_file.read_text().startswith("{")
 
     def test_stock_openai_client_deny_surfaces_api_error(self, proxy_factory):
         pytest.importorskip("openai")
         port, _, receipts_file = proxy_factory(policy=DENY_POLICY)
+        import openai
         from openai import OpenAI
 
         client = OpenAI(base_url=f"http://127.0.0.1:{port}/v1", api_key="sk-test")
-        with pytest.raises(Exception) as exc_info:
+        # Normal SDK error contract: non-2xx surfaces as APIStatusError.
+        with pytest.raises(openai.APIStatusError) as exc_info:
             client.chat.completions.create(
                 model="forbidden-model", messages=[{"role": "user", "content": "x"}]
             )
@@ -398,4 +428,5 @@ class TestOptionalOpenAiSdk:
         err = exc_info.value
         assert getattr(err, "status_code", 403) == 403
         body = getattr(err, "body", None)
-        assert body and body.get("type") == "raucle_gate_deny"
+        assert body is not None
+        assert body.get("type") == "raucle_gate_deny"
