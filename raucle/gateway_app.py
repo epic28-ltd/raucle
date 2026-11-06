@@ -368,7 +368,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         """Public aggregate pulse for the login field (aggregates only)."""
         return JSONResponse(_live_pulse_payload(gateway))  # type: ignore[name-defined]
 
-    @app.post("/gate")
+    @app.post("/gate", responses={413: {"description": "payload exceeds canonical size bound"}})
     def gate_tool_call(
         request: Request,
         req: GateRequest,

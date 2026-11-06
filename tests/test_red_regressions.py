@@ -172,7 +172,8 @@ def test_red017_unit_canonicalisation_contract():
     c = {"starts_with": {"uri": "file:///ledger/coversheets/"}}
     assert _check_starts_with(c, {"uri": "file:///ledger/coversheets/deep/x"}) is None
     denial = _check_starts_with(c, {"uri": RED_017_ESCAPES[0]})
-    assert denial is not None and "does not start with" in denial
+    assert denial is not None
+    assert "does not start with" in denial
 
 
 def test_red017_denials_bind_a_receipt_their_peer_allows_miss(gate):

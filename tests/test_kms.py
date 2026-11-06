@@ -425,7 +425,8 @@ class TestAzureSigner:
         der = pem.split(b"-----BEGIN PUBLIC KEY-----\n")[1].split(b"-----END")[0]
         body = base64.b64decode(der)
         # Ed25519 SPKI: OID 1.3.101.112 present, key material is the 32 bytes
-        assert b"\x2b\x65\x70" in body and b"\x11" * 32 in body
+        assert b"+ep" in body
+        assert b"\x11" * 32 in body
 
 
 def _install_hvac(monkeypatch):

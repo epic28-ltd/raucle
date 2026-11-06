@@ -93,7 +93,8 @@ def _fixture(tmp_path, *, store_all: bool = False):
                 "/gate",
                 json={"tool": "export_records", "args": args, "agent_id": "agent:svc"},
             )
-            assert resp.status_code == 200 and resp.json()["decision"] == "allow"
+            assert resp.status_code == 200
+            assert resp.json()["decision"] == "allow"
             store.add(_canonical_json(args).decode("utf-8"))
         if store_all:
             args = {"account": "ACC-777", "purpose": "audit"}
@@ -101,7 +102,8 @@ def _fixture(tmp_path, *, store_all: bool = False):
                 "/gate",
                 json={"tool": "export_records", "args": args, "agent_id": "agent:svc"},
             )
-            assert resp.status_code == 200 and resp.json()["decision"] == "deny"
+            assert resp.status_code == 200
+            assert resp.json()["decision"] == "deny"
             store.add(_canonical_json(args).decode("utf-8"))
         else:
             client.post(
@@ -117,7 +119,8 @@ def _fixture(tmp_path, *, store_all: bool = False):
             "/gate",
             json={"tool": "unmodelled_tool", "args": {"x": 1}, "agent_id": "agent:svc"},
         )
-        assert resp.status_code == 200 and resp.json()["decision"] == "deny"
+        assert resp.status_code == 200
+        assert resp.json()["decision"] == "deny"
         if store_all:
             # store_all means EVERYTHING stored: also the unmodelled call's
             # args, so the no-policy digest row is honestly resolvable
@@ -268,7 +271,8 @@ def test_missing_policy_artifact():
     for f in policy_dir.iterdir():
         f.unlink()
     report = replay()
-    assert report["verified"] == 0 and report["divergent"] == 0
+    assert report["verified"] == 0
+    assert report["divergent"] == 0
     # four receipts, none recomputable: the two stored args rows lose
     # their policy of record (artifact missing), the two unstored rows
     # are named at the args stage before the policy is even consulted
@@ -324,7 +328,8 @@ def test_forged_receipt_decision_diverges():
     assert row["receipted_decision"] == "deny"
     assert row["recomputed_decision"] == "allow"
     assert report["verdict"].startswith("EVIDENCE DIVERGENCE:")
-    assert report["divergent"] == 1 and report["verified"] == 1
+    assert report["divergent"] == 1
+    assert report["verified"] == 1
 
 
 # --- vector: counterfactual join + bounded disclosure --------------------
