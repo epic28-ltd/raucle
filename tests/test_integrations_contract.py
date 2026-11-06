@@ -106,8 +106,9 @@ def test_guard_tool_without_crewai_raises_runtime_error(monkeypatch, tmp_path, i
     _issuer, gate, _token = issued
     monkeypatch.setattr(crewai_mod, "_HAS_CREWAI", False)
     sink = _sink(tmp_path)
+    tool = _PayTool()
     with pytest.raises(RuntimeError, match="crewai"):
-        crewai_mod.guard_tool(_PayTool(), gate=gate, sink=sink)
+        crewai_mod.guard_tool(tool, gate=gate, sink=sink)
 
 
 def test_guarded_tool_allow_delegates_and_receipts(crewai_integration, tmp_path, issued):
