@@ -1,0 +1,16 @@
+[
+  {
+    "_document_id": "gh-evt-0001",
+    "@timestamp": "2026-11-06T10:00:00.123Z",
+    "action": "repo.create",
+    "actor": "octodev",
+    "repo": "epic28-ltd/raucle"
+  },
+  {
+    "_document_id": "gh-evt-0002",
+    "@timestamp": "2026-11-06T10:01:00.123Z",
+    "action": "protected branch dismiss_stale_reviews",
+    "actor": "octoadmin",
+    "repo": "epic28-ltd/raucle"
+  }
+]

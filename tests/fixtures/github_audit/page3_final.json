@@ -1,0 +1,15 @@
+[
+  {
+    "_document_id": "gh-evt-0004",
+    "@timestamp": "2026-11-06T10:03:00.123Z",
+    "action": "integration_installation.create",
+    "repo": "epic28-ltd/raucle"
+  },
+  {
+    "_document_id": "gh-evt-0005",
+    "@timestamp": "2026-11-06T10:04:00.123Z",
+    "action": "workflow_run.completed",
+    "actor": "dependabot[bot]",
+    "repo": "epic28-ltd/raucle"
+  }
+]

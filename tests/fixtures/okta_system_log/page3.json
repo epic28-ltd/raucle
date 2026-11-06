@@ -1,0 +1,31 @@
+[
+  {
+    "uuid": "okta-evt-0004",
+    "published": "2026-11-06T09:17:00.000Z",
+    "eventType": "application.user.login",
+    "actor": {"displayName": "Mystery Device"},
+    "outcome": {"result": "FAILURE"},
+    "_links": {"next": {"href": "https://example.okta.com/api/v1/logs?after=CUR_4&since=2026-11-06T00:00:00Z&limit=2"}}
+  },
+  {
+    "uuid": "okta-evt-0005",
+    "published": "2026-11-06T09:18:00.000Z",
+    "eventType": "policy.lifecycle.activate",
+    "actor": {
+      "id": "00uadmin",
+      "type": "User",
+      "displayName": "Grace Hopper",
+      "login": "grace@example.com"
+    },
+    "outcome": {"result": "SUCCESS"},
+    "_links": {}
+  },
+  {
+    "uuid": "okta-evt-0006",
+    "published": "2026-11-06T09:19:00.000Z",
+    "eventType": "user.lifecycle.deactivated",
+    "actor": null,
+    "outcome": {"result": "SUCCESS"},
+    "_links": {}
+  }
+]
