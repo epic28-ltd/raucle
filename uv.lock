@@ -7505,6 +7505,7 @@ dev = [
     { name = "cryptography" },
     { name = "fastapi" },
     { name = "langchain-core" },
+    { name = "openai-agents" },
     { name = "pydantic" },
     { name = "pyotp" },
     { name = "pytest" },
@@ -7547,6 +7548,9 @@ multimodal = [
     { name = "pypdf" },
     { name = "pytesseract" },
 ]
+openai-agents = [
+    { name = "openai-agents" },
+]
 pq = [
     { name = "cryptography" },
 ]
@@ -7587,6 +7591,7 @@ requires-dist = [
     { name = "hvac", marker = "extra == 'kms-all'", specifier = ">=1.0" },
     { name = "hvac", marker = "extra == 'kms-vault'", specifier = ">=1.0" },
     { name = "langchain-core", marker = "extra == 'langchain'", specifier = ">=0.3" },
+    { name = "openai-agents", marker = "extra == 'openai-agents'", specifier = ">=0.1" },
     { name = "pillow", marker = "extra == 'multimodal'", specifier = ">=10.0" },
     { name = "pydantic", marker = "extra == 'server'", specifier = ">=2.0" },
     { name = "pyotp", marker = "extra == 'server'", specifier = ">=2.9" },
@@ -7597,7 +7602,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "pyyaml", marker = "extra == 'rules'", specifier = ">=6.0" },
     { name = "raucle", extras = ["rules", "ml", "server", "compliance", "timestamp", "multimodal", "proof"], marker = "extra == 'all'" },
-    { name = "raucle", extras = ["rules", "server", "compliance", "timestamp", "langchain", "proof"], marker = "extra == 'dev'" },
+    { name = "raucle", extras = ["rules", "server", "compliance", "timestamp", "langchain", "proof", "openai-agents"], marker = "extra == 'dev'" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
     { name = "slowapi", marker = "extra == 'server'", specifier = ">=0.1.9" },
     { name = "torch", marker = "extra == 'ml'", specifier = ">=2.0" },
@@ -7605,7 +7610,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.20" },
     { name = "z3-solver", marker = "extra == 'proof'", specifier = ">=4.12" },
 ]
-provides-extras = ["rules", "ml", "server", "compliance", "timestamp", "pq", "agent-framework", "langchain", "autogen", "crewai", "multimodal", "proof", "kms", "kms-azure", "kms-vault", "kms-all", "dev", "all"]
+provides-extras = ["rules", "ml", "server", "compliance", "timestamp", "pq", "agent-framework", "openai-agents", "langchain", "autogen", "crewai", "multimodal", "proof", "kms", "kms-azure", "kms-vault", "kms-all", "dev", "all"]
 
 [[package]]
 name = "redis"
