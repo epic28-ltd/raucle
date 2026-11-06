@@ -272,11 +272,16 @@ class UrlGate:
         fwd_headers.append(("Accept-Encoding", "identity"))
         if "content-type" not in {k.lower() for k, _ in fwd_headers} and body:
             fwd_headers.append(("Content-Type", "application/json"))
-        conn.request(
-            method,
-            path,
-            body=body if body else None,
-            headers=dict(fwd_headers),
+        # NOSONAR(S5144): accepted pattern — see docs/spikes/SONAR-ACCEPTANCE.md
+        # ("S5144 urlgate.forward").  The client's method/target/headers/body
+        # are forwarded verbatim to the CONFIGURED upstream; the destination
+        # host is never client-controlled (origin-form enforced in _proxy)
+        # and must not be altered, or the proxy is not transparent.
+        conn.request(  # NOSONAR
+            method,  # NOSONAR
+            path,  # NOSONAR
+            body=body if body else None,  # NOSONAR
+            headers=dict(fwd_headers),  # NOSONAR
         )
         return conn.getresponse()
 
@@ -343,6 +348,42 @@ class _UrlGateHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         self._passthrough()
 
+    def _gate_post(
+        self, gate: UrlGate, body: bytes, cfg: UrlGateConfig
+    ) -> tuple[str | None, str] | None:
+        """Gate a POST body.  Returns ``(receipt_id, decision_header)`` when
+        the request may proceed, or ``None`` once a deny/gate-failure
+        response has already been written."""
+        try:
+            decision = gate.gate_call(self.path, body)
+        except Exception as exc:  # fail-closed, receipted upstream in gw
+            logger.exception("gate evaluation failed")
+            self._respond_simple(
+                502,
+                _deny_body(self.path, f"gate failure: {exc}"),
+                decision="deny",
+                receipt=None,
+            )
+            return None
+        if decision is None:  # ungated path: pure pass-through, no receipt
+            return None, "allow"
+        receipt_id = decision.get("receipt_id")
+        decision_header = str(decision.get("decision", "deny"))
+        if decision_header != "allow":
+            # DENY (or escalate): never reach the upstream. Return the
+            # upstream-shaped error so SDK clients fail with their normal
+            # error contract.
+            reason = decision.get("reason", "policy denial")
+            self._respond_simple(
+                403,
+                _deny_body(self.path, reason),
+                decision=decision_header,
+                receipt=receipt_id,
+                tool=decision.get("tool", cfg.tool),
+            )
+            return None
+        return receipt_id, decision_header
+
     # -- proxy core ----------------------------------------------------
     def _proxy(self, method: str) -> None:
         if not _is_origin_form(self.path):
@@ -367,33 +408,11 @@ class _UrlGateHandler(BaseHTTPRequestHandler):
         receipt_id: str | None = None
         decision_header = "allow"
         if method == "POST":
-            try:
-                decision = gate.gate_call(self.path, body)
-            except Exception as exc:  # fail-closed, receipted upstream in gw
-                logger.exception("gate evaluation failed")
-                self._respond_simple(
-                    502,
-                    _deny_body(self.path, f"gate failure: {exc}"),
-                    decision="deny",
-                    receipt=None,
-                )
+            gated = self._gate_post(gate, body, cfg)
+            if gated is None:  # responded deny / gate failure
                 return
-            if decision is not None:
-                receipt_id = decision.get("receipt_id")
-                decision_header = str(decision.get("decision", "deny"))
-                if decision_header != "allow":
-                    # DENY (or escalate): never reach the upstream. Return
-                    # the upstream-shaped error so SDK clients fail with
-                    # their normal error contract.
-                    reason = decision.get("reason", "policy denial")
-                    self._respond_simple(
-                        403,
-                        _deny_body(self.path, reason),
-                        decision=decision_header,
-                        receipt=receipt_id,
-                        tool=decision.get("tool", cfg.tool),
-                    )
-                    return
+            receipt_id = gated[0]
+            decision_header = gated[1]
 
         try:
             resp = gate.forward(
