@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Added - N1: x_bilateral execution-boundary co-signed receipts
+- New `x_bilateral` extension (v1.2, docs/spec/provenance/v1.2/bilateral-
+  outcomes.md): the tool/execution side CO-SIGNS the outcome it actually
+  produced — `executed` | `failed` | `rejected` (a closed vocabulary) — over
+  the receipt's own output_hash, INSIDE the signed payload. The co-signature
+  is bound by the same JWS: the agent's signature, the output_hash and the
+  executor's claim cannot move independently of one another. Additive:
+  receipts without the block verify exactly as before.
+- `raucle/bilateral.py`: the dependency-light executor-side surface
+  (`sign_bilateral_outcome`, `bilateral_signing_input`, the closed outcome
+  vocabulary), imported by harness adapters directly; `raucle.provenance`
+  re-exports the helpers.
+- `ProvenanceVerifier(executor_keys=...)`: offline fail-closed re-check.
+  A receipt carrying x_bilateral whose co-signature is missing, names an
+  unregistered executor key, or does not verify over the bilateral binding
+  FAILS with a named reason — the outcome is never inferred. A verifier
+  that was never told the executor keys fails bilateral receipts closed by
+  default, while legacy receipts verify untouched.
+- `QmHarnessBridge.bilateral_outcome()` (the QM adapter seam): the executor
+  co-signs its outcome; `QmHarnessBridge.executor_keys()` produces the
+  verifier-side key map; `wiring()` carries the exec-side block.
+- tests/test_x_bilateral.py pins the acceptance: well-formed co-sign
+  verifies, missing executor signature fails named, co-signature over a
+  re-labelled outcome fails, mixed bilateral+legacy chains verify, the
+  outcome vocabulary is closed and the block's object shape is validated.
+
 ### Added - I1: counterfactual proofs (the z3 leg)
 - `raucle counterfactual policy` attaches a proof to every prevented
   action. PROVEN: the alternative policy's constraints exclude the whole
