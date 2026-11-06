@@ -123,6 +123,10 @@ class PolicyRule:
     # matches whenever a prior output in the same task chain carries a
     # listed taint tag. See :class:`ChainTaintDeny`.
     deny_from_chain_taint: ChainTaintDeny | None = None
+    # Evidence Quality Requirement (N6): gate input declaring the minimum
+    # evidence quality the authority depends on, and the narrowing-side
+    # behaviour when the evidence is degraded. See :class:`raucle.eqr.EQR`.
+    eqr: Any = None
     # Source/destination matching: the policy only applies when the
     # inbound source and outbound destination match these patterns.
     # Empty string or "*" means "match anything".
@@ -152,37 +156,7 @@ class PolicyRule:
 
     def _compile_constraints(self) -> dict[str, Any]:
         """Compile DSL constraint syntax to the gate's native format."""
-        compiled: dict[str, Any] = {}
-
-        # allow -> allowed_values
-        if "allow" in self.constraints:
-            compiled["allowed_values"] = self._expand_wildcards(self.constraints["allow"])
-
-        # deny -> forbidden_values
-        if "deny" in self.constraints:
-            compiled["forbidden_values"] = self._expand_wildcards(self.constraints["deny"])
-
-        # max -> max_value
-        if "max" in self.constraints:
-            compiled["max_value"] = self.constraints["max"]
-
-        # min -> min_value
-        if "min" in self.constraints:
-            compiled["min_value"] = self.constraints["min"]
-
-        # require -> required_present
-        if "require" in self.constraints:
-            compiled["required_present"] = self.constraints["require"]
-
-        # starts_with
-        if "starts_with" in self.constraints:
-            compiled["starts_with"] = self.constraints["starts_with"]
-
-        # forbidden_combinations
-        if "forbidden_combinations" in self.constraints:
-            compiled["forbidden_field_combinations"] = self.constraints["forbidden_combinations"]
-
-        return compiled
+        return compile_constraint_dsl(self.constraints)
 
     @staticmethod
     def _expand_wildcards(
@@ -204,6 +178,53 @@ class PolicyRule:
                             f"instead: starts_with: {{{field_name}: ['ACC-']}}"
                         )
         return values
+
+
+def _load_eqr_class() -> Any:
+    """Lazy import of :class:`raucle.eqr.EQR` (eqr imports this module)."""
+    from raucle.eqr import EQR
+
+    return EQR
+
+
+def compile_constraint_dsl(constraints: dict[str, Any]) -> dict[str, Any]:
+    """Compile DSL constraint syntax to the gate's native format.
+
+    Module-level so other policy-input kinds (e.g. the EQR reduced scope in
+    :mod:`raucle.eqr`) compile through the same path as
+    :meth:`PolicyRule._compile_constraints`.
+    """
+    compiled: dict[str, Any] = {}
+
+    # allow -> allowed_values
+    if "allow" in constraints:
+        compiled["allowed_values"] = PolicyRule._expand_wildcards(constraints["allow"])
+
+    # deny -> forbidden_values
+    if "deny" in constraints:
+        compiled["forbidden_values"] = PolicyRule._expand_wildcards(constraints["deny"])
+
+    # max -> max_value
+    if "max" in constraints:
+        compiled["max_value"] = constraints["max"]
+
+    # min -> min_value
+    if "min" in constraints:
+        compiled["min_value"] = constraints["min"]
+
+    # require -> required_present
+    if "require" in constraints:
+        compiled["required_present"] = constraints["require"]
+
+    # starts_with
+    if "starts_with" in constraints:
+        compiled["starts_with"] = constraints["starts_with"]
+
+    # forbidden_combinations
+    if "forbidden_combinations" in constraints:
+        compiled["forbidden_field_combinations"] = constraints["forbidden_combinations"]
+
+    return compiled
 
 
 @dataclass
@@ -247,6 +268,11 @@ class PolicyFile:
                     if rule_data.get("deny_from_chain_taint") is not None
                     else None
                 ),
+                eqr=(
+                    _load_eqr_class().from_dict(rule_data["eqr"])
+                    if rule_data.get("eqr") is not None
+                    else None
+                ),
                 source=rule_data.get("source", ""),
                 destination=rule_data.get("destination", ""),
             )
@@ -284,6 +310,7 @@ class PolicyFile:
                         if r.deny_from_chain_taint
                         else {}
                     ),
+                    **({"eqr": r.eqr.to_dict()} if r.eqr is not None else {}),
                     **({"source": r.source} if r.source else {}),
                     **({"destination": r.destination} if r.destination else {}),
                 }
@@ -451,6 +478,7 @@ __all__ = [
     "PolicyFile",
     "PolicyRule",
     "ChainTaintDeny",
+    "compile_constraint_dsl",
     "ApprovalThreshold",
     "mint_from_policy",
     "check_approval_needed",

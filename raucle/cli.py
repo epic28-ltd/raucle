@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -387,6 +388,65 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ts_plan.add_argument("--chain", required=True, help=_CHAIN_JSONL_HELP)
     ts_plan.add_argument("--out", help="Write the JSON plan here (else stdout)")
+
+    # -- containment (P4.A v0: emergency authority stop) ---------------------
+    cont_p = subparsers.add_parser(
+        "containment",
+        help=(
+            "Emergency authority stop: receipted hold/resume/status. "
+            "Global scope swaps the policy for deny-all; agent/chain scope "
+            "appends cascade token revocations. Every transition is signed "
+            "and verifiable offline. Trace quarantine and lease suspension "
+            "are v1 (not in this CLI)."
+        ),
+    )
+    cont_sub = cont_p.add_subparsers(dest="containment_command")
+    cont_hold = cont_sub.add_parser("hold", help="Engage a containment hold (receipted)")
+    cont_resume = cont_sub.add_parser(
+        "resume", help="Restore the pre-hold policy/revocations bytes exactly (receipted)"
+    )
+    cont_status = cont_sub.add_parser("status", help="Show the current containment state")
+    cont_hold.add_argument("scope", choices=["global", "agent", "chain"], help="Scope of the stop")
+    cont_hold.add_argument(
+        "scope_id",
+        nargs="?",
+        default="",
+        help=("For 'agent': agent id (agent:...). For 'chain': root token id. Empty for global."),
+    )
+    cont_hold.add_argument("--reason", default="", help="Operator reason recorded in the receipt")
+    cont_resume.add_argument("--reason", default="", help="Operator reason recorded in the receipt")
+    for cont_cmd in (cont_hold, cont_resume, cont_status):
+        cont_cmd.add_argument(
+            "--policy-file",
+            default=os.environ.get("RAUCLE_POLICY_FILE", ""),
+            help="Active policy file (global scope); default $RAUCLE_POLICY_FILE",
+        )
+        cont_cmd.add_argument(
+            "--revocations-file",
+            default=os.environ.get("RAUCLE_REVOCATIONS_FILE", ""),
+            help="Revocations JSONL (agent/chain scope); default $RAUCLE_REVOCATIONS_FILE",
+        )
+        cont_cmd.add_argument(
+            "--delegations-file",
+            default=os.environ.get("RAUCLE_DELEGATIONS_FILE", ""),
+            help="Delegation ledger (agent/chain scope); default $RAUCLE_DELEGATIONS_FILE",
+        )
+        cont_cmd.add_argument(
+            "--receipts",
+            default=os.environ.get("RAUCLE_CONTAINMENT_RECEIPTS", "containment-receipts.jsonl"),
+            help="Receipt stream JSONL path (default $RAUCLE_CONTAINMENT_RECEIPTS)",
+        )
+        cont_cmd.add_argument(
+            "--state-dir",
+            default=os.environ.get("RAUCLE_CONTAINMENT_STATE_DIR", "~/.raucle/containment"),
+            help="Containment state dir (default $RAUCLE_CONTAINMENT_STATE_DIR)",
+        )
+        cont_cmd.add_argument(
+            "--actor",
+            default=os.environ.get("RAUCLE_ACTOR", "operator"),
+            help="Operator identity recorded in receipts (default $RAUCLE_ACTOR)",
+        )
+        cont_cmd.add_argument("--json", action="store_true", help="Machine-readable output")
 
     # -- compliance (evidence packs, P4) ------------------------------------
     comp_p = subparsers.add_parser(
@@ -2010,6 +2070,74 @@ def _cmd_verify_receipt(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_containment(args: argparse.Namespace) -> int:
+    """P4.A v0: receipted emergency authority stop (hold/resume/status)."""
+    from raucle.containment import (
+        ContainmentConfig,
+        ContainmentError,
+        ContainmentManager,
+    )
+
+    sub = getattr(args, "containment_command", None)
+    if not sub:
+        print("Error: containment requires a subcommand: hold | resume | status")
+        return 1
+
+    config = ContainmentConfig(
+        policy_file=getattr(args, "policy_file", ""),
+        revocations_file=getattr(args, "revocations_file", ""),
+        delegations_file=getattr(args, "delegations_file", ""),
+        receipts_path=getattr(args, "receipts", ""),
+        state_dir=os.path.expanduser(getattr(args, "state_dir", "~/.raucle/containment")),
+        actor=getattr(args, "actor", "operator"),
+    )
+    manager = ContainmentManager(config)
+    try:
+        if sub == "hold":
+            result = manager.hold(
+                scope=args.scope,
+                scope_id=args.scope_id,
+                reason=getattr(args, "reason", ""),
+            )
+        elif sub == "resume":
+            result = manager.resume(reason=getattr(args, "reason", ""))
+        else:
+            result = manager.status()
+    except ContainmentError as exc:
+        print(f"Error: containment: {exc}", file=sys.stderr)
+        return 1
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+    if sub == "status":
+        if not result.get("held"):
+            print("NOT HELD")
+            return 0
+        scope_line = f"HELD          scope={result['scope']}"
+        if result.get("scope_id"):
+            scope_line += f" id={result['scope_id']}"
+        print(scope_line)
+        print(f"  held_at     {result.get('held_at', '')} by {result.get('actor', '')}")
+        if result.get("reason"):
+            print(f"  reason      {result['reason']}")
+        print(f"  target      {result.get('target_file', '')}")
+        print(f"  hold receipt {result.get('receipt_id', '')}")
+        return 0
+    final_line = f"containment {result['status']}: scope={result['scope']}"
+    if result.get("scope_id"):
+        final_line += f" id={result['scope_id']}"
+    print(final_line)
+    print(f"  target: {result['target_file']}")
+    print(f"  receipt: {result['receipt_id']}")
+    if result.get("restored_sha256"):
+        print(f"  restored sha256: {result['restored_sha256']}")
+    print(
+        "  verify offline: raucle verify-receipt <jws> --pubkey "
+        f"{config.state_dir}/containment-operator-pubkey.pem"
+    )
+    return 0
+
+
 def _default_receipt_path(repo: Path) -> Path:
     slots = repo / ".raucle" / "authorship"
     count = len(sorted(slots.glob("stop-*.jsonl")))
@@ -2921,6 +3049,9 @@ def _dispatch(argv: list[str] | None = None) -> int:
         ("timestamp", "stamp"): _cmd_timestamp,
         ("timestamp", "verify"): _cmd_timestamp,
         ("timestamp", "plan"): _cmd_timestamp,
+        ("containment", "hold"): _cmd_containment,
+        ("containment", "resume"): _cmd_containment,
+        ("containment", "status"): _cmd_containment,
     }
     sub = getattr(args, f"{args.command.replace('-', '_')}_command", None) if args.command else None
     handler = _SUBCOMMANDS.get((args.command, sub))

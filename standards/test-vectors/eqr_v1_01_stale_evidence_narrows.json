@@ -1,0 +1,31 @@
+{
+  "spec": "raucle-eqr/v1",
+  "draft": "draft-watts-agent-evidence-boundary",
+  "name": "stale_evidence_narrows",
+  "eqr": {
+    "evidence_kind": "kyc_check",
+    "max_age_seconds": 60,
+    "min_source_class": "third-party",
+    "confidence_floor": 70,
+    "on_degraded": "reduce",
+    "reduced_constraints": {"max": {"amount": 100}}
+  },
+  "base_constraints": {
+    "allowed_values": {"from_account": ["ACC-001"]},
+    "max_value": {"amount": 10000}
+  },
+  "now": 1900000000,
+  "evidence": [
+    {
+      "evidence_kind": "kyc_check",
+      "observed_at": 1899999939,
+      "source_class": "third-party",
+      "confidence": 90
+    }
+  ],
+  "expected": {
+    "verdict": "stale",
+    "reason": "age 61s exceeds freshness bound 60s",
+    "narrowed_max_amount": 100
+  }
+}
