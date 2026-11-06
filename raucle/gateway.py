@@ -1182,6 +1182,11 @@ class RaucleGateway:
             rule_dict["deny_from_chain_taint"] = dataclasses.asdict(
                 rule_dict["deny_from_chain_taint"]
             )
+        if rule_dict.get("eqr") is not None:
+            # N6: the rule's EQR is a dataclass, not a mapping — canonicalise
+            # through its own to_dict() (exactly as raucle.policy.to_dict does)
+            # so the ruleset hash stays JSON-serialisable and stable.
+            rule_dict["eqr"] = rule_dict["eqr"].to_dict()
         return _sha256_hex(_canonical_json(rule_dict))
 
     @property
