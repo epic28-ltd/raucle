@@ -1,0 +1,690 @@
+{
+  "meta": {
+    "draft": "draft-nelson-agent-delegation-receipts-14",
+    "draft_date": "2026-10-15",
+    "profile": "python",
+    "module": "raucle.nelson14",
+    "signature_encoding": "compact JWS, raw R||S; ECDSA randomised per issuance so bodies are published, signatures are reproduced by tests/nelson14_vectors.py",
+    "draft_cose_profile": "UNIMPLEMENTED-PH",
+    "signer_keys": {
+      "root": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "bfSWKnrrnFKDKp4HvnO8620p18Z93S0FZGB1Mk9J-eA",
+        "y": "AkI5I5-DjKgWKvS9FKA8-LzFjB0EVgzu0xKFnVZeLlw"
+      },
+      "note": "vector key, scalar 3f5a7b1c...6f70 — publishable, do not use in production"
+    }
+  },
+  "vectors": [
+    {
+      "id": "valid-root",
+      "class": "valid",
+      "section": "4/5/6/9.1",
+      "expected": "verify_ok",
+      "bodies": [
+        {
+          "delegationId": "auth-1730000000000-ab12d",
+          "issuedAt": "2026-11-06T09:00:00.000Z",
+          "scope": "Read calendar events and draft daily summaries",
+          "boundaries": "Never send email; never touch payment systems",
+          "timeWindow": {
+            "start": "2026-11-06T00:00:00.000Z",
+            "end": "2026-11-07T00:00:00.000Z"
+          },
+          "operatorInstructions": "Draft the daily summary, then review the agenda",
+          "instructionsHash": "3db9589f8ff65320f968e4b104cb0c2ac7f3b406574a138f763c86a3f2e9b47d",
+          "signerPublicKey": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "bfSWKnrrnFKDKp4HvnO8620p18Z93S0FZGB1Mk9J-eA",
+            "y": "AkI5I5-DjKgWKvS9FKA8-LzFjB0EVgzu0xKFnVZeLlw"
+          },
+          "revocationRequired": false,
+          "scopeSchema": {
+            "version": "1.0",
+            "allowedActions": [
+              {
+                "operation": "read",
+                "resource": "calendar/*"
+              },
+              {
+                "operation": "read",
+                "resource": "files/*"
+              },
+              {
+                "operation": "draft",
+                "resource": "summary/*"
+              },
+              {
+                "operation": "index",
+                "resource": "search/*"
+              }
+            ],
+            "deniedActions": [
+              {
+                "operation": "send",
+                "resource": "email/*"
+              }
+            ]
+          }
+        }
+      ],
+      "note": "body only; signers re-sign live over the JCS form"
+    },
+    {
+      "id": "valid-chain",
+      "class": "valid",
+      "section": "8.5/8.7",
+      "expected": "verify_ok",
+      "bodies": [
+        {
+          "delegationId": "auth-1730000000000-ab12d",
+          "issuedAt": "2026-11-06T09:00:00.000Z",
+          "scope": "Read calendar events and draft daily summaries",
+          "boundaries": "Never send email; never touch payment systems",
+          "timeWindow": {
+            "start": "2026-11-06T00:00:00.000Z",
+            "end": "2026-11-07T00:00:00.000Z"
+          },
+          "operatorInstructions": "Draft the daily summary, then review the agenda",
+          "instructionsHash": "3db9589f8ff65320f968e4b104cb0c2ac7f3b406574a138f763c86a3f2e9b47d",
+          "signerPublicKey": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "bfSWKnrrnFKDKp4HvnO8620p18Z93S0FZGB1Mk9J-eA",
+            "y": "AkI5I5-DjKgWKvS9FKA8-LzFjB0EVgzu0xKFnVZeLlw"
+          },
+          "revocationRequired": false,
+          "scopeSchema": {
+            "version": "1.0",
+            "allowedActions": [
+              {
+                "operation": "read",
+                "resource": "calendar/*"
+              },
+              {
+                "operation": "read",
+                "resource": "files/*"
+              },
+              {
+                "operation": "draft",
+                "resource": "summary/*"
+              },
+              {
+                "operation": "index",
+                "resource": "search/*"
+              }
+            ],
+            "deniedActions": [
+              {
+                "operation": "send",
+                "resource": "email/*"
+              }
+            ]
+          }
+        },
+        {
+          "delegationId": "auth-1730000000000-ab12d",
+          "issuedAt": "2026-11-06T09:00:00.000Z",
+          "scope": "Read calendar events and draft daily summaries",
+          "boundaries": "Never send email; never touch payment systems",
+          "timeWindow": {
+            "start": "2026-11-06T00:00:00.000Z",
+            "end": "2026-11-07T00:00:00.000Z"
+          },
+          "operatorInstructions": "Draft the daily summary, then review the agenda",
+          "instructionsHash": "3db9589f8ff65320f968e4b104cb0c2ac7f3b406574a138f763c86a3f2e9b47d",
+          "signerPublicKey": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "AA",
+            "y": "BB"
+          },
+          "revocationRequired": false,
+          "parentReceiptId": "<root-receiptId>",
+          "scopeSchema": {
+            "version": "1.0",
+            "allowedActions": [
+              {
+                "operation": "read",
+                "resource": "calendar/*"
+              },
+              {
+                "operation": "draft",
+                "resource": "summary/*"
+              }
+            ],
+            "deniedActions": [
+              {
+                "operation": "send",
+                "resource": "email/*"
+              }
+            ]
+          }
+        }
+      ],
+      "note": "sub-receipt issued by the orchestrator holding the parent; binding over orch-delegation:<parent>:<child>"
+    },
+    {
+      "id": "unknown-body-field",
+      "class": "unknown_body_field",
+      "section": "4.1",
+      "expected": "UNKNOWN_BODY_FIELD",
+      "body": {
+        "delegationId": "auth-1730000000000-ab12d",
+        "issuedAt": "2026-11-06T09:00:00.000Z",
+        "scope": "Read calendar events and draft daily summaries",
+        "boundaries": "Never send email; never touch payment systems",
+        "timeWindow": {
+          "start": "2026-11-06T00:00:00.000Z",
+          "end": "2026-11-07T00:00:00.000Z"
+        },
+        "operatorInstructions": "Draft the daily summary, then review the agenda",
+        "instructionsHash": "3db9589f8ff65320f968e4b104cb0c2ac7f3b406574a138f763c86a3f2e9b47d",
+        "signerPublicKey": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "bfSWKnrrnFKDKp4HvnO8620p18Z93S0FZGB1Mk9J-eA",
+          "y": "AkI5I5-DjKgWKvS9FKA8-LzFjB0EVgzu0xKFnVZeLlw"
+        },
+        "revocationRequired": false,
+        "escalationToken": "all permissions"
+      }
+    },
+    {
+      "id": "missing-required-field",
+      "class": "missing_required_field",
+      "section": "4.2",
+      "expected": "MISSING_REQUIRED_FIELD",
+      "body": {
+        "delegationId": "auth-1730000000000-ab12d",
+        "issuedAt": "2026-11-06T09:00:00.000Z",
+        "scope": "Read calendar events and draft daily summaries",
+        "timeWindow": {
+          "start": "2026-11-06T00:00:00.000Z",
+          "end": "2026-11-07T00:00:00.000Z"
+        },
+        "operatorInstructions": "Draft the daily summary, then review the agenda",
+        "instructionsHash": "3db9589f8ff65320f968e4b104cb0c2ac7f3b406574a138f763c86a3f2e9b47d",
+        "signerPublicKey": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "bfSWKnrrnFKDKp4HvnO8620p18Z93S0FZGB1Mk9J-eA",
+          "y": "AkI5I5-DjKgWKvS9FKA8-LzFjB0EVgzu0xKFnVZeLlw"
+        },
+        "revocationRequired": false
+      }
+    },
+    {
+      "id": "alg-none",
+      "class": "alg_prohibited",
+      "section": "6.5",
+      "expected": "ALG_PROHIBITED",
+      "header": {
+        "alg": "none",
+        "typ": "drp-receipt"
+      }
+    },
+    {
+      "id": "alg-rs256",
+      "class": "alg_not_in_profile",
+      "section": "6.5",
+      "expected": "ALG_NOT_IN_PROFILE",
+      "header": {
+        "alg": "RS256",
+        "typ": "drp-receipt"
+      }
+    },
+    {
+      "id": "typ-jwt",
+      "class": "typ_mismatch",
+      "section": "6.1",
+      "expected": "TYP_MISMATCH",
+      "header": {
+        "alg": "ES256",
+        "typ": "JWT"
+      }
+    },
+    {
+      "id": "der-signature",
+      "class": "der_signature",
+      "section": "6.3",
+      "expected": "DER_SIGNATURE_REJECTED",
+      "note": "DER-encoded ECDSA is the deprecated pre-11 form"
+    },
+    {
+      "id": "undefined-header-parameter",
+      "class": "undefined_header_parameter",
+      "section": "6.1",
+      "expected": "BAD_HEADER",
+      "header": {
+        "alg": "ES256",
+        "typ": "drp-receipt",
+        "jku": "https://attacker.invalid/jwks"
+      }
+    },
+    {
+      "id": "detached-form",
+      "class": "detached_not_supported",
+      "section": "6.4",
+      "expected": "DETACHED_NOT_SUPPORTED",
+      "header": {
+        "alg": "ES256",
+        "typ": "drp-receipt",
+        "b64": false,
+        "crit": [
+          "b64"
+        ]
+      }
+    },
+    {
+      "id": "non-canonical-payload",
+      "class": "non_canonical_payload",
+      "section": "5",
+      "expected": "NON_CANONICAL_PAYLOAD",
+      "body": {
+        "delegationId": "auth-1730000000000-ab12d",
+        "issuedAt": "2026-11-06T09:00:00.000Z",
+        "scope": "Read calendar events and draft daily summaries",
+        "boundaries": "Never send email; never touch payment systems",
+        "timeWindow": {
+          "start": "2026-11-06T00:00:00.000Z",
+          "end": "2026-11-07T00:00:00.000Z"
+        },
+        "operatorInstructions": "Draft the daily summary, then review the agenda",
+        "instructionsHash": "3db9589f8ff65320f968e4b104cb0c2ac7f3b406574a138f763c86a3f2e9b47d",
+        "signerPublicKey": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "bfSWKnrrnFKDKp4HvnO8620p18Z93S0FZGB1Mk9J-eA",
+          "y": "AkI5I5-DjKgWKvS9FKA8-LzFjB0EVgzu0xKFnVZeLlw"
+        },
+        "revocationRequired": false,
+        "metadata": {
+          "z": "astral 🔑 key",
+          "a": 1
+        }
+      },
+      "canonical_form": "{\"boundaries\":\"Never send email; never touch payment systems\",\"delegationId\":\"auth-1730000000000-ab12d\",\"instructionsHash\":\"3db9589f8ff65320f968e4b104cb0c2ac7f3b406574a138f763c86a3f2e9b47d\",\"issuedAt\":\"2026-11-06T09:00:00.000Z\",\"metadata\":{\"a\":1,\"z\":\"astral 🔑 key\"},\"operatorInstructions\":\"Draft the daily summary, then review the agenda\",\"revocationRequired\":false,\"scope\":\"Read calendar events and draft daily summaries\",\"signerPublicKey\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"bfSWKnrrnFKDKp4HvnO8620p18Z93S0FZGB1Mk9J-eA\",\"y\":\"AkI5I5-DjKgWKvS9FKA8-LzFjB0EVgzu0xKFnVZeLlw\"},\"timeWindow\":{\"end\":\"2026-11-07T00:00:00.000Z\",\"start\":\"2026-11-06T00:00:00.000Z\"}}"
+    },
+    {
+      "id": "sig-tampered",
+      "class": "signature_invalid",
+      "section": "6.3/10",
+      "expected": "SIGNATURE_INVALID"
+    },
+    {
+      "id": "instructions-drift",
+      "class": "instructions_hash_mismatch",
+      "section": "4.2",
+      "expected": "INSTRUCTIONS_HASH_MISMATCH",
+      "body": {
+        "delegationId": "auth-1730000000000-ab12d",
+        "issuedAt": "2026-11-06T09:00:00.000Z",
+        "scope": "Read calendar events and draft daily summaries",
+        "boundaries": "Never send email; never touch payment systems",
+        "timeWindow": {
+          "start": "2026-11-06T00:00:00.000Z",
+          "end": "2026-11-07T00:00:00.000Z"
+        },
+        "operatorInstructions": "whispered contrary instructions",
+        "instructionsHash": "3db9589f8ff65320f968e4b104cb0c2ac7f3b406574a138f763c86a3f2e9b47d",
+        "signerPublicKey": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "bfSWKnrrnFKDKp4HvnO8620p18Z93S0FZGB1Mk9J-eA",
+          "y": "AkI5I5-DjKgWKvS9FKA8-LzFjB0EVgzu0xKFnVZeLlw"
+        },
+        "revocationRequired": false
+      }
+    },
+    {
+      "id": "scope-widened",
+      "class": "scope_widened",
+      "section": "8.5",
+      "expected": "SCOPE_WIDENED",
+      "parent": {
+        "version": "1.0",
+        "allowedActions": [
+          {
+            "operation": "read",
+            "resource": "calendar/*"
+          },
+          {
+            "operation": "read",
+            "resource": "files/*"
+          },
+          {
+            "operation": "draft",
+            "resource": "summary/*"
+          },
+          {
+            "operation": "index",
+            "resource": "search/*"
+          }
+        ],
+        "deniedActions": [
+          {
+            "operation": "send",
+            "resource": "email/*"
+          }
+        ]
+      },
+      "child": {
+        "allowedActions": [
+          {
+            "operation": "read",
+            "resource": "calendar/*"
+          },
+          {
+            "operation": "read",
+            "resource": "files/*"
+          },
+          {
+            "operation": "draft",
+            "resource": "summary/*"
+          },
+          {
+            "operation": "index",
+            "resource": "search/*"
+          },
+          {
+            "operation": "send",
+            "resource": "email/*"
+          }
+        ],
+        "deniedActions": [
+          {
+            "operation": "send",
+            "resource": "email/*"
+          }
+        ]
+      }
+    },
+    {
+      "id": "equal-scope",
+      "class": "narrowing_required",
+      "section": "8.5",
+      "expected": "NARROWING_REQUIRED",
+      "parent": {
+        "version": "1.0",
+        "allowedActions": [
+          {
+            "operation": "read",
+            "resource": "calendar/*"
+          },
+          {
+            "operation": "read",
+            "resource": "files/*"
+          },
+          {
+            "operation": "draft",
+            "resource": "summary/*"
+          },
+          {
+            "operation": "index",
+            "resource": "search/*"
+          }
+        ],
+        "deniedActions": [
+          {
+            "operation": "send",
+            "resource": "email/*"
+          }
+        ]
+      },
+      "child": {
+        "version": "1.0",
+        "allowedActions": [
+          {
+            "operation": "read",
+            "resource": "calendar/*"
+          },
+          {
+            "operation": "read",
+            "resource": "files/*"
+          },
+          {
+            "operation": "draft",
+            "resource": "summary/*"
+          },
+          {
+            "operation": "index",
+            "resource": "search/*"
+          }
+        ],
+        "deniedActions": [
+          {
+            "operation": "send",
+            "resource": "email/*"
+          }
+        ]
+      }
+    },
+    {
+      "id": "denied-dropped",
+      "class": "denied_action_dropped",
+      "section": "8.5",
+      "expected": "DENIED_ACTION_DROPPED",
+      "parent": {
+        "version": "1.0",
+        "allowedActions": [
+          {
+            "operation": "read",
+            "resource": "calendar/*"
+          },
+          {
+            "operation": "read",
+            "resource": "files/*"
+          },
+          {
+            "operation": "draft",
+            "resource": "summary/*"
+          },
+          {
+            "operation": "index",
+            "resource": "search/*"
+          }
+        ],
+        "deniedActions": [
+          {
+            "operation": "send",
+            "resource": "email/*"
+          }
+        ]
+      },
+      "child": {
+        "version": "1.0",
+        "allowedActions": [
+          {
+            "operation": "read",
+            "resource": "calendar/*"
+          },
+          {
+            "operation": "draft",
+            "resource": "summary/*"
+          }
+        ],
+        "deniedActions": [
+          {
+            "operation": "send",
+            "resource": "email/*"
+          }
+        ]
+      }
+    },
+    {
+      "id": "literal-wildcard",
+      "class": "literal_wildcard_no_expansion",
+      "section": "8.5",
+      "expected": "SCOPE_WIDENED",
+      "parent": {
+        "allowedActions": [
+          {
+            "operation": "read",
+            "resource": "calendar/*"
+          }
+        ]
+      },
+      "child": {
+        "allowedActions": [
+          {
+            "operation": "read",
+            "resource": "calendar/events"
+          }
+        ]
+      },
+      "note": "wildcards compare as literal strings; read::calendar/events is NOT covered by read::calendar/*"
+    },
+    {
+      "id": "schema-parity",
+      "class": "schema_parity",
+      "section": "8.7",
+      "expected": "SCHEMA_PARITY",
+      "parent": {
+        "version": "1.0",
+        "allowedActions": [
+          {
+            "operation": "read",
+            "resource": "calendar/*"
+          },
+          {
+            "operation": "read",
+            "resource": "files/*"
+          },
+          {
+            "operation": "draft",
+            "resource": "summary/*"
+          },
+          {
+            "operation": "index",
+            "resource": "search/*"
+          }
+        ],
+        "deniedActions": [
+          {
+            "operation": "send",
+            "resource": "email/*"
+          }
+        ]
+      },
+      "child": null
+    },
+    {
+      "id": "window-not-contained",
+      "class": "window_not_contained",
+      "section": "4.2/8.7",
+      "expected": "WINDOW_NOT_CONTAINED",
+      "child_window": {
+        "start": "2026-11-05T00:00:00.000Z",
+        "end": "2026-11-07T00:00:00.000Z"
+      },
+      "parent_window": {
+        "start": "2026-11-06T00:00:00.000Z",
+        "end": "2026-11-07T00:00:00.000Z"
+      }
+    },
+    {
+      "id": "chain-depth",
+      "class": "chain_depth",
+      "section": "8.6",
+      "expected": "CHAIN_DEPTH_EXCEEDED",
+      "note": "a third delegation hop reaches the default maxDepth of 3 and is denied"
+    },
+    {
+      "id": "unknown-parent",
+      "class": "unknown_parent",
+      "section": "8.7",
+      "expected": "UNKNOWN_PARENT"
+    },
+    {
+      "id": "orchestrator-binding-mismatch",
+      "class": "orchestrator_binding_mismatch",
+      "section": "4.4/8.7",
+      "expected": "ORCHESTRATOR_BINDING_MISMATCH"
+    },
+    {
+      "id": "binding-not-in-body",
+      "class": "unknown_body_field",
+      "section": "4.4",
+      "expected": "UNKNOWN_BODY_FIELD",
+      "note": "orchestratorSignature travels attached, never as signed body material"
+    },
+    {
+      "id": "cascade-revocation",
+      "class": "cascade_revocation",
+      "section": "9.3",
+      "expected": "ANCESTOR_REVOKED",
+      "note": "revoke the parent (any path, any API); every descendant denies at the gate"
+    },
+    {
+      "id": "offline-no-registry",
+      "class": "revocation_required",
+      "section": "9.4",
+      "expected": "REVOCATION_CHECK_REQUIRED",
+      "note": "revocationRequired with no registry access fails closed"
+    },
+    {
+      "id": "offline-ancestor-flag",
+      "class": "revocation_required_ancestor",
+      "section": "9.4",
+      "expected": "ANCESTOR_REVOCATION_CHECK_REQUIRED"
+    },
+    {
+      "id": "registry-unchecked",
+      "class": "revocation_check_incomplete",
+      "section": "9.4",
+      "expected": "REVOCATION_CHECK_REQUIRED",
+      "note": "'unknown' is never 'not revoked' when the flag demands a live check"
+    },
+    {
+      "id": "one-time-no-store",
+      "class": "consumption",
+      "section": "9.5",
+      "expected": "CONSUMPTION_STORE_REQUIRED",
+      "note": "oneTimeUse without a durable shared consumption store fails closed"
+    },
+    {
+      "id": "replay",
+      "class": "replay_after_consume",
+      "section": "9.5",
+      "expected": "RECEIPT_ALREADY_CONSUMED",
+      "body": {
+        "delegationId": "auth-1730000000000-ab12d",
+        "issuedAt": "2026-11-06T09:00:00.000Z",
+        "scope": "Read calendar events and draft daily summaries",
+        "boundaries": "Never send email; never touch payment systems",
+        "timeWindow": {
+          "start": "2026-11-06T00:00:00.000Z",
+          "end": "2026-11-07T00:00:00.000Z"
+        },
+        "operatorInstructions": "Draft the daily summary, then review the agenda",
+        "instructionsHash": "3db9589f8ff65320f968e4b104cb0c2ac7f3b406574a138f763c86a3f2e9b47d",
+        "signerPublicKey": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "bfSWKnrrnFKDKp4HvnO8620p18Z93S0FZGB1Mk9J-eA",
+          "y": "AkI5I5-DjKgWKvS9FKA8-LzFjB0EVgzu0xKFnVZeLlw"
+        },
+        "revocationRequired": false,
+        "oneTimeUse": true
+      },
+      "note": "consumption key = receiptId, or receiptId:nonce when a nonce is carried"
+    },
+    {
+      "id": "slot-not-burned",
+      "class": "consumption_not_burned_on_deny",
+      "section": "9.5",
+      "expected": "REVOCATION_CHECK_REQUIRED",
+      "note": "consumption is attempted only after every other check passes; a denied receipt frees no slot"
+    },
+    {
+      "id": "cose-profile-stub",
+      "class": "cose_unimplemented",
+      "section": "7",
+      "expected": "UNIMPLEMENTED-PH",
+      "note": "COSE_Sign1 profile is named status UNIMPLEMENTED-PH in this module"
+    }
+  ]
+}
