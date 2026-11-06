@@ -296,10 +296,12 @@ def _forge_decision(chain_path, gateway, index=0):
     lines = chain_path.read_text(encoding="utf-8").splitlines()
     envelope = json.loads(lines[index])
     header_b64, payload_b64, _ = envelope["jws"].split(".")
-    padding = "=" * (-len(payload_b64) % 4)
-    payload = json.loads(base64.urlsafe_b64decode(payload_b64 + padding))
+    # Each JWS segment carries its own modulo-4 remainder: pad each one
+    # independently (padding the header with the payload's remainder
+    # raises "Incorrect padding" whenever the header length mod 4 differs).
+    payload = json.loads(base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4)))
     payload["x_gate"]["decision"] = "deny"
-    header = json.loads(base64.urlsafe_b64decode(header_b64 + padding))
+    header = json.loads(base64.urlsafe_b64decode(header_b64 + "=" * (-len(header_b64) % 4)))
     signing_input = (
         _b64url_encode(_canonical_json(header)) + "." + _b64url_encode(_canonical_json(payload))
     ).encode("ascii")
