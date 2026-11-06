@@ -77,6 +77,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from raucle.bilateral import BILATERAL_OUTCOMES as _BILATERAL_OUTCOMES
+from raucle.bilateral import bilateral_signing_input, sign_bilateral_outcome  # noqa: F401
+
 from . import registry as _registry
 from ._canon import make_duplicate_key_rejecter as _make_duplicate_key_rejecter
 from ._canon import reject_lone_surrogates as _reject_lone_surrogates
@@ -700,6 +703,10 @@ class ProvenanceReceipt:
     taint: list[str] = field(default_factory=list)
     tenant: str | None = None
     issued_at: int = 0
+    #: x_bilateral executor co-signature block (v1.2). Rides the signed
+    #: payload root; None means the receipt has no bilateral leg and
+    #: verifies exactly as before (additive extension).
+    x_bilateral: dict[str, Any] | None = None
 
     # Set after sign() / from_jws() — not part of the signed payload itself.
     jws: str = ""
@@ -733,6 +740,8 @@ class ProvenanceReceipt:
             out["guardrail_verdict"] = self.guardrail_verdict
         if self.tenant is not None:
             out["tenant"] = self.tenant
+        if self.x_bilateral is not None:
+            out["x_bilateral"] = self.x_bilateral
         return out
 
     def sign(self, identity: AgentIdentity, hybrid: Any = None) -> str:
@@ -880,6 +889,7 @@ class ProvenanceReceipt:
             taint=list(payload.get("taint", [])),
             tenant=payload.get("tenant"),
             issued_at=payload.get("iat", 0),
+            x_bilateral=payload.get("x_bilateral"),
         )
         receipt.jws = jws
         receipt.receipt_hash = _SHA256_PREFIX + _sha256_hex(jws.encode("ascii"))
@@ -1444,6 +1454,12 @@ class ProvenanceVerifier:
         verifier independently confirms each receipt only invoked permitted
         models/tools. Omit to skip capability conformance (signature/DAG/taint
         still run).
+    executor_keys : dict[str, bytes], optional
+        Mapping ``executor_key_id -> PEM-encoded Ed25519 public key bytes``
+        for the x_bilateral extension: the tool/execution side that
+        co-signs outcomes. Receipts carrying x_bilateral that name a key
+        id absent here or whose co-signature does not verify FAIL (v1.2
+        bilateral-outcomes); receipts without the block are untouched.
     """
 
     def __init__(
@@ -1452,11 +1468,18 @@ class ProvenanceVerifier:
         capabilities: dict[str, CapabilityStatement] | None = None,
         pq_public_keys: dict[str, bytes | str] | None = None,
         require_pq: bool = False,
+        executor_keys: dict[str, bytes] | None = None,
     ) -> None:
         from cryptography.hazmat.primitives import serialization
 
         self._keys: dict[str, Any] = {
             kid: serialization.load_pem_public_key(pem) for kid, pem in public_keys.items()
+        }
+        # Separate namespace from agent keys: execution-side co-signers.
+        # Unknown executor keys fail closed (the bilateral leg never verifies).
+        self._exec_keys: dict[str, Any] = {
+            kid: serialization.load_pem_public_key(pem)
+            for kid, pem in (executor_keys or {}).items()
         }
         self._caps: dict[str, CapabilityStatement] = dict(capabilities or {})
         # ML-DSA-65 keys for pq1 hybrid receipts: pq_key_id -> PEM bytes.
@@ -1669,6 +1692,90 @@ class ProvenanceVerifier:
         self._verify_task_intent(x_gate_payload, receipt, line_no, report)
         self._verify_harness_finding(decoded, line_no, report, receipts_by_hash)
         self._verify_time_anchor(decoded, line_no, report, receipts_by_hash, raw_lines_by_hash)
+        self._verify_bilateral(decoded, line_no, receipt, report)
+
+    def _verify_bilateral(
+        self,
+        decoded: Any,
+        line_no: int,
+        receipt: ProvenanceReceipt,
+        report: VerificationReport,
+    ) -> None:
+        """Invariant (v1.2, bilateral-outcomes): a receipt whose signed
+        payload carries ``x_bilateral`` must bind the executor co-signature
+        that covers the outcome and the receipt's own output_hash, under a
+        key registered in ``executor_keys``. Fail-closed: a missing,
+        unknown-key, non-verifying co-signature, or an outcome outside the
+        closed vocabulary never verifies — nothing about the executor's
+        claim is inferred. Receipts without the block are untouched
+        (additive extension). Mutates *report* in place."""
+        xb = decoded.get("x_bilateral") if isinstance(decoded, dict) else None
+        if xb is None:
+            return
+        if not isinstance(xb, dict):
+            report.errors.append(
+                f"line {line_no}: x_bilateral must be an object, got {type(xb).__name__}"
+            )
+            report.valid = False
+            return
+
+        outcome = xb.get("outcome")
+        if outcome not in _BILATERAL_OUTCOMES:
+            report.errors.append(
+                f"line {line_no}: x_bilateral outcome {outcome!r} outside the closed "
+                f"vocabulary {list(_BILATERAL_OUTCOMES)}"
+            )
+            report.valid = False
+
+        output_hash = xb.get("output_hash")
+        if not receipt.output_hash or output_hash != receipt.output_hash:
+            report.errors.append(
+                f"line {line_no}: x_bilateral output_hash {output_hash!r} does not "
+                f"bind the receipt's own output_hash {receipt.output_hash!r}"
+            )
+            report.valid = False
+
+        executor_key_id = xb.get("executor_key_id")
+        signature = xb.get("signature")
+        if not signature or not isinstance(signature, str):
+            # Fail-closed: an outcome claim without the executor's signature
+            # over it is an unsigned claim, never silently accepted.
+            report.errors.append(
+                f"line {line_no}: x_bilateral carries no executor signature "
+                f"(fail-closed: the outcome would otherwise be inferred)"
+            )
+            report.valid = False
+        if not executor_key_id or not isinstance(executor_key_id, str):
+            report.errors.append(f"line {line_no}: x_bilateral names no executor key id")
+            report.valid = False
+        elif executor_key_id not in self._exec_keys:
+            report.errors.append(
+                f"line {line_no}: no executor key registered for "
+                f"{executor_key_id!r} (fail-closed: unknown executor)"
+            )
+            report.valid = False
+        if (
+            signature
+            and isinstance(signature, str)
+            and executor_key_id
+            and isinstance(executor_key_id, str)
+            and executor_key_id in self._exec_keys
+            and outcome in _BILATERAL_OUTCOMES
+        ):
+            from cryptography.exceptions import InvalidSignature
+
+            try:
+                self._exec_keys[executor_key_id].verify(
+                    base64.b64decode(signature),
+                    bilateral_signing_input(executor_key_id, outcome, str(xb.get("output_hash"))),
+                )
+            except (InvalidSignature, ValueError, TypeError):
+                report.errors.append(
+                    f"line {line_no}: x_bilateral executor signature does not verify "
+                    f"over the bilateral binding (outcome {outcome!r}, "
+                    f"executor {executor_key_id!r})"
+                )
+                report.valid = False
 
     def _decode_gate_payload(self, raw: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         """Invariant: x_gate lives INSIDE the signed JWS payload, not in the

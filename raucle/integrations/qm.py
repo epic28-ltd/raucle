@@ -8,6 +8,10 @@ the wiring between that hand-off and the raucle gate:
   returns the signed token dict to the harness.
 - gate_call(): the harness runs the agent; every tool call crosses the raucle
   gate with the token; the receipt binds the full delegated-authority chain.
+- bilateral_outcome(): the tool/execution side co-signs the outcome it
+  produced (executed | failed | rejected) over the receipt's output_hash,
+  inside the signed payload — verification is fail-closed when the
+  co-signature is missing or does not verify (spec v1.2 bilateral-outcomes).
 - wiring(): the "one wiring file" QM README promises: a static integration
   bundle (endpoint, header name, token injection point, receipt store path).
 """
@@ -16,6 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from raucle.bilateral import sign_bilateral_outcome
 from raucle.capability import Capability, CapabilityIssuer, DelegationLedger
 from raucle.provenance import authorization_block
 
@@ -80,6 +85,41 @@ class QmHarnessBridge:
         recompute the digest the gate will bind."""
         return authorization_block(token_dict)
 
+    @staticmethod
+    def executor_keys(executors: list[Any]) -> dict[str, bytes]:
+        """The verifier-side executor key map, from the executor identities.
+
+        Each executor is an :class:`raucle.provenance.AgentIdentity` (the
+        tool/execution side has its own keypair, distinct from the agent's).
+        Register the returned ``{key_id: public_key_pem}`` mapping on
+        :class:`ProvenanceVerifier(executor_keys=...)`; an x_bilateral block
+        naming any other key id fails verification (fail-closed)."""
+        return {e.key_id: e.public_key_pem() for e in executors}
+
+    def bilateral_outcome(
+        self,
+        executor: Any,
+        *,
+        outcome: str,
+        output_hash: str,
+    ) -> dict[str, Any]:
+        """The executor-side co-signature block (x_bilateral) for one outcome.
+
+        The tool/execution side signs the outcome it actually produced —
+        executed, failed or rejected (closed vocabulary, enforced) — over
+        the receipt's output_hash. The returned dict rides INSIDE the
+        receipt's signed payload (attach before the agent signs), so the
+        co-signature is bound by the same JWS: neither the agent's
+        signature nor the payload's output_hash can move independently of
+        the executor's claim. Verification is fail-closed: a missing or
+        non-verifying co-signature fails the chain with a named reason."""
+        return sign_bilateral_outcome(
+            executor,
+            executor_key_id=executor.key_id,
+            outcome=outcome,
+            output_hash=output_hash,
+        )
+
 
 def gate_call(
     bridge: QmHarnessBridge,
@@ -132,6 +172,13 @@ def wiring(bridge: QmHarnessBridge, *, ledger_path: str, receipt_store: str) -> 
             "capability_header": "X-Capability-Token",
             "credential_header": "X-Api-Key",
             "token_injection": "per-tool-call",
+            "exec_side": {
+                "co_signs": "x_bilateral",
+                "binds": ["outcome", "output_hash"],
+                "outcomes": ["executed", "failed", "rejected"],
+                "when": "attach the executor co-signature before the agent signs",
+                "verify": "raucle-cli verify-chain (executor_keys)",
+            },
             "delegation_ledger": {
                 "path": ledger_path,
                 "write_on": "task_handoff",
