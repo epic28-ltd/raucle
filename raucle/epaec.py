@@ -122,15 +122,8 @@ def canonical_action_digest(action: Any) -> str:
 # --------------------------------------------------------------------------
 
 
-def validate_chain(chain: Any) -> dict[str, Any]:
-    """Section 4 step 1 structural checks.  Raises :class:`AecError` if malformed."""
-    if not isinstance(chain, dict):
-        raise AecError("BAD_CHAIN_TYPE", "chain must be a JSON object")
-    if chain.get("@version") != AEC_VERSION:
-        raise AecError("BAD_VERSION", "@version must be exactly " + AEC_VERSION)
-    if not isinstance(chain.get("action"), dict):
-        raise AecError("BAD_ACTION", "action is required and must be an object")
-    components = chain.get("components")
+def _validate_chain_components(components: Any) -> None:
+    """Section 4 step 1 component checks (shared helper of :func:`validate_chain`)."""
     if not isinstance(components, list) or not components:
         raise AecError("BAD_COMPONENTS", "components must be a non-empty array")
     seen_types: set[str] = set()
@@ -147,10 +140,10 @@ def validate_chain(chain: Any) -> dict[str, Any]:
             raise AecError("BAD_COMPONENT", f"component [{i}] ({ctype}) has no evidence")
         if comp.get("label") is not None and not isinstance(comp.get("label"), str):
             raise AecError("BAD_COMPONENT", f"component [{i}].label must be a string")
-    req = chain.get("requirement")
-    if not isinstance(req, str) or not req.strip():
-        raise AecError("BAD_REQUIREMENT", "requirement is required and must be a non-empty string")
-    # Unknown top-level fields are rejected, never silently ignored.
+
+
+def _validate_unknown_fields(chain: dict[str, Any]) -> None:
+    """Unknown top-level fields are rejected, never silently ignored."""
     unknown = sorted(
         set(chain)
         - {"@version", "action", "action_digest", "components", "requirement"}
@@ -158,6 +151,21 @@ def validate_chain(chain: Any) -> dict[str, Any]:
     )
     if unknown:
         raise AecError("UNKNOWN_CHAIN_FIELD", ",".join(unknown))
+
+
+def validate_chain(chain: Any) -> dict[str, Any]:
+    """Section 4 step 1 structural checks.  Raises :class:`AecError` if malformed."""
+    if not isinstance(chain, dict):
+        raise AecError("BAD_CHAIN_TYPE", "chain must be a JSON object")
+    if chain.get("@version") != AEC_VERSION:
+        raise AecError("BAD_VERSION", "@version must be exactly " + AEC_VERSION)
+    if not isinstance(chain.get("action"), dict):
+        raise AecError("BAD_ACTION", "action is required and must be an object")
+    _validate_chain_components(chain.get("components"))
+    req = chain.get("requirement")
+    if not isinstance(req, str) or not req.strip():
+        raise AecError("BAD_REQUIREMENT", "requirement is required and must be a non-empty string")
+    _validate_unknown_fields(chain)
     return chain
 
 
@@ -431,6 +439,83 @@ def _fail(
     )
 
 
+def _check_declared_digest(chain: dict[str, Any], chain_digest: str) -> AecResult | None:
+    """Section 4 step 2: a present action_digest MUST equal the recomputed one.
+
+    Returns a DENY result on mismatch/malformation, ``None`` when OK.
+    """
+    if "action_digest" not in chain:
+        return None
+    declared = chain["action_digest"]
+    if not isinstance(declared, str) or not declared.startswith(_DIGEST_PREFIX):
+        return _fail(
+            "action_digest must be a 'sha256:<hex>' string", "BAD_ACTION_DIGEST", chain_digest
+        )
+    if declared != chain_digest:
+        return _fail(
+            "declared action_digest does not match the recomputed canonical digest",
+            "ACTION_DIGEST_MISMATCH",
+            chain_digest,
+        )
+    return None
+
+
+def _walk_components(
+    chain: dict[str, Any], verifiers: dict[str, ComponentVerifier], chain_digest: str
+) -> tuple[set[str], list[dict[str, Any]], bool]:
+    """Section 4 step 3: walk components, fail-closed per component.
+
+    Returns ``(satisfied, component_summaries, any_invalid)``.
+    """
+    satisfied: set[str] = set()
+    summaries: list[dict[str, Any]] = []
+    any_invalid = False
+    for i, comp in enumerate(chain["components"]):
+        ctype = comp["type"]
+        label = comp.get("label")
+        status, reason, invalid = _verify_component(comp, ctype, verifiers, chain_digest)
+        if status == VERIFIED:
+            # Step 3d: add type (and label) to the satisfied set.
+            satisfied.add(ctype)
+            if isinstance(label, str) and label:
+                satisfied.add(label)
+        any_invalid = any_invalid or bool(invalid)
+        summaries.append(
+            {
+                "index": i,
+                "type": ctype,
+                "label": label if isinstance(label, str) else None,
+                "status": status,
+                "reason": reason,
+            }
+        )
+    return satisfied, summaries, any_invalid
+
+
+def _verify_component(
+    comp: dict[str, Any],
+    ctype: str,
+    verifiers: dict[str, ComponentVerifier],
+    chain_digest: str,
+) -> tuple[str, str | None, bool]:
+    """Determine ``(status, reason, invalid)`` for a single component."""
+    verifier = verifiers.get(ctype)
+    if verifier is None or not callable(verifier):
+        # Step 3a: no verifier registered -> unsatisfied, never assumed.
+        return UNVERIFIED, "no verifier registered for type", False
+    try:
+        valid, bound_digest = verifier(comp["evidence"])
+    except AecError as e:
+        return INVALID, f"receipt rejected: {e.code}", True
+    except Exception as e:  # step 3b: any exception marks unsatisfied
+        return INVALID, "verifier raised: " + type(e).__name__, True
+    if valid and bound_digest == chain_digest:
+        return VERIFIED, None, False  # step 3c: verified AND bound
+    if valid:
+        return INVALID, "binds a different action", True
+    return INVALID, "verifier returned invalid", True
+
+
 def verify_chain(chain: Any, verifiers: dict[str, ComponentVerifier]) -> AecResult:
     """Verify an EP-AEC chain, fail-closed (draft Section 4 steps 1-5).
 
@@ -452,76 +537,12 @@ def verify_chain(chain: Any, verifiers: dict[str, ComponentVerifier]) -> AecResu
         return _fail("action digest: " + e.detail, e.code)
 
     # Section 4 step 2: a present action_digest MUST equal the recomputed one.
-    if "action_digest" in chain:
-        declared = chain["action_digest"]
-        if not isinstance(declared, str) or not declared.startswith(_DIGEST_PREFIX):
-            return _fail(
-                "action_digest must be a 'sha256:<hex>' string", "BAD_ACTION_DIGEST", chain_digest
-            )
-        if declared != chain_digest:
-            return _fail(
-                "declared action_digest does not match the recomputed canonical digest",
-                "ACTION_DIGEST_MISMATCH",
-                chain_digest,
-            )
+    digest_fail = _check_declared_digest(chain, chain_digest)
+    if digest_fail is not None:
+        return digest_fail
 
     requirement = chain["requirement"]
-    satisfied: set[str] = set()
-    components: list[dict[str, Any]] = []
-    any_invalid = False
-
-    # Section 4 step 3: walk components.
-    for i, comp in enumerate(chain["components"]):
-        ctype = comp["type"]
-        label = comp.get("label")
-        reason: str | None = None
-        verifier = verifiers.get(ctype)
-        if verifier is None or not callable(verifier):
-            # Step 3a: no verifier registered -> unsatisfied, never assumed.
-            status = UNVERIFIED
-            reason = "no verifier registered for type"
-        else:
-            try:
-                valid, bound_digest = verifier(comp["evidence"])
-            except AecError as e:
-                valid, bound_digest, status, reason = (
-                    False,
-                    None,
-                    INVALID,
-                    f"receipt rejected: {e.code}",
-                )
-            except Exception as e:  # step 3b: any exception marks unsatisfied
-                valid, bound_digest, status, reason = (
-                    False,
-                    None,
-                    INVALID,
-                    "verifier raised: " + type(e).__name__,
-                )
-            else:
-                if valid and bound_digest == chain_digest:
-                    status = VERIFIED  # step 3c: verified AND bound
-                elif valid:
-                    status = INVALID
-                    reason = "binds a different action"
-                    any_invalid = True
-                else:
-                    status = INVALID
-                    reason = "verifier returned invalid"
-                    any_invalid = True
-        if status == VERIFIED:
-            # Step 3d: add type (and label) to the satisfied set.
-            satisfied.add(ctype)
-            if isinstance(label, str) and label:
-                satisfied.add(label)
-        components.append(
-            {
-                "index": i,
-                "type": ctype,
-                "label": label if isinstance(label, str) else None,
-                "status": status,
-                "reason": reason,
-            }
-        )
+    satisfied, components, any_invalid = _walk_components(chain, verifiers, chain_digest)
 
     # Section 4 step 4: evaluate the bounded requirement expression.
     value, req_err = evaluate_requirement(requirement, satisfied)

@@ -83,6 +83,6 @@ def test_vector_valid_e2e_allows(corpus):
 def test_vector_bytes_deterministic(corpus):
     v = next(v for v in corpus["vectors"] if v["name"] == "valid_e2e")
     verifiers = _verifiers_from_receipt_key(corpus)
-    assert epaec.result_bytes(epaec.verify_chain(v["chain"], verifiers)) == epaec.result_bytes(
-        epaec.verify_chain(v["chain"], verifiers)
-    )
+    first = epaec.result_bytes(epaec.verify_chain(v["chain"], verifiers))
+    second = epaec.result_bytes(epaec.verify_chain(v["chain"], verifiers))
+    assert first == second

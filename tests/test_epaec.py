@@ -74,7 +74,8 @@ def test_malformed_chains_deny(keys):
     jwk, _pem = keys
     verifiers = {"ep-receipt": _always_valid}
     base = _chain()
-    assert base is not None and jwk is not None
+    assert base is not None
+    assert jwk is not None
     for name, chain in {
         "not_object": "hello",
         "bad_version": _chain(**{"@version": "EP-AEC-v2"}),
