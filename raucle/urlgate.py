@@ -272,7 +272,7 @@ class UrlGate:
         fwd_headers.append(("Accept-Encoding", "identity"))
         if "content-type" not in {k.lower() for k, _ in fwd_headers} and body:
             fwd_headers.append(("Content-Type", "application/json"))
-        # NOSONAR(S5144): accepted pattern — see docs/spikes/SONAR-ACCEPTANCE.md
+        # S5144 accepted pattern — see docs/spikes/SONAR-ACCEPTANCE.md
         # ("S5144 urlgate.forward").  The client's method/target/headers/body
         # are forwarded verbatim to the CONFIGURED upstream; the destination
         # host is never client-controlled (origin-form enforced in _proxy)
