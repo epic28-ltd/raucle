@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Added - N2: SCITT transparency anchoring of receipt-chain heads
+- `raucle/transparency.py` registers a receipt-chain head (final event
+  index + record hash) with a SCITT Transparency Service per the
+  draft-noa-scitt-ai-agent-receipt profile semantics: submit entry,
+  poll operation status, fetch signed_statement. Standard-library HTTP
+  only, no vendor SDK; strict RFC header handling (unparseable `Date`
+  raises; `Retry-After` honoured); bearer tokens arrive as parameters,
+  never globals; anchoring never mutates the chain file.
+- Offline verifier-side check `verify_transparency_anchor` recomputes
+  the chain head and compares it against a cached/fetched signed
+  statement (digest match + signature path present). Optional and OFF
+  by default; absent transparency root yields the honestly named
+  `SELF-SIGNED-ONLY` status with the reason recorded — a named
+  fail-open, never a silent pass. Digest divergence is named
+  `DIGEST-MISMATCH`. Anchoring proves non-equivocation of the chain
+  head — nothing more; no compliance claim is made or implied.
+- Loopback HTTP double in `tests/test_transparency.py` (no external
+  network calls); canonical-bytes SHA-256 invariant pinned by test.
+- Spec: `docs/spec/transparency-v1.md`.
+
 ### Added - I1: counterfactual proofs (the z3 leg)
 - `raucle counterfactual policy` attaches a proof to every prevented
   action. PROVEN: the alternative policy's constraints exclude the whole
