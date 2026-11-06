@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -37,6 +38,17 @@ from typing import Any
 import yaml
 
 logger = logging.getLogger(__name__)
+
+#: Log-injection guard (S5145): enforcement-file digests, paths and
+#: divergence messages quote on-disk content; control characters from
+#: the disk must never reach the log stream or a receipt reason.
+_LOG_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _sanitize_log_text(text: Any) -> str:
+    """Strip control characters from on-disk-sourced text."""
+    return _LOG_CONTROL_RE.sub(" ", str(text))
+
 
 # Receipt/evidence vocabulary constants (single source of truth):
 _HASH_PREFIX = "sha256:"
@@ -869,28 +881,39 @@ class RaucleGateway:
         self._policy_ledger_head = _HASH_PREFIX + "0" * 64
 
         # Policy-bytes tamper detection (M2): verify the enforcement files
-        # against the receipted activation seal at gate start. A diverging
-        # or unreadable seal puts the gate in the named policy_tampered
-        # state and every call denies fail-closed until an explicit
-        # re-activation re-receipts the new bytes.
+        # against the receipted activation seal at gate start (see
+        # _init_policy_bytes). A diverging or unreadable seal puts the
+        # gate in the named policy_tampered state and every call denies
+        # fail-closed until an explicit re-activation re-receipts the
+        # new bytes.
+        self._policy_bytes = None
+        self._policy_bytes_status: dict[str, Any] | None = None
+        self._init_policy_bytes()
+
+    def _init_policy_bytes(self) -> None:
+        """Wire the policy-bytes verifier when a seal file is configured.
+
+        Verification runs once at gate start; a tampered state is
+        logged with sanitised text (the divergence messages quote
+        on-disk digests and paths, so control characters from the disk
+        never enter the log stream)."""
+        config = self.config
+        if not config.policy_seal_file:
+            return
         from raucle.policy_bytes import POLICY_STATUS_TAMPERED, PolicyBytesVerifier
 
-        if config.policy_seal_file:
-            self._policy_bytes = PolicyBytesVerifier(
-                policy_path=config.policy_file,
-                seal_path=config.policy_seal_file,
-                revocations_path=config.revocations_file,
-                emitter=self._emit_policy_bytes_receipt,
+        self._policy_bytes = PolicyBytesVerifier(
+            policy_path=config.policy_file,
+            seal_path=config.policy_seal_file,
+            revocations_path=config.revocations_file,
+            emitter=self._emit_policy_bytes_receipt,
+        )
+        self._policy_bytes_status = self._policy_bytes.verify()
+        if self._policy_bytes_status["status"] == POLICY_STATUS_TAMPERED:
+            logger.error(
+                "POLICY TAMPERED at gate start: %s",
+                "; ".join(_sanitize_log_text(d) for d in self._policy_bytes_status["divergences"]),
             )
-            self._policy_bytes_status = self._policy_bytes.verify()
-            if self._policy_bytes_status["status"] == POLICY_STATUS_TAMPERED:
-                logger.error(
-                    "POLICY TAMPERED at gate start: %s",
-                    "; ".join(self._policy_bytes_status["divergences"]),
-                )
-        else:
-            self._policy_bytes = None
-            self._policy_bytes_status = None
 
     def _emit_policy_bytes_receipt(self, verdict: str, extra: dict[str, Any]) -> str:
         """The policy-bytes emitter: activation/re-activation digests ride
@@ -910,7 +933,7 @@ class RaucleGateway:
         self._policy_bytes_status = status
         if status["status"] != "policy_tampered":
             return None
-        return "policy_tampered: " + "; ".join(status["divergences"])
+        return "policy_tampered: " + "; ".join(_sanitize_log_text(d) for d in status["divergences"])
 
     def seal_policy_bytes(self, *, actor: str = "operator") -> dict[str, Any]:
         """Receipt the current enforcement bytes into the activation seal

@@ -321,12 +321,15 @@ class PolicyBytesVerifier:
 
     def _divergences(self, seal: dict[str, Any]) -> list[str]:
         out: list[str] = []
-        policy_path = seal.get("policy_path", str(self.policy_path))
-        current = self._digest_file(policy_path)
+        # The paths actually opened come from THIS verifier's
+        # configuration (constructor arguments), never from the seal
+        # file's contents: the seal is read from disk, so a path inside
+        # it is untrusted input and must not steer filesystem access.
+        current = self._digest_file(self.policy_path)
         if current is None:
             out.append(
-                f"policy file '{policy_path}' has vanished since activation "
-                "(receipted activation digest: "
+                f"policy file '{self.policy_path}' has vanished since "
+                "activation (receipted activation digest: "
                 f"{seal.get('policy_sha256', '')[:16]}...)"
             )
         elif current != seal.get("policy_sha256"):
@@ -334,18 +337,18 @@ class PolicyBytesVerifier:
                 "policy bytes diverge from the receipted activation digest: "
                 f"on-disk sha256 {current} != sealed {seal.get('policy_sha256')}"
             )
-        rev_path = seal.get("revocations_path", "")
-        if rev_path:
-            divergence = self._revocations_divergence(rev_path, seal)
+        if self.revocations_path:
+            divergence = self._revocations_divergence(seal)
             if divergence:
                 out.append(divergence)
         return out
 
-    def _revocations_divergence(self, rev_path: str, seal: dict[str, Any]) -> str:
+    def _revocations_divergence(self, seal: dict[str, Any]) -> str:
         """The revocation registry is append-only (the gate appends
         cascade revocations), so verification pins the SEALED PREFIX:
         current bytes must extend the exact bytes receipted at
         activation."""
+        rev_path = self.revocations_path
         sealed_len = int(seal.get("revocations_prefix_len", 0) or 0)
         try:
             size = os.path.getsize(rev_path)
