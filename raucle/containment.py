@@ -43,6 +43,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,12 +57,28 @@ SCOPES = (SCOPE_GLOBAL, SCOPE_AGENT, SCOPE_CHAIN)
 VERDICT_HOLD = "containment_hold"
 VERDICT_RESUME = "containment_resume"
 
+# v1: targeted containment (per-trace / per-lease, two-sided receipts).
+VERDICT_TRACE_QUARANTINE = "containment_trace_quarantine"
+VERDICT_TRACE_RELEASE = "containment_trace_release"
+VERDICT_LEASE_SUSPEND = "containment_lease_suspend"
+VERDICT_LEASE_REINSTATE = "containment_lease_reinstate"
+
+STATE_QUARANTINED = "quarantined"
+STATE_RELEASED = "released"
+STATE_SUSPENDED = "suspended"
+STATE_REINSTATED = "reinstated"
+
+_QUARANTINE_PATH = "trace-quarantine"
+_LEASE_PATH = "lease-suspension"
+_ID_RE = re.compile(r"^[A-Za-z0-9._:/@-]{1,128}$")
+
 _STATE_FILE = "containment-state.json"
 _KEY_FILE = "containment-operator-key.pem"
 _PUBKEY_FILE = "containment-operator-pubkey.pem"
 
 _REVOCATION_PATH = "containment"  # named slot: trace quarantine / lease
-#: v1 named slots kept in the CLI help; v0 only implements the policy
+# v1 named slots now implemented below: trace quarantine (quarantine/release)
+# and lease suspension (suspend/reinstate) ride the same receipt machinery.
 
 
 class ContainmentError(Exception):
@@ -92,6 +109,10 @@ class ContainmentConfig:
     delegations_file: str = ""
     #: receipt stream (append-only JSONL of {receipt_hash, jws})
     receipts_path: str = ""
+    #: trace-quarantine registry JSONL the gate loads per call (v1)
+    quarantines_file: str = ""
+    #: lease-suspension registry JSONL the gate loads per call (v1)
+    lease_suspensions_file: str = ""
     #: directory for the state file + operator keypair
     state_dir: str = ""
     actor: str = "operator"
@@ -477,10 +498,292 @@ class ContainmentManager:
                 finally:
                     os.close(fd_lock)
 
+    def _validate_id(self, ident: str, label: str) -> None:
+        """Hostile inputs are named errors, never silent acceptance."""
+        if not ident:
+            raise ContainmentError(f"malformed scope: {label} is required and cannot be empty")
+        if ".." in ident:
+            raise ContainmentError(
+                f"malformed scope: {label} '{ident[:32]}' contains a path-traversal segment"
+            )
+        if not _ID_RE.fullmatch(ident):
+            raise ContainmentError(
+                f"malformed scope: {label} '{ident[:32]}' contains characters outside "
+                "[A-Za-z0-9._:/@-] or exceeds 128 chars (fail-closed)"
+            )
+
+    # -- v1: registry transitions (trace quarantine / lease suspension) ------
+    #
+    # Each targeted lever is a state registry (append-only JSONL, last
+    # record per id wins) the gateway loads per call, the same
+    # propagate-immediately pattern as the revocations file. The registry
+    # only ever DENIES new work: quarantined traces lose new gate
+    # decisions, existing receipts stay independently verifiable — no
+    # history is rewritten. Every transition (quarantine, release,
+    # suspend, reinstate) mints a signed receipt appended to the same
+    # operator receipt stream; if the receipt emission fails the registry
+    # append is rolled back — an unreceipted transition never survives.
+
+    def _registry_file(self, config_key: str, label: str, env: str) -> Path:
+        path = getattr(self.config, config_key, "")
+        if not path:
+            raise ContainmentError(
+                f"{config_key} is not configured: {label} cannot persist (set {env})"
+            )
+        return Path(path)
+
+    @staticmethod
+    def _registry_states(path: Path, id_field: str) -> dict[str, str]:
+        """Last-record-wins state map for *id_field*; corrupt lines are
+        skipped (the gate reads the same registries with the same
+        tolerance — the receipt stream is the tamper evidence)."""
+        if not path.exists():
+            return {}
+        states: dict[str, str] = {}
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(record, dict) and record.get(id_field):
+                    states[str(record[id_field])] = str(record.get("state", ""))
+        return states
+
+    def _registry_transition(
+        self,
+        target: Path,
+        record: dict[str, Any],
+        *,
+        verdict: str,
+        description: str,
+        extra: dict[str, Any],
+        rollback_note: str,
+    ) -> dict[str, Any]:
+        """Append a registry record, then receipt it. Fail-closed: if the
+        receipt cannot be minted the append is rolled back and the
+        transition raises named — quarantine/suspension are never
+        unreceipted (v0 invariant: halt without receipt = bug)."""
+        fd_lock: int | None = None
+        fd_target: int | None = None
+        try:
+            fd_lock = self._locked_state()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            original = target.read_bytes() if target.exists() else b""
+            if target.exists():
+                fd_target = self._lock_target(target)
+            else:
+                fd_target = os.open(target, os.O_RDWR | os.O_CREAT, 0o600)
+                fcntl.flock(fd_target, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with open(target, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            try:
+                receipt_id = self._emit_receipt(
+                    verdict=verdict, description=description, extra=extra
+                )
+            except Exception as exc:
+                # Receipt failed: roll the append back — no silent halt state.
+                if original:
+                    self._write_atomic(target, original)
+                else:
+                    fcntl.flock(fd_target, fcntl.LOCK_UN)
+                    os.close(fd_target)
+                    fd_target = None
+                    with contextlib.suppress(FileNotFoundError):
+                        target.unlink()
+                raise ContainmentError(
+                    f"{rollback_note} receipt emission failed; transition rolled back: {exc}"
+                ) from exc
+            return {"state": record["state"], "receipt_id": receipt_id, "target_file": str(target)}
+        finally:
+            if fd_target is not None:
+                try:
+                    fcntl.flock(fd_target, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd_target)
+            if fd_lock is not None:
+                try:
+                    fcntl.flock(fd_lock, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd_lock)
+
+    def _trace_transition(
+        self, trace_id: str, *, state: str, verdict: str, action: str, reason: str
+    ) -> dict[str, Any]:
+        self._validate_id(trace_id, "trace_id")
+        target = self._registry_file(
+            "quarantines_file", "trace quarantine", "RAUCLE_TRACE_QUARANTINE_FILE"
+        )
+        states = self._registry_states(target, "trace_id")
+        current = states.get(trace_id, "")
+        if action == "quarantine":
+            if current == STATE_QUARANTINED:
+                raise ContainmentError(
+                    f"trace '{trace_id}' is already quarantined; release it first"
+                )
+            if current == STATE_RELEASED:
+                pass  # re-quarantine after release is legitimate; appends again
+        else:  # release
+            if current != STATE_QUARANTINED:
+                raise ContainmentError(
+                    f"trace '{trace_id}' is not quarantined; nothing to release (fail-closed)"
+                )
+        record = {
+            "trace_id": trace_id,
+            "state": state,
+            "reason": reason,
+            "actor": self.config.actor,
+            "timestamp": _now_iso(),
+            "path": _QUARANTINE_PATH,
+        }
+        result = self._registry_transition(
+            target,
+            record,
+            verdict=verdict,
+            description=f"containment:{action}:trace:{trace_id}",
+            extra={**record},
+            rollback_note=f"trace {action}",
+        )
+        return {
+            "status": state,
+            "trace_id": trace_id,
+            "receipt_id": result["receipt_id"],
+            "target_file": result["target_file"],
+            "reason": reason,
+            "actor": record["actor"],
+        }
+
+    def quarantine_trace(self, trace_id: str, *, reason: str = "") -> dict[str, Any]:
+        """Quarantine a trace: NEW gate work on this trace_id is denied
+        before constraint evaluation; existing receipts remain
+        independently verifiable (no history rewrite). Receipted."""
+        return self._trace_transition(
+            trace_id,
+            state=STATE_QUARANTINED,
+            verdict=VERDICT_TRACE_QUARANTINE,
+            action="quarantine",
+            reason=reason,
+        )
+
+    def release_trace(self, trace_id: str, *, reason: str = "") -> dict[str, Any]:
+        """Release a quarantined trace: the gate resumes evaluating new
+        work for this trace_id. Receipted, paired to the quarantine."""
+        return self._trace_transition(
+            trace_id,
+            state=STATE_RELEASED,
+            verdict=VERDICT_TRACE_RELEASE,
+            action="release",
+            reason=reason,
+        )
+
+    def _lease_transition(
+        self,
+        agent_id: str,
+        lease_id: str,
+        *,
+        state: str,
+        verdict: str,
+        action: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        self._validate_agent_id(agent_id)
+        if lease_id:
+            self._validate_id(lease_id, "lease_id")
+        target = self._registry_file(
+            "lease_suspensions_file", "lease suspension", "RAUCLE_LEASE_SUSPENSIONS_FILE"
+        )
+        states = self._registry_states(target, "agent_id")
+        current = states.get(agent_id, "")
+        if action == "suspend" and current == STATE_SUSPENDED:
+            raise ContainmentError(
+                f"agent '{agent_id}' already has a suspended lease; reinstate it first"
+            )
+        if action == "reinstate" and current != STATE_SUSPENDED:
+            raise ContainmentError(
+                f"agent '{agent_id}' has no suspended lease; nothing to reinstate (fail-closed)"
+            )
+        record = {
+            "agent_id": agent_id,
+            "lease_id": lease_id,
+            "state": state,
+            "reason": reason,
+            "actor": self.config.actor,
+            "timestamp": _now_iso(),
+            "path": _LEASE_PATH,
+        }
+        result = self._registry_transition(
+            target,
+            record,
+            verdict=verdict,
+            description=f"containment:{action}:lease:{agent_id}",
+            extra={**record},
+            rollback_note=f"lease {action}",
+        )
+        return {
+            "status": state,
+            "agent_id": agent_id,
+            "lease_id": lease_id,
+            "receipt_id": result["receipt_id"],
+            "target_file": result["target_file"],
+            "reason": reason,
+            "actor": record["actor"],
+        }
+
+    def suspend_lease(
+        self, agent_id: str, *, lease_id: str = "", reason: str = ""
+    ) -> dict[str, Any]:
+        """Suspend a credential lease via the gate's lease-suspension
+        registry: the agent's credential is cut at the gate even with a
+        valid token/key presented. Receipted, two-sided."""
+        return self._lease_transition(
+            agent_id,
+            lease_id,
+            state=STATE_SUSPENDED,
+            verdict=VERDICT_LEASE_SUSPEND,
+            action="suspend",
+            reason=reason,
+        )
+
+    def reinstate_lease(
+        self, agent_id: str, *, lease_id: str = "", reason: str = ""
+    ) -> dict[str, Any]:
+        """Reinstate a suspended credential lease. Receipted."""
+        return self._lease_transition(
+            agent_id,
+            lease_id,
+            state=STATE_REINSTATED,
+            verdict=VERDICT_LEASE_REINSTATE,
+            action="reinstate",
+            reason=reason,
+        )
+
+    def _active_quarantines(self) -> list[str]:
+        target = getattr(self.config, "quarantines_file", "")
+        if not target:
+            return []
+        states = self._registry_states(Path(target), "trace_id")
+        return sorted(t for t, s in states.items() if s == STATE_QUARANTINED)
+
+    def _active_lease_suspensions(self) -> list[str]:
+        target = getattr(self.config, "lease_suspensions_file", "")
+        if not target:
+            return []
+        states = self._registry_states(Path(target), "agent_id")
+        return sorted(a for a, s in states.items() if s == STATE_SUSPENDED)
+
     def status(self) -> dict[str, Any]:
         state = self._read_state()
         if not state:
-            return {"held": False}
+            return {
+                "held": False,
+                "quarantined_traces": self._active_quarantines(),
+                "suspended_leases": self._active_lease_suspensions(),
+            }
         return {
             "held": True,
             "scope": state.get("scope", ""),
@@ -496,6 +799,8 @@ class ContainmentManager:
                 if state.get("scope") != SCOPE_GLOBAL
                 else ""
             ),
+            "quarantined_traces": self._active_quarantines(),
+            "suspended_leases": self._active_lease_suspensions(),
         }
 
     # -- helpers -------------------------------------------------------------
@@ -555,6 +860,14 @@ __all__ = [
     "SCOPE_AGENT",
     "SCOPE_CHAIN",
     "SCOPE_GLOBAL",
+    "STATE_QUARANTINED",
+    "STATE_RELEASED",
+    "STATE_REINSTATED",
+    "STATE_SUSPENDED",
     "VERDICT_HOLD",
+    "VERDICT_LEASE_REINSTATE",
+    "VERDICT_LEASE_SUSPEND",
     "VERDICT_RESUME",
+    "VERDICT_TRACE_QUARANTINE",
+    "VERDICT_TRACE_RELEASE",
 ]

@@ -133,6 +133,16 @@ class GatewayConfig:
     # Loaded per call so revocations propagate immediately, like the trust
     # registry. Empty string = no token revocations configured.
     revocations_file: str = ""
+    # P4.A v1: trace-quarantine registry (JSONL of {trace_id, state, ...}).
+    # Loaded per call; a trace whose last record is quarantined is denied
+    # before constraint evaluation (existing receipts never rewritten).
+    # Empty string = no trace-quarantine enforcement.
+    trace_quarantine_file: str = ""
+    # P4.A v1: lease-suspension registry (JSONL of {agent_id, state, ...}).
+    # Loaded per call; an agent whose last record is suspended has its
+    # credential lease cut at the gate even with a valid api key/token.
+    # Empty string = no lease-suspension enforcement.
+    lease_suspensions_file: str = ""
     agent_credentials_file: str = "/data/agent-credentials.jsonl"
     # Admission policy hooks (P1.4c): when admission_enforce is set and an
     # agent registry is configured, a gate call for an agent whose signed
@@ -223,6 +233,8 @@ class GatewayConfig:
             policy_ledger_path=os.environ.get("RAUCLE_POLICY_LEDGER", ""),
             gate_auth=os.environ.get("RAUCLE_GATE_AUTH", "off"),
             revocations_file=os.environ.get("RAUCLE_REVOCATIONS_FILE", ""),
+            trace_quarantine_file=os.environ.get("RAUCLE_TRACE_QUARANTINE_FILE", ""),
+            lease_suspensions_file=os.environ.get("RAUCLE_LEASE_SUSPENSIONS_FILE", ""),
             agent_credentials_file=os.environ.get(
                 "RAUCLE_AGENT_CREDENTIALS", "/data/agent-credentials.jsonl"
             ),
@@ -1508,6 +1520,11 @@ class RaucleGateway:
             agent_id = self._agent_creds.verify(api_key)
             if agent_id is None:
                 return None, "invalid or revoked api key", None
+            # P4.A v1: a suspended lease cuts the credential at the gate
+            # even though the key itself is valid.
+            lease_refusal = self._lease_suspension_refusal(agent_id)
+            if lease_refusal:
+                return None, "suspended credential lease: " + lease_refusal, None
             return agent_id, "", None
 
         # token mode
@@ -1771,6 +1788,20 @@ class RaucleGateway:
         result = self._fresh_check_result(
             tool, args, agent_id, source, destination, trace_id, _authorization_hint
         )
+
+        # P4.A v1 containment: trace quarantine + lease suspension are
+        # consulted FIRST, before any delegated-authority shortcut or
+        # constraint evaluation. Both checks only ever DENY, so putting
+        # them first cannot widen authority — but it guarantees a
+        # quarantined trace / suspended lease cannot be bypassed by a
+        # valid token. Denials flow through the standard receipted deny
+        # path (nothing about containment is a special channel).
+        trace_refusal = self._trace_quarantine_refusal(trace_id)
+        if trace_refusal:
+            return self._deny_result(result, trace_refusal, start)
+        lease_refusal = self._lease_suspension_refusal(agent_id)
+        if lease_refusal:
+            return self._deny_result(result, lease_refusal, start)
 
         if _token_decision is not None and not _token_decision.allowed:
             # Attributable token denial (receipts v1.1): the caller is
@@ -2514,6 +2545,60 @@ class RaucleGateway:
                 except ValueError:
                     continue
         return {i for i in ids if i}
+
+    def _load_registry_last_state(self, path: str, id_field: str) -> dict[str, str]:
+        """P4.A v1: last-record-wins state map from a containment registry
+        (trace quarantine / lease suspension). Corrupt lines are skipped,
+        exactly as in the containment CLI side — the receipt stream is
+        the tamper evidence for tampering the registries don't cover."""
+        if not path or not Path(path).exists():
+            return {}
+        states: dict[str, str] = {}
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(record, dict) and record.get(id_field):
+                    states[str(record[id_field])] = str(record.get("state", ""))
+        return states
+
+    def _trace_quarantine_refusal(self, trace_id: str) -> str:
+        """Named deny reason when *trace_id* is currently quarantined.
+
+        Checked BEFORE constraint evaluation (and before the delegated
+        authority shortcut): quarantine only ever denies, so ordering it
+        first can never widen authority, and it cannot be bypassed by a
+        valid token. Existing receipts are untouched — no history rewrite.
+        """
+        if not trace_id:
+            return ""
+        states = self._load_registry_last_state(self.config.trace_quarantine_file or "", "trace_id")
+        if states.get(trace_id) == "quarantined":
+            return (
+                f"trace quarantine: trace_id '{trace_id}' is quarantined; "
+                "new work on this trace is denied (existing receipts remain verifiable)"
+            )
+        return ""
+
+    def _lease_suspension_refusal(self, agent_id: str) -> str:
+        """Named deny reason when *agent_id*'s credential lease is
+        suspended: the cut holds even with a valid token/key presented."""
+        if not agent_id:
+            return ""
+        states = self._load_registry_last_state(
+            self.config.lease_suspensions_file or "", "agent_id"
+        )
+        if states.get(agent_id) == "suspended":
+            return (
+                f"lease suspension: credential lease for agent '{agent_id}' is "
+                "suspended; calls are denied regardless of token validity"
+            )
+        return ""
 
     def emit_finding(
         self,

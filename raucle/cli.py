@@ -435,11 +435,11 @@ def _build_parser() -> argparse.ArgumentParser:
     cont_p = subparsers.add_parser(
         "containment",
         help=(
-            "Emergency authority stop: receipted hold/resume/status. "
-            "Global scope swaps the policy for deny-all; agent/chain scope "
-            "appends cascade token revocations. Every transition is signed "
-            "and verifiable offline. Trace quarantine and lease suspension "
-            "are v1 (not in this CLI)."
+            "Emergency authority stop: receipted hold/resume/status (v0) "
+            "plus receipted trace quarantine/release and credential-lease "
+            "suspend/reinstate (v1). Every transition is signed and "
+            "verifiable offline. Never touches processes or hosts — it "
+            "revokes authority at the gate."
         ),
     )
     cont_sub = cont_p.add_subparsers(dest="containment_command")
@@ -448,6 +448,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "resume", help="Restore the pre-hold policy/revocations bytes exactly (receipted)"
     )
     cont_status = cont_sub.add_parser("status", help="Show the current containment state")
+    cont_q = cont_sub.add_parser(
+        "quarantine",
+        help="Quarantine a trace_id: deny NEW work on it (receipted); "
+        "existing receipts stay verifiable",
+    )
+    cont_r = cont_sub.add_parser(
+        "release", help="Release a quarantined trace_id: resume gate work on it (receipted)"
+    )
+    cont_sl = cont_sub.add_parser(
+        "suspend-lease",
+        help="Suspend an agent's credential lease: cut at the gate "
+        "even with a valid key (receipted)",
+    )
+    cont_rl = cont_sub.add_parser(
+        "reinstate-lease", help="Reinstate a suspended credential lease (receipted)"
+    )
     cont_hold.add_argument("scope", choices=["global", "agent", "chain"], help="Scope of the stop")
     cont_hold.add_argument(
         "scope_id",
@@ -455,9 +471,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help=("For 'agent': agent id (agent:...). For 'chain': root token id. Empty for global."),
     )
+    for cont_cmd in (cont_q, cont_r, cont_sl, cont_rl):
+        cont_cmd.add_argument(
+            "target_id",
+            help="Trace id (quarantine/release) or agent id (suspend-lease/reinstate-lease)",
+        )
+        cont_cmd.add_argument(
+            "--lease-id",
+            default="",
+            help="Optional credential-lease id recorded on the suspension/reinstatement",
+        )
     cont_hold.add_argument("--reason", default="", help="Operator reason recorded in the receipt")
     cont_resume.add_argument("--reason", default="", help="Operator reason recorded in the receipt")
-    for cont_cmd in (cont_hold, cont_resume, cont_status):
+    for cont_cmd in (cont_q, cont_r, cont_sl, cont_rl):
+        cont_cmd.add_argument(
+            "--reason", default="", help="Operator reason recorded in the receipt"
+        )
+    for cont_cmd in (cont_hold, cont_resume, cont_status, cont_q, cont_r, cont_sl, cont_rl):
         cont_cmd.add_argument(
             "--policy-file",
             default=os.environ.get("RAUCLE_POLICY_FILE", ""),
@@ -472,6 +502,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "--delegations-file",
             default=os.environ.get("RAUCLE_DELEGATIONS_FILE", ""),
             help="Delegation ledger (agent/chain scope); default $RAUCLE_DELEGATIONS_FILE",
+        )
+        cont_cmd.add_argument(
+            "--quarantine-file",
+            default=os.environ.get("RAUCLE_TRACE_QUARANTINE_FILE", ""),
+            help="Trace-quarantine registry JSONL (v1); default $RAUCLE_TRACE_QUARANTINE_FILE",
+        )
+        cont_cmd.add_argument(
+            "--lease-file",
+            default=os.environ.get("RAUCLE_LEASE_SUSPENSIONS_FILE", ""),
+            help="Lease-suspension registry JSONL (v1); default $RAUCLE_LEASE_SUSPENSIONS_FILE",
         )
         cont_cmd.add_argument(
             "--receipts",
@@ -2159,7 +2199,10 @@ def _cmd_containment(args: argparse.Namespace) -> int:
 
     sub = getattr(args, "containment_command", None)
     if not sub:
-        print("Error: containment requires a subcommand: hold | resume | status")
+        print(
+            "Error: containment requires a subcommand: "
+            "hold | resume | status | quarantine | release | suspend-lease | reinstate-lease"
+        )
         return 1
 
     config = ContainmentConfig(
@@ -2167,6 +2210,8 @@ def _cmd_containment(args: argparse.Namespace) -> int:
         revocations_file=getattr(args, "revocations_file", ""),
         delegations_file=getattr(args, "delegations_file", ""),
         receipts_path=getattr(args, "receipts", ""),
+        quarantines_file=getattr(args, "quarantine_file", ""),
+        lease_suspensions_file=getattr(args, "lease_file", ""),
         state_dir=os.path.expanduser(getattr(args, "state_dir", "~/.raucle/containment")),
         actor=getattr(args, "actor", "operator"),
     )
@@ -2180,6 +2225,22 @@ def _cmd_containment(args: argparse.Namespace) -> int:
             )
         elif sub == "resume":
             result = manager.resume(reason=getattr(args, "reason", ""))
+        elif sub == "quarantine":
+            result = manager.quarantine_trace(args.target_id, reason=getattr(args, "reason", ""))
+        elif sub == "release":
+            result = manager.release_trace(args.target_id, reason=getattr(args, "reason", ""))
+        elif sub == "suspend-lease":
+            result = manager.suspend_lease(
+                args.target_id,
+                lease_id=getattr(args, "lease_id", ""),
+                reason=getattr(args, "reason", ""),
+            )
+        elif sub == "reinstate-lease":
+            result = manager.reinstate_lease(
+                args.target_id,
+                lease_id=getattr(args, "lease_id", ""),
+                reason=getattr(args, "reason", ""),
+            )
         else:
             result = manager.status()
     except ContainmentError as exc:
@@ -2191,6 +2252,12 @@ def _cmd_containment(args: argparse.Namespace) -> int:
     if sub == "status":
         if not result.get("held"):
             print("NOT HELD")
+            quarantined = result.get("quarantined_traces") or []
+            suspended = result.get("suspended_leases") or []
+            if quarantined:
+                print("quarantined traces: " + ", ".join(quarantined))
+            if suspended:
+                print("suspended leases: " + ", ".join(suspended))
             return 0
         scope_line = f"HELD          scope={result['scope']}"
         if result.get("scope_id"):
@@ -2201,6 +2268,26 @@ def _cmd_containment(args: argparse.Namespace) -> int:
             print(f"  reason      {result['reason']}")
         print(f"  target      {result.get('target_file', '')}")
         print(f"  hold receipt {result.get('receipt_id', '')}")
+        return 0
+    if sub in ("quarantine", "release"):
+        print(f"containment trace {result['status']}: {result['trace_id']}")
+        print(f"  registry: {result['target_file']}")
+        print(f"  receipt: {result['receipt_id']}")
+        print(
+            "  verify offline: raucle verify-receipt <jws> --pubkey "
+            f"{config.state_dir}/containment-operator-pubkey.pem"
+        )
+        return 0
+    if sub in ("suspend-lease", "reinstate-lease"):
+        print(f"containment lease {result['status']}: {result['agent_id']}")
+        if result.get("lease_id"):
+            print(f"  lease id: {result['lease_id']}")
+        print(f"  registry: {result['target_file']}")
+        print(f"  receipt: {result['receipt_id']}")
+        print(
+            "  verify offline: raucle verify-receipt <jws> --pubkey "
+            f"{config.state_dir}/containment-operator-pubkey.pem"
+        )
         return 0
     final_line = f"containment {result['status']}: scope={result['scope']}"
     if result.get("scope_id"):
@@ -3132,6 +3219,10 @@ def _dispatch(argv: list[str] | None = None) -> int:
         ("containment", "hold"): _cmd_containment,
         ("containment", "resume"): _cmd_containment,
         ("containment", "status"): _cmd_containment,
+        ("containment", "quarantine"): _cmd_containment,
+        ("containment", "release"): _cmd_containment,
+        ("containment", "suspend-lease"): _cmd_containment,
+        ("containment", "reinstate-lease"): _cmd_containment,
     }
     sub = getattr(args, f"{args.command.replace('-', '_')}_command", None) if args.command else None
     handler = _SUBCOMMANDS.get((args.command, sub))
