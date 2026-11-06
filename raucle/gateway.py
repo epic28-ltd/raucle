@@ -770,6 +770,9 @@ class RaucleGateway:
         # taint tags, per task/delegation chain (trace_id). Evaluated
         # deterministically at each gate decision; see record_chain_output.
         self._chain_state = ChainTaintState()
+        from raucle.eqr import EvidenceStore
+
+        self._evidence_store = EvidenceStore()
 
         # Gate authentication (A1). "off" preserves today's behaviour
         # exactly: declared agent_id is trusted, suitable only for
@@ -1326,6 +1329,20 @@ class RaucleGateway:
         """Clear recorded chain outputs (one trace, or all when None)."""
         self._chain_state.clear(trace_id)
 
+    def record_evidence(self, tool: str, evidence: Any) -> Any:
+        """Record one evidence event for EQR evaluation (N6).
+
+        The record is replayed deterministically at every subsequent
+        ``check_tool_call`` whose matched rule carries an ``eqr`` kind.
+        Evidence is consumed pessimistically (worst record wins), so a
+        successor event can only narrow a decision - never widen it.
+        """
+        return self._evidence_store.record(tool, evidence)
+
+    def clear_evidence(self) -> None:
+        """Clear recorded evidence (the explicit administrative refresh)."""
+        self._evidence_store.clear()
+
     def _evaluate_dataflow_rule(
         self, matched_rule: Any, tool: str, trace_id: str, destination_class: str
     ) -> str:
@@ -1356,6 +1373,74 @@ class RaucleGateway:
             if rule.matches(source, destination):
                 return rule
         return None
+
+    def _evaluate_eqr_rule(self, matched_rule: Any, tool: str, token: Any) -> tuple[str, Any, bool]:
+        """Evaluate the matched rule's EQR kind against the recorded evidence.
+
+        Returns ``(deny_reason, narrowed_token, eqr_active)``:
+
+        - no ``eqr`` on the rule → ``("", None, False)``;
+        - passing evidence → ``("", None, True)`` (decision unchanged);
+        - degraded evidence with ``on_degraded: deny`` → named deny reason;
+        - degraded evidence with ``on_degraded: reduce`` → a reduced-scope
+          child token (parent constraints MEET the EQR's reduced constraints,
+          via :meth:`raucle.capability.CapabilityIssuer.attenuate`); the
+          call is then re-checked under the narrowed token. Any narrowing
+          failure denies (fail-closed).
+
+        Deterministic: reads :class:`raucle.eqr.EvidenceStore` only, integer
+        epoch clock. Narrowing-only: a narrowed child is strictly
+        tighter-or-equal to the parent, so the EQR can never widen the
+        authority a token grants.
+        """
+        eqr = getattr(matched_rule, "eqr", None)
+        if eqr is None:
+            return "", None, False
+        from raucle.eqr import apply_eqr_to_token
+
+        decision = apply_eqr_to_token(
+            eqr,
+            self._evidence_store.snapshot(tool, eqr.evidence_kind),
+            token,
+            self._issuer,
+            int(time.time()),
+        )
+        if decision.deny_reason:
+            return decision.deny_reason, None, True
+        if decision.narrowed_token is None:
+            return "", None, True
+        return "", decision.narrowed_token, True
+
+    def _check_eqr_narrowed(
+        self,
+        narrowed_token: Any,
+        parent_token: Any,
+        tool: str,
+        agent_id: str,
+        args: dict[str, Any],
+    ) -> Any:
+        """Re-check a call under an EQR-narrowed child token (N6).
+
+        The child was derived IN-CALL by this gateway's own issuer from
+        ``parent_token`` (the token the binding stages already verified);
+        a plain CapabilityGate denies it because it cites a parent no
+        ``parent_resolver`` can resolve. The re-check therefore runs under
+        a gate whose resolver reconstructs exactly that chain link:
+        ``child.parent_id -> parent_token``. Nothing else is resolvable,
+        so the narrowed check cannot legitimise any other lineage.
+        """
+        from raucle.capability import CapabilityGate
+
+        narrowed_gate = CapabilityGate(
+            trusted_issuers={self._issuer.key_id: self._issuer.public_key_pem},
+            parent_resolver=(lambda tid: parent_token if tid == parent_token.token_id else None),
+        )
+        return narrowed_gate.check(
+            narrowed_token,
+            tool=tool,
+            agent_id=agent_id,
+            args=args,
+        )
 
     def authenticate_caller(
         self,
@@ -1726,12 +1811,27 @@ class RaucleGateway:
         if dataflow_reason:
             return self._deny_result(result, dataflow_reason, start)
 
+        # Evidence quality enforcement (N6): a policy rule with an `eqr`
+        # kind is evaluated against the REPLAYED evidence records for its
+        # kind - deterministic, fail-closed. Degraded evidence either
+        # denies (named reason) or narrows the authority to the EQR-declared
+        # reduced scope (the call is re-checked under the narrowed child
+        # token); it can never widen the authority the token grants.
+        eqr_reason, eqr_narrowed_token, _ = self._evaluate_eqr_rule(matched_rule, tool, token)
+        if eqr_reason:
+            return self._deny_result(result, eqr_reason, start)
         decision = self._gate.check(
             token,
             tool=tool,
             agent_id=actual_agent_id,
             args=args,
         )
+        if eqr_narrowed_token is not None:
+            # Re-check under the narrowed child; the parent reference stays
+            # the ORIGINAL token (never the child) for chain reconstruction.
+            decision = self._check_eqr_narrowed(
+                eqr_narrowed_token, token, tool, actual_agent_id, args
+            )
         # Approval reference presented (PR-E): honour it only if it binds
         # to this exact tool, agent and arguments. Any failure is deny.
         consumed_approval, approval_error = self._consume_call_approval(
@@ -1749,6 +1849,13 @@ class RaucleGateway:
                 f"approved by {consumed_approval.approver} via {consumed_approval.request_id}"
             )
             result["approval_id"] = consumed_approval.request_id
+
+        # EQR narrow annotation (N6): a call allowed under the narrowed
+        # reduced scope carries the narrowing in its reason (audit-visible).
+        if eqr_narrowed_token is not None:
+            result["reason"] = (
+                f"{result['reason']} [EQR: degraded evidence - authority narrowed to reduced scope]"
+            )
 
         # Escalation creates a human approval request (PR-E): receipted so
         # the request itself is evidence in the chain, surfaced to the
