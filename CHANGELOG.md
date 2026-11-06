@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added - N3: Nelson-14 delegation-receipt gate (Python profile)
+- `raucle/nelson14.py`: first-class verifier module for the normative checks
+  of draft-nelson-agent-delegation-receipts-14 (Agent Delegation Receipts,
+  15 October 2026): compact-JWS/JCS pinning (ES256 only, `typ`/`kid` header
+  rules, DER signatures rejected, `none` prohibited), monotonic
+  attenuation on literal `operation::resource` keys (delegated grants may
+  only NARROW — equal scope rejected), deterministic cascade revocation by
+  parent walk, and fail-closed one-time-use consumption bound to the
+  existing consume-after-verify pattern. All denials are named and
+  fail-closed; the COSE profile is a named `UNIMPLEMENTED-PH` follow-up
+  stub. Additive: no existing receipt schema is touched; §5 JCS ordering
+  reuses the shared `raucle._canon` UTF-16 machinery.
+- Published test vectors: `tests/nelson14_vectors.py` (45 tests) plus the
+  machine-readable corpus
+  `docs/spec/nelson14-delegation-gate/v1/test-vectors.json` (31 vectors
+  across every implemented check class) for downstream N10 consumption.
+- Spec document `docs/spec/nelson14-delegation-gate.md` mapping each check
+  to its draft section, implementation and test.
+
 ### Added - N1: x_bilateral execution-boundary co-signed receipts
 - New `x_bilateral` extension (v1.2, docs/spec/provenance/v1.2/bilateral-
   outcomes.md): the tool/execution side CO-SIGNS the outcome it actually
