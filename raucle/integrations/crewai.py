@@ -164,6 +164,10 @@ def guard_tool(
 
     wrapped = tool
     tool_name = getattr(tool, "name", None) or "<unknown>"
+    # CrewAI 1.x BaseTool has no ``arun``/``_arun`` surface at all (sync
+    # ``run`` -> ``_run`` only), so detect an async impl from the wrapped
+    # tool's own class definition rather than comparing against a stub.
+    wrapped_arun = type(wrapped).__dict__.get("_arun")
 
     class _GuardedTool(BaseTool):  # type: ignore[misc,valid-type]
         name: str = wrapped.name
@@ -219,12 +223,21 @@ def guard_tool(
             )
             if not decision.allowed:
                 raise CapabilityDenied(tool_name, decision.reason or "denied")
-            # Use the wrapped tool's async impl only if it genuinely overrides
-            # the BaseTool stub (which raises NotImplementedError); otherwise
-            # fall back to the sync impl.
-            if type(wrapped)._arun is not BaseTool._arun:
+            # Use the wrapped tool's own async impl if it defines one;
+            # otherwise fall back to the sync impl.
+            if wrapped_arun is not None:
                 return await wrapped._arun(*args, **kwargs)
             return wrapped._run(*args, **kwargs)
+
+        async def arun(self, *args: Any, **kwargs: Any) -> Any:
+            """Async entry point guarded tools expose exposes to async consumers.
+
+            CrewAI 1.x's ``BaseTool`` itself has no ``arun``; users driving
+            tools from asyncio code call ``await guarded.arun(...)`` so the
+            gate runs inside *their* event loop instead of behind
+            ``asyncio.run`` in ``BaseTool.run``.
+            """
+            return await self._arun(*args, **kwargs)
 
     return _GuardedTool()
 

@@ -27,3 +27,18 @@ ids, registry contents) and the traceback's final line reproduces that message,
 so `logging.exception()` would reintroduce the S5145 log-injection finding.
 Full diagnostics stay in the admission receipt, not in the log file. Suppressed
 with an inline `# NOSONAR` rationale and this entry. Decision owner: Craig.
+
+## S5144 (server-side request forgery in UrlGate.forward) - raucle/urlgate.py, accepted 2026-11-06
+
+O3 is a transparent URL-switch gate proxy: its purpose is to forward SDK
+client traffic verbatim to the CONFIGURED upstream (`UrlGateConfig.upstream`,
+bound to 127.0.0.1 by default). The client's method, origin-form request
+target, headers and body are the proxied payload; altering or re-resolving
+them would break the transparent-proxy contract. The destination host is
+never client-controlled. Hardening applied with this acceptance: only
+RFC 9112 origin-form request targets are proxied (`_is_origin_form`),
+absolute/authority/asterisk-form targets (the only way a client could steer
+the proxy at a different destination) are rejected with 400, and the taint
+finding is suppressed with inline `# NOSONAR` markers on the forwarding
+call. Accepted pattern: "a transparent proxy MUST forward client payload
+to the configured upstream". Decision owner: Craig.
