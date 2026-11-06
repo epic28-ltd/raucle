@@ -48,6 +48,65 @@ from raucle.capability import Capability, CapabilityIssuer
 
 
 @dataclass
+class ChainTaintDeny:
+    """Data-flow constraint binding chain taint to a destination-class deny.
+
+    Semantics (deterministic, fail-closed): when any prior tool output in
+    the SAME task/delegation chain (identified by ``trace_id``) carries one
+    of ``taint_tags``, a call whose ``destination_class`` matches this kind
+    is denied. ``allow_destination_classes`` optionally allow-lists the
+    destination classes the deny does NOT cover; when it is set, every
+    destination class NOT on the allow-list denies (fail-closed). The kind
+    only ever denies - it can never widen the authority a capability
+    token grants.
+    """
+
+    taint_tags: list[str] = field(default_factory=list)
+    destination_classes: list[str] = field(default_factory=list)
+    allow_destination_classes: list[str] | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ChainTaintDeny:
+        if not isinstance(data, dict):
+            raise ValueError(f"deny_from_chain_taint must be a mapping, got {type(data).__name__}")
+        tags = data.get("taint_tags")
+        dest_classes = data.get("destination_classes") or []
+        allow_classes = data.get("allow_destination_classes")
+        if not isinstance(tags, list) or not tags:
+            raise ValueError("deny_from_chain_taint.taint_tags must be a non-empty list")
+        for name, values in (("taint_tags", tags), ("destination_classes", dest_classes)):
+            if any(not isinstance(v, str) or not v for v in values):
+                raise ValueError(f"deny_from_chain_taint.{name} must be non-empty strings")
+        if allow_classes is not None:
+            if not isinstance(allow_classes, list) or not allow_classes:
+                raise ValueError(
+                    "deny_from_chain_taint.allow_destination_classes must be a non-empty list"
+                )
+            if any(not isinstance(v, str) or not v for v in allow_classes):
+                raise ValueError(
+                    "deny_from_chain_taint.allow_destination_classes must be non-empty strings"
+                )
+        if not dest_classes and allow_classes is None:
+            raise ValueError(
+                "deny_from_chain_taint requires 'destination_classes' or "
+                "'allow_destination_classes'"
+            )
+        return cls(
+            taint_tags=list(tags),
+            destination_classes=list(dest_classes),
+            allow_destination_classes=list(allow_classes) if allow_classes is not None else None,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {"taint_tags": list(self.taint_tags)}
+        if self.destination_classes:
+            data["destination_classes"] = list(self.destination_classes)
+        if self.allow_destination_classes is not None:
+            data["allow_destination_classes"] = list(self.allow_destination_classes)
+        return data
+
+
+@dataclass
 class PolicyRule:
     """A single policy rule for one tool."""
 
@@ -60,6 +119,10 @@ class PolicyRule:
     # wins; otherwise derived at load as "<tool>/<agent_id>/<index>".
     id: str = ""
     require_approval_when: dict[str, Any] | None = None
+    # Data-flow rule kind (EPIC O1): deny calls whose destination class
+    # matches whenever a prior output in the same task chain carries a
+    # listed taint tag. See :class:`ChainTaintDeny`.
+    deny_from_chain_taint: ChainTaintDeny | None = None
     # Source/destination matching: the policy only applies when the
     # inbound source and outbound destination match these patterns.
     # Empty string or "*" means "match anything".
@@ -179,6 +242,11 @@ class PolicyFile:
                 description=rule_data.get("description", ""),
                 id=rule_data.get("id") or "",
                 require_approval_when=rule_data.get("require_approval_when"),
+                deny_from_chain_taint=(
+                    ChainTaintDeny.from_dict(rule_data["deny_from_chain_taint"])
+                    if rule_data.get("deny_from_chain_taint") is not None
+                    else None
+                ),
                 source=rule_data.get("source", ""),
                 destination=rule_data.get("destination", ""),
             )
@@ -209,6 +277,11 @@ class PolicyFile:
                     **(
                         {"require_approval_when": r.require_approval_when}
                         if r.require_approval_when
+                        else {}
+                    ),
+                    **(
+                        {"deny_from_chain_taint": r.deny_from_chain_taint.to_dict()}
+                        if r.deny_from_chain_taint
                         else {}
                     ),
                     **({"source": r.source} if r.source else {}),
@@ -316,10 +389,70 @@ def check_approval_needed(
     return any(t.matches(args) for t in thresholds)
 
 
+def evaluate_chain_taint_deny(
+    deny: ChainTaintDeny,
+    prior_outputs: list[dict[str, Any]],
+    destination_class: str,
+) -> str:
+    """Evaluate a data-flow rule against the replayed chain state.
+
+    *prior_outputs* is the ordered list of tool outputs recorded for the
+    SAME task/delegation chain (``{"tool": str, "taint_tags": list[str]}``),
+    excluding the call under decision. Returns the deny REASON string, or
+    "" when the call is not covered.
+
+    Semantics, in evaluation order (fail-closed with named reasons):
+      1. a malformed (non-string or empty) taint tag anywhere in the chain
+         state is UNKNOWN and denies the call outright;
+      2. no listed taint tag in the chain state allows the call (every
+         call alone stays allowed) - regardless of destination class;
+      3. with chain taint present, an UNKNOWN (empty) destination class
+         denies;
+      4. with an allow-list, any destination class not on it denies;
+         otherwise a destination class in the denied list denies.
+
+    The function is pure: the same (deny, prior_outputs, destination_class)
+    triple always yields the same verdict - no side-channel state.
+    """
+    # Unknown taint tags anywhere in the chain state deny outright: an
+    # unclassifiable taint cannot be proven NOT to reach this call.
+    for output in prior_outputs:
+        for tag in output.get("taint_tags") or []:
+            if not isinstance(tag, str) or not tag:
+                return "data-flow rule: unknown taint tag in chain state (fail-closed deny)"
+    matching_tags = sorted(
+        {
+            tag
+            for output in prior_outputs
+            for tag in output.get("taint_tags") or []
+            if tag in deny.taint_tags
+        }
+    )
+    if not matching_tags:
+        return ""
+    if not isinstance(destination_class, str) or not destination_class:
+        return "data-flow rule: unknown destination class (fail-closed deny)"
+    allow = deny.allow_destination_classes
+    if allow is not None:
+        covered = destination_class not in allow
+        basis = "not on data-flow allow-list"
+    else:
+        covered = destination_class in deny.destination_classes
+        basis = "in denied destination classes"
+    if not covered:
+        return ""
+    return (
+        f"data-flow rule: taint tag '{matching_tags[0]}' in chain state with destination class "
+        f"'{destination_class}' {basis} (fail-closed deny)"
+    )
+
+
 __all__ = [
     "PolicyFile",
     "PolicyRule",
+    "ChainTaintDeny",
     "ApprovalThreshold",
     "mint_from_policy",
     "check_approval_needed",
+    "evaluate_chain_taint_deny",
 ]
