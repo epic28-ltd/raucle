@@ -1,0 +1,48 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#auditLogs/signIns",
+  "value": [
+    {
+      "id": "entra-sin-0003",
+      "createdDateTime": "2026-11-06T09:15:21.000Z",
+      "userPrincipalName": "svc-archiver@contoso.com",
+      "userId": null,
+      "servicePrincipalName": null,
+      "servicePrincipalId": null,
+      "status": {
+        "errorCode": 0,
+        "failureReason": null,
+        "detail": null
+      },
+      "clientAppUsed": "Browser"
+    },
+    {
+      "id": "entra-sin-0004",
+      "createdDateTime": "2026-11-06T09:15:28.000Z",
+      "userPrincipalName": null,
+      "userId": "uid-2002",
+      "servicePrincipalName": null,
+      "servicePrincipalId": null,
+      "status": {
+        "errorCode": 0,
+        "failureReason": null,
+        "detail": null
+      },
+      "clientAppUsed": "Browser"
+    },
+    {
+      "id": "entra-sin-0005",
+      "createdDateTime": "2026-11-06T09:15:35.000Z",
+      "userPrincipalName": null,
+      "userId": null,
+      "servicePrincipalName": null,
+      "servicePrincipalId": null,
+      "status": {
+        "errorCode": 0,
+        "failureReason": null,
+        "detail": null
+      },
+      "clientAppUsed": "Browser"
+    }
+  ],
+  "@odata.nextLink": "https://graph.microsoft.com/v1.0/auditLogs/signIns?$skiptoken=TOKEN_4&$top=3"
+}

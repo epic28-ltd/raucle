@@ -22,10 +22,12 @@ from raucle.connectors.base import (
     chain_event,
     vector,
 )
+from raucle.connectors.entra import EntraSignInConnector
 from raucle.connectors.github_audit import GitHubAuditConnector
 from raucle.connectors.okta import OktaConnector
 
 __all__ = [
+    "EntraSignInConnector",
     "GitHubAuditConnector",
     "OktaConnector",
     "RateLimitError",
