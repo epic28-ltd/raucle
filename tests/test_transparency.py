@@ -103,7 +103,7 @@ class _FakeTSHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": "no such path"})
 
 
-@pytest.fixture()
+@pytest.fixture
 def ts_double():
     record: dict = {
         "requests": [],
@@ -128,7 +128,7 @@ def ts_double():
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def chain_path(tmp_path):
     """A small three-event hash chain written by the real HashChainSink."""
     path = tmp_path / "chain.jsonl"

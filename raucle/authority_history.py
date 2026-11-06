@@ -42,6 +42,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -219,6 +220,103 @@ class _PolicyOfRecord:
         return self._empty(), False, POLICY_DIGEST_MISMATCH
 
 
+def _counterfactual_replay_rows(
+    chain_path: str | Path,
+    input_store_path: str | Path,
+    counterfactual_policy_path: str | Path | None,
+) -> tuple[dict[str, dict[str, Any]], str]:
+    """Run the existing counterfactual machinery over the SAME chain and
+    input store; its per-action rows join by receipt hash."""
+    if counterfactual_policy_path is None:
+        return {}, ""
+    from raucle.counterfactual import replay_counterfactual
+
+    cf = replay_counterfactual(
+        chain_path,
+        input_store_path=input_store_path,
+        alternative_policy_path=counterfactual_policy_path,
+    )
+    note = ""
+    if cf["actions_unreplayable"]:
+        note = (
+            f"{cf['actions_unreplayable']} action(s) unreplayable by the counterfactual "
+            f"machinery (no stored input) - named there, not merged silently"
+        )
+    return {row["receipt_hash"]: row for row in cf["actions"]}, note
+
+
+def _classify_replay_status(recomputed: str, receipted: str) -> str:
+    """Fail-closed status: only an exact receipted match is verified."""
+    if recomputed == receipted:
+        return "verified"
+    if recomputed in _DECISIONS:
+        # an undecidable recompute cannot fake agreement
+        return "divergent"
+    return "unverified"
+
+
+def _replay_row(
+    store: Any,
+    rec: dict[str, Any],
+    counterfactual_by_receipt: dict[str, dict[str, Any]],
+    policy_of_record: _PolicyOfRecord,
+) -> tuple[dict[str, Any], str | None]:
+    """Recompute one gate decision row from stored evidence alone.
+
+    Returns the row plus the named missing-evidence kind when the
+    decision inputs cannot be fully evidenced (never inferred, never
+    guessed), or ``None`` when evidence is complete.
+    """
+    from raucle.provenance import _sha256_hex as _sh
+
+    payload, x_gate = rec["payload"], rec["x_gate"]
+    row: dict[str, Any] = {
+        "receipt_hash": str(rec["envelope"].get("receipt_hash", "")),
+        "tool": str(x_gate.get("tool", "")),
+        "agent_id": str(x_gate.get("agent_id", "")),
+        "receipted_decision": str(x_gate.get("decision", "")),
+        "recomputed_decision": None,
+        "counterfactual_decision": None,
+        "ruleset_hash": str(payload.get("ruleset_hash", "")),
+        "status": "unverified",
+        "missing_evidence": None,
+    }
+    cf_row = counterfactual_by_receipt.get(row["receipt_hash"])
+    if cf_row is not None:
+        row["counterfactual_decision"] = str(cf_row["counterfactual_decision"])
+
+    # every decision input must be evidenced; the receipt binds
+    # the args by digest - the stored text must reproduce it
+    args = _resolve_args(store, str(payload.get("input_hash", "")))
+    if isinstance(args, str):
+        return row, args
+    # canonical form the live gate hashed: recompute the digest
+    # over the stored args and bind before trusting them
+    canonical = _canonical_json(args)
+    if _sh(canonical) != str(payload.get("input_hash", "")).removeprefix(_HASH_PREFIX):
+        return row, ARGS_HASH_MISMATCH
+
+    gateway, resolved, unresolved_kind = policy_of_record.resolve(
+        row["tool"],
+        row["ruleset_hash"],
+        str(x_gate.get("source", "") or ""),
+        str(x_gate.get("destination", "") or ""),
+    )
+    if not resolved:
+        return row, unresolved_kind
+
+    recomputed = gateway.check_tool_call(
+        row["tool"],
+        args,
+        agent_id=row["agent_id"],
+        source=str(x_gate.get("source", "") or ""),
+        destination=str(x_gate.get("destination", "") or ""),
+    )["decision"]
+    row["recomputed_decision"] = recomputed
+    row["status"] = _classify_replay_status(recomputed, row["receipted_decision"])
+    return row, None
+
+
 def replay_authority_history(
     chain_path: str | Path,
     *,
@@ -235,26 +333,13 @@ def replay_authority_history(
     missing-evidence kind; it is never inferred, never guessed, and
     never counted as verified.
     """
-    from raucle.counterfactual import replay_counterfactual
     from raucle.replay import InputStore
 
-    counterfactual_by_receipt: dict[str, dict[str, Any]] = {}
-    counterfactual_note = ""
-    if counterfactual_policy_path is not None:
-        # the existing counterfactual machinery, replayed over the SAME
-        # chain and input store: its per-action rows join by receipt hash
-        cf = replay_counterfactual(
-            chain_path,
-            input_store_path=input_store_path,
-            alternative_policy_path=counterfactual_policy_path,
-        )
-        counterfactual_by_receipt = {row["receipt_hash"]: row for row in cf["actions"]}
-        if cf["actions_unreplayable"]:
-            counterfactual_note = (
-                f"{cf['actions_unreplayable']} action(s) unreplayable by the counterfactual "
-                f"machinery (no stored input) - named there, not merged silently"
-            )
-
+    counterfactual_by_receipt, counterfactual_note = _counterfactual_replay_rows(
+        chain_path,
+        input_store_path,
+        counterfactual_policy_path,
+    )
     policy_of_record = _PolicyOfRecord(policy_dir)
     raw_lines = sum(
         1 for line in Path(chain_path).read_text(encoding="utf-8").splitlines() if line.strip()
@@ -264,81 +349,24 @@ def replay_authority_history(
 
     with InputStore.open(input_store_path) as store:
         for rec in _gate_decisions(chain_path):
-            payload, x_gate = rec["payload"], rec["x_gate"]
-            row: dict[str, Any] = {
-                "receipt_hash": str(rec["envelope"].get("receipt_hash", "")),
-                "tool": str(x_gate.get("tool", "")),
-                "agent_id": str(x_gate.get("agent_id", "")),
-                "receipted_decision": str(x_gate.get("decision", "")),
-                "recomputed_decision": None,
-                "counterfactual_decision": None,
-                "ruleset_hash": str(payload.get("ruleset_hash", "")),
-                "status": "unverified",
-                "missing_evidence": None,
-            }
-            cf_row = counterfactual_by_receipt.get(row["receipt_hash"])
-            if cf_row is not None:
-                row["counterfactual_decision"] = str(cf_row["counterfactual_decision"])
-
-            # every decision input must be evidenced; the receipt binds
-            # the args by digest - the stored text must reproduce it
-            args = _resolve_args(store, str(payload.get("input_hash", "")))
-            if isinstance(args, str):
-                row["missing_evidence"] = args
-                missing_counter[args] = missing_counter.get(args, 0) + 1
-                items.append(row)
-                continue
-            # canonical form the live gate hashed: recompute the digest
-            # over the stored args and bind before trusting them
-            canonical = _canonical_json(args)
-            from raucle.provenance import _sha256_hex as _sh
-
-            if _sh(canonical) != str(payload.get("input_hash", "")).removeprefix(_HASH_PREFIX):
-                row["missing_evidence"] = ARGS_HASH_MISMATCH
-                missing_counter[ARGS_HASH_MISMATCH] = missing_counter.get(ARGS_HASH_MISMATCH, 0) + 1
-                items.append(row)
-                continue
-
-            gateway, resolved, unresolved_kind = policy_of_record.resolve(
-                row["tool"],
-                row["ruleset_hash"],
-                str(x_gate.get("source", "") or ""),
-                str(x_gate.get("destination", "") or ""),
-            )
-            if not resolved:
-                row["missing_evidence"] = unresolved_kind
-                missing_counter[unresolved_kind] = missing_counter.get(unresolved_kind, 0) + 1
-                items.append(row)
-                continue
-
-            recomputed = gateway.check_tool_call(
-                row["tool"],
-                args,
-                agent_id=row["agent_id"],
-                source=str(x_gate.get("source", "") or ""),
-                destination=str(x_gate.get("destination", "") or ""),
-            )["decision"]
-            row["recomputed_decision"] = recomputed
-            row["status"] = (
-                "verified"
-                if recomputed == row["receipted_decision"]
-                else "divergent"
-                if recomputed in _DECISIONS
-                # an undecidable recompute cannot fake agreement
-                else "unverified"
-            )
+            row, missing_kind = _replay_row(store, rec, counterfactual_by_receipt, policy_of_record)
+            if missing_kind is not None:
+                row["missing_evidence"] = missing_kind
+                missing_counter[missing_kind] = missing_counter.get(missing_kind, 0) + 1
             items.append(row)
 
-    verified = sum(1 for r in items if r["status"] == "verified")
-    divergent = sum(1 for r in items if r["status"] == "divergent")
-    unverified = sum(1 for r in items if r["status"] == "unverified")
+    status_counts = Counter(r["status"] for r in items)
+    verified = status_counts["verified"]
+    divergent = status_counts["divergent"]
+    unverified = status_counts["unverified"]
     table_sorted = sorted(items, key=lambda r: r["receipt_hash"])
+    counterfactual_policy = (
+        str(counterfactual_policy_path) if counterfactual_policy_path is not None else ""
+    )
     report = {
         "chain": str(chain_path),
         "policy_dir": str(policy_dir),
-        "counterfactual_policy": (
-            str(counterfactual_policy_path) if counterfactual_policy_path is not None else ""
-        ),
+        "counterfactual_policy": counterfactual_policy,
         "chain_lines": raw_lines,
         "gate_decisions": len(items),
         "non_gate_lines": raw_lines - len(items),

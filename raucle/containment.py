@@ -298,7 +298,6 @@ class ContainmentManager:
             raise ContainmentError(
                 f"malformed scope: '{scope}' (expected one of {', '.join(SCOPES)})"
             )
-        actor = self.config.actor
         if scope == SCOPE_AGENT:
             self._validate_agent_id(scope_id)  # malformed scope: named, before anything else
         state = self._read_state()
@@ -307,7 +306,35 @@ class ContainmentManager:
                 f"already held since {state.get('held_at', '?')} "
                 f"(scope {state.get('scope')}); resume first"
             )
+        return self._hold_locked(scope, scope_id, reason)
 
+    def _open_hold_target(
+        self, scope: str, scope_id: str
+    ) -> tuple[Any, int | None, bytes, list[str]]:
+        """Acquire the target file lock for a hold and snapshot its
+        current bytes (the rollback baseline)."""
+        target = self._target_for(scope)
+        if scope == SCOPE_GLOBAL:
+            if not target.exists():
+                raise ContainmentError(
+                    f"policy file '{target}' does not exist; the gate is "
+                    "already deny-all — nothing to hold (fail-closed)"
+                )
+            fd_target = self._lock_target(target)
+            return target, fd_target, target.read_bytes(), []
+        ids = self._resolve_ids(scope, scope_id)
+        rev_path = target
+        rev_path.parent.mkdir(parents=True, exist_ok=True)
+        fd_target = self._lock_target(rev_path) if rev_path.exists() else None
+        if fd_target is None:
+            fd_target = os.open(rev_path, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd_target, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return target, fd_target, rev_path.read_bytes(), ids
+
+    def _hold_locked(self, scope: str, scope_id: str, reason: str) -> dict[str, Any]:
+        """Apply the hold under the state lock, receipt it, and release
+        both locks in all paths."""
+        actor = self.config.actor
         fd_target: int | None = None
         fd_lock: int | None = None
         ids: list[str] = []
@@ -320,25 +347,7 @@ class ContainmentManager:
                     f"(scope {state.get('scope')}); resume first"
                 )
 
-            target = self._target_for(scope)
-            if scope == SCOPE_GLOBAL:
-                if not target.exists():
-                    raise ContainmentError(
-                        f"policy file '{target}' does not exist; the gate is "
-                        "already deny-all — nothing to hold (fail-closed)"
-                    )
-                fd_target = self._lock_target(target)
-                original = target.read_bytes()
-            else:
-                ids = self._resolve_ids(scope, scope_id)
-                rev_path = target
-                rev_path.parent.mkdir(parents=True, exist_ok=True)
-                fd_target = self._lock_target(rev_path) if rev_path.exists() else None
-                if fd_target is None:
-                    fd_target = os.open(rev_path, os.O_RDWR | os.O_CREAT, 0o600)
-                    fcntl.flock(fd_target, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                revocations = rev_path.read_bytes()
-                original = revocations
+            target, fd_target, original, ids = self._open_hold_target(scope, scope_id)
 
             original_sha = _sha256_bytes(original)
             if scope == SCOPE_GLOBAL:

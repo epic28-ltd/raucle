@@ -19,6 +19,8 @@ import json
 import sys
 
 import pytest
+from fastapi import HTTPException
+from pydantic import ValidationError
 
 fastapi = pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
@@ -36,7 +38,8 @@ def test_usermanager_mfa_lifecycle(tmp_path):
     users = UserManager()
     users.add_user("u-key", "operator", "Op")
     setup = users.setup_mfa("u-key")
-    assert setup and set(setup) >= {"secret", "uri"}
+    assert setup
+    assert set(setup) >= {"secret", "uri"}
     code = pytest.importorskip("pyotp").TOTP(setup["secret"]).now()
     assert users.verify_totp(users.get_user("u-key"), code) is True
     assert users.verify_mfa("u-key", "000000") is False
@@ -197,8 +200,8 @@ def _server(monkeypatch):
 
 def test_server_batch_cap_rejects(monkeypatch):
     server = _server(monkeypatch)
-    with pytest.raises(Exception) as excinfo:
-        server.scan_batch(server.BatchScanRequest(prompts=["x"] * 1001))
+    with pytest.raises(ValidationError) as excinfo:
+        server.BatchScanRequest(prompts=["x"] * 1001)
     assert "1000" in str(getattr(excinfo.value, "detail", excinfo.value))
 
 
@@ -218,13 +221,13 @@ def test_server_verify_receipt_endpoint(monkeypatch, tmp_path):
             receipt=receipt, public_key_pem=signer.public_key_pem().decode()
         )
     )
-    assert body["valid"] is True and body["payload"]["verdict"] == "MALICIOUS"
-    with pytest.raises(Exception) as excinfo:
-        server.verify_receipt(
-            server.VerifyReceiptRequest(
-                receipt="a.b.c", public_key_pem=signer.public_key_pem().decode()
-            )
-        )
+    assert body["valid"] is True
+    assert body["payload"]["verdict"] == "MALICIOUS"
+    bad = server.VerifyReceiptRequest(
+        receipt="a.b.c", public_key_pem=signer.public_key_pem().decode()
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        server.verify_receipt(bad)
     assert "Invalid receipt" in str(getattr(excinfo.value, "detail", excinfo.value))
 
 
@@ -252,7 +255,8 @@ def test_server_audit_stream_sse_frames(monkeypatch, tmp_path):
     )
     frames = [server._audit_line_to_frame(line) for line in chain.read_text().splitlines()]
     assert frames[0] is None  # meta skipped
-    assert frames[1].startswith("data: ") and "DENY" in frames[1]
+    assert frames[1].startswith("data: ")
+    assert "DENY" in frames[1]
     assert frames[2] is None  # garbage skipped
     with open(chain, encoding="utf-8") as fh:  # noqa: SIM115 - generator holds the handle by design
         follow = server._follow_audit_stream(fh)
