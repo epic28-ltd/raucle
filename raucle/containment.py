@@ -64,6 +64,16 @@ _REVOCATION_PATH = "containment"  # named slot: trace quarantine / lease
 #: v1 named slots kept in the CLI help; v0 only implements the policy
 
 
+def _write_private(path: Path, data: bytes) -> None:
+    """Create a key file owner-only, atomically: restrictive mode from the
+    first byte, never a permissive window between create and tighten."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
+
+
 class ContainmentError(Exception):
     """A named containment failure (CLI maps these to exit code 1)."""
 
@@ -122,17 +132,16 @@ class ContainmentManager:
             signer = VerdictSigner.from_pem(key_path.read_bytes())
         else:
             signer = VerdictSigner.generate()
-            key_path.write_bytes(
+            _write_private(
+                key_path,
                 signer._private_key.private_bytes(
                     encoding=_serialization().Encoding.PEM,
                     format=_serialization().PrivateFormat.PKCS8,
                     encryption_algorithm=_serialization().NoEncryption(),
-                )
+                ),
             )
-            os.chmod(key_path, 0o600)
         if not pub_path.exists():
-            pub_path.write_bytes(signer._public_pem)
-            os.chmod(pub_path, 0o644)
+            _write_private(pub_path, signer._public_pem)
         return signer
 
     # -- receipt stream ------------------------------------------------------
