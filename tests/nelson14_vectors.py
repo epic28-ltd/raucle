@@ -24,8 +24,7 @@ import raucle.nelson14 as nelson14
 from raucle.nelson14 import Nelson14Error
 
 REPO_ROOT = Path(nelson14.__file__).resolve().parent.parent
-CORPUS_PATH = (REPO_ROOT / "docs" / "spec" / "nelson14-delegation-gate" / "v1"
-               / "test-vectors.json")
+CORPUS_PATH = REPO_ROOT / "docs" / "spec" / "nelson14-delegation-gate" / "v1" / "test-vectors.json"
 
 
 # ---------------------------------------------------------------------------
@@ -35,12 +34,13 @@ CORPUS_PATH = (REPO_ROOT / "docs" / "spec" / "nelson14-delegation-gate" / "v1"
 
 def make_key():
     priv = ec.generate_private_key(ec.SECP256R1())
-    priv_pem = priv.private_bytes(serialization.Encoding.PEM,
-                                  serialization.PrivateFormat.PKCS8,
-                                  serialization.NoEncryption())
+    priv_pem = priv.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+    )
     nums = priv.public_key().public_numbers()
     jwk = {
-        "kty": "EC", "crv": "P-256",
+        "kty": "EC",
+        "crv": "P-256",
         "x": nelson14._b64u(nums.x.to_bytes(32, "big")),
         "y": nelson14._b64u(nums.y.to_bytes(32, "big")),
     }
@@ -57,8 +57,7 @@ def root_body(jwk, **overrides):
         "issuedAt": "2026-11-06T09:00:00.000Z",
         "scope": "Read calendar events and draft daily summaries",
         "boundaries": "Never send email; never touch payment systems",
-        "timeWindow": {"start": "2026-11-06T00:00:00.000Z",
-                       "end": "2026-11-07T00:00:00.000Z"},
+        "timeWindow": {"start": "2026-11-06T00:00:00.000Z", "end": "2026-11-07T00:00:00.000Z"},
         "operatorInstructions": instructions_text(),
         "instructionsHash": hashlib.sha256(
             nelson14.normalise_instructions(instructions_text()).encode("utf-8")
@@ -150,17 +149,23 @@ def build_pair(*, child_scope=None, revoke_parent=False, require_registry_on_roo
     # the orchestrator is the holder of the parent delegation.
     orch = nelson14.sign_orchestrator_binding(parent_id, child_id, child_pem)
     bundle = {
-        "parent_pem": parent_pem, "parent": parent,
-        "parent_compact": parent_compact, "parent_id": parent_id,
-        "child_pem": child_pem, "child": child,
-        "child_compact": child_compact, "child_id": child_id,
+        "parent_pem": parent_pem,
+        "parent": parent,
+        "parent_compact": parent_compact,
+        "parent_id": parent_id,
+        "child_pem": child_pem,
+        "child": child,
+        "child_compact": child_compact,
+        "child_id": child_id,
         "orch": orch,
     }
     bundle["keymap"] = {parent_id: parent_jwk, child_id: child_jwk}
     bundle["registry"] = RecordingRegistry()
     if revoke_parent:
         bundle["registry"].revoked[parent_id] = {
-            "reason": "key compromise", "revokedAt": 1730000000001}
+            "reason": "key compromise",
+            "revokedAt": 1730000000001,
+        }
     return bundle
 
 
@@ -196,8 +201,12 @@ def test_vector_valid_receipt_verifies():
     pem, jwk = make_key()
     compact = signed_body(root_body(jwk), pem)
     verdict = nelson14.verify(
-        compact, key_for=lambda c: jwk, parent_lookup=lambda p: None,
-        registry=NullRegistry(), consumption_store=MemoryStore())
+        compact,
+        key_for=lambda c: jwk,
+        parent_lookup=lambda p: None,
+        registry=NullRegistry(),
+        consumption_store=MemoryStore(),
+    )
     assert verdict.receipt_id == receipt_id(compact)
     assert verdict.consume_key is None
 
@@ -219,8 +228,11 @@ def test_vector_typ_must_be_drp_receipt():
 
 
 def _compact_input(header, body):
-    return (nelson14._b64u(json.dumps(header).encode("ascii")) + "."
-            + nelson14._b64u(nelson14.canonicalise_body(body).encode("utf-8")))
+    return (
+        nelson14._b64u(json.dumps(header).encode("ascii"))
+        + "."
+        + nelson14._b64u(nelson14.canonicalise_body(body).encode("utf-8"))
+    )
 
 
 def test_vector_alg_none_prohibited():
@@ -244,6 +256,7 @@ def test_vector_alg_not_in_profile_rejected():
 
 def test_vector_der_signature_rejected():
     from cryptography.hazmat.primitives import hashes
+
     _, jwk = make_key()
     body = root_body(jwk)
     header = {"alg": "ES256", "typ": "drp-receipt", "kid": "k"}
@@ -278,8 +291,11 @@ def test_vector_non_canonical_payload_rejected():
     # insertion-order serialization signed with the real key is still invalid
     header = {"alg": "ES256", "typ": "drp-receipt", "kid": "k"}
     rogue = json.dumps(body, sort_keys=False, separators=(",", ":"))
-    input_ = (nelson14._b64u(json.dumps(header).encode("ascii")) + "."
-              + nelson14._b64u(rogue.encode("utf-8")))
+    input_ = (
+        nelson14._b64u(json.dumps(header).encode("ascii"))
+        + "."
+        + nelson14._b64u(rogue.encode("utf-8"))
+    )
     compact = input_ + "." + nelson14._es256_sign(pem, input_.encode("ascii"))
     expect_error(lambda: nelson14.verify_jws(compact, jwk), "NON_CANONICAL_PAYLOAD")
 
@@ -296,8 +312,12 @@ def test_vector_detached_not_accepted_this_profile_pins_compact():
 def test_vector_undefined_header_parameter_rejected():
     pem, jwk = make_key()
     body = root_body(jwk)
-    header = {"alg": "ES256", "typ": "drp-receipt", "kid": "k",
-              "jku": "https://attacker.invalid/jwks"}
+    header = {
+        "alg": "ES256",
+        "typ": "drp-receipt",
+        "kid": "k",
+        "jku": "https://attacker.invalid/jwks",
+    }
     input_ = _compact_input(header, body)
     compact = input_ + "." + nelson14._es256_sign(pem, input_.encode("ascii"))
     expect_error(lambda: nelson14.verify_jws(compact, jwk), "BAD_HEADER")
@@ -343,8 +363,7 @@ def test_vector_missing_required_field_rejected():
 def test_vector_instructions_hash_mismatch():
     pem, jwk = make_key()
     body = root_body(jwk, operatorInstructions="   Whispered   contrary, instructions. ")
-    expect_error(lambda: nelson14.issue_receipt(body, pem, kid="k"),
-                 "INSTRUCTIONS_HASH_MISMATCH")
+    expect_error(lambda: nelson14.issue_receipt(body, pem, kid="k"), "INSTRUCTIONS_HASH_MISMATCH")
 
 
 def test_vector_instruction_normalisation_is_lossy_by_design():
@@ -365,8 +384,12 @@ def test_vector_valid_chain_verifies_with_all_checks():
     bundle = build_pair(child_scope=_CHILD_SCOPE)
     verdict = walk_child(bundle)
     assert verdict.receipt_id == bundle["child_id"]
-    for check in ("attenuation", "orchestrator_binding", "window_containment",
-                  "cascade_revocation"):
+    for check in (
+        "attenuation",
+        "orchestrator_binding",
+        "window_containment",
+        "cascade_revocation",
+    ):
         assert any(check in c for c in verdict.checks), verdict.checks
 
 
@@ -377,53 +400,71 @@ def test_vector_scope_widened_rejected():
     child["scopeSchema"] = {
         "allowedActions": _PARENT_SCOPE["allowedActions"]
         + [{"operation": "send", "resource": "email/*"}],
-        "deniedActions": list(_PARENT_SCOPE["deniedActions"])}
+        "deniedActions": list(_PARENT_SCOPE["deniedActions"]),
+    }
     expect_error(lambda: nelson14.check_attenuation(parent, child), "SCOPE_WIDENED")
 
 
 def test_vector_equal_scope_rejected_delegation_must_narrow():
     _, jwk = make_key()
     parent = root_body(jwk, scopeSchema=_PARENT_SCOPE)
-    expect_error(lambda: nelson14.check_attenuation(parent, dict(parent)),
-                 "NARROWING_REQUIRED")
+    expect_error(lambda: nelson14.check_attenuation(parent, dict(parent)), "NARROWING_REQUIRED")
 
 
 def test_vector_literal_wildcard_is_not_expanded():
     """§8.5 note: read::calendar/events is NOT covered by read::calendar/*."""
     _, jwk = make_key()
-    parent = root_body(jwk, scopeSchema={
-        "allowedActions": [{"operation": "read", "resource": "calendar/*"}],
-        "version": "1.0"})
+    parent = root_body(
+        jwk,
+        scopeSchema={
+            "allowedActions": [{"operation": "read", "resource": "calendar/*"}],
+            "version": "1.0",
+        },
+    )
     child = dict(parent)
     child["scopeSchema"] = {
         "allowedActions": [{"operation": "read", "resource": "calendar/events"}],
-        "version": "1.0"}
+        "version": "1.0",
+    }
     expect_error(lambda: nelson14.check_attenuation(parent, child), "SCOPE_WIDENED")
 
 
 def test_vector_dropped_denial_rejected_child_may_only_add():
     _, jwk = make_key()
-    parent = root_body(jwk, scopeSchema={
-        "allowedActions": _CHILD_SCOPE["allowedActions"],
-        "deniedActions": [{"operation": "send", "resource": "email/*"},
-                          {"operation": "post", "resource": "social/*"}]})
+    parent = root_body(
+        jwk,
+        scopeSchema={
+            "allowedActions": _CHILD_SCOPE["allowedActions"],
+            "deniedActions": [
+                {"operation": "send", "resource": "email/*"},
+                {"operation": "post", "resource": "social/*"},
+            ],
+        },
+    )
     child = dict(parent)
     child["scopeSchema"] = {
         "allowedActions": _CHILD_SCOPE["allowedActions"],
-        "deniedActions": [{"operation": "send", "resource": "email/*"}]}
-    expect_error(lambda: nelson14.check_attenuation(parent, child),
-                 "DENIED_ACTION_DROPPED")
+        "deniedActions": [{"operation": "send", "resource": "email/*"}],
+    }
+    expect_error(lambda: nelson14.check_attenuation(parent, child), "DENIED_ACTION_DROPPED")
 
 
 def test_vector_child_may_add_denials():
     _, jwk = make_key()
-    parent = root_body(jwk, scopeSchema={
-        "allowedActions": [{"operation": "read", "resource": "calendar/*"},
-                           {"operation": "read", "resource": "files/*"}]})
+    parent = root_body(
+        jwk,
+        scopeSchema={
+            "allowedActions": [
+                {"operation": "read", "resource": "calendar/*"},
+                {"operation": "read", "resource": "files/*"},
+            ]
+        },
+    )
     child = dict(parent)
     child["scopeSchema"] = {
         "allowedActions": [{"operation": "read", "resource": "calendar/*"}],
-        "deniedActions": [{"operation": "send", "resource": "email/*"}]}
+        "deniedActions": [{"operation": "send", "resource": "email/*"}],
+    }
     nelson14.check_attenuation(parent, child)
 
 
@@ -447,45 +488,56 @@ def test_vector_window_containment_enforced():
     _, jwk = make_key()
     parent = root_body(jwk)
     child = dict(parent)
-    child["timeWindow"] = {"start": "2026-11-05T00:00:00.000Z",
-                           "end": "2026-11-07T00:00:00.000Z"}
-    expect_error(lambda: nelson14._child_window_in_parent(child, parent),
-                 "WINDOW_NOT_CONTAINED")
+    child["timeWindow"] = {"start": "2026-11-05T00:00:00.000Z", "end": "2026-11-07T00:00:00.000Z"}
+    expect_error(lambda: nelson14._child_window_in_parent(child, parent), "WINDOW_NOT_CONTAINED")
 
 
 def test_vector_unknown_parent_fails_closed():
     bundle = build_pair(child_scope=_CHILD_SCOPE)
     expect_error(
         lambda: nelson14.verify(
-            bundle["child_compact"], key_for=lambda c: bundle["keymap"][receipt_id(c)],
-            parent_lookup=lambda pid: None, registry=NullRegistry(),
+            bundle["child_compact"],
+            key_for=lambda c: bundle["keymap"][receipt_id(c)],
+            parent_lookup=lambda pid: None,
+            registry=NullRegistry(),
             consumption_store=MemoryStore(),
-            attachments={bundle["child_id"]: bundle["orch"]}),
-        "UNKNOWN_PARENT")
+            attachments={bundle["child_id"]: bundle["orch"]},
+        ),
+        "UNKNOWN_PARENT",
+    )
 
 
 def test_vector_missing_orchestrator_binding_fails_closed():
     bundle = build_pair(child_scope=_CHILD_SCOPE)
     expect_error(
         lambda: nelson14.verify(
-            bundle["child_compact"], key_for=lambda c: bundle["keymap"][receipt_id(c)],
+            bundle["child_compact"],
+            key_for=lambda c: bundle["keymap"][receipt_id(c)],
             parent_lookup=lambda pid: bundle["parent_compact"],
-            registry=NullRegistry(), consumption_store=MemoryStore(),
-            attachments=None),
-        "ORCHESTRATOR_BINDING_MISSING")
+            registry=NullRegistry(),
+            consumption_store=MemoryStore(),
+            attachments=None,
+        ),
+        "ORCHESTRATOR_BINDING_MISSING",
+    )
 
 
 def test_vector_orchestrator_binding_wrong_pair_rejected():
     bundle = build_pair(child_scope=_CHILD_SCOPE)
     rogue = nelson14.sign_orchestrator_binding(
-        bundle["parent_id"] + "x", bundle["child_id"], bundle["parent_pem"])
+        bundle["parent_id"] + "x", bundle["child_id"], bundle["parent_pem"]
+    )
     expect_error(
         lambda: nelson14.verify(
-            bundle["child_compact"], key_for=lambda c: bundle["keymap"][receipt_id(c)],
+            bundle["child_compact"],
+            key_for=lambda c: bundle["keymap"][receipt_id(c)],
             parent_lookup=lambda pid: bundle["parent_compact"],
-            registry=NullRegistry(), consumption_store=MemoryStore(),
-            attachments={bundle["child_id"]: rogue}),
-        "ORCHESTRATOR_BINDING_MISMATCH")
+            registry=NullRegistry(),
+            consumption_store=MemoryStore(),
+            attachments={bundle["child_id"]: rogue},
+        ),
+        "ORCHESTRATOR_BINDING_MISMATCH",
+    )
 
 
 def test_vector_orchestrator_key_must_be_the_sub_receipt_signer():
@@ -495,12 +547,12 @@ def test_vector_orchestrator_key_must_be_the_sub_receipt_signer():
     body = root_body(sub_jwk, parentReceiptId="0" * 64)
     compact = signed_body(body, sub_pem)
     parsed = nelson14.verify_jws(compact, sub_jwk)
-    rogue_binding = nelson14.sign_orchestrator_binding(
-        "0" * 64, receipt_id(compact), rogue_pem)
-    expect_error(lambda: nelson14.verify_orchestrator_binding(
-        rogue_binding, parsed, receipt_id(compact)), "SIGNATURE_INVALID")
-    good_binding = nelson14.sign_orchestrator_binding(
-        "0" * 64, receipt_id(compact), sub_pem)
+    rogue_binding = nelson14.sign_orchestrator_binding("0" * 64, receipt_id(compact), rogue_pem)
+    expect_error(
+        lambda: nelson14.verify_orchestrator_binding(rogue_binding, parsed, receipt_id(compact)),
+        "SIGNATURE_INVALID",
+    )
+    good_binding = nelson14.sign_orchestrator_binding("0" * 64, receipt_id(compact), sub_pem)
     nelson14.verify_orchestrator_binding(good_binding, parsed, receipt_id(compact))
 
 
@@ -518,7 +570,9 @@ def test_vector_cascade_revocation_denies_descendants():
 def test_vector_leaf_revocation_reported_at_leaf():
     bundle = build_pair(child_scope=_CHILD_SCOPE)
     bundle["registry"].revoked[bundle["child_id"]] = {
-        "reason": "misuse", "revokedAt": 1730000000002}
+        "reason": "misuse",
+        "revokedAt": 1730000000002,
+    }
     expect_error(lambda: walk_child(bundle), "RECEIPT_REVOKED")
 
 
@@ -535,32 +589,42 @@ def test_vector_offline_with_revocation_required_fails_closed():
     pem, jwk = make_key()
     compact = signed_body(root_body(jwk, revocationRequired=True), pem)
     expect_error(
-        lambda: nelson14.verify(compact, key_for=lambda c: jwk,
-                                parent_lookup=lambda p: None, registry=None,
-                                consumption_store=MemoryStore()),
-        "REVOCATION_CHECK_REQUIRED")
+        lambda: nelson14.verify(
+            compact,
+            key_for=lambda c: jwk,
+            parent_lookup=lambda p: None,
+            registry=None,
+            consumption_store=MemoryStore(),
+        ),
+        "REVOCATION_CHECK_REQUIRED",
+    )
 
 
 def test_vector_offline_ancestor_revocation_required_fails_closed():
     """§9.4: an ancestor carrying the flag denies the whole subtree offline."""
     bundle = build_pair(child_scope=_CHILD_SCOPE, require_registry_on_root=True)
-    expect_error(lambda: walk_child(bundle, registry=None),
-                 "ANCESTOR_REVOCATION_CHECK_REQUIRED")
+    expect_error(lambda: walk_child(bundle, registry=None), "ANCESTOR_REVOCATION_CHECK_REQUIRED")
 
 
 def test_vector_registry_reached_but_receipt_not_checked_fails_closed():
     """§9.4: 'unknown' is never 'not revoked' when the flag demands a check."""
+
     class NoCheckRegistry:
         def check(self, receipt_id):
             return {"revoked": False, "checked": False}
+
     pem, jwk = make_key()
     compact = signed_body(root_body(jwk, revocationRequired=True), pem)
     expect_error(
-        lambda: nelson14.verify(compact, key_for=lambda c: jwk,
-                                parent_lookup=lambda p: None,
-                                registry=NoCheckRegistry(),
-                                consumption_store=MemoryStore()),
-        "REVOCATION_CHECK_REQUIRED")
+        lambda: nelson14.verify(
+            compact,
+            key_for=lambda c: jwk,
+            parent_lookup=lambda p: None,
+            registry=NoCheckRegistry(),
+            consumption_store=MemoryStore(),
+        ),
+        "REVOCATION_CHECK_REQUIRED",
+    )
 
 
 def test_vector_one_time_use_requires_durable_store():
@@ -568,26 +632,40 @@ def test_vector_one_time_use_requires_durable_store():
     pem, jwk = make_key()
     compact = signed_body(root_body(jwk, oneTimeUse=True), pem)
     expect_error(
-        lambda: nelson14.verify(compact, key_for=lambda c: jwk,
-                                parent_lookup=lambda p: None, registry=NullRegistry(),
-                                consumption_store=None),
-        "CONSUMPTION_STORE_REQUIRED")
+        lambda: nelson14.verify(
+            compact,
+            key_for=lambda c: jwk,
+            parent_lookup=lambda p: None,
+            registry=NullRegistry(),
+            consumption_store=None,
+        ),
+        "CONSUMPTION_STORE_REQUIRED",
+    )
 
 
 def test_vector_replay_after_consume_denied():
     pem, jwk = make_key()
     compact = signed_body(root_body(jwk, oneTimeUse=True), pem)
     store = MemoryStore()
-    v = nelson14.verify(compact, key_for=lambda c: jwk,
-                        parent_lookup=lambda p: None, registry=NullRegistry(),
-                        consumption_store=store)
+    v = nelson14.verify(
+        compact,
+        key_for=lambda c: jwk,
+        parent_lookup=lambda p: None,
+        registry=NullRegistry(),
+        consumption_store=store,
+    )
     assert v.consume_key == receipt_id(compact)
     store.consume(v.consume_key)
     expect_error(
-        lambda: nelson14.verify(compact, key_for=lambda c: jwk,
-                                parent_lookup=lambda p: None, registry=NullRegistry(),
-                                consumption_store=store),
-        "RECEIPT_ALREADY_CONSUMED")
+        lambda: nelson14.verify(
+            compact,
+            key_for=lambda c: jwk,
+            parent_lookup=lambda p: None,
+            registry=NullRegistry(),
+            consumption_store=store,
+        ),
+        "RECEIPT_ALREADY_CONSUMED",
+    )
 
 
 def test_vector_nonce_scopes_the_consumption_key():
@@ -597,8 +675,7 @@ def test_vector_nonce_scopes_the_consumption_key():
     compact_b = signed_body(root_body(jwk, oneTimeUse=True, nonce="n2"), pem)
     rid_a, rid_b = receipt_id(compact_a), receipt_id(compact_b)
     assert rid_a != rid_b  # distinct artifacts; nonce check verified via consume_key
-    assert nelson14.consume_key(root_body(jwk, oneTimeUse=True, nonce="n1"), rid_a) \
-        == f"{rid_a}:n1"
+    assert nelson14.consume_key(root_body(jwk, oneTimeUse=True, nonce="n1"), rid_a) == f"{rid_a}:n1"
     assert nelson14.consume_key(root_body(jwk, oneTimeUse=True), rid_a) == rid_a
 
 
@@ -608,10 +685,15 @@ def test_vector_denied_receipt_never_burns_a_consumption_slot():
     compact = signed_body(root_body(jwk, oneTimeUse=True, revocationRequired=True), pem)
     store = MemoryStore()
     expect_error(
-        lambda: nelson14.verify(compact, key_for=lambda c: jwk,
-                                parent_lookup=lambda p: None, registry=None,
-                                consumption_store=store),
-        "REVOCATION_CHECK_REQUIRED")
+        lambda: nelson14.verify(
+            compact,
+            key_for=lambda c: jwk,
+            parent_lookup=lambda p: None,
+            registry=None,
+            consumption_store=store,
+        ),
+        "REVOCATION_CHECK_REQUIRED",
+    )
     assert store.slots == set()  # the slot was not burned
 
 
@@ -633,55 +715,72 @@ def test_vector_depth_limit_enforced():
     for depth in range(1, 3):
         # §4.4: binding signer = the sub-receipt's own signerPublicKey holder
         bindings[ids[depth]] = nelson14.sign_orchestrator_binding(
-            ids[depth - 1], ids[depth], pems[depth])
+            ids[depth - 1], ids[depth], pems[depth]
+        )
     keys = {}
     for depth in range(3):
         nums = serialization.load_pem_private_key(pems[depth], password=None)
         pub = nums.public_key().public_numbers()
-        keys[ids[depth]] = {"kty": "EC", "crv": "P-256",
-                            "x": nelson14._b64u(pub.x.to_bytes(32, "big")),
-                            "y": nelson14._b64u(pub.y.to_bytes(32, "big"))}
+        keys[ids[depth]] = {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": nelson14._b64u(pub.x.to_bytes(32, "big")),
+            "y": nelson14._b64u(pub.y.to_bytes(32, "big")),
+        }
+
     # each body must carry the signer's own JWK — re-issue child bodies with it
     def verify_at(depth):
         if depth == 0:
             return nelson14.verify(
-                compacts[0], key_for=lambda c: keys[ids[0]],
-                parent_lookup=lambda p: None, registry=NullRegistry(),
-                consumption_store=MemoryStore())
+                compacts[0],
+                key_for=lambda c: keys[ids[0]],
+                parent_lookup=lambda p: None,
+                registry=NullRegistry(),
+                consumption_store=MemoryStore(),
+            )
         return nelson14.verify(
-            compacts[depth], key_for=lambda c: keys[receipt_id(c)],
+            compacts[depth],
+            key_for=lambda c: keys[receipt_id(c)],
             parent_lookup=lambda pid: compacts[ids.index(pid)] if pid in ids else None,
-            registry=NullRegistry(), consumption_store=MemoryStore(),
-            attachments=dict(bindings))
+            registry=NullRegistry(),
+            consumption_store=MemoryStore(),
+            attachments=dict(bindings),
+        )
+
     verdict_1 = verify_at(1)
     assert verdict_1.receipt_id == ids[1]
     # third level would make the walked depth reach the maximum (§8.6)
     pem3, jwk3 = make_key()
-    body3 = root_body(jwk3,
-                      parentReceiptId=ids[2],
-                      revocationRequired=False)
+    body3 = root_body(jwk3, parentReceiptId=ids[2], revocationRequired=False)
     compact3 = nelson14.issue_receipt(body3, pem3, kid="d3")
     ids3 = receipt_id(compact3)
-    keymap3 = {**keys, ids3: {"kty": "EC", "crv": "P-256",
-                              "x": _pub_jwk(pem3)["x"], "y": _pub_jwk(pem3)["y"]}}
-    bindings3 = {**bindings, ids3: nelson14.sign_orchestrator_binding(
-        ids[2], ids3, pem3)}
+    keymap3 = {
+        **keys,
+        ids3: {"kty": "EC", "crv": "P-256", "x": _pub_jwk(pem3)["x"], "y": _pub_jwk(pem3)["y"]},
+    }
+    bindings3 = {**bindings, ids3: nelson14.sign_orchestrator_binding(ids[2], ids3, pem3)}
     expect_error(
         lambda: nelson14.verify(
-            compact3, key_for=lambda c: keymap3[receipt_id(c)],
-            parent_lookup={ids[0]: compacts[0], ids[1]: compacts[1],
-                           ids[2]: compacts[2]}.get,
-            registry=NullRegistry(), consumption_store=MemoryStore(),
-            attachments=bindings3),
-        "CHAIN_DEPTH_EXCEEDED")
+            compact3,
+            key_for=lambda c: keymap3[receipt_id(c)],
+            parent_lookup={ids[0]: compacts[0], ids[1]: compacts[1], ids[2]: compacts[2]}.get,
+            registry=NullRegistry(),
+            consumption_store=MemoryStore(),
+            attachments=bindings3,
+        ),
+        "CHAIN_DEPTH_EXCEEDED",
+    )
 
 
 def _pub_jwk(priv_pem):
     priv = serialization.load_pem_private_key(priv_pem, password=None)
     pub = priv.public_key().public_numbers()
-    return {"kty": "EC", "crv": "P-256",
-            "x": nelson14._b64u(pub.x.to_bytes(32, "big")),
-            "y": nelson14._b64u(pub.y.to_bytes(32, "big"))}
+    return {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": nelson14._b64u(pub.x.to_bytes(32, "big")),
+        "y": nelson14._b64u(pub.y.to_bytes(32, "big")),
+    }
 
 
 def test_vector_verify_ignores_undelivered_binding_values():
@@ -701,17 +800,29 @@ def test_corpus_publishes_vectors_for_n10():
     corpus = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
     assert corpus["meta"]["profile"] == "python"
     assert corpus["meta"]["draft"] == "draft-nelson-agent-delegation-receipts-14"
-    assert corpus["meta"]["draft_cose_profile"] == \
-        nelson14.COSE_PROFILE_STATUS == "UNIMPLEMENTED-PH"
+    assert (
+        corpus["meta"]["draft_cose_profile"] == nelson14.COSE_PROFILE_STATUS == "UNIMPLEMENTED-PH"
+    )
     classes = {v["class"] for v in corpus["vectors"]}
-    for required in ("valid", "unknown_body_field", "alg_prohibited",
-                     "der_signature", "non_canonical_payload",
-                     "instructions_hash_mismatch", "scope_widened",
-                     "narrowing_required", "denied_action_dropped",
-                     "schema_parity", "window_not_contained",
-                     "chain_depth", "cascade_revocation",
-                     "revocation_required", "consumption",
-                     "replay_after_consume", "consumption_not_burned_on_deny"):
+    for required in (
+        "valid",
+        "unknown_body_field",
+        "alg_prohibited",
+        "der_signature",
+        "non_canonical_payload",
+        "instructions_hash_mismatch",
+        "scope_widened",
+        "narrowing_required",
+        "denied_action_dropped",
+        "schema_parity",
+        "window_not_contained",
+        "chain_depth",
+        "cascade_revocation",
+        "revocation_required",
+        "consumption",
+        "replay_after_consume",
+        "consumption_not_burned_on_deny",
+    ):
         assert required in classes, f"corpus missing vector class {required}"
 
 

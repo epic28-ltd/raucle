@@ -139,10 +139,14 @@ def canonicalise_body(obj: Any) -> str:
     if isinstance(obj, list):
         return "[" + ",".join(canonicalise_body(v) for v in obj) + "]"
     if isinstance(obj, dict):
-        return "{" + ",".join(
-            f"{json.dumps(k, ensure_ascii=False)}:{canonicalise_body(v)}"
-            for k, v in reorder_keys_utf16(obj).items()
-        ) + "}"
+        return (
+            "{"
+            + ",".join(
+                f"{json.dumps(k, ensure_ascii=False)}:{canonicalise_body(v)}"
+                for k, v in reorder_keys_utf16(obj).items()
+            )
+            + "}"
+        )
     raise Nelson14Error("UNSUPPORTED_VALUE_TYPE", type(obj).__name__)
 
 
@@ -151,23 +155,48 @@ def canonicalise_body(obj: Any) -> str:
 # --------------------------------------------------------------------------
 
 _REQUIRED_FIELDS = (
-    "delegationId", "issuedAt", "scope", "boundaries", "timeWindow",
-    "operatorInstructions", "instructionsHash", "signerPublicKey",
+    "delegationId",
+    "issuedAt",
+    "scope",
+    "boundaries",
+    "timeWindow",
+    "operatorInstructions",
+    "instructionsHash",
+    "signerPublicKey",
 )
 _OPTIONAL_FIELDS = (
-    "agentId", "metadata", "toolSchemaHash", "trustedSources", "toolOutputHash",
-    "programHash", "revocationRequired", "oneTimeUse", "parentReceiptId",
-    "authorityStateCommitment", "reauthPolicy", "scopeSchema", "nonce",
+    "agentId",
+    "metadata",
+    "toolSchemaHash",
+    "trustedSources",
+    "toolOutputHash",
+    "programHash",
+    "revocationRequired",
+    "oneTimeUse",
+    "parentReceiptId",
+    "authorityStateCommitment",
+    "reauthPolicy",
+    "scopeSchema",
+    "nonce",
 )
 _STRING_FIELDS = (
-    "delegationId", "issuedAt", "scope", "boundaries", "agentId",
-    "toolSchemaHash", "toolOutputHash", "programHash", "authorityStateCommitment",
-    "parentReceiptId", "nonce", "instructionsHash", "operatorInstructions",
+    "delegationId",
+    "issuedAt",
+    "scope",
+    "boundaries",
+    "agentId",
+    "toolSchemaHash",
+    "toolOutputHash",
+    "programHash",
+    "authorityStateCommitment",
+    "parentReceiptId",
+    "nonce",
+    "instructionsHash",
+    "operatorInstructions",
 )
 _HEX64 = set("0123456789abcdef")
 _JWK_MEMBERS = {"kty", "crv", "x", "y"}
-_HEX64_FIELDS = ("toolSchemaHash", "toolOutputHash", "programHash",
-                 "authorityStateCommitment")
+_HEX64_FIELDS = ("toolSchemaHash", "toolOutputHash", "programHash", "authorityStateCommitment")
 
 
 def _is_hex64(v: Any, name: str) -> None:
@@ -195,17 +224,28 @@ def validate_body(body: Any) -> dict:
         if name in body and not isinstance(body[name], bool):
             raise Nelson14Error("BAD_FIELD_TYPE", name)
     tw = body["timeWindow"]
-    if not (isinstance(tw, dict) and isinstance(tw.get("start"), str)
-            and isinstance(tw.get("end"), str) and set(tw) == {"start", "end"}):
-        raise Nelson14Error("BAD_FIELD_TYPE",
-                            "timeWindow must be an object with exactly start and end")
+    if not (
+        isinstance(tw, dict)
+        and isinstance(tw.get("start"), str)
+        and isinstance(tw.get("end"), str)
+        and set(tw) == {"start", "end"}
+    ):
+        raise Nelson14Error(
+            "BAD_FIELD_TYPE", "timeWindow must be an object with exactly start and end"
+        )
     _is_hex64(body["instructionsHash"], "instructionsHash")
     jwk = body["signerPublicKey"]
-    if not (isinstance(jwk, dict) and jwk.get("kty") == "EC" and jwk.get("crv") == "P-256"
-            and isinstance(jwk.get("x"), str) and isinstance(jwk.get("y"), str)
-            and set(jwk) <= _JWK_MEMBERS):
-        raise Nelson14Error("BAD_FIELD_VALUE",
-                            "signerPublicKey must be an EC P-256 JWK with exactly kty/crv/x/y")
+    if not (
+        isinstance(jwk, dict)
+        and jwk.get("kty") == "EC"
+        and jwk.get("crv") == "P-256"
+        and isinstance(jwk.get("x"), str)
+        and isinstance(jwk.get("y"), str)
+        and set(jwk) <= _JWK_MEMBERS
+    ):
+        raise Nelson14Error(
+            "BAD_FIELD_VALUE", "signerPublicKey must be an EC P-256 JWK with exactly kty/crv/x/y"
+        )
     if "metadata" in body and not isinstance(body["metadata"], dict):
         raise Nelson14Error("BAD_FIELD_TYPE", "metadata must be an object (§4.1 extension point)")
     if "trustedSources" in body:
@@ -217,11 +257,15 @@ def validate_body(body: Any) -> dict:
         if not (isinstance(ss, dict) and isinstance(ss.get("allowedActions"), list)):
             raise Nelson14Error("BAD_FIELD_TYPE", "scopeSchema.allowedActions must be an array")
         for entry in ss.get("allowedActions", []) + ss.get("deniedActions", []):
-            if not (isinstance(entry, dict) and isinstance(entry.get("operation"), str)
-                    and isinstance(entry.get("resource"), str)):
-                raise Nelson14Error("BAD_FIELD_TYPE",
-                                    "allowedActions/deniedActions entry needs "
-                                    "operation and resource strings")
+            if not (
+                isinstance(entry, dict)
+                and isinstance(entry.get("operation"), str)
+                and isinstance(entry.get("resource"), str)
+            ):
+                raise Nelson14Error(
+                    "BAD_FIELD_TYPE",
+                    "allowedActions/deniedActions entry needs operation and resource strings",
+                )
     return body
 
 
@@ -252,8 +296,9 @@ def parse_jws(compact: str) -> tuple[dict, bytes, bytes]:
     """Decode a compact JWS into (protected header, payload, signature)."""
     parts = compact.split(".")
     if len(parts) != 3 or not all(parts):
-        raise Nelson14Error("BAD_JWS_FORMAT",
-                            "compact serialization must have exactly three non-empty segments")
+        raise Nelson14Error(
+            "BAD_JWS_FORMAT", "compact serialization must have exactly three non-empty segments"
+        )
     header = json.loads(_b64d(parts[0]))
     if not isinstance(header, dict):
         raise Nelson14Error("BAD_HEADER", "protected header must be an object")
@@ -292,8 +337,9 @@ def verify_jws(compact: str, jwk: dict) -> dict:
         raise Nelson14Error("BAD_PAYLOAD", f"payload is not JSON: {e}") from e
     validate_body(body)
     if canonicalise_body(body) != payload.decode("utf-8"):
-        raise Nelson14Error("NON_CANONICAL_PAYLOAD",
-                            "signing input must be the exact JCS form (§5)")
+        raise Nelson14Error(
+            "NON_CANONICAL_PAYLOAD", "signing input must be the exact JCS form (§5)"
+        )
     _es256_verify(jwk, _signing_input(compact), signature)
     return body
 
@@ -303,14 +349,16 @@ def _es256_verify(jwk: dict, signing_input: bytes, signature: bytes) -> None:
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+
     if len(signature) != 64:
         code = "DER_SIGNATURE_REJECTED" if _looks_der(signature) else "BAD_SIGNATURE_LENGTH"
         raise Nelson14Error(code, "P-256 JWS signatures are the raw R||S form (§6.3)")
     x = int.from_bytes(_b64d(jwk["x"]), "big")
     y = int.from_bytes(_b64d(jwk["y"]), "big")
     pub = ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1()).public_key()
-    der = encode_dss_signature(int.from_bytes(signature[:32], "big"),
-                               int.from_bytes(signature[32:], "big"))
+    der = encode_dss_signature(
+        int.from_bytes(signature[:32], "big"), int.from_bytes(signature[32:], "big")
+    )
     try:
         pub.verify(der, signing_input, ec.ECDSA(hashes.SHA256()))
     except InvalidSignature:
@@ -333,11 +381,13 @@ def jwk_to_pem(jwk: dict) -> bytes:
     """Serialise a P-256 JWK to PEM (for tests and deployments bridging raucle keys)."""
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ec
+
     x = int.from_bytes(_b64d(jwk["x"]), "big")
     y = int.from_bytes(_b64d(jwk["y"]), "big")
     pub = ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1()).public_key()
-    return pub.public_bytes(serialization.Encoding.PEM,
-                            serialization.PublicFormat.SubjectPublicKeyInfo)
+    return pub.public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
 
 
 # --------------------------------------------------------------------------
@@ -349,6 +399,7 @@ def _es256_sign(priv_pem: bytes, signing_input: bytes) -> str:
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
     key = serialization.load_pem_private_key(priv_pem, password=None)
     if not isinstance(key, ec.EllipticCurvePrivateKey) or key.curve.name != "secp256r1":
         raise ValueError("signature issuance in this profile is P-256 (ES256)")
@@ -375,8 +426,9 @@ canonicalise and sign, assemble the compact serialization — the receiptId
 def compact_from_body(body: dict, signer_priv_pem: bytes, *, kid: str) -> str:
     """Assemble the compact JWS for an already-validated body."""
     header = {"alg": "ES256", "typ": "drp-receipt", "kid": kid}
-    input_ = f"{_b64u(json.dumps(header).encode()):s}." \
-             f"{_b64u(canonicalise_body(body).encode('utf-8')):s}"
+    input_ = (
+        f"{_b64u(json.dumps(header).encode()):s}.{_b64u(canonicalise_body(body).encode('utf-8')):s}"
+    )
     return input_ + "." + _es256_sign(signer_priv_pem, input_.encode("ascii"))
 
 
@@ -390,8 +442,9 @@ def orchestrator_binding(parent_receipt_id: str, receipt_id: str) -> str:
     return f"orchestrator-delegation:{parent_receipt_id}:{receipt_id}"
 
 
-def sign_orchestrator_binding(parent_receipt_id: str, receipt_id: str,
-                              orchestrator_priv_pem: bytes) -> str:
+def sign_orchestrator_binding(
+    parent_receipt_id: str, receipt_id: str, orchestrator_priv_pem: bytes
+) -> str:
     """Produce the attached ``orchestratorSignature`` JWS for a sub-receipt.
 
     §8.7 step 4: the binding is signed only after the child receiptId exists;
@@ -403,8 +456,9 @@ def sign_orchestrator_binding(parent_receipt_id: str, receipt_id: str,
     return input_ + "." + _es256_sign(orchestrator_priv_pem, input_.encode("ascii"))
 
 
-def verify_orchestrator_binding(orchestrator_signature: str, sub_body: dict,
-                                receipt_id: str) -> None:
+def verify_orchestrator_binding(
+    orchestrator_signature: str, sub_body: dict, receipt_id: str
+) -> None:
     """§8.7/§4.4: the binding must verify against the SUB-receipt's key."""
     header, payload, signature = parse_jws(orchestrator_signature)
     if header.get("alg") != _ALG_REQUIRED or header.get("typ") != "drp-receipt":
@@ -412,8 +466,11 @@ def verify_orchestrator_binding(orchestrator_signature: str, sub_body: dict,
     expected = orchestrator_binding(sub_body.get("parentReceiptId", ""), receipt_id)
     if payload != expected.encode("utf-8"):
         raise Nelson14Error("ORCHESTRATOR_BINDING_MISMATCH")
-    _es256_verify(sub_body["signerPublicKey"],
-                  orchestrator_signature.rsplit(".", 1)[0].encode("ascii"), signature)
+    _es256_verify(
+        sub_body["signerPublicKey"],
+        orchestrator_signature.rsplit(".", 1)[0].encode("ascii"),
+        signature,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -437,23 +494,26 @@ def check_attenuation(parent: dict, child: dict, *, strict: bool = True) -> None
     ps = parent.get("scopeSchema")
     cs = child.get("scopeSchema")
     if (ps is None) != (cs is None):
-        raise Nelson14Error("SCHEMA_PARITY",
-                            "a sub-receipt carries scopeSchema only when the parent does (§8.7)")
+        raise Nelson14Error(
+            "SCHEMA_PARITY", "a sub-receipt carries scopeSchema only when the parent does (§8.7)"
+        )
     if ps is None:
         return  # §8.4: text scope is advisory only; nothing machine-checked
     parent_keys = {_scope_key(e) for e in ps["allowedActions"]}
     child_keys = {_scope_key(e) for e in cs["allowedActions"]}
     # §8.5 rule 3 first: a child MUST NOT drop any parent denial
-    dropped = {_scope_key(e) for e in ps.get("deniedActions", [])} - \
-        {_scope_key(e) for e in cs.get("deniedActions", [])}
+    dropped = {_scope_key(e) for e in ps.get("deniedActions", [])} - {
+        _scope_key(e) for e in cs.get("deniedActions", [])
+    }
     if dropped:
         raise Nelson14Error("DENIED_ACTION_DROPPED", ",".join(sorted(dropped)))
     widened = child_keys - parent_keys
     if widened:
         raise Nelson14Error("SCOPE_WIDENED", ",".join(sorted(widened)))
     if strict and len(child_keys) >= len(parent_keys):
-        raise Nelson14Error("NARROWING_REQUIRED",
-                            "delegation MUST narrow: equal scope is rejected (§8.5 rule 2)")
+        raise Nelson14Error(
+            "NARROWING_REQUIRED", "delegation MUST narrow: equal scope is rejected (§8.5 rule 2)"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -482,10 +542,13 @@ def consume_key(receipt: dict, receipt_id: str) -> str:
 
 
 def _child_window_in_parent(child: dict, parent: dict) -> None:
-    if not (parent["timeWindow"]["start"] <= child["timeWindow"]["start"]
-            and parent["timeWindow"]["end"] >= child["timeWindow"]["end"]):
-        raise Nelson14Error("WINDOW_NOT_CONTAINED",
-                            "child timeWindow must be inside the parent window (§4.2)")
+    if not (
+        parent["timeWindow"]["start"] <= child["timeWindow"]["start"]
+        and parent["timeWindow"]["end"] >= child["timeWindow"]["end"]
+    ):
+        raise Nelson14Error(
+            "WINDOW_NOT_CONTAINED", "child timeWindow must be inside the parent window (§4.2)"
+        )
 
 
 @dataclass
@@ -537,9 +600,10 @@ def verify(
         if parent_id is None:
             break
         if depth + 1 >= max_depth:
-            raise Nelson14Error("CHAIN_DEPTH_EXCEEDED",
-                                f"walked depth {depth + 1} has reached the configured maximum "
-                                f"{max_depth} (§8.6)")
+            raise Nelson14Error(
+                "CHAIN_DEPTH_EXCEEDED",
+                f"walked depth {depth + 1} has reached the configured maximum {max_depth} (§8.6)",
+            )
         parent_compact = parent_lookup(parent_id)
         if parent_compact is None:
             raise Nelson14Error("UNKNOWN_PARENT", parent_id)
@@ -549,12 +613,12 @@ def verify(
         checks.append("window_containment")
         check_attenuation(parent, body)
         checks.append("attenuation")
-        orch = ((attachments or {}).get(current_id)
-                or (attachments or {}).get(parent_id))
+        orch = (attachments or {}).get(current_id) or (attachments or {}).get(parent_id)
         if orch is None:
-            raise Nelson14Error("ORCHESTRATOR_BINDING_MISSING",
-                                "the binding is an attached value; sub-receipt checks "
-                                "fail closed without it")
+            raise Nelson14Error(
+                "ORCHESTRATOR_BINDING_MISSING",
+                "the binding is an attached value; sub-receipt checks fail closed without it",
+            )
         verify_orchestrator_binding(orch, body, current_id)
         checks.append("orchestrator_binding")
         current = parent_compact
@@ -567,22 +631,26 @@ def verify(
         if registry is None:
             if required:
                 raise Nelson14Error(
-                    "REVOCATION_CHECK_REQUIRED" if leaf
-                else "ANCESTOR_REVOCATION_CHECK_REQUIRED", rid)
+                    "REVOCATION_CHECK_REQUIRED" if leaf else "ANCESTOR_REVOCATION_CHECK_REQUIRED",
+                    rid,
+                )
             continue
         state = registry.check(rid)
         if state.get("revoked"):
             raise Nelson14Error("RECEIPT_REVOKED" if leaf else "ANCESTOR_REVOKED", rid)
         if required and not state.get("checked"):
             raise Nelson14Error(
-                "REVOCATION_CHECK_REQUIRED" if leaf else "ANCESTOR_REVOCATION_CHECK_REQUIRED", rid)
+                "REVOCATION_CHECK_REQUIRED" if leaf else "ANCESTOR_REVOCATION_CHECK_REQUIRED", rid
+            )
     checks.append("cascade_revocation")
     # §9.5 last of all — a denial for any other reason never burns a slot
     leaf_body, leaf_id = chain[0]
     if leaf_body.get("oneTimeUse"):
         if consumption_store is None:
-            raise Nelson14Error("CONSUMPTION_STORE_REQUIRED",
-                                "oneTimeUse requires a durable shared consumption store (§9.5)")
+            raise Nelson14Error(
+                "CONSUMPTION_STORE_REQUIRED",
+                "oneTimeUse requires a durable shared consumption store (§9.5)",
+            )
         key = consume_key(leaf_body, leaf_id)
         if consumption_store.was_consumed(key):
             raise Nelson14Error("RECEIPT_ALREADY_CONSUMED", key)
