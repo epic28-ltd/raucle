@@ -104,12 +104,10 @@ def _sink(tmp_path):
 
 def test_guard_tool_without_crewai_raises_runtime_error(monkeypatch, tmp_path, issued):
     _issuer, gate, _token = issued
-    crewai_mod._HAS_CREWAI = False
-    try:
-        with pytest.raises(RuntimeError, match="crewai"):
-            crewai_mod.guard_tool(_PayTool(), gate=gate, sink=_sink(tmp_path))
-    finally:
-        crewai_mod._HAS_CREWAI = True
+    monkeypatch.setattr(crewai_mod, "_HAS_CREWAI", False)
+    sink = _sink(tmp_path)
+    with pytest.raises(RuntimeError, match="crewai"):
+        crewai_mod.guard_tool(_PayTool(), gate=gate, sink=sink)
 
 
 def test_guarded_tool_allow_delegates_and_receipts(crewai_integration, tmp_path, issued):
@@ -127,7 +125,8 @@ def test_guarded_tool_allow_delegates_and_receipts(crewai_integration, tmp_path,
         events.append(rec.get("event", rec))
     receipts = [e for e in events if e.get("kind") == "capability_receipt"]
     assert len(receipts) == 1
-    assert receipts[0]["decision"] == "ALLOW" and receipts[0]["framework"] == "crewai"
+    assert receipts[0]["decision"] == "ALLOW"
+    assert receipts[0]["framework"] == "crewai"
 
 
 def test_guarded_tool_deny_blocks_the_tool_body(crewai_integration, tmp_path, issued):
@@ -157,7 +156,8 @@ def test_guard_tools_wraps_every_tool(crewai_integration, tmp_path, issued):
     mod.set_in_force_token(token)
     tools = [mod.guard_tool(_PayTool(), gate=gate, sink=_sink(tmp_path)) for _ in range(1)]
     wrapped = mod.guard_tools(tools, gate=gate, sink=_sink(tmp_path))
-    assert len(wrapped) == 1 and wrapped[0].name == "transfer_funds"
+    assert len(wrapped) == 1
+    assert wrapped[0].name == "transfer_funds"
 
 
 def test_guarded_tool_arun_falls_back_to_sync_impl(crewai_integration, tmp_path, issued):
@@ -276,7 +276,8 @@ def test_agt_backend_denies_out_of_scope_tool(agent_os_full, issued):
     decision = backend.evaluate(
         {"tool_name": "other_tool", "agent_id": "agent:pay", "arguments": {}}
     )
-    assert decision.allowed is False and "does not cover" in decision.reason
+    assert decision.allowed is False
+    assert "does not cover" in decision.reason
 
 
 def test_agt_backend_denies_constraint_violation(agent_os_full, issued):

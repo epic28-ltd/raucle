@@ -120,7 +120,8 @@ def test_admin_sweeps_operator_endpoints(stack):
 
     # siem config get + update
     r = client.get("/api/siem", headers=h)
-    assert r.status_code == 200 and r.json()["backend"] == "splunk"
+    assert r.status_code == 200
+    assert r.json()["backend"] == "splunk"
     r = client.put(
         "/api/siem",
         headers=h,
@@ -150,7 +151,8 @@ def test_admin_users_mfa_and_delete(stack):
         == 200
     )
     r = client.post("/api/users/op-2/mfa/setup", headers=h)
-    assert r.status_code == 200 and "secret" in r.json(), r.text
+    assert r.status_code == 200, r.text
+    assert "secret" in r.json(), r.text
     secret = r.json()["secret"]
     code2 = str(totp.TOTP(secret).now())
     r = client.post("/api/users/op-2/mfa/verify", headers=h, params={"code": code2})
@@ -159,7 +161,8 @@ def test_admin_users_mfa_and_delete(stack):
         client.post("/api/users/op-2/mfa/verify", headers=h, params={"code": ""}).status_code == 400
     )
     r = client.post("/api/users/op-2/mfa/disable", headers=h)
-    assert r.status_code == 200 and r.json()["mfa_enabled"] is False
+    assert r.status_code == 200
+    assert r.json()["mfa_enabled"] is False
     assert client.delete("/api/users/ghost", headers=h).status_code == 404
     assert client.delete("/api/users/op-2", headers=h).status_code == 200
 
@@ -238,7 +241,8 @@ def test_audit_log_file_persisted(tmp_path):
         trace_id="t",
     )
     entries = [json.loads(line) for line in log_file.read_text().splitlines() if line.strip()]
-    assert entries and entries[-1]["tool"]
+    assert entries
+    assert entries[-1]["tool"]
 
 
 def test_get_connections_lists_gate_traffic(tmp_path):
@@ -260,21 +264,25 @@ def test_get_connections_lists_gate_traffic(tmp_path):
         trace_id="t",
     )
     conns = gateway.get_connections(limit=10)
-    assert conns and conns[-1]["tool"] == "lookup_balance"
+    assert conns
+    assert conns[-1]["tool"] == "lookup_balance"
 
 
 def test_admin_live_pulse_on_admin_app(stack):
     client, _gateway, _key, _code = stack
     r = client.get("/api/live-pulse")
-    assert r.status_code == 200 and "totals" in r.json()
+    assert r.status_code == 200
+    assert "totals" in r.json()
 
 
 def test_admin_panel_pages_render(stack):
     client, _gateway, _key, _code = stack
     r = client.get("/")
-    assert r.status_code == 200 and "html" in r.text.lower()
+    assert r.status_code == 200
+    assert "html" in r.text.lower()
     r = client.get("/topology")
-    assert r.status_code == 200 and "html" in r.text.lower()
+    assert r.status_code == 200
+    assert "html" in r.text.lower()
 
 
 def test_gateway_app_health_and_gate_roundtrip(tmp_path):
@@ -294,4 +302,5 @@ def test_gateway_app_health_and_gate_roundtrip(tmp_path):
         "/gate",
         json={"tool": "lookup_balance", "args": {"account": "ACC-001"}, "agent_id": "agent:svc"},
     )
-    assert r.status_code == 200 and r.json()["decision"] == "allow"
+    assert r.status_code == 200
+    assert r.json()["decision"] == "allow"

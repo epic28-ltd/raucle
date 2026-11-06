@@ -267,7 +267,8 @@ class TestScopedHolds:
             VERDICT_HOLD,
             VERDICT_RESUME,
         ]
-        assert receipts[0] and receipts[1]
+        assert receipts[0]
+        assert receipts[1]
 
 
 def _read_receipts_of(path) -> list[dict]:
@@ -386,7 +387,9 @@ class TestHostilePaths:
         )
         assert rc == 0
         out = capsys.readouterr().out
-        assert "HELD" in out and "scope=global" in out and "drill" in out
+        assert "HELD" in out
+        assert "scope=global" in out
+        assert "drill" in out
         rc = cli_main(
             [
                 "containment",
