@@ -29,6 +29,16 @@ The generator pins the Ed25519 keypair (via fixed secret seed) and the wall-cloc
 | `proof_v1_01_proven.json` | Trivially-PROVEN proof: the schema's enum already excludes the forbidden value. |
 | `proof_v1_02_refuted.json` | REFUTED proof with concrete counterexample showing a schema-valid argument that violates a stricter policy. |
 
+## `dataflow:v1` vectors
+
+| File | What it verifies |
+|---|---|
+| `dataflow_v1_01_taint_denies_destination.json` | The data-flow acceptance scenario: call 1's output carries taint `untrusted_user` in the same task chain; call 2 targets destination class `payment:external` under `deny_from_chain_taint` — call 1 allows, call 2 denies with the named reason, and each call alone allows. |
+
+A conforming implementation replays the recorded chain state deterministically: the
+same (rule, prior outputs, destination class) triple always yields the same
+verdict, and unknown taint tags / unknown destination classes deny fail-closed.
+
 ## `gate-decision:v1` schema
 
 `gate_decision_v1_schema.json` — the field-shape reference. The reference implementation in `raucle/audit.py` emits events conforming to this shape; production deployments may add `x-`-prefixed extension fields without breaking the canonical-body hashing.

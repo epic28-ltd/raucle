@@ -33,6 +33,62 @@ _TIMEOUT_S = 15
 _EXIT = {"allow": 0, "deny": 1, "escalate": 2}
 
 
+def _retry_guidance(token: dict) -> dict | None:
+    """raucle/retry-guidance/v1, derived from the token's own constraints.
+
+    Mirrors raucle.integrations.retry_guidance (a deliberate stdlib copy:
+    the installed sandbox artifact cannot import raucle). Deterministic
+    from the whitelist/required/bounds constraints the gate enforced;
+    ``None`` - the key is simply never added - when nothing positive is
+    derivable (denylists, rate limits, expiry windows).
+    """
+    tool = token.get("tool")
+    if not isinstance(tool, str) or not tool:
+        return None
+    constraints = token.get("constraints")
+    if not isinstance(constraints, dict):
+        constraints = {}
+    criteria: dict = {}
+    allowed = constraints.get("allowed_values")
+    if isinstance(allowed, dict):
+        whitelists = {
+            str(f): list(v)
+            for f, v in allowed.items()
+            if isinstance(v, list) and v and all(isinstance(x, (str, int, bool)) for x in v)
+        }
+        if whitelists:
+            criteria["allowed_values"] = whitelists
+    required = constraints.get("required_present")
+    if isinstance(required, list) and required:
+        criteria["required_present"] = [str(f) for f in required]
+    bounds: dict = {}
+    for key, side in (("min_value", "min"), ("max_value", "max")):
+        for field, bound in (constraints.get(key) or {}).items():
+            if isinstance(bound, (int, float)) and not isinstance(bound, bool):
+                bounds.setdefault(str(field), {})[side] = bound
+    if bounds:
+        criteria["bounds"] = bounds
+    if not criteria:
+        return None
+    return {
+        "schema": "raucle/retry-guidance/v1",
+        "permitted_actions": [{"tool": tool, "criteria": criteria}],
+    }
+
+
+def _attach_guidance(body: dict, token: dict) -> dict:
+    """Additive on deny only: verdict fields pass through byte-identical,
+    allow/escalate responses are returned unchanged."""
+    if body.get("decision") != "deny":
+        return body
+    guidance = _retry_guidance(token)
+    if guidance is None:
+        return body
+    out = dict(body)
+    out["retry_guidance"] = guidance
+    return out
+
+
 def _fail_closed(message: str) -> int:
     print(json.dumps({"decision": "deny", "reason": "gate_unreachable", "detail": message}))
     print(message, file=sys.stderr)
@@ -91,7 +147,7 @@ def main() -> int:
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         return _fail_closed(f"gate unreachable: {exc}")
 
-    print(json.dumps(body))
+    print(json.dumps(_attach_guidance(body, json.loads(token))))
     return _EXIT.get(body.get("decision", ""), 3)
 
 

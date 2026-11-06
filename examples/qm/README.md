@@ -28,3 +28,14 @@ offline with the public verifier, in any of the five reference languages.
 `tests/test_qm_live_integration.py` in the raucle repository proves this
 fragment end to end against a real gateway socket: mint root, attenuate,
 allow, attributable deny, fail-closed, offline chain verification.
+
+## Deny retry guidance (raucle/retry-guidance/v1)
+
+Deny responses the gate tool prints carry an additive `retry_guidance`
+field when the token's own whitelist/required/bounds constraints
+deterministically describe what WOULD have been allowed
+(`docs/spec/retry-guidance-v1.md`). The verdict is untouched: the exit
+code stays 1, the decision stays `deny`; when nothing deterministic can
+be derived the key is absent, never null. An agent retry loop reads the
+shape, retries within the declared alternatives, and the retry is
+allowed by the same authority — no policy loosening at any point.

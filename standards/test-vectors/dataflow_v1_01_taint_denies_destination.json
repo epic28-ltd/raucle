@@ -1,0 +1,47 @@
+{
+  "spec": "raucle-dataflow/v1",
+  "name": "taint T in chain denies destination class D",
+  "rule": {
+    "tool": "transfer_money",
+    "agent_id": "agent:pay",
+    "deny_from_chain_taint": {
+      "taint_tags": [
+        "untrusted_user"
+      ],
+      "destination_classes": [
+        "payment:external"
+      ]
+    }
+  },
+  "calls": [
+    {
+      "tag": "call1",
+      "tool": "fetch_document",
+      "destination_class": "payment:internal",
+      "output": {
+        "tool": "fetch_document",
+        "taint_tags": [
+          "untrusted_user"
+        ]
+      }
+    },
+    {
+      "tag": "call2",
+      "tool": "transfer_money",
+      "destination_class": "payment:external",
+      "output": null
+    }
+  ],
+  "decisions": [
+    {
+      "tag": "call1",
+      "decision": "allow",
+      "reason": ""
+    },
+    {
+      "tag": "call2",
+      "decision": "deny",
+      "reason": "data-flow rule: taint tag 'untrusted_user' in chain state with destination class 'payment:external' in denied destination classes (fail-closed deny)"
+    }
+  ]
+}

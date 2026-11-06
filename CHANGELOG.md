@@ -47,6 +47,29 @@
   re-labelled outcome fails, mixed bilateral+legacy chains verify, the
   outcome vocabulary is closed and the block's object shape is validated.
 
+### Added - O1: data-flow-aware policy rule kinds
+- New rule-level policy key `deny_from_chain_taint` (`raucle/PolicyRule`,
+  spec `docs/spec/dataflow/v1.md`): deny any call whose destination class is
+  D whenever a prior tool output in the SAME task/delegation chain carries a
+  listed taint tag - riding the existing provenance taint propagation.
+  Deterministic per-call semantics: the rule is evaluated against the
+  REPLAYED chain state at each gate decision (no side-channel state).
+- Destination-class allow-listing via `allow_destination_classes` (fail-closed:
+  any class not listed denies while chain taint applies). The kind only ever
+  denies - it composes with the existing constraint machinery without
+  changing its per-call semantics and never widens authority; the deny fires
+  before escalation so an approval path cannot bypass it.
+- Fail-closed with named reasons: unknown (empty) destination class and
+  unknown/malformed taint tags in the chain state deny; a rule with the kind
+  but no replayable chain state (missing trace_id) denies.
+- Gateway surface: `RaucleGateway.record_chain_output()` records tool
+  outputs + their taint tags per trace; `check_tool_call` takes
+  `destination_class`; the HTTP `/gate` request accepts `destination_class`.
+  Corpus vector `standards/test-vectors/dataflow_v1_01_taint_denies_destination.json`
+  pins the backlog acceptance: two-call chain, call 1 output taint T, call 2
+  target D under 'T denies D' - call 2 denies while each call alone is
+  allowed. tests/test_dataflow_rules.py (19 tests).
+
 ### Added - I1: counterfactual proofs (the z3 leg)
 - `raucle counterfactual policy` attaches a proof to every prevented
   action. PROVEN: the alternative policy's constraints exclude the whole

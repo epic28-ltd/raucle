@@ -711,6 +711,39 @@ class GateReceiptContext:
     acting_for: str = ""
 
 
+class ChainTaintState:
+    """Replayable per-chain record of tool outputs with their taint tags.
+
+    Data-flow enforcement (EPIC O1) needs, at each gate decision, the
+    taint tags every PRIOR tool output in the SAME task/delegation chain
+    carries. Outputs are recorded explicitly (by the harness/gateway
+    integration once a gated call's output is known) under the chain's
+    ``trace_id``, in call order. The state changes only through
+    :meth:`record` and :meth:`clear`, so a gate decision replays the
+    same chain state deterministically - no side-channel input.
+    """
+
+    def __init__(self) -> None:
+        self._outputs: dict[str, list[dict[str, Any]]] = {}
+
+    def record(self, trace_id: str, tool: str, taint_tags: list[str]) -> None:
+        """Record one tool output (its tags) for chain *trace_id*."""
+        self._outputs.setdefault(trace_id, []).append(
+            {"tool": tool, "taint_tags": list(taint_tags or [])}
+        )
+
+    def snapshot(self, trace_id: str) -> list[dict[str, Any]]:
+        """Return a copy of the recorded outputs for *trace_id*, in order."""
+        return [dict(entry) for entry in self._outputs.get(trace_id, [])]
+
+    def clear(self, trace_id: str | None = None) -> None:
+        """Drop one chain's state, or all chains when *trace_id* is None."""
+        if trace_id is None:
+            self._outputs.clear()
+        else:
+            self._outputs.pop(trace_id, None)
+
+
 class RaucleGateway:
     """The gateway core: policy engine + gate + receipt store + stats.
 
@@ -733,6 +766,10 @@ class RaucleGateway:
         self._receipt_writer = None
         self._connection_log: list[dict[str, Any]] = []
         self._max_log_size = 500
+        # Data-flow chain state (EPIC O1): ordered tool outputs with their
+        # taint tags, per task/delegation chain (trace_id). Evaluated
+        # deterministically at each gate decision; see record_chain_output.
+        self._chain_state = ChainTaintState()
 
         # Gate authentication (A1). "off" preserves today's behaviour
         # exactly: declared agent_id is trusted, suitable only for
@@ -1274,6 +1311,45 @@ class RaucleGateway:
         result.pop("_authorization_hint", None)
         return result
 
+    def record_chain_output(self, trace_id: str, tool: str, taint_tags: list[str]) -> None:
+        """Record one tool OUTPUT for data-flow enforcement (EPIC O1).
+
+        Call this once a gated call's output is known, with the taint tags
+        that output carries. The tags are replayed deterministically at
+        every subsequent ``check_tool_call`` on the same ``trace_id`` to
+        evaluate ``deny_from_chain_taint`` policy rules. Unknown taint
+        values (non-string or empty) deny fail-closed at evaluation time.
+        """
+        self._chain_state.record(trace_id, tool, taint_tags)
+
+    def clear_chain_state(self, trace_id: str | None = None) -> None:
+        """Clear recorded chain outputs (one trace, or all when None)."""
+        self._chain_state.clear(trace_id)
+
+    def _evaluate_dataflow_rule(
+        self, matched_rule: Any, tool: str, trace_id: str, destination_class: str
+    ) -> str:
+        """Evaluate the matched rule's data-flow kind against the chain.
+
+        Returns the deny reason, or "" when the rule either has no
+        ``deny_from_chain_taint`` kind or does not cover the call.
+        Deterministic: reads :class:`ChainTaintState` only.
+        Fail-closed: a missing trace_id (no chain state to replay under
+        an active data-flow rule) denies with a named reason.
+        """
+        from raucle.policy import evaluate_chain_taint_deny
+
+        deny_kind = getattr(matched_rule, "deny_from_chain_taint", None)
+        if deny_kind is None:
+            return ""
+        if not trace_id:
+            return "data-flow rule: no chain state available (trace_id missing) - fail-closed deny"
+        return evaluate_chain_taint_deny(
+            deny_kind,
+            self._chain_state.snapshot(trace_id),
+            destination_class,
+        )
+
     def _find_rule(self, tool: str, source: str, destination: str) -> Any:
         """Find the first policy rule for *tool* matching source/destination."""
         for rule in self._policy_rules.get(tool, []):
@@ -1557,6 +1633,7 @@ class RaucleGateway:
         destination: str = "",
         trace_id: str = "",
         approval_id: str = "",
+        destination_class: str = "",
         _authorization_hint: dict[str, Any] | None = None,
         _token_decision: Any = None,
         _intent_hint: dict[str, Any] | None = None,
@@ -1626,6 +1703,13 @@ class RaucleGateway:
 
         token = self._tokens[tool]
         actual_agent_id = agent_id or matched_rule.agent_id
+        # Data-flow enforcement (EPIC O1): a policy rule with the
+        # deny_from_chain_taint kind is evaluated against the REPLAYED
+        # chain state for this trace_id - deterministic, no side-channel.
+        # Fail-closed: an unusable chain state (missing trace) denies too.
+        dataflow_reason = self._evaluate_dataflow_rule(
+            matched_rule, tool, trace_id, destination_class
+        )
         # Token TTL elapsed; re-mint under the matched rule (same issuer
         # key, same constraints) so short policy TTLs do not brick a
         # long-running gateway. Fail-closed if re-minting fails.
@@ -1635,6 +1719,12 @@ class RaucleGateway:
             logger.exception("Re-mint failed for %s", tool)
             return self._deny_result(result, "token expired and re-mint failed", start)
         self._bind_rule_metadata(result, matched_rule, tool)
+
+        # The data-flow deny fires before constraint evaluation: it only
+        # ever denies, and ESCALATE must not bypass it (never widens
+        # authority). The reason is named and cited by the receipt.
+        if dataflow_reason:
+            return self._deny_result(result, dataflow_reason, start)
 
         decision = self._gate.check(
             token,
