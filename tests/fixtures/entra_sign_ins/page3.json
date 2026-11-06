@@ -1,0 +1,33 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#auditLogs/signIns",
+  "value": [
+    {
+      "id": "entra-sin-0006",
+      "createdDateTime": "2026-11-06T09:15:42.000Z",
+      "userPrincipalName": null,
+      "userId": null,
+      "servicePrincipalName": null,
+      "servicePrincipalId": "sp-9",
+      "status": {
+        "errorCode": 50074,
+        "failureReason": "UserStrongAuthClientAuthNRequirement",
+        "detail": null
+      },
+      "clientAppUsed": "Browser"
+    },
+    {
+      "id": "entra-sin-0007",
+      "createdDateTime": "2026-11-06T09:15:49.000Z",
+      "userPrincipalName": null,
+      "userId": null,
+      "servicePrincipalName": "deploy-bot",
+      "servicePrincipalId": "sp-11",
+      "status": {
+        "errorCode": 0,
+        "failureReason": null,
+        "detail": null
+      },
+      "clientAppUsed": "None"
+    }
+  ]
+}

@@ -1,0 +1,342 @@
+{
+  "meta": {
+    "source": "entra_id",
+    "module": "raucle.connectors.entra",
+    "mapping_version": "p3b.v1",
+    "endpoint": "GET https://graph.microsoft.com/v1.0/auditLogs/signIns",
+    "note": "Deterministic mapping vectors pinning the Entra ID sign-in record -> raucle chain-event mapping against drift. Each vector publishes the raw Graph record, the expected chain event, its canonical UTF-8 serialisation (sort_keys, compact separators), and the sha256 over those bytes. A mapping change must advance this JSON deliberately; tests/test_connectors_entra.py reproduces every vector live and refuses silent divergence. Fixtures live in tests/fixtures/entra_sign_ins/.",
+    "action_derivation": "signin.success when status.errorCode == 0; signin.error.<code> otherwise; records without a status object keep action null. createdDateTime is copied verbatim.",
+    "actor_attribution": "known requires an evidenced principal name (userPrincipalName or servicePrincipalName); id included only when the record carries userId/servicePrincipalId. id-name-only records map to unknown id_without_identifier; no-principal records to missing_actor_identity."
+  },
+  "vectors": [
+    {
+      "id": "entra-sin-mapping-01",
+      "sign_in_id": "entra-sin-0001",
+      "input_sign_in": {
+        "id": "entra-sin-0001",
+        "createdDateTime": "2026-11-06T09:15:07.000Z",
+        "userPrincipalName": "ada@contoso.com",
+        "userId": "uid-1001",
+        "servicePrincipalName": null,
+        "servicePrincipalId": null,
+        "status": {
+          "errorCode": 0,
+          "failureReason": null,
+          "detail": null
+        },
+        "clientAppUsed": "Browser"
+      },
+      "expected_chain_event": {
+        "kind": "source_event",
+        "mapping_version": "p3b.v1",
+        "source": "entra_id",
+        "source_id": "entra-sin-0001",
+        "timestamp": "2026-11-06T09:15:07.000Z",
+        "action": "signin.success",
+        "actor": {
+          "status": "known",
+          "identity": "ada@contoso.com",
+          "type": "user",
+          "id": "uid-1001"
+        },
+        "raw": {
+          "id": "entra-sin-0001",
+          "createdDateTime": "2026-11-06T09:15:07.000Z",
+          "userPrincipalName": "ada@contoso.com",
+          "userId": "uid-1001",
+          "servicePrincipalName": null,
+          "servicePrincipalId": null,
+          "status": {
+            "errorCode": 0,
+            "failureReason": null,
+            "detail": null
+          },
+          "clientAppUsed": "Browser"
+        }
+      },
+      "expected_canonical_utf8": "{\"action\":\"signin.success\",\"actor\":{\"id\":\"uid-1001\",\"identity\":\"ada@contoso.com\",\"status\":\"known\",\"type\":\"user\"},\"kind\":\"source_event\",\"mapping_version\":\"p3b.v1\",\"raw\":{\"clientAppUsed\":\"Browser\",\"createdDateTime\":\"2026-11-06T09:15:07.000Z\",\"id\":\"entra-sin-0001\",\"servicePrincipalId\":null,\"servicePrincipalName\":null,\"status\":{\"detail\":null,\"errorCode\":0,\"failureReason\":null},\"userId\":\"uid-1001\",\"userPrincipalName\":\"ada@contoso.com\"},\"source\":\"entra_id\",\"source_id\":\"entra-sin-0001\",\"timestamp\":\"2026-11-06T09:15:07.000Z\"}",
+      "expected_vector_sha256": "874cb303962aff205e487daeb2bd2b3c33785c06e2b66b0d4d0fb3212026d202"
+    },
+    {
+      "id": "entra-sin-mapping-02",
+      "sign_in_id": "entra-sin-0002",
+      "input_sign_in": {
+        "id": "entra-sin-0002",
+        "createdDateTime": "2026-11-06T09:15:14.000Z",
+        "userPrincipalName": null,
+        "userId": null,
+        "servicePrincipalName": "backup-runner",
+        "servicePrincipalId": "sp-7",
+        "status": {
+          "errorCode": 0,
+          "failureReason": null,
+          "detail": null
+        },
+        "clientAppUsed": "None"
+      },
+      "expected_chain_event": {
+        "kind": "source_event",
+        "mapping_version": "p3b.v1",
+        "source": "entra_id",
+        "source_id": "entra-sin-0002",
+        "timestamp": "2026-11-06T09:15:14.000Z",
+        "action": "signin.success",
+        "actor": {
+          "status": "known",
+          "identity": "backup-runner",
+          "type": "servicePrincipal",
+          "id": "sp-7"
+        },
+        "raw": {
+          "id": "entra-sin-0002",
+          "createdDateTime": "2026-11-06T09:15:14.000Z",
+          "userPrincipalName": null,
+          "userId": null,
+          "servicePrincipalName": "backup-runner",
+          "servicePrincipalId": "sp-7",
+          "status": {
+            "errorCode": 0,
+            "failureReason": null,
+            "detail": null
+          },
+          "clientAppUsed": "None"
+        }
+      },
+      "expected_canonical_utf8": "{\"action\":\"signin.success\",\"actor\":{\"id\":\"sp-7\",\"identity\":\"backup-runner\",\"status\":\"known\",\"type\":\"servicePrincipal\"},\"kind\":\"source_event\",\"mapping_version\":\"p3b.v1\",\"raw\":{\"clientAppUsed\":\"None\",\"createdDateTime\":\"2026-11-06T09:15:14.000Z\",\"id\":\"entra-sin-0002\",\"servicePrincipalId\":\"sp-7\",\"servicePrincipalName\":\"backup-runner\",\"status\":{\"detail\":null,\"errorCode\":0,\"failureReason\":null},\"userId\":null,\"userPrincipalName\":null},\"source\":\"entra_id\",\"source_id\":\"entra-sin-0002\",\"timestamp\":\"2026-11-06T09:15:14.000Z\"}",
+      "expected_vector_sha256": "e9f7677f1f9827cf4bab2089578650f43b7f99c1f9210294af131fb5f23fafca"
+    },
+    {
+      "id": "entra-sin-mapping-03",
+      "sign_in_id": "entra-sin-0003",
+      "input_sign_in": {
+        "id": "entra-sin-0003",
+        "createdDateTime": "2026-11-06T09:15:21.000Z",
+        "userPrincipalName": "svc-archiver@contoso.com",
+        "userId": null,
+        "servicePrincipalName": null,
+        "servicePrincipalId": null,
+        "status": {
+          "errorCode": 0,
+          "failureReason": null,
+          "detail": null
+        },
+        "clientAppUsed": "Browser"
+      },
+      "expected_chain_event": {
+        "kind": "source_event",
+        "mapping_version": "p3b.v1",
+        "source": "entra_id",
+        "source_id": "entra-sin-0003",
+        "timestamp": "2026-11-06T09:15:21.000Z",
+        "action": "signin.success",
+        "actor": {
+          "status": "known",
+          "identity": "svc-archiver@contoso.com",
+          "type": "user"
+        },
+        "raw": {
+          "id": "entra-sin-0003",
+          "createdDateTime": "2026-11-06T09:15:21.000Z",
+          "userPrincipalName": "svc-archiver@contoso.com",
+          "userId": null,
+          "servicePrincipalName": null,
+          "servicePrincipalId": null,
+          "status": {
+            "errorCode": 0,
+            "failureReason": null,
+            "detail": null
+          },
+          "clientAppUsed": "Browser"
+        }
+      },
+      "expected_canonical_utf8": "{\"action\":\"signin.success\",\"actor\":{\"identity\":\"svc-archiver@contoso.com\",\"status\":\"known\",\"type\":\"user\"},\"kind\":\"source_event\",\"mapping_version\":\"p3b.v1\",\"raw\":{\"clientAppUsed\":\"Browser\",\"createdDateTime\":\"2026-11-06T09:15:21.000Z\",\"id\":\"entra-sin-0003\",\"servicePrincipalId\":null,\"servicePrincipalName\":null,\"status\":{\"detail\":null,\"errorCode\":0,\"failureReason\":null},\"userId\":null,\"userPrincipalName\":\"svc-archiver@contoso.com\"},\"source\":\"entra_id\",\"source_id\":\"entra-sin-0003\",\"timestamp\":\"2026-11-06T09:15:21.000Z\"}",
+      "expected_vector_sha256": "a2ac902bd5fc81fe881c90d39ca8507f204dd73acc58b42bfe61a14d439fb977"
+    },
+    {
+      "id": "entra-sin-mapping-04",
+      "sign_in_id": "entra-sin-0004",
+      "input_sign_in": {
+        "id": "entra-sin-0004",
+        "createdDateTime": "2026-11-06T09:15:28.000Z",
+        "userPrincipalName": null,
+        "userId": "uid-2002",
+        "servicePrincipalName": null,
+        "servicePrincipalId": null,
+        "status": {
+          "errorCode": 0,
+          "failureReason": null,
+          "detail": null
+        },
+        "clientAppUsed": "Browser"
+      },
+      "expected_chain_event": {
+        "kind": "source_event",
+        "mapping_version": "p3b.v1",
+        "source": "entra_id",
+        "source_id": "entra-sin-0004",
+        "timestamp": "2026-11-06T09:15:28.000Z",
+        "action": "signin.success",
+        "actor": {
+          "status": "unknown",
+          "reason": "id_without_identifier"
+        },
+        "raw": {
+          "id": "entra-sin-0004",
+          "createdDateTime": "2026-11-06T09:15:28.000Z",
+          "userPrincipalName": null,
+          "userId": "uid-2002",
+          "servicePrincipalName": null,
+          "servicePrincipalId": null,
+          "status": {
+            "errorCode": 0,
+            "failureReason": null,
+            "detail": null
+          },
+          "clientAppUsed": "Browser"
+        }
+      },
+      "expected_canonical_utf8": "{\"action\":\"signin.success\",\"actor\":{\"reason\":\"id_without_identifier\",\"status\":\"unknown\"},\"kind\":\"source_event\",\"mapping_version\":\"p3b.v1\",\"raw\":{\"clientAppUsed\":\"Browser\",\"createdDateTime\":\"2026-11-06T09:15:28.000Z\",\"id\":\"entra-sin-0004\",\"servicePrincipalId\":null,\"servicePrincipalName\":null,\"status\":{\"detail\":null,\"errorCode\":0,\"failureReason\":null},\"userId\":\"uid-2002\",\"userPrincipalName\":null},\"source\":\"entra_id\",\"source_id\":\"entra-sin-0004\",\"timestamp\":\"2026-11-06T09:15:28.000Z\"}",
+      "expected_vector_sha256": "56d3b3b78c11fdd3532809523f02653913f7fd6aec6409faf98e9748a9530a4c"
+    },
+    {
+      "id": "entra-sin-mapping-05",
+      "sign_in_id": "entra-sin-0005",
+      "input_sign_in": {
+        "id": "entra-sin-0005",
+        "createdDateTime": "2026-11-06T09:15:35.000Z",
+        "userPrincipalName": null,
+        "userId": null,
+        "servicePrincipalName": null,
+        "servicePrincipalId": null,
+        "status": {
+          "errorCode": 0,
+          "failureReason": null,
+          "detail": null
+        },
+        "clientAppUsed": "Browser"
+      },
+      "expected_chain_event": {
+        "kind": "source_event",
+        "mapping_version": "p3b.v1",
+        "source": "entra_id",
+        "source_id": "entra-sin-0005",
+        "timestamp": "2026-11-06T09:15:35.000Z",
+        "action": "signin.success",
+        "actor": {
+          "status": "unknown",
+          "reason": "missing_actor_identity"
+        },
+        "raw": {
+          "id": "entra-sin-0005",
+          "createdDateTime": "2026-11-06T09:15:35.000Z",
+          "userPrincipalName": null,
+          "userId": null,
+          "servicePrincipalName": null,
+          "servicePrincipalId": null,
+          "status": {
+            "errorCode": 0,
+            "failureReason": null,
+            "detail": null
+          },
+          "clientAppUsed": "Browser"
+        }
+      },
+      "expected_canonical_utf8": "{\"action\":\"signin.success\",\"actor\":{\"reason\":\"missing_actor_identity\",\"status\":\"unknown\"},\"kind\":\"source_event\",\"mapping_version\":\"p3b.v1\",\"raw\":{\"clientAppUsed\":\"Browser\",\"createdDateTime\":\"2026-11-06T09:15:35.000Z\",\"id\":\"entra-sin-0005\",\"servicePrincipalId\":null,\"servicePrincipalName\":null,\"status\":{\"detail\":null,\"errorCode\":0,\"failureReason\":null},\"userId\":null,\"userPrincipalName\":null},\"source\":\"entra_id\",\"source_id\":\"entra-sin-0005\",\"timestamp\":\"2026-11-06T09:15:35.000Z\"}",
+      "expected_vector_sha256": "1e1d2e2db9a46af1f27170283115efb97d2deb28d08c7a2788125646964570e9"
+    },
+    {
+      "id": "entra-sin-mapping-06",
+      "sign_in_id": "entra-sin-0006",
+      "input_sign_in": {
+        "id": "entra-sin-0006",
+        "createdDateTime": "2026-11-06T09:15:42.000Z",
+        "userPrincipalName": null,
+        "userId": null,
+        "servicePrincipalName": null,
+        "servicePrincipalId": "sp-9",
+        "status": {
+          "errorCode": 50074,
+          "failureReason": "UserStrongAuthClientAuthNRequirement",
+          "detail": null
+        },
+        "clientAppUsed": "Browser"
+      },
+      "expected_chain_event": {
+        "kind": "source_event",
+        "mapping_version": "p3b.v1",
+        "source": "entra_id",
+        "source_id": "entra-sin-0006",
+        "timestamp": "2026-11-06T09:15:42.000Z",
+        "action": "signin.error.50074",
+        "actor": {
+          "status": "unknown",
+          "reason": "id_without_identifier"
+        },
+        "raw": {
+          "id": "entra-sin-0006",
+          "createdDateTime": "2026-11-06T09:15:42.000Z",
+          "userPrincipalName": null,
+          "userId": null,
+          "servicePrincipalName": null,
+          "servicePrincipalId": "sp-9",
+          "status": {
+            "errorCode": 50074,
+            "failureReason": "UserStrongAuthClientAuthNRequirement",
+            "detail": null
+          },
+          "clientAppUsed": "Browser"
+        }
+      },
+      "expected_canonical_utf8": "{\"action\":\"signin.error.50074\",\"actor\":{\"reason\":\"id_without_identifier\",\"status\":\"unknown\"},\"kind\":\"source_event\",\"mapping_version\":\"p3b.v1\",\"raw\":{\"clientAppUsed\":\"Browser\",\"createdDateTime\":\"2026-11-06T09:15:42.000Z\",\"id\":\"entra-sin-0006\",\"servicePrincipalId\":\"sp-9\",\"servicePrincipalName\":null,\"status\":{\"detail\":null,\"errorCode\":50074,\"failureReason\":\"UserStrongAuthClientAuthNRequirement\"},\"userId\":null,\"userPrincipalName\":null},\"source\":\"entra_id\",\"source_id\":\"entra-sin-0006\",\"timestamp\":\"2026-11-06T09:15:42.000Z\"}",
+      "expected_vector_sha256": "e5fe26aa2b74ce997e61129bcabcd984df50ddefb0e1ffff5e2d09eedc68e7f9"
+    },
+    {
+      "id": "entra-sin-mapping-07",
+      "sign_in_id": "entra-sin-0007",
+      "input_sign_in": {
+        "id": "entra-sin-0007",
+        "createdDateTime": "2026-11-06T09:15:49.000Z",
+        "userPrincipalName": null,
+        "userId": null,
+        "servicePrincipalName": "deploy-bot",
+        "servicePrincipalId": "sp-11",
+        "status": {
+          "errorCode": 0,
+          "failureReason": null,
+          "detail": null
+        },
+        "clientAppUsed": "None"
+      },
+      "expected_chain_event": {
+        "kind": "source_event",
+        "mapping_version": "p3b.v1",
+        "source": "entra_id",
+        "source_id": "entra-sin-0007",
+        "timestamp": "2026-11-06T09:15:49.000Z",
+        "action": "signin.success",
+        "actor": {
+          "status": "known",
+          "identity": "deploy-bot",
+          "type": "servicePrincipal",
+          "id": "sp-11"
+        },
+        "raw": {
+          "id": "entra-sin-0007",
+          "createdDateTime": "2026-11-06T09:15:49.000Z",
+          "userPrincipalName": null,
+          "userId": null,
+          "servicePrincipalName": "deploy-bot",
+          "servicePrincipalId": "sp-11",
+          "status": {
+            "errorCode": 0,
+            "failureReason": null,
+            "detail": null
+          },
+          "clientAppUsed": "None"
+        }
+      },
+      "expected_canonical_utf8": "{\"action\":\"signin.success\",\"actor\":{\"id\":\"sp-11\",\"identity\":\"deploy-bot\",\"status\":\"known\",\"type\":\"servicePrincipal\"},\"kind\":\"source_event\",\"mapping_version\":\"p3b.v1\",\"raw\":{\"clientAppUsed\":\"None\",\"createdDateTime\":\"2026-11-06T09:15:49.000Z\",\"id\":\"entra-sin-0007\",\"servicePrincipalId\":\"sp-11\",\"servicePrincipalName\":\"deploy-bot\",\"status\":{\"detail\":null,\"errorCode\":0,\"failureReason\":null},\"userId\":null,\"userPrincipalName\":null},\"source\":\"entra_id\",\"source_id\":\"entra-sin-0007\",\"timestamp\":\"2026-11-06T09:15:49.000Z\"}",
+      "expected_vector_sha256": "6ef6cf757b4a96bc632807dfec35958a709d1a8abb856838b62c5953431b5ddf"
+    }
+  ]
+}
