@@ -62,8 +62,10 @@ async def test_missing_sdk_raises_for_input(monkeypatch):
     import raucle.integrations.openai_agents as mod
 
     monkeypatch.setattr(mod, "_HAS_OPENAI_AGENTS", False)
+    factory = mod.input_guardrail
+    scanner = Scanner()
     with pytest.raises(RuntimeError, match="openai-agents"):
-        input_guardrail(Scanner())
+        factory(scanner)
 
 
 @pytest.mark.asyncio
@@ -71,8 +73,10 @@ async def test_missing_sdk_raises_for_output(monkeypatch):
     import raucle.integrations.openai_agents as mod
 
     monkeypatch.setattr(mod, "_HAS_OPENAI_AGENTS", False)
+    factory = mod.output_guardrail
+    scanner = Scanner()
     with pytest.raises(RuntimeError, match="openai-agents"):
-        output_guardrail(Scanner())
+        factory(scanner)
 
 
 def test_has_openai_agents():
