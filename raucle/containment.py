@@ -1060,9 +1060,7 @@ class ContainmentManager:
                 "pending_hold": {
                     "scope": state.get("scope", ""),
                     "scope_id": state.get("scope_id", ""),
-                    "min_approvers": int(
-                        state.get("min_approvers", self.config.min_approvers)
-                    ),
+                    "min_approvers": int(state.get("min_approvers", self.config.min_approvers)),
                     "approvers": list(state.get("approvers", [])),
                     "receipt_id": state.get("pending_receipt_id", ""),
                     "requested_at": state.get("requested_at", ""),

@@ -240,7 +240,11 @@ def test_m2_abort_is_receipted_and_clears(tmp_path: Path):
     assert _verdicts(tmp_path)
     assert _verdicts(tmp_path)[-1] == VERDICT_HOLD_ABORT
     assert policy.read_bytes() == before
-    assert manager.status() == {"held": False}
+    assert manager.status() == {
+        "held": False,
+        "quarantined_traces": [],
+        "suspended_leases": [],
+    }
     # a cleared pending hold can be re-held and approved afresh
     manager.hold(scope="global")
     manager.approve_hold(approver="alice")
