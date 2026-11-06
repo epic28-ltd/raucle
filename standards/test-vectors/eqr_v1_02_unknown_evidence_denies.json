@@ -1,0 +1,18 @@
+{
+  "spec": "raucle-eqr/v1",
+  "draft": "draft-watts-agent-evidence-boundary",
+  "name": "unknown_evidence_denies",
+  "eqr": {
+    "evidence_kind": "kyc_check",
+    "max_age_seconds": 60,
+    "min_source_class": "third-party",
+    "confidence_floor": 70,
+    "on_degraded": "deny"
+  },
+  "now": 1900000000,
+  "evidence": [],
+  "expected": {
+    "verdict": "unknown",
+    "reason": "no evidence of kind 'kyc_check' recorded (fail-closed)"
+  }
+}
