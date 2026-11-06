@@ -37,6 +37,7 @@ Quick start
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from typing import Any
@@ -50,7 +51,8 @@ try:  # pragma: no cover - import-time check
     from agents import GuardrailFunctionOutput, InputGuardrail, OutputGuardrail
 
     _HAS_OPENAI_AGENTS = True
-except ImportError:
+except ImportError:  # narrowed by _require_sdk() at call time
+    GuardrailFunctionOutput = InputGuardrail = OutputGuardrail = None  # type: ignore[assignment]
     _HAS_OPENAI_AGENTS = False
 
 __all__ = ["has_openai_agents", "input_guardrail", "output_guardrail"]
@@ -83,7 +85,7 @@ def _receipt(
     }
 
 
-def _scan_and_receipt(
+async def _scan_and_receipt(
     scanner: Scanner,
     sink: HashChainSink | NullSink,
     text: str,
@@ -94,20 +96,21 @@ def _scan_and_receipt(
     """Scan ``text`` (raising through on scanner failure = fail-closed),
     append a receipt, and return the (ScanResult, tripwire) pair."""
     try:
-        result = scanner.scan(text)
+        result = await asyncio.to_thread(scanner.scan, text)
     except Exception:
         # Fail-closed: an unusable guardrail must never pass traffic.
         logger.exception("raucle OpenAI-Agents guardrail scan failed (%s)", stage)
         raise
     try:
-        sink.append(
+        await asyncio.to_thread(
+            sink.append,
             _receipt(
                 stage=stage,
                 text_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
                 verdict=result.verdict,
                 action=result.action,
                 agent_id=agent_id,
-            )
+            ),
         )
     except Exception:
         logger.exception("failed to append raucle guardrail receipt")
@@ -141,10 +144,11 @@ def input_guardrail(
     on any scan action of ``BLOCK``.
     """
     _require_sdk()
+    assert GuardrailFunctionOutput is not None and InputGuardrail is not None  # _require_sdk
     audit_sink: HashChainSink | NullSink = sink if sink is not None else NullSink()
 
     async def _guardrail(ctx: Any, agent: Any, prompt: Any) -> Any:
-        result, tripwire = _scan_and_receipt(
+        result, tripwire = await _scan_and_receipt(
             scanner,
             audit_sink,
             _extract_text(prompt),
@@ -161,11 +165,9 @@ def input_guardrail(
         )
 
     _guardrail.guardrail_name = name
-    if _HAS_OPENAI_AGENTS:
-        # Wrap in the SDK's own guardrail object so the returned value can
-        # go straight into ``Agent(input_guardrails=[...])``.
-        return InputGuardrail(guardrail_function=_guardrail, name=name, run_in_parallel=False)
-    return _guardrail
+    # The SDK is guaranteed importable here (_require_sdk raised otherwise),
+    # so the plain-callable fallback branch is dead code and is not kept.
+    return InputGuardrail(guardrail_function=_guardrail, name=name, run_in_parallel=False)
 
 
 def output_guardrail(
@@ -180,10 +182,11 @@ def output_guardrail(
     output-side detection over the agent's final output object.
     """
     _require_sdk()
+    assert GuardrailFunctionOutput is not None and OutputGuardrail is not None  # _require_sdk
     audit_sink: HashChainSink | NullSink = sink if sink is not None else NullSink()
 
     async def _guardrail(ctx: Any, agent: Any, output: Any) -> Any:
-        result, tripwire = _scan_and_receipt(
+        result, tripwire = await _scan_and_receipt(
             scanner,
             audit_sink,
             _extract_text(output),
@@ -200,6 +203,4 @@ def output_guardrail(
         )
 
     _guardrail.guardrail_name = name
-    if _HAS_OPENAI_AGENTS:
-        return OutputGuardrail(guardrail_function=_guardrail, name=name)
-    return _guardrail
+    return OutputGuardrail(guardrail_function=_guardrail, name=name)

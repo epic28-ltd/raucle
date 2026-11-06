@@ -25,7 +25,7 @@ from agents import (  # noqa: E402
     Runner,
 )
 
-from raucle.audit import AuditVerifier, Ed25519Signer, HashChainSink  # noqa: E402
+from raucle.audit import AuditVerifier, Ed25519Signer, HashChainSink, NullSink  # noqa: E402
 from raucle.integrations.openai_agents import (  # noqa: E402
     has_openai_agents,
     input_guardrail,
@@ -57,13 +57,20 @@ def ctx() -> RunContextWrapper[None]:
 
 
 @pytest.mark.asyncio
-async def test_missing_sdk_raises(monkeypatch):
+async def test_missing_sdk_raises_for_input(monkeypatch):
     # The wiring must fail loudly, not silently no-op, without the SDK.
     import raucle.integrations.openai_agents as mod
 
     monkeypatch.setattr(mod, "_HAS_OPENAI_AGENTS", False)
     with pytest.raises(RuntimeError, match="openai-agents"):
         input_guardrail(Scanner())
+
+
+@pytest.mark.asyncio
+async def test_missing_sdk_raises_for_output(monkeypatch):
+    import raucle.integrations.openai_agents as mod
+
+    monkeypatch.setattr(mod, "_HAS_OPENAI_AGENTS", False)
     with pytest.raises(RuntimeError, match="openai-agents"):
         output_guardrail(Scanner())
 
@@ -169,3 +176,58 @@ async def test_sdk_end_to_end_tripwire_via_runner(scanner):
     agent = Agent(name="raucle-e2e", input_guardrails=[guard])
     with pytest.raises(InputGuardrailTripwireTriggered):
         await Runner.run(agent, MALICIOUS)
+
+
+@pytest.mark.asyncio
+async def test_default_sink_is_null_when_none_supplied(scanner, agent, ctx):
+    # No sink supplied -> NullSink: receipt emission is skipped silently,
+    # while scanning still enforces the wire (NullSink records nothing).
+    guard = input_guardrail(scanner)
+    out = await guard.guardrail_function(ctx, agent, MALICIOUS)
+    assert out.tripwire_triggered is True
+
+
+@pytest.mark.asyncio
+async def test_scanner_exception_fails_closed(scanner, agent, ctx):
+    # A scanner that raises must not let the payload through: the exception
+    # propagates (the SDK trips closed), never an allow verdict.
+    class _ExplodingScanner:
+        def scan(self, _text: str):
+            raise RuntimeError("scanner broken")
+
+    guard = input_guardrail(_ExplodingScanner(), sink=NullSink())  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="scanner broken"):
+        await guard.guardrail_function(ctx, agent, CLEAN)
+
+
+@pytest.mark.asyncio
+async def test_sink_failure_fails_closed(scanner, agent, ctx):
+    # A receipt-append failure must also fail closed — an unevidenced
+    # scan is not a passing scan.
+    class _BrokenSink:
+        def append(self, _receipt):  # noqa: ANN001
+            raise OSError("audit sink down")
+
+    guard = input_guardrail(scanner, sink=_BrokenSink())  # type: ignore[arg-type]
+    with pytest.raises(OSError, match="audit sink down"):
+        await guard.guardrail_function(ctx, agent, CLEAN)
+
+
+@pytest.mark.asyncio
+async def test_extract_text_fallback_attributes(scanner, agent, ctx):
+    # Non-'output' attribute objects: 'message', then 'text', then str().
+    guard = output_guardrail(scanner)
+
+    class _Msg:
+        message = MALICIOUS
+
+    class _Txt:
+        text = MALICIOUS
+
+    class _Neither:
+        pass
+
+    _Neither.__str__ = lambda self: MALICIOUS  # type: ignore[method-assign]
+    for obj in (_Msg(), _Txt(), _Neither()):
+        out = await guard.guardrail_function(ctx, agent, obj)
+        assert out.tripwire_triggered is True
