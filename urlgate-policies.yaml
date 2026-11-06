@@ -1,0 +1,15 @@
+version: 1
+issuer: raucle-urlgate
+policies:
+  - tool: llm.chat
+    agent_id: agent:urlgate-service
+    ttl_seconds: 3600
+    constraints: {}
+  - tool: llm.embedding
+    agent_id: agent:urlgate-service
+    ttl_seconds: 3600
+    constraints: {}
+  - tool: llm.moderate
+    agent_id: agent:urlgate-service
+    ttl_seconds: 3600
+    constraints: {}

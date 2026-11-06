@@ -200,6 +200,48 @@ def _build_parser() -> argparse.ArgumentParser:
         help=_HELP_RULES_DIR,
     )
 
+    # -- urlgate (EPIC O3: URL-switch gate proxy for SDK clients) -----------
+    urlgate_p = subparsers.add_parser(
+        "urlgate",
+        help="Transparent URL-switch gate proxy: receipt-minting drop-in",
+    )
+    urlgate_p.add_argument(
+        "--listen",
+        default="127.0.0.1:8095",
+        help="host:port to bind (default: 127.0.0.1:8095; loopback-only posture)",
+    )
+    urlgate_p.add_argument(
+        "--upstream",
+        default=_urlgate_default_upstream(),
+        help="Upstream base URL the proxy forwards to (default: https://api.openai.com)",
+    )
+    urlgate_p.add_argument(
+        "--policy",
+        default="",
+        help="Gate policy YAML used by the service-scoped gate "
+        "(default: urlgate-policies.yaml, created with an allow policy if absent)",
+    )
+    urlgate_p.add_argument(
+        "--receipts",
+        default="urlgate-receipts.jsonl",
+        help="Receipt JSONL file (default: urlgate-receipts.jsonl)",
+    )
+    urlgate_p.add_argument(
+        "--receipts-dir",
+        default="",
+        help="Segmented receipt store directory (overrides --receipts when set)",
+    )
+    urlgate_p.add_argument(
+        "--tool",
+        default="llm.chat",
+        help="Gate tool name for gated chat traffic (default: llm.chat)",
+    )
+    urlgate_p.add_argument(
+        "--agent-id",
+        default="agent:urlgate-service",
+        help="Service agent id used at the gate (default: agent:urlgate-service)",
+    )
+
     # -- rules --------------------------------------------------------------
     rules_p = subparsers.add_parser("rules", help="Manage detection rules")
     rules_sub = rules_p.add_subparsers(dest="rules_command")
@@ -1039,6 +1081,43 @@ def _cmd_agents_list(args: argparse.Namespace) -> int:
     # Listing is informational on every path: a non-empty AND an empty
     # store are both healthy states, so the exit code is 0 either way.
     return 0
+
+
+def _urlgate_default_upstream() -> str:
+    """Lazy import keeps module import side-effect free."""
+    try:
+        from raucle.urlgate import DEFAULT_UPSTREAM
+
+        return DEFAULT_UPSTREAM
+    except Exception:
+        return "https://api.openai.com"
+
+
+def _cmd_urlgate(args: argparse.Namespace) -> int:
+    """EPIC O3: run the URL-switch gate proxy (stdlib http.server; no
+    mandatory third-party dependency)."""
+    import os
+
+    cwd = Path.cwd()
+
+    def _abs(p: str) -> str:
+        return p if not p or os.path.isabs(p) else str(cwd / p)
+
+    from raucle.urlgate import UrlGateConfig
+
+    cfg = UrlGateConfig(
+        upstream=args.upstream,
+        listen_host=args.listen.rsplit(":", 1)[0],
+        listen_port=int(args.listen.rsplit(":", 1)[1]),
+        policy_file=_abs(args.policy),
+        receipt_store=_abs(args.receipts),
+        receipt_store_dir=_abs(args.receipts_dir),
+        tool=args.tool,
+        agent_id=args.agent_id,
+    )
+    import raucle.urlgate as _ug
+
+    return _ug.serve(cfg)
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
@@ -2872,6 +2951,7 @@ def _dispatch(argv: list[str] | None = None) -> int:
         "scan-pdf": _cmd_scan_pdf,
         "scrub": _cmd_scrub,
         "serve": _cmd_serve,
+        "urlgate": _cmd_urlgate,
         "watch": _cmd_watch,
         "registry": _cmd_registry,
         "compliance": _cmd_compliance,
