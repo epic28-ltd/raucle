@@ -22,6 +22,18 @@ from typing import Any
 
 from raucle.bilateral import sign_bilateral_outcome
 from raucle.capability import Capability, CapabilityIssuer, DelegationLedger
+from raucle.integrations.retry_guidance import (
+    RETRY_GUIDANCE_SCHEMA as _RETRY_GUIDANCE_SCHEMA,
+)
+from raucle.integrations.retry_guidance import (
+    SCHEMA_NAME as _RETRY_GUIDANCE_SCHEMA_NAME,
+)
+from raucle.integrations.retry_guidance import (
+    attach_retry_guidance as _attach_retry_guidance,
+)
+from raucle.integrations.retry_guidance import (
+    retry_guidance as _retry_guidance,
+)
 from raucle.provenance import authorization_block
 
 
@@ -84,6 +96,26 @@ class QmHarnessBridge:
         """The receipt-side chain block, for local verification/tests:
         recompute the digest the gate will bind."""
         return authorization_block(token_dict)
+
+    @staticmethod
+    def deny_feedback(token_dict: dict[str, Any]) -> dict[str, Any] | None:
+        """The O2 retry-guidance shape for a denied call's authority.
+
+        Deterministic, from the same token dict the harness injected:
+        the whitelist/required/bounds constraints the gate enforced
+        become the machine-readable description of what a retry within
+        this authority could look like. ``None`` (honest absence) when
+        nothing deterministic can be derived - denylists, rate limits
+        and expiry windows say nothing about what WOULD be allowed.
+        Never consults the verdict: a deny never fails, softens or
+        becomes an allow because of this field.
+        """
+        return _retry_guidance(token_dict)
+
+    @staticmethod
+    def retry_guidance_schema() -> dict[str, Any]:
+        """The documented schema of the ``retry_guidance`` shape."""
+        return _RETRY_GUIDANCE_SCHEMA
 
     @staticmethod
     def executor_keys(executors: list[Any]) -> dict[str, bytes]:
@@ -151,13 +183,17 @@ def gate_call(
     )
     try:
         with _req.urlopen(req, timeout=timeout) as resp:
-            return _json.load(resp)
+            response = _json.load(resp)
     except _err.HTTPError as exc:
-        return {
+        response = {
             "decision": "deny",
             "status": exc.code,
             "detail": exc.read()[:200].decode(errors="replace"),
         }
+    # O2: additive, deterministic retry guidance on deny, from the same
+    # token dict the harness injected. The verdict fields pass through
+    # byte-identical; a deny with nothing derivable gains no key at all.
+    return _attach_retry_guidance(response, token_dict)
 
 
 def wiring(bridge: QmHarnessBridge, *, ledger_path: str, receipt_store: str) -> str:
@@ -188,6 +224,17 @@ def wiring(bridge: QmHarnessBridge, *, ledger_path: str, receipt_store: str) -> 
                 "store": receipt_store,
                 "version": "v1.1",
                 "verify": "raucle-cli verify-chain",
+            },
+            "retry_guidance": {
+                "schema": _RETRY_GUIDANCE_SCHEMA_NAME,
+                "schema_module": "raucle.integrations.retry_guidance.RETRY_GUIDANCE_SCHEMA",
+                "on": "deny",
+                "derivation": "deterministic, from the injected capability token's constraints",
+                "absence": (
+                    "absent (key omitted) when no deterministic alternative "
+                    "can be derived; never null"
+                ),
+                "doc": "docs/spec/retry-guidance-v1.md",
             },
             "fail_closed_on": [
                 "unresolved_parent",
