@@ -1,0 +1,112 @@
+{
+  "spec": "draft-rampertab-audit-agent-authority-history-00",
+  "engine": "raucle.authority_history.replay_authority_history",
+  "note": "Scenario vectors: each entry names a retained-evidence scenario the fixture builder constructs, and the fail-closed outcome the engine MUST produce. Receipt hashes and wall-clock values are intentionally NOT pinned (iat is second-resolution wall clock); the pinned surface is the decision-comparison semantics.",
+  "vectors": [
+    {
+      "name": "honest_full_replay",
+      "scenario": "two allowed calls with stored args, one denied call with no stored args, original policy retained, alternative policy supplied",
+      "expected": {
+        "gate_decisions": 3,
+        "verified": 2,
+        "divergent": 0,
+        "unverified": 1,
+        "missing_evidence_kinds": ["stored_args_missing"],
+        "item_statuses": ["verified", "verified", "unverified"],
+        "counterfactual_decisions_sorted": ["allow", "deny", null],
+        "verdict_prefix": "INCOMPLETE EVIDENCE:"
+      }
+    },
+    {
+      "name": "deterministic_output_bytes",
+      "scenario": "the same chain and evidence replayed twice",
+      "expected": {
+        "byte_identical": true,
+        "canonical_form": "sorted keys, no whitespace, UTF-8"
+      }
+    },
+    {
+      "name": "tampered_stored_args_rebinds_to_receipt_digest",
+      "scenario": "one stored input's text is rewritten (its store hash field recomputed so the store accepts it); the receipt binds the ORIGINAL args digest",
+      "expected": {
+        "target_item_status": "unverified",
+        "target_missing_evidence": "args_hash_mismatch",
+        "verified": 1,
+        "divergent": 0
+      }
+    },
+    {
+      "name": "tampered_store_record_reads_as_missing",
+      "scenario": "one stored input's text is rewritten WITHOUT fixing the store hash field; InputStore's own integrity recheck treats it as absent",
+      "expected": {
+        "target_item_status": "unverified",
+        "target_missing_evidence": "stored_args_missing",
+        "unverified": 2
+      }
+    },
+    {
+      "name": "missing_policy_artifact",
+      "scenario": "the policy directory retains NO artifacts",
+      "expected": {
+        "every_resolvable_item_status": "unverified",
+        "missing_evidence_kinds": ["policy_artifact_not_retained"],
+        "verified": 0
+      }
+    },
+    {
+      "name": "policy_digest_mismatch",
+      "scenario": "a policy artifact IS retained but its content was edited so no rule reproduces the receipts' bound digest",
+      "expected": {
+        "missing_evidence_kinds": ["policy_digest_mismatch"],
+        "verified": 0,
+        "unverified": 3
+      }
+    },
+    {
+      "name": "forged_receipt_decision_diverges",
+      "scenario": "a receipt's signed payload is altered (decided deny) and re-signed with the gate key; the evidence still recomputes allow",
+      "expected": {
+        "target_item_status": "divergent",
+        "target_recomputed_decision": "allow",
+        "target_receipted_decision": "deny",
+        "verdict_prefix": "EVIDENCE DIVERGENCE:"
+      }
+    },
+    {
+      "name": "counterfactual_variant_joined_by_receipt",
+      "scenario": "alternative policy allows only ACC-001; the ACC-999 decision must carry counterfactual_decision deny",
+      "expected": {
+        "counterfactual_unstored_item": null,
+        "counterfactual_denied_count": 1,
+        "note_present": true
+      }
+    },
+    {
+      "name": "bounded_disclosure",
+      "scenario": "any replay report over the fixture chain",
+      "expected": {
+        "no_arg_values_in_report": "ACC-",
+        "fields_present": [
+          "receipt_hash",
+          "tool",
+          "agent_id",
+          "receipted_decision",
+          "recomputed_decision",
+          "counterfactual_decision",
+          "ruleset_hash",
+          "status",
+          "missing_evidence"
+        ]
+      }
+    },
+    {
+      "name": "no_policy_digest_honestly_resolvable",
+      "scenario": "a receipt binds the stable no-policy digest; the empty retained recompute environment resolves it and the deny recomputes",
+      "expected": {
+        "item_status": "verified",
+        "recomputed_decision": "deny",
+        "missing_evidence": null
+      }
+    }
+  ]
+}

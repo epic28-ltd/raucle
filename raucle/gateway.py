@@ -1115,7 +1115,7 @@ class RaucleGateway:
             "parents": [],
             "taint": ["gate:observed"],
             "input_hash": _sha256_hex(_canonical_json(ctx.args)),
-            "ruleset_hash": self._policy_ruleset_hash(ctx.tool),
+            "ruleset_hash": self._policy_ruleset_hash(ctx.tool, ctx.source, ctx.destination),
             "guardrail_verdict": ctx.decision,
             "x_gate": {
                 "decision": ctx.decision,
@@ -1146,21 +1146,40 @@ class RaucleGateway:
         # authority receipt emitters (PR-E extraction).
         return self._sign_and_store_receipt(payload)
 
-    def _policy_ruleset_hash(self, tool: str) -> str:
-        """Hash of the policy rule in force for *tool* (binds the decision
-        to the exact policy content)."""
+    def _policy_ruleset_hash(self, tool: str, source: str = "", destination: str = "") -> str:
+        """Content digest of the policy rule in force for *tool* (binds
+        the decision to the exact policy content). The digest is
+        PATH-FREE and VALUE-FREE: it is sha256 over the canonical JSON
+        of every rule field except ``source_file`` (which names the
+        file the rule was loaded from and would make the receipt
+        unreplayable off the original host - the digest must be
+        computable from the retained policy artefact alone, wherever it
+        now lives). Matching honours source/destination exactly as the
+        gate's own rule selection does; a tool no rule covers binds the
+        stable no-policy digest.
+        """
+        import dataclasses
         import hashlib as _hl
 
-        from raucle.provenance import _canonical_json
+        from raucle.provenance import _canonical_json, _sha256_hex
 
-        rule = self._policy_rules.get(tool)
+        rule = self._find_rule(tool, source, destination)
         if rule is None:
             return _hl.sha256(b"no-policy").hexdigest()
-        try:
-            rule_dict = rule.to_dict()
-        except Exception:
-            rule_dict = {"repr": repr(rule)}
-        return _hl.sha256(_canonical_json(rule_dict)).hexdigest()
+        # asdict, not the raw dataclass: a dataflow constraint (e.g.
+        # deny_from_chain_taint: ChainTaintDeny) is a nested dataclass that
+        # is not JSON-serialisable on its own, and repr() is not a stable
+        # canonical form. asdict recursively flattens it to plain dicts.
+        rule_dict = {
+            f.name: getattr(rule, f.name)
+            for f in dataclasses.fields(rule)
+            if f.name != "source_file"
+        }
+        if rule_dict.get("deny_from_chain_taint") is not None:  # asdict()s nested dataclasses
+            rule_dict["deny_from_chain_taint"] = dataclasses.asdict(
+                rule_dict["deny_from_chain_taint"]
+            )
+        return _sha256_hex(_canonical_json(rule_dict))
 
     @property
     def gate_identity(self):
