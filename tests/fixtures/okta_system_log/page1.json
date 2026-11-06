@@ -1,0 +1,28 @@
+[
+  {
+    "uuid": "okta-evt-0001",
+    "published": "2026-11-06T09:15:00.000Z",
+    "eventType": "user.session.start",
+    "actor": {
+      "id": "00uabc001",
+      "type": "User",
+      "displayName": "Ada Lovelace",
+      "login": "ada@example.com"
+    },
+    "outcome": {"result": "SUCCESS"},
+    "_links": {"next": {"href": "https://example.okta.com/api/v1/logs?after=CUR_2&since=2026-11-06T00:00:00Z&limit=2"}}
+  },
+  {
+    "uuid": "okta-evt-0002",
+    "published": "2026-11-06T09:15:10.000Z",
+    "eventType": "user.authentication.sso",
+    "actor": {
+      "id": "00uabc001",
+      "type": "User",
+      "displayName": "Ada Lovelace",
+      "login": "ada@example.com"
+    },
+    "outcome": {"result": "SUCCESS"},
+    "_links": {"next": {"href": "https://example.okta.com/api/v1/logs?after=CUR_2&since=2026-11-06T00:00:00Z&limit=2"}}
+  }
+]
