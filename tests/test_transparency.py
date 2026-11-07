@@ -10,7 +10,9 @@ from __future__ import annotations
 import email.utils
 import hashlib
 import json
+import socket
 import threading
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -19,6 +21,8 @@ from raucle.audit import HashChainSink
 from raucle.transparency import (
     STATUS_ANCHORED,
     STATUS_DIGEST_MISMATCH,
+    STATUS_FAILED,
+    STATUS_PENDING,
     STATUS_SELF_SIGNED_ONLY,
     SCITTAnchorClient,
     compute_chain_head,
@@ -34,6 +38,22 @@ class _FakeTSHandler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # keep test output clean
         pass
 
+    def _send_raw(self, code: int, body: bytes) -> None:
+        self.server.record.setdefault("requests", []).append(
+            {"method": self.command, "path": self.path}
+        )
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header(
+            "Date",
+            self.server.record.get("date_header") or email.utils.formatdate(usegmt=True),
+        )
+        if self.server.record.get("raw_retry_after") is not None:
+            self.send_header("Retry-After", self.server.record["raw_retry_after"])
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _send_json(self, code: int, body: dict, extra_headers: dict | None = None) -> None:
         self.server.record.setdefault("requests", []).append(
             {"method": self.command, "path": self.path}
@@ -41,7 +61,10 @@ class _FakeTSHandler(BaseHTTPRequestHandler):
         raw = json.dumps(body).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Date", email.utils.formatdate(usegmt=True))
+        self.send_header(
+            "Date",
+            self.server.record.get("date_header") or email.utils.formatdate(usegmt=True),
+        )
         if extra_headers:
             for key, value in extra_headers.items():
                 self.send_header(key, value)
@@ -66,6 +89,17 @@ class _FakeTSHandler(BaseHTTPRequestHandler):
         record = self.server.record
         if self.path.endswith("/operations"):
             record["polls"] += 1
+            # Optional fault-injection knobs for the poll-edge tests.
+            if record.get("always_pending"):
+                self._send_json(
+                    200,
+                    {"operation_id": record["op_id"], "status": "pending"},
+                    extra_headers={"Retry-After": "1"},
+                )
+                return
+            if record.get("raw_poll_body") is not None:
+                self._send_raw(record.get("raw_poll_code", 200), record["raw_poll_body"])
+                return
             sequence: list = record["status_sequence"]
             status = sequence.pop(0) if sequence else "complete"
             if status == "pending":
@@ -113,6 +147,11 @@ def ts_double():
         "status_sequence": [],
         "statement_head": None,  # override to force an echo mismatch
         "submitted_entry": None,
+        # Fault-injection knobs for the poll-edge tests (default: clean).
+        "always_pending": False,  # poll answers pending forever
+        "raw_poll_body": None,  # raw bytes for GET /operations
+        "raw_poll_code": 200,  # status code used with raw_poll_body
+        "date_header": None,  # override the Date header (garbage date tests)
     }
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeTSHandler)
     server.record = record
@@ -238,3 +277,100 @@ def test_tampered_chain_refuses_to_anchor(chain_path):
     chain_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     with pytest.raises(ValueError, match="refusing to anchor a tampered chain"):
         compute_chain_head(chain_path)
+
+
+# ---------------------------------------------------------------------------
+# Poll/HTTP edge cases against a fake host (named failures, never silent)
+# ---------------------------------------------------------------------------
+
+
+def test_pending_forever_returns_named_pending_with_location(ts_double, chain_path):
+    """The operation never completes: status is PENDING and the caller is
+    told it may resume, with the operation location recorded."""
+    ts_double.record["always_pending"] = True
+    client = _client(ts_double, max_polls=3)
+    result = client.register(chain_path, chain_id="chain-a")
+    assert result.status == STATUS_PENDING
+    assert ts_double.record["polls"] == 3
+    assert any("operation location:" in o for o in result.observation)
+    assert any("still pending after 3 polls" in o and "may resume" in o for o in result.observation)
+    assert result.chain_head == compute_chain_head(chain_path)
+
+
+def test_operation_failed_after_poll_is_named_status(ts_double, chain_path):
+    """The service reports the operation failed: named TRANSPARENCY-FAILED
+    with the service's reason carried into the observations."""
+    ts_double.record["status_sequence"] = ["failed"]
+    client = _client(ts_double)
+    result = client.register(chain_path, chain_id="chain-a")
+    assert result.status == STATUS_FAILED
+    assert ts_double.record["polls"] == 1
+    assert any("operation failed:" in o for o in result.observation)
+    assert any("test" in o for o in result.observation)
+
+
+def test_garbage_poll_status_fails_closed(ts_double, chain_path):
+    """A poll body carrying a status the protocol does not define — even a
+    200 response with parseable JSON — fails closed with TRANSPARENCY-FAILED."""
+    ts_double.record["raw_poll_body"] = json.dumps({"status": "garbled-bytes"}).encode("utf-8")
+    client = _client(ts_double)
+    result = client.register(chain_path, chain_id="chain-a")
+    assert result.status == STATUS_FAILED
+    assert any(
+        "unknown operation status 'garbled-bytes'" in o and "failing closed" in o
+        for o in result.observation
+    )
+
+
+def test_malformed_poll_body_never_silent(ts_double, chain_path):
+    """A poll body that is not JSON at all surfaces the decode failure —
+    the client must not mistake garbage for a completed operation."""
+    ts_double.record["raw_poll_body"] = b"<html>not json</html>"
+    with pytest.raises(json.JSONDecodeError):
+        _client(ts_double).register(chain_path, chain_id="chain-a")
+
+
+def test_unparseable_date_header_is_named_rejection(ts_double, chain_path):
+    """A Date header that is not an HTTP-date anywhere in the flow is a
+    named hard failure, not an ignored header."""
+    ts_double.record["date_header"] = "yesterday-ish"
+    with pytest.raises(ValueError, match="unparseable Date header"):
+        _client(ts_double).register(chain_path, chain_id="chain-a")
+
+
+def test_garbage_retry_after_is_ignored_not_fatal(ts_double, chain_path):
+    """A Retry-After that is neither delta-seconds nor an HTTP-date is
+    treated as zero: the flow proceeds instead of erroring."""
+    ts_double.record["status_sequence"] = ["pending"]
+    client = _client(ts_double)
+    result = client.register(chain_path, chain_id="chain-a")
+    assert result.status == STATUS_ANCHORED
+
+
+def test_http_date_retry_after_is_honoured_and_clamped(ts_double, chain_path):
+    """An HTTP-date Retry-After parses, is honoured (capped at 30s), and
+    the flow keeps polling instead of erroring."""
+    import time as _time
+
+    ts_double.record["raw_poll_body"] = json.dumps(
+        {"operation_id": ts_double.record["op_id"], "status": "pending"}
+    ).encode("utf-8")
+    ts_double.record["raw_retry_after"] = email.utils.formatdate(_time.time() + 60, usegmt=True)
+    client = _client(ts_double, max_polls=2)
+    result = client.register(chain_path, chain_id="chain-a")
+    assert result.status == STATUS_PENDING
+    assert any("honouring Retry-After" in o for o in result.observation)
+
+
+def test_connection_refused_surfaces_immediately(chain_path, tmp_path):
+    """A dead service (connection refused) surfaces as a network error the
+    caller plans for — it must not be swallowed or retried into silence."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()  # nothing is listening on this port now
+    client = SCITTAnchorClient(
+        f"http://127.0.0.1:{port}/transparency", token="t", poll_interval=0.01
+    )
+    with pytest.raises((urllib.error.URLError, ConnectionError, OSError, RuntimeError)):
+        client.register(chain_path, chain_id="chain-a")
