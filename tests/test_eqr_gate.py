@@ -27,6 +27,7 @@ from raucle.eqr import (
     VERDICT_STALE,
     VERDICT_UNKNOWN,
     Evidence,
+    EvidenceStore,
     evaluate_eqr,
     narrowed_reduced_constraints,
 )
@@ -812,3 +813,83 @@ def test_vectors_registry_contains_eqr_class() -> None:
         assert vector["spec"] == "raucle-eqr/v1"
         assert "draft-watts-agent-evidence-boundary" in vector["draft"]
         _eqr_from_vector(vector)
+
+
+# ---------------------------------------------------------------------------
+# EvidenceStore: record / snapshot / clear slices (refresh is an explicit
+# administrative act — every clear shape must drop exactly its named slice)
+# ---------------------------------------------------------------------------
+
+
+def _store_with_two_tools() -> tuple[EvidenceStore, Evidence, Evidence, Evidence]:
+    store = EvidenceStore()
+    a_kyc = _ev(evidence_kind="kyc_check")
+    a_sanctions = _ev(evidence_kind="sanctions_check")
+    b_kyc = _ev(evidence_kind="kyc_check")
+    store.record("tool-a", a_kyc)
+    store.record("tool-a", a_sanctions)
+    store.record("tool-b", b_kyc)
+    return store, a_kyc, a_sanctions, b_kyc
+
+
+def test_evidence_store_record_accepts_evidence_and_dict() -> None:
+    store = EvidenceStore()
+    recorded = store.record(
+        "tool-a",
+        {
+            "evidence_kind": "kyc_check",
+            "observed_at": _NOW,
+            "source_class": "third-party",
+            "confidence": 90,
+        },
+    )
+    assert isinstance(recorded, Evidence)
+    assert recorded.evidence_kind == "kyc_check"
+    assert store.snapshot("tool-a", "kyc_check") == [recorded]
+
+
+def test_evidence_store_snapshot_is_copy_of_slice_in_order() -> None:
+    store, a_kyc, _, _ = _store_with_two_tools()
+    store.record("tool-a", _ev(evidence_kind="kyc_check"))
+    snap = store.snapshot("tool-a", "kyc_check")
+    assert len(snap) == 2
+    assert snap[0] is a_kyc
+    snap.clear()  # mutating the copy must not touch the store
+    assert len(store.snapshot("tool-a", "kyc_check")) == 2
+    assert store.snapshot("unknown-tool", "kyc_check") == []
+
+
+def test_evidence_store_clear_drops_exactly_one_slice() -> None:
+    store, _, a_sanctions, b_kyc = _store_with_two_tools()
+    store.clear("tool-a", "kyc_check")
+    assert store.snapshot("tool-a", "kyc_check") == []
+    # the sibling slices survive
+    assert len(store.snapshot("tool-a", "sanctions_check")) == 1
+    assert len(store.snapshot("tool-b", "kyc_check")) == 1
+    # clearing an absent slice is a no-op, not an error
+    store.clear("tool-a", "kyc_check")
+    store.clear("nowhere", "nothing")
+
+
+def test_evidence_store_clear_tool_drops_every_kind_for_that_tool() -> None:
+    store, a_kyc, a_sanctions, b_kyc = _store_with_two_tools()
+    store.clear("tool-a")
+    assert store.snapshot("tool-a", "kyc_check") == []
+    assert store.snapshot("tool-a", "sanctions_check") == []
+    # other tools are untouched
+    assert store.snapshot("tool-b", "kyc_check") == [b_kyc]
+
+
+def test_evidence_store_clear_all_resets_everything_and_can_re_record() -> None:
+    store, a_kyc, _, b_kyc = _store_with_two_tools()
+    store.clear()
+    for tool, kind, _record in (
+        ("tool-a", "kyc_check", a_kyc),
+        ("tool-a", "sanctions_check", None),
+        ("tool-b", "kyc_check", b_kyc),
+    ):
+        assert store.snapshot(tool, kind) == []
+    # after a full refresh the store accepts fresh evidence again
+    fresh = _ev(evidence_kind="kyc_check")
+    store.record("tool-a", fresh)
+    assert store.snapshot("tool-a", "kyc_check") == [fresh]
