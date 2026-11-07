@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Fixed - M026/M027: round-3 bypass remediations (RED-026 / AV-02, RED-027 / AV-10)
+- M-026 (RED-026 authority re-mint escape): while a hold is applied, the
+  containment manager publishes a receipted control row into the
+  delegation ledger (`containment_hold_active`, with the hold's
+  receipt id and revocations surface; a receipted `containment_resume`
+  row on release). `DelegationLedger.register` now consults active
+  holds at mint/registration time: new authority entering a held agent
+  scope or a held chain is refused into the live deny set (revocation
+  row named `hold_active`), or the registration fails closed (named)
+  when the hold's revocations surface is unusable. Resolvers ignore
+  control rows entirely.
+- M-027 (RED-027 snapshot re-stamp): the resume digest check was
+  integrity-only - a state writer who re-stamped
+  `original_bytes_b64` + `original_sha256` together committed attacker
+  policy bytes silently on resume. Resume now binds the snapshot to the
+  RECEIPTED hold: the hold receipt carries the snapshot digest, and a
+  state whose snapshot digest or scope does not match the receipt is
+  refused (fail-closed, named `snapshot_restamped`), receipted as
+  `containment_resume_refused`, and the halt stays applied. A held
+  state without its receipt stream is likewise a named refusal.
+
 ### Added - N2: SCITT transparency anchoring of receipt-chain heads
 - `raucle/transparency.py` registers a receipt-chain head (final event
   index + record hash) with a SCITT Transparency Service per the

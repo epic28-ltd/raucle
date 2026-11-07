@@ -1376,6 +1376,7 @@ class DelegationLedger:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self._records: dict[str, dict[str, Any]] = {}
+        self._control_rows: list[dict[str, Any]] = []
         self._mtime: float | None = None
         if self.path.exists():
             self._load()
@@ -1384,13 +1385,20 @@ class DelegationLedger:
         import json as _json
 
         self._records = {}
+        self._control_rows = []
         with open(self.path, encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
                     continue
                 rec = _json.loads(line)
-                cap_id = rec.get("capability", {}).get("token_id", "")
+                if "capability" not in rec:
+                    # Containment control row (hold/resume marker): never a
+                    # delegateable capability - kept in order for the
+                    # hold-state consult in :meth:`register`.
+                    self._control_rows.append(rec)
+                    continue
+                cap_id = rec["capability"].get("token_id", "")
                 self._records[cap_id] = rec
         self._mtime = self.path.stat().st_mtime
 
@@ -1452,6 +1460,7 @@ class DelegationLedger:
             raise ValueError(f"delegation ledger: capability signature failed: {exc}") from exc
 
         record = {"capability": token, "delegated_to_agent": delegated_to_agent}
+        self._hold_check(token, delegated_to_agent)
         record_hash = hashlib.sha256(
             json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
         ).hexdigest()
@@ -1462,6 +1471,88 @@ class DelegationLedger:
         self._records[token.get("token_id", "")] = record
         self._mtime = self.path.stat().st_mtime
         return record_hash
+
+    def _hold_check(self, token: dict[str, Any], delegated_to_agent: str) -> None:
+        """M-026 (RED-026 / AV-02): consult active containment holds at
+        token-mint/registration time.
+
+        A hold snapshots token ids when it is *applied*; authority minted
+        into the held scope afterwards escapes that snapshot. So when a new
+        record lands in the ledger for a held agent (or inside a held
+        chain), it is refused into the live deny set: the record is
+        registered but immediately revoked in the hold's revocations file
+        (reason named ``hold_active``). A hold whose revocations file
+        cannot be determined fails closed (the registration is refused):
+        no new authority may enter a held scope uncovered.
+        """
+        held = self._active_containment_holds()
+        if not held:
+            return
+        chain = self._chain_ids(token)
+        for marker in held:
+            scope = marker.get("scope", "")
+            scope_id = marker.get("scope_id", "")
+            hits_agent = scope == "agent" and delegated_to_agent == scope_id
+            hits_chain = scope == "chain" and scope_id in chain
+            if not (hits_agent or hits_chain):
+                continue
+            self._propagate_hold_revocation(token, marker)
+            return
+
+    def _active_containment_holds(self) -> list[dict[str, Any]]:
+        """Ordered containment-marker rows still in force (hold, no resume)."""
+        self._ensure_loaded()
+        active: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in self._control_rows:
+            kind = row.get("kind")
+            key = (row.get("scope", ""), row.get("scope_id", ""))
+            if kind == "containment_hold_active":
+                active[key] = row
+            elif kind == "containment_resume":
+                active.pop(key, None)
+        return [row for row in active.values() if row.get("kind") == "containment_hold_active"]
+
+    def _chain_ids(self, token: dict[str, Any]) -> set[str]:
+        ids: set[str] = set()
+        ids.add(token.get("token_id", ""))
+        current: str | None = token.get("parent_id")
+        while current and current not in ids:
+            ids.add(current)
+            rec = self._records.get(current)
+            parent = rec.get("capability", {}).get("parent_id") if rec else None
+            current = parent
+        return ids
+
+    def _propagate_hold_revocation(self, token: dict[str, Any], marker: dict[str, Any]) -> None:
+        rev_path = str(marker.get("revocations_path", "") or marker.get("target_path", ""))
+        token_id = token.get("token_id", "")
+        if not rev_path:
+            raise ValueError(
+                "delegation ledger: refusing new authority into held scope "
+                f"'{marker.get('scope_id', '')}' (containment hold_active): no "
+                "revocations surface to cover it (fail-closed)"
+            )
+        from datetime import datetime, timezone
+
+        row = {
+            "token_id": token_id,
+            "reason": "containment hold_active: authority re-minted into a held scope",
+            "actor": marker.get("actor", "containment"),
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "path": "containment",
+            "hold_receipt_id": marker.get("receipt_id", ""),
+        }
+        path = Path(rev_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            raise ValueError(
+                "delegation ledger: refusing new authority into held scope "
+                f"'{marker.get('scope_id', '')}' (containment hold_active): "
+                f"revocations surface '{rev_path}' is unwritable (fail-closed): {exc}"
+            ) from exc
 
     def descendants(self, token_id: str) -> list[str]:
         """A3: the subtree under *token_id* (inclusive): the id itself plus

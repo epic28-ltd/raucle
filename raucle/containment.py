@@ -56,6 +56,7 @@ SCOPES = (SCOPE_GLOBAL, SCOPE_AGENT, SCOPE_CHAIN)
 
 VERDICT_HOLD = "containment_hold"
 VERDICT_RESUME = "containment_resume"
+VERDICT_RESUME_REFUSED = "containment_resume_refused"
 VERDICT_HOLD_PENDING = "containment_hold_pending"
 VERDICT_HOLD_APPROVAL = "containment_hold_approval"
 VERDICT_HOLD_ABORT = "containment_hold_abort"
@@ -663,6 +664,22 @@ class ContainmentManager:
                 self.state_path,
                 json.dumps(held_state, sort_keys=True).encode("utf-8"),
             )
+            if scope != SCOPE_GLOBAL and self.config.delegations_file:
+                # M-026 (RED-026 / AV-02): publish the hold INTO the delegation
+                # ledger so registrations made during the hold consult active
+                # hold state at mint/registration time (fail-closed named
+                # hold_active) instead of relying on the hold-time id snapshot.
+                self._append_hold_marker(
+                    {
+                        "kind": "containment_hold_active",
+                        "scope": scope,
+                        "scope_id": scope_id,
+                        "receipt_id": receipt_id,
+                        "revocations_path": str(target),
+                        "actor": actor,
+                        "held_at": _now_iso(),
+                    }
+                )
             held_result: dict[str, Any] = {
                 "status": "held",
                 "scope": scope,
@@ -681,6 +698,118 @@ class ContainmentManager:
                     fcntl.flock(fd_target, fcntl.LOCK_UN)
                 finally:
                     os.close(fd_target)
+
+    def _append_hold_marker(self, marker: dict[str, Any]) -> None:
+        """Append a containment control row to the delegation ledger.
+
+        Best-effort co-op with the ledger's own appender: a control row is
+        never a capability, so no resolver misreads it. Marker failure is
+        NOT swallowed (state already persisted - the marker must exist or
+        the transition is incomplete), but a missing ledger surface just
+        disables the registration-time consult for that hold.
+        """
+        if not self.config.delegations_file:
+            return
+        path = Path(self.config.delegations_file)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(marker, ensure_ascii=False) + "\n")
+        except OSError as exc:
+            if marker.get("kind") == "containment_hold_active":
+                raise ContainmentError(
+                    f"containment hold marker append failed; hold incomplete: {exc}"
+                ) from exc
+
+    def _refuse_restamped_resume(self, state: dict[str, Any], target: Path) -> dict[str, Any]:
+        """Named, RECEIPTED refusal of a re-stamped snapshot (M-027).
+
+        The halt stays applied, the enforcement bytes are untouched
+        (the held deny set stays live), and the refusal itself is a
+        receipt so the attempted re-commit is never silent.
+        """
+        try:
+            receipt_id = self._emit_receipt(
+                verdict=VERDICT_RESUME_REFUSED,
+                description=f"containment:resume_refused:{state['scope']}",
+                extra={
+                    "scope": state["scope"],
+                    "scope_id": state.get("scope_id", ""),
+                    "reason": "snapshot_restamped",
+                    "target_file": str(target),
+                    "state_snapshot_sha256": state.get("original_sha256", ""),
+                    "hold_receipt_id": state.get("receipt_id", ""),
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 - must be named, never silent
+            raise ContainmentError(
+                f"resume-refusal receipt emission failed; resume refused: {exc}"
+            ) from exc
+        return {
+            "status": "resume_refused",
+            "reason": "snapshot_restamped",
+            "held": True,
+            "scope": state["scope"],
+            "scope_id": state.get("scope_id", ""),
+            "target_file": str(target),
+            "receipt_id": receipt_id,
+        }
+
+    def _hold_receipt_extra(self, state: dict[str, Any]) -> dict[str, Any]:
+        """Return the claim-set ``extra`` of the RECEIPTED hold (M-027).
+
+        The hold receipt binding is the authority for what the snapshot
+        was: resume must refuse a state whose receipt cannot be found or
+        decoded (fail-closed), never guess from state alone.
+        """
+        receipt_id = str(state.get("receipt_id", ""))
+        if not receipt_id:
+            raise ContainmentError(
+                "resume refused: held state carries no hold receipt id; "
+                "the snapshot cannot be bound to a receipt (fail-closed)"
+            )
+        receipts_path = Path(self.config.receipts_path or "")
+        if not receipts_path.name or not receipts_path.is_file():
+            raise ContainmentError(
+                f"resume refused: hold receipt stream '{receipts_path}' "
+                "unavailable; the snapshot cannot be bound to a receipt "
+                "(fail-closed)"
+            )
+        try:
+            rows = [
+                json.loads(line)
+                for line in receipts_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        except (OSError, ValueError) as exc:
+            raise ContainmentError(
+                f"resume refused: hold receipt stream unreadable: {exc}"
+            ) from exc
+        row = next((r for r in rows if str(r.get("receipt_hash", "")) == receipt_id), None)
+        if row is None:
+            raise ContainmentError(
+                f"resume refused: hold receipt '{receipt_id[:16]}...' is not in "
+                "the receipt stream; the snapshot cannot be bound to a receipt "
+                "(fail-closed)"
+            )
+        jws = str(row.get("jws", ""))
+        parts = jws.split(".")
+        if len(parts) != 3:
+            raise ContainmentError("resume refused: hold receipt JWS is malformed (fail-closed)")
+        try:
+            payload = json.loads(
+                base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)).decode("utf-8")
+            )
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ContainmentError(
+                f"resume refused: hold receipt payload undecodable: {exc}"
+            ) from exc
+        extra = payload.get("extra")
+        if not isinstance(extra, dict):
+            raise ContainmentError(
+                "resume refused: hold receipt carries no claim set (fail-closed)"
+            )
+        return extra
 
     def resume(self, *, reason: str = "") -> dict[str, Any]:
         """Restore the pre-hold enforcement bytes exactly and receipt it."""
@@ -708,6 +837,20 @@ class ContainmentManager:
                     "restore verification failed: snapshot digest mismatch; "
                     "resume refused (fail-closed)"
                 )
+            # M-027 (RED-027 / AV-10): the digest check above is
+            # integrity-only - a state-file writer who re-stamps
+            # ``original_bytes_b64`` together with ``original_sha256``
+            # sails through it. So the SNAPSHOT is additionally bound to
+            # the RECEIPTED hold: the hold receipt carries the snapshot
+            # digest, and resume refuses any state whose snapshot does
+            # not match the receipt (fail-closed, named
+            # ``snapshot_restamped``). The refusal is receipted and the
+            # halt stays applied: no attacker bytes are ever restored.
+            receipt_extra = self._hold_receipt_extra(state)
+            receipt_snapshot = str(receipt_extra.get("sha256_before", ""))
+            scope_matches = str(receipt_extra.get("scope", "")) == str(state.get("scope", ""))
+            if receipt_snapshot != expected or not scope_matches:
+                return self._refuse_restamped_resume(state, target)
             if target.exists():
                 fd_target = self._lock_target(target)
 
@@ -744,6 +887,21 @@ class ContainmentManager:
                 raise ContainmentError(
                     "resume verification failed: restored digest "
                     f"'{actual}' != snapshot '{expected}' (fail-closed)"
+                )
+            if state.get("scope") != SCOPE_GLOBAL:
+                # M-026 (RED-026 / AV-02): release the registration-time
+                # hold consult, so authority minted AFTER the resume is
+                # no longer snapped into the released hold's deny set.
+                self._append_hold_marker(
+                    {
+                        "kind": "containment_resume",
+                        "scope": state["scope"],
+                        "scope_id": state.get("scope_id", ""),
+                        "hold_receipt_id": state.get("receipt_id", ""),
+                        "resume_receipt_id": receipt_id,
+                        "actor": actor,
+                        "released_at": _now_iso(),
+                    }
                 )
             self._write_atomic(self.state_path, b"")
             with contextlib.suppress(FileNotFoundError):
