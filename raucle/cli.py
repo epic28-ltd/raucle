@@ -2245,41 +2245,25 @@ def _cmd_containment(args: argparse.Namespace) -> int:
     if getattr(args, "json", False):
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
-    return _containment_render(result, config, sub)
+    _containment_render(result, config, sub)
+    return 0
 
 
-def _containment_render(result: dict, config: Any, sub: str) -> int:
-    """Human-readable rendering of a containment result; returns the exit code."""
+def _containment_render(result: dict, config: Any, sub: str) -> None:
+    """Human-readable rendering of a containment result."""
+    if sub == "status":
+        _containment_status_render(result)
+        return
     verify_line = (
         "  verify offline: raucle verify-receipt <jws> --pubkey "
         f"{config.state_dir}/containment-operator-pubkey.pem"
     )
-    if sub == "status":
-        if not result.get("held"):
-            print("NOT HELD")
-            quarantined = result.get("quarantined_traces") or []
-            suspended = result.get("suspended_leases") or []
-            if quarantined:
-                print("quarantined traces: " + ", ".join(quarantined))
-            if suspended:
-                print("suspended leases: " + ", ".join(suspended))
-            return 0
-        scope_line = f"HELD          scope={result['scope']}"
-        if result.get("scope_id"):
-            scope_line += f" id={result['scope_id']}"
-        print(scope_line)
-        print(f"  held_at     {result.get('held_at', '')} by {result.get('actor', '')}")
-        if result.get("reason"):
-            print(f"  reason      {result['reason']}")
-        print(f"  target      {result.get('target_file', '')}")
-        print(f"  hold receipt {result.get('receipt_id', '')}")
-        return 0
     if sub in ("quarantine", "release"):
         print(f"containment trace {result['status']}: {result['trace_id']}")
         print(f"  registry: {result['target_file']}")
         print(f"  receipt: {result['receipt_id']}")
         print(verify_line)
-        return 0
+        return
     if sub in ("suspend-lease", "reinstate-lease"):
         print(f"containment lease {result['status']}: {result['agent_id']}")
         if result.get("lease_id"):
@@ -2287,7 +2271,8 @@ def _containment_render(result: dict, config: Any, sub: str) -> int:
         print(f"  registry: {result['target_file']}")
         print(f"  receipt: {result['receipt_id']}")
         print(verify_line)
-        return 0
+        return
+    # hold / resume
     final_line = f"containment {result['status']}: scope={result['scope']}"
     if result.get("scope_id"):
         final_line += f" id={result['scope_id']}"
@@ -2297,7 +2282,28 @@ def _containment_render(result: dict, config: Any, sub: str) -> int:
     if result.get("restored_sha256"):
         print(f"  restored sha256: {result['restored_sha256']}")
     print(verify_line)
-    return 0
+
+
+def _containment_status_render(result: dict) -> None:
+    """Rendering of a ``containment status`` result."""
+    if not result.get("held"):
+        print("NOT HELD")
+        quarantined = result.get("quarantined_traces") or []
+        suspended = result.get("suspended_leases") or []
+        if quarantined:
+            print("quarantined traces: " + ", ".join(quarantined))
+        if suspended:
+            print("suspended leases: " + ", ".join(suspended))
+        return
+    scope_line = f"HELD          scope={result['scope']}"
+    if result.get("scope_id"):
+        scope_line += f" id={result['scope_id']}"
+    print(scope_line)
+    print(f"  held_at     {result.get('held_at', '')} by {result.get('actor', '')}")
+    if result.get("reason"):
+        print(f"  reason      {result['reason']}")
+    print(f"  target      {result.get('target_file', '')}")
+    print(f"  hold receipt {result.get('receipt_id', '')}")
 
 
 def _default_receipt_path(repo: Path) -> Path:
