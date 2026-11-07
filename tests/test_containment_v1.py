@@ -488,7 +488,8 @@ class TestCLIV1:
         assert "containment" in out
         # quarantine trace rendering
         out = self._cli_raw(tmp_path, "quarantine", "t-h")
-        assert "containment trace" in out and "verify offline" in out
+        assert "containment trace" in out
+        assert "verify offline" in out
         # suspend-lease rendering (registry + receipt, no lease id given)
         creds = AgentCredentialStore(path=tmp_path / "agent-credentials.jsonl")
         creds.issue("agent:svc")
