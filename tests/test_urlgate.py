@@ -507,4 +507,5 @@ class TestMethodAgnosticGating:
             status, hdrs, _ = _request(port, method, "/v1/chat/completions")
             assert status == 200
             receipt = hdrs.get("x-raucle-receipt")
-            assert receipt is not None and receipt in receipts_file.read_text()
+            assert receipt is not None
+            assert receipt in receipts_file.read_text()

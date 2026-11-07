@@ -326,16 +326,18 @@ def test_malformed_poll_body_never_silent(ts_double, chain_path):
     """A poll body that is not JSON at all surfaces the decode failure —
     the client must not mistake garbage for a completed operation."""
     ts_double.record["raw_poll_body"] = b"<html>not json</html>"
+    client = _client(ts_double)
     with pytest.raises(json.JSONDecodeError):
-        _client(ts_double).register(chain_path, chain_id="chain-a")
+        client.register(chain_path, chain_id="chain-a")
 
 
 def test_unparseable_date_header_is_named_rejection(ts_double, chain_path):
     """A Date header that is not an HTTP-date anywhere in the flow is a
     named hard failure, not an ignored header."""
     ts_double.record["date_header"] = "yesterday-ish"
+    client = _client(ts_double)
     with pytest.raises(ValueError, match="unparseable Date header"):
-        _client(ts_double).register(chain_path, chain_id="chain-a")
+        client.register(chain_path, chain_id="chain-a")
 
 
 def test_garbage_retry_after_is_ignored_not_fatal(ts_double, chain_path):
