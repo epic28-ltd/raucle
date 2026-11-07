@@ -126,7 +126,8 @@ def test_intact_stream_reports_intact_and_the_action_proceeds(tmp_path):
     mgr = ContainmentManager(cfg)
     mgr.hold(scope="global", reason="anchor-5")
     integrity = verify_receipt_stream_anchor(cfg.receipts_path)
-    assert integrity["anchored"] is True and integrity["receipt_stream_gap"] == "none"
+    assert integrity["anchored"] is True
+    assert integrity["receipt_stream_gap"] == "none"
     status = mgr.status()
     assert status.get("receipt_integrity") is True
     assert status.get("receipt_stream_integrity") == "intact"

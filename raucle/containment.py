@@ -748,6 +748,89 @@ class ContainmentManager:
                 finally:
                     os.close(fd_lock)
 
+    def _assert_pending_operator_fingerprint(self, pending: dict[str, Any]) -> None:
+        """RED-028: a hold apply that rides a pending record re-checks the pin
+        minted at request time; the anchor must not have moved in between
+        (else the approvals were receipted under another key)."""
+        pending_fp = str(pending.get("operator_key_fingerprint", ""))
+        if pending_fp and pending_fp != self._operator_key_fingerprint():
+            raise ContainmentError(
+                f"operator keypair fingerprint changed since the hold "
+                f"request ({_ERR_OPERATOR_KEY_CHANGED}): the pending "
+                "approvals were receipted under a different anchor; "
+                "apply refused (fail-closed)"
+            )
+
+    def _hold_apply_receipt_extra(
+        self,
+        scope: str,
+        scope_id: str,
+        actor: str,
+        reason: str,
+        target: Path,
+        original_sha: str,
+        ids: list[str],
+        operator_key_fingerprint: str,
+        pending: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Receipt payload for a hold: v0 core keys plus quorum provenance
+        (approvers, M, and the pending receipt id) when riding a pending."""
+        extra: dict[str, Any] = {
+            "scope": scope,
+            "scope_id": scope_id,
+            "actor": actor,
+            "reason": reason,
+            "target_file": str(target),
+            "sha256_before": original_sha,
+            "revoked_ids": ids if scope != SCOPE_GLOBAL else [],
+            "operator_key_fingerprint": operator_key_fingerprint,
+        }
+        if pending is not None:
+            # Quorum provenance rides the hold receipt: every approver
+            # that receipted the pending hold, and the pending
+            # receipt that opened it.
+            extra["approvers"] = list(pending.get("approvers", []))
+            extra["min_approvers"] = int(pending.get("min_approvers", self.config.min_approvers))
+            extra["pending_receipt_id"] = pending.get("pending_receipt_id", "")
+        return extra
+
+    def _hold_apply_held_state(
+        self,
+        scope: str,
+        scope_id: str,
+        actor: str,
+        reason: str,
+        target: Path,
+        original_sha: str,
+        original: bytes,
+        ids: list[str],
+        operator_key_fingerprint: str,
+        receipt_id: str,
+        pending: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Persisted held-state record for a hold (v0 core + quorum keys)."""
+        held_state: dict[str, Any] = {
+            "scope": scope,
+            "scope_id": scope_id,
+            "held_at": _now_iso(),
+            "actor": actor,
+            "reason": reason,
+            "target_file": str(target),
+            "target_existed": scope == SCOPE_GLOBAL or target.exists(),
+            "original_sha256": original_sha,
+            "held_sha256": _sha256_file(target),
+            "receipt_id": receipt_id,
+            "revoked_ids": ids if scope != SCOPE_GLOBAL else [],
+            "original_bytes_b64": base64.b64encode(original).decode("ascii"),
+            "operator_key_fingerprint": operator_key_fingerprint,
+        }
+        if pending is not None:
+            held_state["approvers"] = list(pending.get("approvers", []))
+            held_state["min_approvers"] = int(
+                pending.get("min_approvers", self.config.min_approvers)
+            )
+        return held_state
+
     def _apply_hold_locked(
         self,
         scope: str,
@@ -770,18 +853,10 @@ class ContainmentManager:
         try:
             target, fd_target, original, ids = self._open_hold_target(scope, scope_id)
 
-            # RED-028: a hold apply that rides a pending record carries the
-            # pin minted at request time; the anchor must not have moved in
-            # between (else the approvals were receipted under another key).
+            # RED-028: a hold apply that rides a pending record re-checks
+            # the pin minted at request time (fail-closed on drift).
             if pending is not None:
-                pending_fp = str(pending.get("operator_key_fingerprint", ""))
-                if pending_fp and pending_fp != self._operator_key_fingerprint():
-                    raise ContainmentError(
-                        f"operator keypair fingerprint changed since the hold "
-                        f"request ({_ERR_OPERATOR_KEY_CHANGED}): the pending "
-                        "approvals were receipted under a different anchor; "
-                        "apply refused (fail-closed)"
-                    )
+                self._assert_pending_operator_fingerprint(pending)
             operator_key_fingerprint = self._operator_key_fingerprint()
 
             original_sha = _sha256_bytes(original)
@@ -791,25 +866,17 @@ class ContainmentManager:
             else:
                 self._append_revocations(target, ids, reason=reason, actor=actor)
 
-            extra: dict[str, Any] = {
-                "scope": scope,
-                "scope_id": scope_id,
-                "actor": actor,
-                "reason": reason,
-                "target_file": str(target),
-                "sha256_before": original_sha,
-                "revoked_ids": ids if scope != SCOPE_GLOBAL else [],
-                "operator_key_fingerprint": operator_key_fingerprint,
-            }
-            if pending is not None:
-                # Quorum provenance rides the hold receipt: every approver
-                # that receipted the pending hold, and the pending
-                # receipt that opened it.
-                extra["approvers"] = list(pending.get("approvers", []))
-                extra["min_approvers"] = int(
-                    pending.get("min_approvers", self.config.min_approvers)
-                )
-                extra["pending_receipt_id"] = pending.get("pending_receipt_id", "")
+            extra = self._hold_apply_receipt_extra(
+                scope,
+                scope_id,
+                actor,
+                reason,
+                target,
+                original_sha,
+                ids,
+                operator_key_fingerprint,
+                pending,
+            )
             try:
                 receipt_id = self._emit_receipt(
                     verdict=VERDICT_HOLD,
@@ -823,26 +890,19 @@ class ContainmentManager:
                     f"hold receipt emission failed; hold rolled back: {exc}"
                 ) from exc
 
-            held_state: dict[str, Any] = {
-                "scope": scope,
-                "scope_id": scope_id,
-                "held_at": _now_iso(),
-                "actor": actor,
-                "reason": reason,
-                "target_file": str(target),
-                "target_existed": scope == SCOPE_GLOBAL or target.exists(),
-                "original_sha256": original_sha,
-                "held_sha256": _sha256_file(target),
-                "receipt_id": receipt_id,
-                "revoked_ids": ids if scope != SCOPE_GLOBAL else [],
-                "original_bytes_b64": base64.b64encode(original).decode("ascii"),
-                "operator_key_fingerprint": operator_key_fingerprint,
-            }
-            if pending is not None:
-                held_state["approvers"] = list(pending.get("approvers", []))
-                held_state["min_approvers"] = int(
-                    pending.get("min_approvers", self.config.min_approvers)
-                )
+            held_state = self._hold_apply_held_state(
+                scope,
+                scope_id,
+                actor,
+                reason,
+                target,
+                original_sha,
+                original,
+                ids,
+                operator_key_fingerprint,
+                receipt_id,
+                pending,
+            )
             self._write_atomic(
                 self.state_path,
                 json.dumps(held_state, sort_keys=True).encode("utf-8"),
@@ -925,7 +985,8 @@ class ContainmentManager:
                     "hold_receipt_id": state.get("receipt_id", ""),
                 },
             )
-        except Exception as exc:  # noqa: BLE001 - must be named, never silent
+        # The receipt error must be named, never silent.
+        except Exception as exc:  # noqa: BLE001
             raise ContainmentError(
                 f"resume-refusal receipt emission failed; resume refused: {exc}"
             ) from exc
@@ -984,7 +1045,7 @@ class ContainmentManager:
             payload = json.loads(
                 base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)).decode("utf-8")
             )
-        except (ValueError, UnicodeDecodeError) as exc:
+        except ValueError as exc:  # UnicodeDecodeError is a ValueError subclass
             raise ContainmentError(
                 f"resume refused: hold receipt payload undecodable: {exc}"
             ) from exc
