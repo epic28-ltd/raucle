@@ -35,6 +35,7 @@ _DEFAULT_CANARY_RECEIPTS = "/data/canary-receipts.jsonl"
 logger = logging.getLogger(__name__)
 
 _REGISTRY_DESC = "Registry JSONL file"
+_CONTAINMENT_REASON_HELP = "Operator reason recorded in the receipt"
 _ANSI_RED = "\033[91m"
 _ANSI_YELLOW = "\033[93m"
 _ANSI_GREEN = "\033[92m"
@@ -481,12 +482,10 @@ def _build_parser() -> argparse.ArgumentParser:
             default="",
             help="Optional credential-lease id recorded on the suspension/reinstatement",
         )
-    cont_hold.add_argument("--reason", default="", help="Operator reason recorded in the receipt")
-    cont_resume.add_argument("--reason", default="", help="Operator reason recorded in the receipt")
+    cont_hold.add_argument("--reason", default="", help=_CONTAINMENT_REASON_HELP)
+    cont_resume.add_argument("--reason", default="", help=_CONTAINMENT_REASON_HELP)
     for cont_cmd in (cont_q, cont_r, cont_sl, cont_rl):
-        cont_cmd.add_argument(
-            "--reason", default="", help="Operator reason recorded in the receipt"
-        )
+        cont_cmd.add_argument("--reason", default="", help=_CONTAINMENT_REASON_HELP)
     for cont_cmd in (cont_hold, cont_resume, cont_status, cont_q, cont_r, cont_sl, cont_rl):
         cont_cmd.add_argument(
             "--policy-file",
@@ -2189,6 +2188,28 @@ def _cmd_verify_receipt(args: argparse.Namespace) -> int:
     return 0
 
 
+def _containment_dispatch(manager: Any, sub: str, args: argparse.Namespace) -> dict:
+    """Route a containment subcommand to its manager call and return the result."""
+    reason = getattr(args, "reason", "")
+    if sub == "hold":
+        return manager.hold(scope=args.scope, scope_id=args.scope_id, reason=reason)
+    if sub == "resume":
+        return manager.resume(reason=reason)
+    if sub == "quarantine":
+        return manager.quarantine_trace(args.target_id, reason=reason)
+    if sub == "release":
+        return manager.release_trace(args.target_id, reason=reason)
+    if sub == "suspend-lease":
+        return manager.suspend_lease(
+            args.target_id, lease_id=getattr(args, "lease_id", ""), reason=reason
+        )
+    if sub == "reinstate-lease":
+        return manager.reinstate_lease(
+            args.target_id, lease_id=getattr(args, "lease_id", ""), reason=reason
+        )
+    return manager.status()
+
+
 def _cmd_containment(args: argparse.Namespace) -> int:
     """P4.A v0: receipted emergency authority stop (hold/resume/status)."""
     from raucle.containment import (
@@ -2217,38 +2238,22 @@ def _cmd_containment(args: argparse.Namespace) -> int:
     )
     manager = ContainmentManager(config)
     try:
-        if sub == "hold":
-            result = manager.hold(
-                scope=args.scope,
-                scope_id=args.scope_id,
-                reason=getattr(args, "reason", ""),
-            )
-        elif sub == "resume":
-            result = manager.resume(reason=getattr(args, "reason", ""))
-        elif sub == "quarantine":
-            result = manager.quarantine_trace(args.target_id, reason=getattr(args, "reason", ""))
-        elif sub == "release":
-            result = manager.release_trace(args.target_id, reason=getattr(args, "reason", ""))
-        elif sub == "suspend-lease":
-            result = manager.suspend_lease(
-                args.target_id,
-                lease_id=getattr(args, "lease_id", ""),
-                reason=getattr(args, "reason", ""),
-            )
-        elif sub == "reinstate-lease":
-            result = manager.reinstate_lease(
-                args.target_id,
-                lease_id=getattr(args, "lease_id", ""),
-                reason=getattr(args, "reason", ""),
-            )
-        else:
-            result = manager.status()
+        result = _containment_dispatch(manager, sub, args)
     except ContainmentError as exc:
         print(f"Error: containment: {exc}", file=sys.stderr)
         return 1
     if getattr(args, "json", False):
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
+    return _containment_render(result, config, sub)
+
+
+def _containment_render(result: dict, config: Any, sub: str) -> int:
+    """Human-readable rendering of a containment result; returns the exit code."""
+    verify_line = (
+        "  verify offline: raucle verify-receipt <jws> --pubkey "
+        f"{config.state_dir}/containment-operator-pubkey.pem"
+    )
     if sub == "status":
         if not result.get("held"):
             print("NOT HELD")
@@ -2273,10 +2278,7 @@ def _cmd_containment(args: argparse.Namespace) -> int:
         print(f"containment trace {result['status']}: {result['trace_id']}")
         print(f"  registry: {result['target_file']}")
         print(f"  receipt: {result['receipt_id']}")
-        print(
-            "  verify offline: raucle verify-receipt <jws> --pubkey "
-            f"{config.state_dir}/containment-operator-pubkey.pem"
-        )
+        print(verify_line)
         return 0
     if sub in ("suspend-lease", "reinstate-lease"):
         print(f"containment lease {result['status']}: {result['agent_id']}")
@@ -2284,10 +2286,7 @@ def _cmd_containment(args: argparse.Namespace) -> int:
             print(f"  lease id: {result['lease_id']}")
         print(f"  registry: {result['target_file']}")
         print(f"  receipt: {result['receipt_id']}")
-        print(
-            "  verify offline: raucle verify-receipt <jws> --pubkey "
-            f"{config.state_dir}/containment-operator-pubkey.pem"
-        )
+        print(verify_line)
         return 0
     final_line = f"containment {result['status']}: scope={result['scope']}"
     if result.get("scope_id"):
@@ -2297,10 +2296,7 @@ def _cmd_containment(args: argparse.Namespace) -> int:
     print(f"  receipt: {result['receipt_id']}")
     if result.get("restored_sha256"):
         print(f"  restored sha256: {result['restored_sha256']}")
-    print(
-        "  verify offline: raucle verify-receipt <jws> --pubkey "
-        f"{config.state_dir}/containment-operator-pubkey.pem"
-    )
+    print(verify_line)
     return 0
 
 
