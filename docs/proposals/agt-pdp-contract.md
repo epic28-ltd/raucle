@@ -1,6 +1,8 @@
 # A Policy Decision Point plug-in contract for the Microsoft Agent Governance Toolkit
 
-**Status:** Draft proposal, 2026-05-27.
+**Status:** Draft proposal, 2026-05-27 (updated 2026-11-07: the M2
+reference implementation has landed at
+`raucle.integrations.agt.RauclePolicyProvider`).
 **Authors:** Raucle.
 **Target:** upstream PR to [`microsoft/agent-governance-toolkit`](https://github.com/microsoft/agent-governance-toolkit); the raucle side has shipped (PDP adapter in current releases).
 **Companion proposal:** [`agent-framework-middleware.md`](./agent-framework-middleware.md).
@@ -158,7 +160,12 @@ With the PDP contract, those records gain three optional fields:
 ```jsonc
 {
   // ... existing AGT audit-record fields ...
-  "policy_provider":        "raucle.vcd@0.12.0",   // PDP.name() return
+  // `policy_provider` is the provider's audit-record name string
+  // (PDP.name() return) — an identifier, not an import path. The
+  // importable reference implementation is
+  // `raucle.integrations.agt.RauclePolicyProvider`; the `raucle.vcd`
+  // prefix honours the VCD formal model in `paper/lean/VCD/`.
+  "policy_provider":        "raucle.vcd@0.1.0",
   "policy_proof_artefact":  "sha256:4b78e687...",  // PolicyDecision.proof_artefact
   "verification_pointers": {
     "issuer_pubkey":     "https://acme.bank/.well-known/raucle-issuer.pub",
@@ -180,7 +187,11 @@ decision was sound.
 Raucle ships `RauclePolicyProvider` as part of the agent-framework
 integration package. The provider:
 
-- Returns `name()` = `"raucle.vcd@<package-version>"`.
+- Returns `name()` = `f"raucle.vcd@{RAUCLE_PROVIDER_VERSION}"` —
+  an audit-record identifier (currently `0.1.0`), *not an importable
+  module*. There is no `raucle.vcd` Python package; the VCD model lives
+  in `paper/lean/VCD/` and the importable provider is
+  `raucle.integrations.agt.RauclePolicyProvider`.
 - `supports(tool, agent_id)` returns True if the tool name has a
   policy in raucle's registry (loaded at provider construction).
 - `decide(...)` runs the existing `CapabilityGate.check` against the
@@ -191,8 +202,8 @@ integration package. The provider:
 Implementation sketch:
 
 ```python
-# raucle/integrations/agt.py  (M2 deliverable, alongside the
-# Agent Framework middleware)
+# raucle/integrations/agt.py  (the M2 deliverable — this module is
+# shipped; the sketch below is abridged)
 
 from agent_governance_toolkit.agent_os import IPolicyProvider, PolicyDecision
 
@@ -211,7 +222,7 @@ class RauclePolicyProvider(IPolicyProvider):
         self._base = verification_base_url.rstrip("/")
 
     def name(self) -> str:
-        return "raucle.vcd@0.12.0"
+        return f"raucle.vcd@{RAUCLE_PROVIDER_VERSION}"  # 0.1.0
 
     def supports(self, tool: str, agent_id: str) -> bool:
         token = get_in_force_token()
