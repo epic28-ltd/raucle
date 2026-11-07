@@ -22,6 +22,29 @@
   refused (fail-closed, named `snapshot_restamped`), receipted as
   `containment_resume_refused`, and the halt stays applied. A held
   state without its receipt stream is likewise a named refusal.
+### Fixed - Round-3 bypass remediations (RED-029, RED-030)
+- Containment (RED-029 / AV-12): the receipt stream is no longer
+  append-only by convention alone. A SCITT-style head anchor (N2
+  machinery pattern) is maintained beside the stream — every receipt
+  emit updates a sidecar `.head` file binding (count, stream_head),
+  where stream_head is a hash chain folded over the emitted receipt
+  hashes. Deleting, truncating or rewriting the stream is detected
+  under its own name `receipt_stream_gap`: the next operator /
+  containment action refuses with a named `ContainmentError`, and
+  `status()` surfaces `receipt_integrity` / `receipt_stream_erased`.
+  Honest anchoring limit (documented, not claimed away): detection runs
+  at the next containment action or status read, so there is a
+  detection lag window; a writer who rewrites BOTH the stream and the
+  co-located anchor resets anchoring — equivocation proof against a
+  collusive writer requires an external Transparency Service.
+- urlgate (RED-030 / AV-14): gating is method-agnostic for content-
+  bearing methods (GET, POST, PUT, PATCH, DELETE) — a GET with
+  prompt-bearing content in the request target to a gated suffix now
+  hits the same gate path as the POST of the same body, receipted
+  allow AND deny; a policy deny never contacts the upstream. HEAD and
+  OPTIONS remain the only exempt methods, narrowly, with a named
+  `X-Raucle-Passthrough: method-exempt-head-options` marker and no
+  receipt minted (no receipt inflation).
 
 ### Added - N2: SCITT transparency anchoring of receipt-chain heads
 - `raucle/transparency.py` registers a receipt-chain head (final event
