@@ -97,6 +97,113 @@ def _write_private(path: Path, data: bytes) -> None:
         os.close(fd)
 
 
+# -- receipt-stream head anchor (SCITT-style, N2 pattern) --------------------
+#
+# The receipt stream is append-only *by convention*: an attacker with write
+# access to it can erase receipt evidence without anything noticing (round-3
+# RED-029 / AV-12). The N2 transparency machinery proves the head of an
+# existing hash chain by anchoring its digest; the same construction anchors
+# the containment receipt stream: every receipt emit updates a sidecar HEAD
+# ANCHOR file binding (count, stream_head), where ``stream_head`` is a hash
+# chain folded over the emitted receipt hashes. Deleting the stream — or any
+# prefix/suffix/slice of it — no longer matches the anchored head, so the
+# tamper is detectable under its own name, ``receipt_stream_gap``.
+#
+# Anchoring limit (honest, documented — not claimed away): detection runs at
+# the next operator/containment action (receipt emit) or status read, so
+# there is an inherent DETECTION LAG WINDOW — tampering after the last
+# anchored emit stays invisible until that next action. The anchor also lives
+# beside the receipt stream under the same operator-controlled storage, so a
+# writer who rewrites BOTH resets anchoring; equivocation proof against a
+# collusive writer needs an external Transparency Service
+# (raucle/transparency.py), which is out of scope for this local anchor.
+_RECEIPT_ANCHOR_SUFFIX = ".head"
+_RECEIPT_ANCHOR_VERSION = 1
+_GENESIS_HEAD = "0" * 64
+
+
+def _receipt_anchor_path(receipts_path: str | Path) -> Path:
+    return Path(str(receipts_path) + _RECEIPT_ANCHOR_SUFFIX)
+
+
+def _fold_stream_head(prev_head: str, receipt_hash: str) -> str:
+    return hashlib.sha256((prev_head + receipt_hash).encode("ascii")).hexdigest()
+
+
+def _compute_stream_head(path: Path) -> tuple[str, int]:
+    """Recompute the anchored head over a receipt stream's receipt_hash values."""
+    head = _GENESIS_HEAD
+    count = 0
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            try:
+                receipt_hash = str(json.loads(line).get("receipt_hash", ""))
+            except json.JSONDecodeError:
+                receipt_hash = ""  # malformed line: folds as its absence
+            head = _fold_stream_head(head, receipt_hash)
+            count += 1
+    return head, count
+
+
+def _read_stream_anchor(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        anchor = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return anchor if isinstance(anchor, dict) else None
+
+
+def _write_stream_anchor(receipts_path: str | Path) -> dict[str, Any]:
+    """Anchor the current receipt stream: (count, stream_head), atomically."""
+    path = Path(receipts_path)
+    head, count = _compute_stream_head(path)
+    anchor = {
+        "anchor": "receipt_stream_head",
+        "version": _RECEIPT_ANCHOR_VERSION,
+        "count": count,
+        "stream_head": head,
+        "updated_at": _now_iso(),
+    }
+    anchor_path = _receipt_anchor_path(receipts_path)
+    anchor_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = anchor_path.with_suffix(anchor_path.suffix + ".tmp")
+    tmp.write_text(json.dumps(anchor, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, anchor_path)
+    return anchor
+
+
+def verify_receipt_stream_anchor(receipts_path: str | Path) -> dict[str, Any]:
+    """Compare the containment receipt stream against its head anchor.
+
+    Tamper is named under ``receipt_stream_gap``: ``missing_stream`` (the
+    stream file was deleted), ``truncated_or_rewritten`` (count or head
+    mismatch), or ``none`` when intact. Unanchored legacy streams report
+    ``anchored: False`` — absence of an anchor is never a silent pass.
+    """
+    path = Path(receipts_path)
+    anchor = _read_stream_anchor(_receipt_anchor_path(receipts_path))
+    if anchor is None:
+        return {"anchored": False, "receipt_stream_gap": "none", "receipts_present": path.exists()}
+    gap = "none"
+    if not path.exists():
+        gap = "missing_stream"
+    else:
+        head, count = _compute_stream_head(path)
+        if int(anchor.get("count", 0)) != count or str(anchor.get("stream_head", "")) != head:
+            gap = "truncated_or_rewritten"
+    return {
+        "anchored": True,
+        "receipt_stream_gap": gap,
+        "receipts_present": path.exists(),
+        "count": int(anchor.get("count", 0)),
+        "stream_head": str(anchor.get("stream_head", "")),
+    }
+
+
 class ContainmentError(Exception):
     """A named containment failure (CLI maps these to exit code 1)."""
 
@@ -191,6 +298,22 @@ class ContainmentManager:
         an unreceipted transition must never survive (design invariant).
         """
         signer = self._operator_signer()
+        # Anchor check first: the receipt stream must match its head anchor
+        # before the next receipt is appended onto it. A gap (deletion /
+        # truncation / rewrite since the last anchored emit) is refused under
+        # its own name — operator/containment actions never append receipt
+        # evidence onto an unanchored, silently-rewritten stream.
+        integrity = verify_receipt_stream_anchor(self.config.receipts_path)
+        if integrity["anchored"] and integrity["receipt_stream_gap"] != "none":
+            raise ContainmentError(
+                "receipt_stream_gap: containment receipt stream no longer matches "
+                f"its anchored head ({integrity['receipt_stream_gap']}); the receipt "
+                "evidence was tampered with between the last anchored emit and this "
+                "action — resolve the gap before issuing further containment receipts"
+            )
+        if not integrity["anchored"] and Path(self.config.receipts_path).exists():
+            # Legacy (pre-anchor) stream: adopt it as anchored on first emit.
+            _write_stream_anchor(self.config.receipts_path)
         jws = signer.issue(
             input_text=description,
             verdict=verdict,
@@ -209,6 +332,10 @@ class ContainmentManager:
             fh.write(line + "\n")
             fh.flush()
             os.fsync(fh.fileno())
+        # Re-anchor immediately after the append: the head anchor now covers
+        # the new receipt too, shrinking the detection lag window to the gap
+        # between this emit and the next operator/containment action.
+        _write_stream_anchor(self.config.receipts_path)
         return receipt_hash
 
     # -- state / locking -----------------------------------------------------
@@ -1243,6 +1370,27 @@ class ContainmentManager:
             ),
             "quarantined_traces": self._active_quarantines(),
             "suspended_leases": self._active_lease_suspensions(),
+            **self._receipt_integrity_fields(),
+        }
+
+    def _receipt_integrity_fields(self) -> dict[str, Any]:
+        """Receipt-stream anchor status for ``status()`` report payloads.
+
+        Unanchored legacy streams report ``receipt_integrity: null`` — no
+        silent claim in either direction. When the anchored stream no longer
+        matches (deleted / truncated / rewritten since the last anchored
+        emit), the tamper is reported under its own name
+        (``receipt_stream_gap``) with ``receipt_integrity: False``; this is
+        the documented detection-lag window, evaluated as of this call.
+        """
+        integrity = verify_receipt_stream_anchor(self.config.receipts_path)
+        if not integrity["anchored"]:
+            return {"receipt_integrity": None, "receipt_stream_integrity": "unanchored"}
+        gap = integrity["receipt_stream_gap"]
+        return {
+            "receipt_integrity": gap == "none",
+            "receipt_stream_integrity": "receipt_stream_gap" if gap != "none" else "intact",
+            "receipt_stream_erased": gap == "missing_stream" or None,
         }
 
     # -- helpers -------------------------------------------------------------

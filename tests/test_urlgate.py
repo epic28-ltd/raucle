@@ -86,6 +86,14 @@ class _MockUpstream(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
             return
+        if self.path.split("?", 1)[0].startswith("/v1/chat/completions"):
+            # gated tunnel targets: answer upstream-shaped like the POST path
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(OPENAI_CHAT_BODY)))
+            self.end_headers()
+            self.wfile.write(OPENAI_CHAT_BODY)
+            return
         self._no_content()
 
     def do_POST(self):
@@ -124,6 +132,23 @@ class _MockUpstream(BaseHTTPRequestHandler):
         self.send_response(404)
         self.send_header("Content-Length", "0")
         self.end_headers()
+
+    def do_PUT(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(OPENAI_CHAT_BODY)))
+        self.end_headers()
+        self.wfile.write(OPENAI_CHAT_BODY)
+
+    do_DELETE = do_PUT
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    do_OPTIONS = do_HEAD
 
 
 @pytest.fixture
@@ -430,3 +455,56 @@ class TestOptionalOpenAiSdk:
         body = getattr(err, "body", None)
         assert body is not None
         assert body.get("type") == "raucle_gate_deny"
+
+
+class TestMethodAgnosticGating:
+    """RED-030 / AV-14: gated suffixes gate content-bearing METHODS, not only
+    POSTs; HEAD/OPTIONS remain a narrow exempt passthrough with a named marker
+    and no receipt minted (no receipt inflation)."""
+
+    def test_get_tunnel_to_gated_suffix_is_gated(self, proxy_factory):
+        port, _, receipts_file = proxy_factory()
+        tunneled = "/v1/chat/completions?prompt=SECRET-PROD-KEY-12345"
+        status, hdrs, _ = _request(port, "GET", tunneled)
+        assert status == 200
+        assert hdrs.get("x-raucle-decision") == "allow"
+        receipt = hdrs.get("x-raucle-receipt")
+        assert receipt is not None, "the content-bearing GET hit the gate path: receipted"
+        assert receipt in receipts_file.read_text()
+
+    def test_get_deny_never_reaches_upstream(self, proxy_factory):
+        port, _, receipts_file = proxy_factory(
+            policy="version: 1\nissuer: test.urlgate\npolicies:\n"
+        )
+        tunneled = "/v1/chat/completions?prompt=SECRET-PROD-KEY-12345"
+        status, hdrs, _ = _request(port, "GET", tunneled)
+        assert status == 403
+        assert hdrs.get("x-raucle-receipt") in receipts_file.read_text()
+
+    def test_get_non_gated_paths_still_pure_passthrough_no_receipt(self, proxy_factory):
+        port, _, receipts_file = proxy_factory()
+        before = receipts_file.read_text().count("\n") if receipts_file.exists() else 0
+        status, hdrs, _ = _request(port, "GET", "/v1/models?q=anything")
+        assert status == 200
+        assert hdrs.get("x-raucle-receipt") is None
+        after = receipts_file.read_text().count("\n") if receipts_file.exists() else 0
+        assert after == before, "no receipt inflation for ungated paths"
+
+    def test_head_and_options_exempt_named_marker_no_receipt(self, proxy_factory):
+        port, _, receipts_file = proxy_factory()
+        before = receipts_file.read_text().count("\n")
+        for method in ("HEAD", "OPTIONS"):
+            status, hdrs, _ = _request(port, method, "/v1/chat/completions")
+            assert status == 200
+            assert hdrs.get("x-raucle-passthrough") == "method-exempt-head-options"
+            assert hdrs.get("x-raucle-receipt") is None, "exempt: no receipt minted"
+        after = receipts_file.read_text().count("\n")
+        assert after == before, "no receipt inflation for the exempt methods"
+
+    def test_delete_and_put_on_gated_suffix_are_gated(self, proxy_factory):
+        port, _, receipts_file = proxy_factory()
+        for method in ("PUT", "DELETE"):
+            status, hdrs, _ = _request(port, method, "/v1/chat/completions")
+            assert status == 200
+            receipt = hdrs.get("x-raucle-receipt")
+            assert receipt is not None and receipt in receipts_file.read_text()
