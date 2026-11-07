@@ -439,6 +439,78 @@ class TestCLIV1:
         assert agent_id == "agent:svc"
         assert not reason
 
+    def _cli_raw(self, tmp_path, *args):
+        """Human-output (non --json) invocation; returns captured stdout."""
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = cli_main(
+                [
+                    "containment",
+                    *args,
+                    "--quarantine-file",
+                    str(tmp_path / "trace-quarantines.jsonl"),
+                    "--lease-file",
+                    str(tmp_path / "lease-suspensions.jsonl"),
+                    "--receipts",
+                    str(tmp_path / "containment-receipts.jsonl"),
+                    "--state-dir",
+                    str(tmp_path / "containment"),
+                    "--policy-file",
+                    str(tmp_path / "policies.yaml"),
+                    "--revocations-file",
+                    str(tmp_path / "revocations.jsonl"),
+                    "--delegations-file",
+                    str(tmp_path / "delegations.jsonl"),
+                ]
+            )
+        assert rc == 0
+        return buf.getvalue()
+
+    def test_cli_human_rendering_all_paths(self, tmp_path, gw):
+        # status with nothing held or quarantined
+        out = self._cli_raw(tmp_path, "status")
+        assert "NOT HELD" in out
+        # scoped holds write revocations / read the delegation ledger
+        (tmp_path / "revocations.jsonl").touch()
+        (tmp_path / "delegations.jsonl").touch()
+        # hold rendering (global scope: final tail branch), then HELD status
+        out = self._cli_raw(tmp_path, "hold", "global", "--reason", "drill")
+        assert "containment held: scope=global" in out
+        assert "receipt:" in out
+        out = self._cli_raw(tmp_path, "status")
+        assert "hold receipt" in out
+        assert "reason      drill" in out
+        # resume rendering (final tail branch) releases the hold
+        out = self._cli_raw(tmp_path, "resume", "--reason", "over")
+        assert "containment" in out
+        # quarantine trace rendering
+        out = self._cli_raw(tmp_path, "quarantine", "t-h")
+        assert "containment trace" in out and "verify offline" in out
+        # suspend-lease rendering (registry + receipt, no lease id given)
+        creds = AgentCredentialStore(path=tmp_path / "agent-credentials.jsonl")
+        creds.issue("agent:svc")
+        out = self._cli_raw(tmp_path, "suspend-lease", "agent:svc")
+        assert "containment lease" in out
+        self._cli_raw(tmp_path, "reinstate-lease", "agent:svc")
+        # release rendering
+        out = self._cli_raw(tmp_path, "release", "t-h")
+        assert "containment trace" in out
+        # status with active entries listed
+        self._cli_raw(tmp_path, "quarantine", "t-h2")
+        out = self._cli_raw(tmp_path, "status")
+        assert "quarantined traces: t-h2" in out
+        # suspend-lease WITH a lease id rendered
+        self._cli_raw(tmp_path, "suspend-lease", "agent:svc", "--lease-id", "lease:xyz")
+        # status listing suspended leases while suspended
+        out = self._cli_raw(tmp_path, "status")
+        assert "suspended leases: agent:svc" in out
+        self._cli_raw(tmp_path, "reinstate-lease", "agent:svc", "--lease-id", "lease:xyz")
+        # release with a scope id in the rendering (final tail branch)
+        self._cli_raw(tmp_path, "release", "t-h2")
+
     def test_cli_hostile_inputs_exit_named(self, tmp_path, capsys):
         self._cli(tmp_path, "release", "t-nothing", expect=1)
         err = capsys.readouterr().err
