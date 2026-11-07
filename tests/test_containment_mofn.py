@@ -92,6 +92,9 @@ def test_default_m1_applies_immediately_with_v0_receipt_shape(tmp_path: Path):
     manager = _manager(tmp_path, min_approvers=1)
     outcome = manager.hold(scope="global", reason="incident")
     assert outcome["status"] == "held"
+    # RED-028 adds the operator keypin on the default path: the fingerprint
+    # rides the result and the hold receipt (a deliberate, documented
+    # departure from the v0 shape — the pin is the whole point).
     assert set(outcome) == {
         "status",
         "scope",
@@ -99,9 +102,9 @@ def test_default_m1_applies_immediately_with_v0_receipt_shape(tmp_path: Path):
         "target_file",
         "receipt_id",
         "revoked_ids",
+        "operator_key_fingerprint",
     }
-    # the hold receipt carries exactly the v0 extra keys — no M-of-N
-    # additions on the default path (demo path byte-identical)
+    # the hold receipt carries the v0 extra keys PLUS the RED-028 keypin
     holds = [r for r in _receipts(tmp_path) if r["verdict"] == VERDICT_HOLD]
     assert len(holds) == 1
     x = holds[0]["x"]
@@ -113,6 +116,7 @@ def test_default_m1_applies_immediately_with_v0_receipt_shape(tmp_path: Path):
         "target_file",
         "sha256_before",
         "revoked_ids",
+        "operator_key_fingerprint",
     }
     assert "lookup_balance" not in Path(manager.config.policy_file).read_text("utf-8")
     # resume restores the pre-hold bytes byte-exactly (state snapshot)

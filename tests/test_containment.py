@@ -29,7 +29,7 @@ from raucle.containment import (
     ContainmentManager,
 )
 from raucle.gateway import GatewayConfig, RaucleGateway
-from raucle.verdicts import VerdictVerifier
+from raucle.verdicts import VerdictSigner, VerdictVerifier
 
 POLICY = """
 version: 1
@@ -85,6 +85,84 @@ def _read_receipts(path) -> list[dict]:
 def _verdict_payload(jws: str) -> dict:
     part = jws.split(".")[1]
     return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+
+
+def _export_signer_pem(signer) -> bytes:
+    from cryptography.hazmat.primitives import serialization
+
+    return signer._private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+
+class TestOperatorKeypin:
+    """RED-028 honest mitigation: the operator keypair fingerprint is
+    pinned at hold-request time; a post-hold re-anchor is DETECTABLE
+    (operator_key_changed), not silently accepted. The pre-hold swap
+    window stays a documented limit (R3-L1)."""
+
+    def test_resume_after_unchanged_operator_key_succeeds(self, tmp_path, gw):
+        cfg = _config(tmp_path)
+        mgr = ContainmentManager(cfg)
+        policy = tmp_path / "policies.yaml"
+        original = policy.read_bytes()
+        mgr.hold(scope="global", reason="pin drill")
+        resumed = mgr.resume(reason="done")
+        assert resumed["status"] == "resumed"
+        assert policy.read_bytes() == original
+
+    def test_hold_receipt_and_state_carry_the_pinned_fingerprint(self, tmp_path, gw):
+        cfg = _config(tmp_path)
+        mgr = ContainmentManager(cfg)
+        held = mgr.hold(scope="global", reason="pin drill")
+        fp = held["operator_key_fingerprint"]
+        expected = hashlib.sha256(
+            (tmp_path / "containment" / "containment-operator-pubkey.pem").read_bytes()
+        ).hexdigest()
+        assert fp == expected
+        # the hold receipt pins the same fingerprint
+        receipts = _read_receipts(cfg.receipts_path)
+        payload = _verdict_payload(receipts[0]["jws"])
+        assert payload["extra"]["operator_key_fingerprint"] == expected
+        # the held state carries it too
+        state = json.loads((tmp_path / "containment" / "containment-state.json").read_text())
+        assert state["operator_key_fingerprint"] == expected
+
+    def test_post_hold_keypair_swap_refuses_named(self, tmp_path, gw):
+        cfg = _config(tmp_path)
+        mgr = ContainmentManager(cfg)
+        mgr.hold(scope="global", reason="incident")
+        state_dir = tmp_path / "containment"
+        # the attacker swaps the anchor AFTER the hold (RED-028 shape)
+        attacker = VerdictSigner.generate()
+        (state_dir / "containment-operator-key.pem").write_bytes(_export_signer_pem(attacker))
+        with pytest.raises(ContainmentError, match="operator_key_changed"):
+            mgr.resume(reason="try the swap")
+        # fail-closed: the policy bytes were NOT restored
+        assert (state_dir / "containment-state.json").exists()
+
+    def test_removed_keypair_refuses_without_minting_a_new_anchor(self, tmp_path, gw):
+        cfg = _config(tmp_path)
+        mgr = ContainmentManager(cfg)
+        mgr.hold(scope="global", reason="incident")
+        key_path = tmp_path / "containment" / "containment-operator-key.pem"
+        key_path.unlink()
+        with pytest.raises(ContainmentError, match="operator_key_changed"):
+            mgr.resume(reason="try again")
+        assert not key_path.exists()  # no fresh anchor minted by the failed resume
+
+    def test_pre_keypin_held_state_refuses_named(self, tmp_path, gw):
+        cfg = _config(tmp_path)
+        mgr = ContainmentManager(cfg)
+        mgr.hold(scope="global", reason="incident")
+        state_path = tmp_path / "containment" / "containment-state.json"
+        state = json.loads(state_path.read_text())
+        del state["operator_key_fingerprint"]
+        state_path.write_text(json.dumps(state, sort_keys=True))
+        with pytest.raises(ContainmentError, match="operator_key_unpinned"):
+            mgr.resume(reason="legacy")
 
 
 class TestGlobalHoldResume:
