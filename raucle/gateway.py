@@ -1630,18 +1630,7 @@ class RaucleGateway:
             return declared_agent_id, "", None
 
         if self._gate_auth_mode == "apikey":
-            if not api_key:
-                return None, "api key required (X-Api-Key)", None
-            assert self._agent_creds is not None
-            agent_id = self._agent_creds.verify(api_key)
-            if agent_id is None:
-                return None, "invalid or revoked api key", None
-            # P4.A v1: a suspended lease cuts the credential at the gate
-            # even though the key itself is valid.
-            lease_refusal = self._lease_suspension_refusal(agent_id)
-            if lease_refusal:
-                return None, "suspended credential lease: " + lease_refusal, None
-            return agent_id, "", None
+            return self._authenticate_apikey(api_key)
 
         # token mode
         if not capability_token:
@@ -1670,6 +1659,20 @@ class RaucleGateway:
         if declared_agent_id and declared_agent_id != token.agent_id:
             return None, "agent_id/token mismatch", None
         return token.agent_id, "", None
+
+    def _authenticate_apikey(self, api_key: str | None) -> tuple[str | None, str, Any]:
+        """Resolve an api-key caller; a suspended lease cuts the credential
+        at the gate even though the key itself is valid (P4.A v1)."""
+        if not api_key:
+            return None, "api key required (X-Api-Key)", None
+        assert self._agent_creds is not None
+        agent_id = self._agent_creds.verify(api_key)
+        if agent_id is None:
+            return None, "invalid or revoked api key", None
+        lease_refusal = self._lease_suspension_refusal(agent_id)
+        if lease_refusal:
+            return None, "suspended credential lease: " + lease_refusal, None
+        return agent_id, "", None
 
     def _ensure_caller_gate(self):
         """Lazily build the caller-token verification gate.

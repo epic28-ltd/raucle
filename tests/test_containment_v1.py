@@ -281,7 +281,8 @@ class TestLeaseSuspension:
     def test_suspended_lease_cuts_valid_apikey(self, tmp_path, keyed_gw):
         gw, api_key = keyed_gw
         agent_id, reason, _ = gw.authenticate_caller(api_key=api_key)
-        assert agent_id == "agent:svc" and not reason  # key is valid
+        assert agent_id == "agent:svc"  # key is valid
+        assert not reason
 
         mgr = ContainmentManager(_config(tmp_path))
         suspended = mgr.suspend_lease("agent:svc", lease_id="lease:abc123", reason="compromise")
@@ -301,7 +302,8 @@ class TestLeaseSuspension:
         reinstated = mgr.reinstate_lease("agent:svc", lease_id="lease:abc123", reason="cleared")
         assert reinstated["status"] == "reinstated"
         agent_id, reason, _ = gw.authenticate_caller(api_key=api_key)
-        assert agent_id == "agent:svc" and not reason
+        assert agent_id == "agent:svc"
+        assert not reason
 
     def test_suspend_and_reinstate_receipts_verify_offline(self, tmp_path):
         cfg = _config(tmp_path)
@@ -330,7 +332,8 @@ class TestLeaseSuspension:
         with pytest.raises(ContainmentError, match="receipt emission failed"):
             mgr.suspend_lease("agent:svc")
         agent_id, reason, _ = gw.authenticate_caller(api_key=api_key)
-        assert agent_id == "agent:svc" and not reason
+        assert agent_id == "agent:svc"
+        assert not reason
 
     def test_hostile_lease_transitions_are_named(self, tmp_path):
         mgr = ContainmentManager(_config(tmp_path))
@@ -433,7 +436,8 @@ class TestCLIV1:
         assert "suspended credential lease" in reason
         self._cli(tmp_path, "reinstate-lease", "agent:svc")
         agent_id, reason, _ = keyed.authenticate_caller(api_key=api_key)
-        assert agent_id == "agent:svc" and not reason
+        assert agent_id == "agent:svc"
+        assert not reason
 
     def test_cli_hostile_inputs_exit_named(self, tmp_path, capsys):
         self._cli(tmp_path, "release", "t-nothing", expect=1)
