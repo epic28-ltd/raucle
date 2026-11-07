@@ -9,9 +9,16 @@ What it does
 * Proxies loopback API traffic to the configured upstream (default
   ``https://api.openai.com``). Non-gated traffic (e.g. ``GET /v1/models``)
   passes through untouched.
-* Gated traffic (chat/completions/messages POSTs) consults the existing
+* Gated traffic (chat/completions/messages paths) consults the existing
   policy gate (``RaucleGateway``) server-side with a service-scoped policy
   and mints one signed provenance receipt per gated call - allow AND deny.
+  GATING IS METHOD-AGNOSTIC for content-bearing methods (GET, POST, PUT,
+  PATCH, DELETE): a GET to a gated suffix that carries prompt-bearing
+  content in the request target hits the same gate path as the POST of the
+  same body (round-3 RED-030). Only HEAD and OPTIONS are exempt — narrowly:
+  they carry no request content, pass through with a named
+  ``X-Raucle-Passthrough: method-exempt-head-options`` marker, and mint no
+  receipt (no receipt inflation).
 * On DENY it never contacts the upstream. It returns an upstream-shaped
   error body (OpenAI ``{"error": {...}}`` / Anthropic
   ``{"type": "error", "error": {...}}``) with HTTP 403 so stock SDK
@@ -56,8 +63,9 @@ logger = logging.getLogger("raucle.urlgate")
 DEFAULT_UPSTREAM = "https://api.openai.com"
 DEFAULT_RECEIPT_STORE = "urlgate-receipts.jsonl"
 
-# Endpoints whose POST traffic is gated (policy + receipt). Everything
-# else passes through untouched.
+# Endpoints whose content-bearing traffic (any gated method: GET, POST,
+# PUT, PATCH, DELETE) is gated (policy + receipt). HEAD/OPTIONS are exempt
+# with a named passthrough marker. Everything else passes through untouched.
 DEFAULT_GATED_SUFFIXES = (
     "/chat/completions",
     "/completions",
@@ -85,6 +93,10 @@ HOP_BY_HOP = frozenset(
 RECEIPT_HEADER = "X-Raucle-Receipt"
 DECISION_HEADER = "X-Raucle-Decision"
 TOOL_HEADER = "X-Raucle-Tool"
+#: Named marker on deliberate method-exempt (HEAD/OPTIONS) passthroughs: no
+#: gate consultation, no receipt minted (RED-030 narrow exemption).
+PASSTHROUGH_MARKER_HEADER = "X-Raucle-Passthrough"
+PASSTHROUGH_MARKER_METHOD_EXEMPT = "method-exempt-head-options"
 
 DEFAULT_POLICY = """\
 version: 1
@@ -228,7 +240,8 @@ class UrlGate:
     # Gating
     # ------------------------------------------------------------------
     def gate_call(self, path: str, body: bytes) -> dict[str, Any] | None:
-        """Gate a POST body. Returns the decision dict for gated calls
+        """Gate a request body (method-agnostic for gated suffixes).
+        Returns the decision dict for gated calls
         (caller inspects ``decision``), or None when the path is not
         gated (pure pass-through, no receipt)."""
         tool = _gate_tool_for_path(path, self.config)
@@ -328,30 +341,34 @@ class _UrlGateHandler(BaseHTTPRequestHandler):
         self._proxy(method=self.command)
 
     def do_GET(self) -> None:
-        self._passthrough()
-
-    def do_HEAD(self) -> None:
-        self._passthrough()
+        self._proxy(method="GET")
 
     def do_POST(self) -> None:
         self._proxy(method="POST")
 
     def do_PUT(self) -> None:
-        self._passthrough()
+        self._proxy(method="PUT")
 
     def do_PATCH(self) -> None:
-        self._passthrough()
+        self._proxy(method="PATCH")
 
     def do_DELETE(self) -> None:
+        self._proxy(method="DELETE")
+
+    def do_HEAD(self) -> None:
         self._passthrough()
 
     def do_OPTIONS(self) -> None:
         self._passthrough()
 
+    GATED_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
+    EXEMPT_METHODS = frozenset({"HEAD", "OPTIONS"})
+
     def _gate_post(
         self, gate: UrlGate, body: bytes, cfg: UrlGateConfig
     ) -> tuple[str | None, str] | None:
-        """Gate a POST body.  Returns ``(receipt_id, decision_header)`` when
+        """Gate a request body (method-agnostic; see ``GATED_METHODS``).
+        Returns ``(receipt_id, decision_header)`` when
         the request may proceed, or ``None`` once a deny/gate-failure
         response has already been written."""
         try:
@@ -407,12 +424,21 @@ class _UrlGateHandler(BaseHTTPRequestHandler):
 
         receipt_id: str | None = None
         decision_header = "allow"
-        if method == "POST":
+        # Method-agnostic gating (round-3 RED-030 / AV-14): gated CONTENT
+        # must hit the gate path regardless of request method — a GET with
+        # prompt-bearing content in the request target is exactly as
+        # policy-relevant as the POST of the same body. Only HEAD and
+        # OPTIONS are exempt, NARROWLY: they carry no request content by
+        # definition, so they pass through with a named passthrough marker
+        # and no receipt minted (no receipt inflation either way).
+        if method in self.GATED_METHODS:
             gated = self._gate_post(gate, body, cfg)
             if gated is None:  # responded deny / gate failure
                 return
             receipt_id = gated[0]
             decision_header = gated[1]
+        # method not in GATED_METHODS: only HEAD/OPTIONS reach _proxy (the
+        # BaseHTTPRequestHandler dispatches do_* explicitly) — narrow exempt.
 
         try:
             resp = gate.forward(
@@ -433,6 +459,10 @@ class _UrlGateHandler(BaseHTTPRequestHandler):
 
         out_headers = _strip_hop_headers(resp.headers)
         out_headers.append((DECISION_HEADER, decision_header))
+        if method not in self.GATED_METHODS:
+            # Named passthrough marker: the exempt (HEAD/OPTIONS) request was
+            # deliberately not gate-consulted and mints no receipt.
+            out_headers.append((PASSTHROUGH_MARKER_HEADER, PASSTHROUGH_MARKER_METHOD_EXEMPT))
         if receipt_id:
             out_headers.append((RECEIPT_HEADER, receipt_id))
         # Preserve the upstream content framing: Content-Length is copied
