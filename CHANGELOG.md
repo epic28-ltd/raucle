@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Tests - dark-corners remediation round 2
+
+- SCITT anchoring (`raucle/transparency.py`): the poll/HTTP edge states get
+  fake-host tests in `tests/test_transparency.py` — pending-forever (named
+  `PENDING` with the resumable operation location), op-failed after poll
+  (named `TRANSPARENCY-FAILED` with the service reason), unknown/garbage
+  poll status (fails closed, named), malformed poll body, unparseable
+  `Date` header (named rejection), HTTP-date `Retry-After` honoured and
+  clamped to 30s, garbage `Retry-After` treated as zero, and a
+  connection-refused service surfacing immediately instead of hanging.
+- EQR (`raucle/eqr.py`): `EvidenceStore` record/snapshot/clear slices are
+  covered with real behaviour assertions — a one-(tool, kind)-slice clear,
+  a tool-wide clear, the everything clear, clearing an absent slice as a
+  no-op, snapshot as an independent copy, dict-form `record`, and
+  re-recording after a full refresh (`tests/test_eqr_gate.py`).
+- Gateway entry point (`raucle/gateway_server.py`): kept, not deleted —
+  it is the `Dockerfile.gateway` `CMD`, referenced by
+  `docker-compose.gateway.yml` and the helm chart, so the audit's
+  "dead entry point" branch did not apply. Smoke tests
+  (`tests/test_gateway_server.py`) pin the wiring (env → config →
+  gateway/user bootstrap → two uvicorn servers) and the README now names
+  the single-process deployment path.
+
 ### Fixed - M026/M027: round-3 bypass remediations (RED-026 / AV-02, RED-027 / AV-10)
 - M-026 (RED-026 authority re-mint escape): while a hold is applied, the
   containment manager publishes a receipted control row into the
