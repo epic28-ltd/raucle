@@ -82,6 +82,17 @@ _STATE_FILE = "containment-state.json"
 _KEY_FILE = "containment-operator-key.pem"
 _PUBKEY_FILE = "containment-operator-pubkey.pem"
 
+#: RED-028 honest mitigation (documented limit R3-L1): the operator keypair
+#: fingerprint (sha256 over the public-key PEM) is PINNED into the hold
+#: receipt and the held state at hold-request time; :meth:`resume` refuses
+#: with ``operator_key_changed`` when the anchor moved out of band. This
+#: converts the silent quarantiner re-anchor into a DETECTABLE attack for
+#: the post-hold window; a swap completed BEFORE the hold still issues the
+#: hold under the attacker key (the pin then matches) and remains a
+#: documented limit — closing it needs an out-of-band anchor.
+_ERR_OPERATOR_KEY_CHANGED = "operator_key_changed"
+_ERR_OPERATOR_KEY_UNPINNED = "operator_key_unpinned"
+
 _REVOCATION_PATH = "containment"  # named slot: trace quarantine / lease
 # v1 named slots now implemented below: trace quarantine (quarantine/release)
 # and lease suspension (suspend/reinstate) ride the same receipt machinery.
@@ -204,6 +215,11 @@ def verify_receipt_stream_anchor(receipts_path: str | Path) -> dict[str, Any]:
     }
 
 
+def _key_fingerprint(pem: bytes) -> str:
+    """Operator keypair fingerprint: sha256 over the public-key PEM (RED-028)."""
+    return hashlib.sha256(pem).hexdigest()
+
+
 class ContainmentError(Exception):
     """A named containment failure (CLI maps these to exit code 1)."""
 
@@ -261,6 +277,24 @@ class ContainmentManager:
         self.state_path = self.state_dir / _STATE_FILE
 
     # -- operator identity --------------------------------------------------
+
+    def _operator_key_fingerprint(self) -> str:
+        """The persistent operator keypair's fingerprint (RED-028 pin).
+
+        Refuses without generating when the key file is MISSING while the
+        state directory already holds a pubkey: that path is exactly the
+        RED-028 re-anchor shape and the check must stay read-only (a
+        failed resume must not mint a fresh anchor).
+        """
+        key_path = self.state_dir / _KEY_FILE
+        if not key_path.exists() and (self.state_dir / _PUBKEY_FILE).exists():
+            raise ContainmentError(
+                f"operator keypair file '{key_path.name}' is missing while the "
+                f"published pubkey remains; the quarantiner anchor moved "
+                f"({_ERR_OPERATOR_KEY_CHANGED}) - resume refused (fail-closed)"
+            )
+        signer = self._operator_signer()
+        return _key_fingerprint(signer.public_key_pem())
 
     def _operator_signer(self):
         """A VerdictSigner keyed by the persistent operator key.
@@ -507,6 +541,9 @@ class ContainmentManager:
                 self._raise_state_busy(state)
             actor = self.config.actor
             required = self.config.min_approvers
+            # RED-028: pin the operator keypair fingerprint at hold REQUEST
+            # time so a later re-anchor is detectable at apply/resume time.
+            operator_key_fingerprint = self._operator_key_fingerprint()
             receipt_id = self._emit_receipt(
                 verdict=VERDICT_HOLD_PENDING,
                 description=f"containment:hold-pending:{scope}:{scope_id}",
@@ -517,6 +554,7 @@ class ContainmentManager:
                     "reason": reason,
                     "min_approvers": required,
                     "approvers": [],
+                    "operator_key_fingerprint": operator_key_fingerprint,
                 },
             )
             self._write_atomic(
@@ -533,6 +571,7 @@ class ContainmentManager:
                         "approval_receipts": [],
                         "pending_receipt_id": receipt_id,
                         "requested_at": _now_iso(),
+                        "operator_key_fingerprint": operator_key_fingerprint,
                     },
                     sort_keys=True,
                 ).encode("utf-8"),
@@ -543,6 +582,7 @@ class ContainmentManager:
                 "scope_id": scope_id,
                 "min_approvers": required,
                 "approvers": [],
+                "operator_key_fingerprint": operator_key_fingerprint,
                 "receipt_id": receipt_id,
             }
         finally:
@@ -730,6 +770,20 @@ class ContainmentManager:
         try:
             target, fd_target, original, ids = self._open_hold_target(scope, scope_id)
 
+            # RED-028: a hold apply that rides a pending record carries the
+            # pin minted at request time; the anchor must not have moved in
+            # between (else the approvals were receipted under another key).
+            if pending is not None:
+                pending_fp = str(pending.get("operator_key_fingerprint", ""))
+                if pending_fp and pending_fp != self._operator_key_fingerprint():
+                    raise ContainmentError(
+                        f"operator keypair fingerprint changed since the hold "
+                        f"request ({_ERR_OPERATOR_KEY_CHANGED}): the pending "
+                        "approvals were receipted under a different anchor; "
+                        "apply refused (fail-closed)"
+                    )
+            operator_key_fingerprint = self._operator_key_fingerprint()
+
             original_sha = _sha256_bytes(original)
             if scope == SCOPE_GLOBAL:
                 held_bytes = self._deny_all_policy_bytes(original)
@@ -745,6 +799,7 @@ class ContainmentManager:
                 "target_file": str(target),
                 "sha256_before": original_sha,
                 "revoked_ids": ids if scope != SCOPE_GLOBAL else [],
+                "operator_key_fingerprint": operator_key_fingerprint,
             }
             if pending is not None:
                 # Quorum provenance rides the hold receipt: every approver
@@ -781,6 +836,7 @@ class ContainmentManager:
                 "receipt_id": receipt_id,
                 "revoked_ids": ids if scope != SCOPE_GLOBAL else [],
                 "original_bytes_b64": base64.b64encode(original).decode("ascii"),
+                "operator_key_fingerprint": operator_key_fingerprint,
             }
             if pending is not None:
                 held_state["approvers"] = list(pending.get("approvers", []))
@@ -814,6 +870,7 @@ class ContainmentManager:
                 "target_file": str(target),
                 "receipt_id": receipt_id,
                 "revoked_ids": ids if scope != SCOPE_GLOBAL else [],
+                "operator_key_fingerprint": operator_key_fingerprint,
             }
             if pending is not None:
                 held_result["approvers"] = list(pending.get("approvers", []))
@@ -964,6 +1021,24 @@ class ContainmentManager:
                     "restore verification failed: snapshot digest mismatch; "
                     "resume refused (fail-closed)"
                 )
+            # RED-028: the quarantiner anchor is pinned at hold-request time;
+            # a keypair swap after the hold must surface as a NAMED refusal
+            # (operator_key_changed), never a silent re-anchor.
+            pinned_fp = str(state.get("operator_key_fingerprint", ""))
+            if not pinned_fp:
+                raise ContainmentError(
+                    f"held state predates operator keypair pinning "
+                    f"({_ERR_OPERATOR_KEY_UNPINNED}): the anchor cannot be "
+                    "verified out of band; resume refused (fail-closed) — "
+                    "re-establish the pin with a fresh resumeable hold"
+                )
+            current_fp = self._operator_key_fingerprint()
+            if current_fp != pinned_fp:
+                raise ContainmentError(
+                    f"operator keypair fingerprint changed since the hold "
+                    f"request ({_ERR_OPERATOR_KEY_CHANGED}): the quarantiner "
+                    "anchor moved out of band; resume refused (fail-closed)"
+                )
             # M-027 (RED-027 / AV-10): the digest check above is
             # integrity-only - a state-file writer who re-stamps
             # ``original_bytes_b64`` together with ``original_sha256``
@@ -998,6 +1073,7 @@ class ContainmentManager:
                         "sha256_before": state.get("held_sha256", ""),
                         "hold_receipt_id": state.get("receipt_id", ""),
                         "released_ids": state.get("revoked_ids", []),
+                        "operator_key_fingerprint": current_fp,
                     },
                 )
             except Exception as exc:
