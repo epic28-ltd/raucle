@@ -530,7 +530,15 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
 
     _register_deployment_intake_routes(app, gateway)
 
-    @app.get("/.well-known/raucle-conformance")
+    @app.get(
+        "/.well-known/raucle-conformance",
+        responses={
+            503: {
+                "description": "Service Unavailable: conformance data not built "
+                "(run scripts/gen_conformance_data.py)",
+            },
+        },
+    )
     def raucle_conformance() -> JSONResponse:
         """Serve the build-pinned standards/ vector conformance record.
 

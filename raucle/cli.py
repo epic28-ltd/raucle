@@ -18,11 +18,14 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from raucle import __version__
 from raucle._paths import validate_path
 from raucle.scanner import MAX_INPUT_BYTES, Scanner
+
+if TYPE_CHECKING:
+    from raucle.audit_pack import PackVerdict
 
 _CHAIN_JSONL_HELP = "The receipt chain JSONL"
 _VALID_COLOR = "\033[92mVALID\033[0m"
@@ -2195,6 +2198,52 @@ def _cmd_audit_pack_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_demo_verdict(verdict: PackVerdict) -> None:
+    """Print the human status block for a ``verify_pack`` verdict."""
+    if verdict.signer_trusted is None:
+        signer = (
+            f"  signer (not pinned)         {verdict.signer_key_id} [internal consistency only]\n"
+        )
+    else:
+        signer = (
+            f"  signer matches pinned key   {'PASS' if verdict.signer_trusted else 'FAIL'} "
+            f"({verdict.signer_key_id})\n"
+        )
+    status = "".join(
+        f"  {label:<28}{'PASS' if ok else 'FAIL'}\n"
+        for label, ok in (
+            ("index signature", verdict.index_signature_ok),
+            ("integrity (member hashes)", verdict.integrity_ok),
+            ("manifest signature", verdict.manifest_signature_ok),
+            ("receipt chain (offline)", verdict.chain_valid),
+            ("manifest reproducible", verdict.reproducible),
+        )
+    )
+    print(status + signer.rstrip("\n"), file=sys.stderr)
+
+
+def _demo_pinned_digest_check(args: argparse.Namespace, digest: str) -> bool | None:
+    """Compare ``--pinned`` against the computed bundle digest.
+
+    Returns None when no pin was given; True/False otherwise.
+    """
+    pinned = getattr(args, "pinned", None)
+    if not pinned:
+        return None
+    pinned_ok = pinned == digest
+    print(
+        f"  pinned published digest     {'PASS' if pinned_ok else 'FAIL'} ({pinned})",
+        file=sys.stderr,
+    )
+    if not pinned_ok:
+        print(
+            "    - published digest mismatch: bundle differs from the pinned value; "
+            "re-pin only via a reviewable change with the cause named",
+            file=sys.stderr,
+        )
+    return pinned_ok
+
+
 def _cmd_demo_verify(args: argparse.Namespace) -> int:
     """One-command offline verification of the shipped demo bundle.
 
@@ -2205,6 +2254,7 @@ def _cmd_demo_verify(args: argparse.Namespace) -> int:
     from raucle.audit_pack import verify_pack
     from raucle.demo_bundle import (
         DIGEST_ALGO,
+        PACK_JSON_NAME,
         bundle_digest,
         locate_demo_bundle,
         pack_index_summary,
@@ -2213,11 +2263,11 @@ def _cmd_demo_verify(args: argparse.Namespace) -> int:
     try:
         pack_dir = locate_demo_bundle(args.pack)
         summary = pack_index_summary(pack_dir)
-    except (FileNotFoundError, ValueError, json.JSONDecodeError, OSError) as exc:
+    except (ValueError, OSError) as exc:
         print(f"demo verify failed: {exc}", file=sys.stderr)
         return 2
-    if not (Path(pack_dir) / "PACK.json").is_file():
-        print(f"demo verify failed: no PACK.json in {pack_dir}", file=sys.stderr)
+    if not (Path(pack_dir) / PACK_JSON_NAME).is_file():
+        print(f"demo verify failed: no {PACK_JSON_NAME} in {pack_dir}", file=sys.stderr)
         return 2
     print(
         f"demo bundle: {pack_dir}\n"
@@ -2228,26 +2278,7 @@ def _cmd_demo_verify(args: argparse.Namespace) -> int:
     )
 
     verdict = verify_pack(pack_dir)
-    for line in (
-        ("index signature", verdict.index_signature_ok),
-        ("integrity (member hashes)", verdict.integrity_ok),
-        ("manifest signature", verdict.manifest_signature_ok),
-        ("receipt chain (offline)", verdict.chain_valid),
-        ("manifest reproducible", verdict.reproducible),
-    ):
-        label, ok = line
-        print(f"  {label:<28}{'PASS' if ok else 'FAIL'}", file=sys.stderr)
-    if verdict.signer_trusted is None:
-        print(
-            f"  signer (not pinned)         {verdict.signer_key_id} [internal consistency only]",
-            file=sys.stderr,
-        )
-    else:
-        print(
-            f"  signer matches pinned key   {'PASS' if verdict.signer_trusted else 'FAIL'} "
-            f"({verdict.signer_key_id})",
-            file=sys.stderr,
-        )
+    _print_demo_verdict(verdict)
 
     try:
         digest = bundle_digest(pack_dir)
@@ -2256,21 +2287,7 @@ def _cmd_demo_verify(args: argparse.Namespace) -> int:
         return 1
     print(f"  bundle digest {DIGEST_ALGO}\n    {digest}", file=sys.stderr)
 
-    pinned = getattr(args, "pinned", None)
-    pinned_ok: bool | None = None
-    if pinned:
-        pinned_ok = pinned == digest
-        print(
-            f"  pinned published digest     {'PASS' if pinned_ok else 'FAIL'} ({pinned})",
-            file=sys.stderr,
-        )
-        if not pinned_ok:
-            print(
-                "    - published digest mismatch: bundle differs from the pinned value; "
-                "re-pin only via a reviewable change with the cause named",
-                file=sys.stderr,
-            )
-
+    pinned_ok = _demo_pinned_digest_check(args, digest)
     if verdict.reasons:
         for reason in verdict.reasons:
             print(f"    - {reason}", file=sys.stderr)

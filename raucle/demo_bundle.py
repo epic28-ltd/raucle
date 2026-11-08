@@ -27,6 +27,10 @@ DEMO_BUNDLE_DIRNAME = Path("docs") / "demo-bundle"
 # values, so treat any bump as a published-event worth its own PR.
 DIGEST_ALGO = "raucle-demo-bundle-digest/v1"
 
+# Name of the pack index file. Keeping it a single constant keeps locate /
+# digest / summary / CLI messaging agree on the canonical filename.
+PACK_JSON_NAME = "PACK.json"
+
 
 def locate_demo_bundle(explicit: str | Path | None = None) -> Path:
     """Return the demo-bundle directory: explicit path, else cwd, else repo."""
@@ -37,7 +41,7 @@ def locate_demo_bundle(explicit: str | Path | None = None) -> Path:
         Path(__file__).resolve().parent.parent / DEMO_BUNDLE_DIRNAME,
     ]
     for candidate in candidates:
-        if (candidate / "PACK.json").is_file():
+        if (candidate / PACK_JSON_NAME).is_file():
             return candidate
     tried = ", ".join(str(c) for c in candidates)
     raise FileNotFoundError(
@@ -56,7 +60,7 @@ def bundle_digest(pack_dir: str | Path) -> str:
     member does.
     """
     pack = Path(pack_dir)
-    index_path = pack / "PACK.json"
+    index_path = pack / PACK_JSON_NAME
     if not index_path.is_file():
         raise FileNotFoundError(f"no PACK.json in {pack}")
     index = json.loads(index_path.read_text())
@@ -66,14 +70,14 @@ def bundle_digest(pack_dir: str | Path) -> str:
         if not isinstance(rel, str) or not rel:
             raise ValueError(f"PACK.json member without a path: {member!r}")
         members.append((rel, hashlib.sha256((pack / rel).read_bytes()).hexdigest()))
-    members.append(("PACK.json", hashlib.sha256(index_path.read_bytes()).hexdigest()))
+    members.append((PACK_JSON_NAME, hashlib.sha256(index_path.read_bytes()).hexdigest()))
     payload = "\n".join(f"{digest}\t{rel}" for rel, digest in sorted(members)) + "\n"
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def pack_index_summary(pack_dir: str | Path) -> dict[str, object]:
     """Human-relevant fields from PACK.json (signer id, member count, version)."""
-    index = json.loads((Path(pack_dir) / "PACK.json").read_text())
+    index = json.loads((Path(pack_dir) / PACK_JSON_NAME).read_text())
     return {
         "kind": index.get("kind"),
         "tool_version": index.get("tool_version"),

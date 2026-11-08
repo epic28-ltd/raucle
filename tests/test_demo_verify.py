@@ -10,6 +10,8 @@ the tamper case flips a byte in a COPY.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
 from pathlib import Path
 
@@ -26,6 +28,24 @@ def _run(capsys: pytest.CaptureFixture[str], *argv: str) -> tuple[int, str]:
     code = main(["demo", "verify", *argv])
     out, err = capsys.readouterr()
     return code, err + out
+
+
+def _independent_bundle_digest(pack_dir: Path) -> str:
+    """Recompute the demo-bundle digest WITHOUT calling bundle_digest.
+
+    Algorithm per ``raucle.demo_bundle`` docstring: sha256 over the sorted
+    ``<digest>\\t<rel>`` lines of the members declared in PACK.json, plus
+    PACK.json itself. Deliberately written from the spec so a tautological
+    actual == actual comparison (Sonar S5863) is not needed.
+    """
+    index = json.loads((pack_dir / "PACK.json").read_text())
+    digests = [
+        (hashlib.sha256((pack_dir / m["path"]).read_bytes()).hexdigest(), m["path"])
+        for m in index["members"]
+    ]
+    digests.append((hashlib.sha256((pack_dir / "PACK.json").read_bytes()).hexdigest(), "PACK.json"))
+    payload = "\n".join(f"{d}\t{rel}" for d, rel in sorted(digests, key=lambda t: t[1])) + "\n"
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _tampered_copy(pack: Path, tmp_path: Path) -> Path:
@@ -103,9 +123,9 @@ class TestDemoVerify:
         with pytest.raises(ValueError, match="without a path"):
             bundle_digest(tmp_path)
 
-    def test_bundle_digest_stable_within_run(self):
+    def test_bundle_digest_matches_independent_recomputation(self):
         pack = locate_demo_bundle()
-        assert bundle_digest(pack) == bundle_digest(pack)
+        assert bundle_digest(pack) == _independent_bundle_digest(pack)
 
     def test_pack_index_is_recognised_kind(self):
         from raucle.demo_bundle import pack_index_summary
