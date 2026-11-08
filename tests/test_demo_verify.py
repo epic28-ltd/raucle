@@ -47,9 +47,7 @@ class TestDemoVerify:
     def test_digest_is_printed_and_reproducible(self, capsys):
         code, err = _run(capsys, str(locate_demo_bundle()))
         assert code == 0, err
-        printed = [
-            line.strip() for line in err.splitlines() if line.strip().startswith("sha256:")
-        ]
+        printed = [line.strip() for line in err.splitlines() if line.strip().startswith("sha256:")]
         assert printed, f"no digest line printed:\n{err}"
         assert printed[-1] == bundle_digest(locate_demo_bundle())
 
