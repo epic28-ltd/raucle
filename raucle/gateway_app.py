@@ -2377,10 +2377,11 @@ function showTab(t,el) {
 function api(p,o){const h={'Authorization':key,...((o||{}).headers||{})};if(totpCode)h['X-TOTP']=totpCode;return fetch(p,{...(o||{}),headers:h});}
 function loadAll(){loadStats();}
 function loadStats(){api('/api/stats').then(r=>r.json()).then(d=>{
-  document.getElementById('statsGrid').innerHTML=`<div class="stat"><div class="stat-value">${d.total_requests||0}</div><div class="stat-label">Total</div></div><div class="stat"><div class="stat-value">${d.allowed||0}</div><div class="stat-label">Allowed</div></div><div class="stat"><div class="stat-value">${d.denied||0}</div><div class="stat-label">Denied</div></div><div class="stat"><div class="stat-value">${d.escalated||0}</div><div class="stat-label">Escalated</div></div><div class="stat"><div class="stat-value">${d.avg_latency_us||0}</div><div class="stat-label">Avg us</div></div>`;
-  let tb=document.getElementById('toolTableBody');tb.innerHTML='';Object.entries(d.tools||{}).forEach(([t,s])=>tb.innerHTML+=`<tr><td>${esc(t)}</td><td>${s.allow||0}</td><td>${s.deny||0}</td><td>${s.escalate||0}</td></tr>`);
+  document.getElementById('statsGrid').innerHTML=`<div class="stat"><div class="stat-value">${escn(d.total_requests)}</div><div class="stat-label">Total</div></div><div class="stat"><div class="stat-value">${escn(d.allowed)}</div><div class="stat-label">Allowed</div></div><div class="stat"><div class="stat-value">${escn(d.denied)}</div><div class="stat-label">Denied</div></div><div class="stat"><div class="stat-value">${escn(d.escalated)}</div><div class="stat-label">Escalated</div></div><div class="stat"><div class="stat-value">${escn(d.avg_latency_us)}</div><div class="stat-label">Avg us</div></div>`;
+  let tb=document.getElementById('toolTableBody');tb.innerHTML='';Object.entries(d.tools||{}).forEach(([t,s])=>tb.innerHTML+=`<tr><td>${esc(t)}</td><td>${escn(s.allow)}</td><td>${escn(s.deny)}</td><td>${escn(s.escalate)}</td></tr>`);
 });}
 function esc(s){return s?s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])):'--';}
+function escn(v){return esc(String(v===undefined||v===null?0:v));}
 function setDirFilter(d,el){dirFilter=d;document.querySelectorAll('.dir-toggle button').forEach(b=>b.classList.remove('active'));el.classList.add('active');loadConnections(lastLimit||200);}
 
 // === Netbird-style flow graph ===
@@ -2435,7 +2436,7 @@ function renderFlow() {
     let dot=d.a>d.d?'dot-allow':d.d>d.a?'dot-deny':'dot-escalate';
     return `<div class="flow-item${selectedSource===n?' active':''}" id="src-${esc(n)}" data-name="${esc(n)}" onclick="flowItemClick(event,'source')">
       <div class="flow-item-name"><span class="flow-item-dot ${dot}"></span>${esc(n)}</div>
-      <div class="flow-item-meta">${d.t} calls: ${d.a||0}A / ${d.d||0}D / ${d.e||0}E</div>
+      <div class="flow-item-meta">${escn(d.t)} calls: ${escn(d.a)}A / ${escn(d.d)}D / ${escn(d.e)}E</div>
       <div class="flow-item-bar"><div class="flow-item-bar-fill" style="width:${pct}%;background:#171717"></div></div>
     </div>`;
   }).join(''):'<div class="flow-empty">No sources</div>';
@@ -2449,7 +2450,7 @@ function renderFlow() {
     let pol=d.p?d.p.split('/').pop():'';
     return `<div class="flow-item" id="mid-${esc(n)}" data-name="${esc(n)}" onclick="flowItemClick(event,'tool')">
       <div class="flow-item-name"><span class="flow-item-dot ${dot}"></span>${esc(n)}</div>
-      <div class="flow-item-meta">${d.t} calls: ${d.a||0}A / ${d.d||0}D / ${d.e||0}E ${pol?'<span class="protocol-tag">'+esc(pol)+'</span>':''}</div>
+      <div class="flow-item-meta">${escn(d.t)} calls: ${escn(d.a)}A / ${escn(d.d)}D / ${escn(d.e)}E ${pol?'<span class="protocol-tag">'+esc(pol)+'</span>':''}</div>
       <div class="flow-item-bar"><div class="flow-item-bar-fill" style="width:${pct}%;background:#171717"></div></div>
     </div>`;
   }).join(''):'<div class="flow-empty">No gate activity</div>';
@@ -2462,7 +2463,7 @@ function renderFlow() {
     let dot=d.a>d.d?'dot-allow':d.d>d.a?'dot-deny':'dot-escalate';
     return `<div class="flow-item${selectedDest===n?' active':''}" id="dst-${esc(n)}" data-name="${esc(n)}" onclick="flowItemClick(event,'dest')">
       <div class="flow-item-name"><span class="flow-item-dot ${dot}"></span>${esc(n)}</div>
-      <div class="flow-item-meta">${d.t} calls: ${d.a||0}A / ${d.d||0}D / ${d.e||0}E</div>
+      <div class="flow-item-meta">${escn(d.t)} calls: ${escn(d.a)}A / ${escn(d.d)}D / ${escn(d.e)}E</div>
       <div class="flow-item-bar"><div class="flow-item-bar-fill" style="width:${pct}%;background:#171717"></div></div>
     </div>`;
   }).join(''):'<div class="flow-empty">No destinations</div>';
@@ -2549,7 +2550,7 @@ function renderConnTable() {
     let badge=c.decision==='allow'?'badge-allow':c.decision==='deny'?'badge-deny':'badge-escalate';
     let time=c.timestamp?c.timestamp.substring(11,19):'--:--:--';
     let policy=c.policy?c.policy.split('/').pop():'--';
-    tb.innerHTML+=`<tr class="conn-row" onclick="selectConn(${i});showPath(${i})" data-idx="${i}"><td>${esc(time)}</td><td>${esc(c.source)}</td><td>${esc(c.tool)}</td><td>${esc(policy)}</td><td><span class="${badge}">${esc(c.decision)}</span></td><td>${esc(c.destination)}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${esc(c.reason)}</td><td>${c.latency_us||0}us</td></tr>`;
+    tb.innerHTML+=`<tr class="conn-row" onclick="selectConn(${i});showPath(${i})" data-idx="${i}"><td>${esc(time)}</td><td>${esc(c.source)}</td><td>${esc(c.tool)}</td><td>${esc(policy)}</td><td><span class="${badge}">${esc(c.decision)}</span></td><td>${esc(c.destination)}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${esc(c.reason)}</td><td>${escn(c.latency_us)}us</td></tr>`;
   });
 }
 function selectConn(i){document.querySelectorAll('.conn-row').forEach(r=>r.classList.remove('selected'));let row=document.querySelector(`.conn-row[data-idx="${i}"]`);if(row)row.classList.add('selected');}
@@ -2760,7 +2761,7 @@ function setupMfa(key){
       document.getElementById('mfaUri').textContent=d.uri;
       // Generate QR code using Google Charts API fallback to text display
       const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(d.uri)}`;
-      document.getElementById('mfaQrCode').innerHTML=`<img src="${qrUrl}" width="200" height="200" style="border-radius:8px;border:1px solid #e5e5e5" alt="QR Code for TOTP setup" />`;
+      document.getElementById('mfaQrCode').innerHTML=`<img src="${esc(qrUrl)}" width="200" height="200" style="border-radius:8px;border:1px solid #e5e5e5" alt="QR Code for TOTP setup" />`;
       document.getElementById('mfaCodeInput').value='';
       document.getElementById('mfaCodeInput').focus();
     } else { alert('MFA setup failed: '+(d.detail||'unknown')); }
@@ -2916,8 +2917,8 @@ function tourShow(){
     if(by+170>window.innerHeight-12) by=Math.max(12,r.top-186);
     const host=document.getElementById('tourHost');
     host.innerHTML=`<div class="tour-card" style="left:${bx}px;top:${by}px">
-      <div class="tour-step">Step ${tourStep+1} of ${TOUR_STEPS.length} · ${s.title}</div>
-      <div class="tour-body">${s.body}</div>
+      <div class="tour-step">Step ${tourStep+1} of ${TOUR_STEPS.length} · ${esc(s.title)}</div>
+      <div class="tour-body">${esc(s.body)}</div>
       <div class="tour-actions">
         <button class="tour-skip" onclick="tourEnd(false)">Skip tour</button>
         <button class="tour-next" onclick="tourNext()">${tourStep+1<TOUR_STEPS.length?'Next':'Start exploring'}</button>
@@ -3339,7 +3340,7 @@ function loadLearn(){
     } else if(!Object.keys(s.tools||{}).length){
       el.innerHTML='Learn mode is on. No unmatched calls recorded yet.';
     } else {
-      let rows=Object.entries(s.tools).map(([t,d])=>`<tr><td>${esc(t)}</td><td>${d.calls}</td><td>${esc((d.agents||[]).join(', ')||'-')}</td></tr>`).join('');
+      let rows=Object.entries(s.tools).map(([t,d])=>`<tr><td>${esc(t)}</td><td>${escn(d.calls)}</td><td>${esc((d.agents||[]).join(', ')||'-')}</td></tr>`).join('');
       el.innerHTML='<table><tr><th>Observed tool</th><th>Denied calls</th><th>Agents</th></tr>'+rows+'</table>';
     }
   }).catch(()=>{});
@@ -3666,8 +3667,8 @@ function showNodeDetails(node) {
   document.getElementById('detailTitle').textContent = node.label;
   let html = '';
   if (node.subtitle) html += `<div class="detail-row"><span class="detail-label">Address</span><span class="detail-value">${esc(node.subtitle)}</span></div>`;
-  html += `<div class="detail-row"><span class="detail-label">Type</span><span class="detail-value">${node.type}</span></div>`;
-  html += `<div class="detail-row"><span class="detail-label">Status</span><span class="detail-status"><span class="node-dot ${node.status||'inactive'}"></span>${node.status || 'unknown'}</span></div>`;
+  html += `<div class="detail-row"><span class="detail-label">Type</span><span class="detail-value">${esc(node.type)}</span></div>`;
+  html += `<div class="detail-row"><span class="detail-label">Status</span><span class="detail-status"><span class="node-dot ${node.status||'inactive'}"></span>${esc(node.status || 'unknown')}</span></div>`;
   if (node.metadata) {
     Object.entries(node.metadata).forEach(([k,v]) => {
       html += `<div class="detail-row"><span class="detail-label">${esc(k)}</span><span class="detail-value">${esc(String(v))}</span></div>`;
@@ -3680,7 +3681,7 @@ function showNodeDetails(node) {
     conns.forEach(e => {
       const other = e.source === node.id ? e.target : e.source;
       const otherNode = topologyNodes.find(n => n.id === other);
-      html += `<div class="detail-row"><span class="detail-label">${esc(otherNode?.label || other)}</span><span class="detail-value" style="color:${e.colour||getEdgeColor(e.status)}">${e.label || e.status}</span></div>`;
+      html += `<div class="detail-row"><span class="detail-label">${esc(otherNode?.label || other)}</span><span class="detail-value" style="color:${e.colour||getEdgeColor(e.status)}">${esc(e.label || e.status)}</span></div>`;
     });
   }
   document.getElementById('detailBody').innerHTML = html;
@@ -3695,10 +3696,10 @@ function showEdgeDetails(edge) {
   let html = '';
   html += `<div class="detail-row"><span class="detail-label">From</span><span class="detail-value">${esc(srcNode?.label || edge.source)}</span></div>`;
   html += `<div class="detail-row"><span class="detail-label">To</span><span class="detail-value">${esc(dstNode?.label || edge.target)}</span></div>`;
-  if (edge.protocol) html += `<div class="detail-row"><span class="detail-label">Protocol</span><span class="detail-value">${edge.protocol.toUpperCase()}</span></div>`;
-  if (edge.ports) html += `<div class="detail-row"><span class="detail-label">Ports</span><span class="detail-value">${edge.ports}</span></div>`;
-  html += `<div class="detail-row"><span class="detail-label">Status</span><span class="detail-status"><span class="node-dot ${edge.status==='active'?'active':'blocked'}"></span>${edge.status || 'unknown'}</span></div>`;
-  if (edge.trafficRate !== undefined) html += `<div class="detail-row"><span class="detail-label">Traffic Rate</span><span class="detail-value">${edge.trafficRate}/s</span></div>`;
+  if (edge.protocol) html += `<div class="detail-row"><span class="detail-label">Protocol</span><span class="detail-value">${esc(edge.protocol.toUpperCase())}</span></div>`;
+  if (edge.ports) html += `<div class="detail-row"><span class="detail-label">Ports</span><span class="detail-value">${esc(String(edge.ports))}</span></div>`;
+  html += `<div class="detail-row"><span class="detail-label">Status</span><span class="detail-status"><span class="node-dot ${edge.status==='active'?'active':'blocked'}"></span>${esc(edge.status || 'unknown')}</span></div>`;
+  if (edge.trafficRate !== undefined) html += `<div class="detail-row"><span class="detail-label">Traffic Rate</span><span class="detail-value">${escn(edge.trafficRate)}/s</span></div>`;
   if (edge.metadata) {
     Object.entries(edge.metadata).forEach(([k,v]) => {
       html += `<div class="detail-row"><span class="detail-label">${esc(k)}</span><span class="detail-value">${esc(String(v))}</span></div>`;

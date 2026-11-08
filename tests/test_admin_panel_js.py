@@ -113,3 +113,276 @@ def test_shipped_script_parses_under_v8() -> None:
             assert proc.returncode == 0, (
                 f"script block {i} fails to parse: {(proc.stderr or proc.stdout).strip()[-300:]}"
             )
+
+
+# ---------------------------------------------------------------------------
+# T-B2: MFA column render contract (both states)
+# ---------------------------------------------------------------------------
+
+
+def test_users_mfa_column_renders_both_states() -> None:
+    """The MFA cell must carry both render states and an escaped user id."""
+    m = re.search(
+        r"u\.mfa_enabled\?'<span[^>]*>Enabled</span>':'<span[^>]*>Off</span>'", ADMIN_PANEL_HTML
+    )
+    assert m, "MFA cell must render both Enabled and Off states literally"
+    assert 'data-user-id="${uid}"' in ADMIN_PANEL_HTML
+    assert "const uid=esc(u.user_id||'')" in ADMIN_PANEL_HTML
+
+
+def test_users_mfa_button_contract_both_states() -> None:
+    """Setup button always; Disable button only in the mfa_enabled branch."""
+    assert 'data-user-id="${uid}" onclick="userMfaAction(event,\'setup\')"' in ADMIN_PANEL_HTML or (
+        'data-user-id="${uid}" data-hi="userMfaAction(event,\'setup\')"' in ADMIN_PANEL_HTML
+    )
+    assert re.search(
+        r"mfa_enabled\?` <button[^>]*userMfaAction\(event,'disable'\)", ADMIN_PANEL_HTML
+    )
+
+
+# ---------------------------------------------------------------------------
+# T-S2: innerHTML escaping sweep
+# ---------------------------------------------------------------------------
+
+ALLOWLIST = {
+    # class-name / css values / generated indices: not server-controlled text
+    "selectedSource===n?' active':''",
+    "selectedDest===n?' active':''",
+    "selectedSource===n?' flow-active':''",
+    "dot",
+    "i",
+    "badge",
+    "uid",
+    "pct",
+    "bx",
+    "by",
+    "tourStep+1",
+    "TOUR_STEPS.length",
+    "tourStep+1<TOUR_STEPS.length?'Next':'Start exploring'",
+    "TOUR_STEPS.map((_,i)=>`<span class=\"${i===tourStep?'on':''}\"></span>`).join('')",
+    "n.status",
+    "statusClass",
+    "e.colour||getEdgeColor(e.status)",
+    "u.mfa_enabled?'<span style=\"color:#22c55e;font-size:12px\">Enabled</span>':'<span style=\"color:#a3a3a3;font-size:12px\">Off</span>'",  # noqa: E501
+    'u.mfa_enabled?` <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-user-id="${uid}" onclick="userMfaAction(event,\'disable\')">Disable</button>`:\'\'',  # noqa: E501
+    "i===tourStep?'on':''",
+}
+
+
+def _statement_windows_containing_innerhtml(html: str):
+    """Yield the full statement text of each innerHTML assignment."""
+    for m in re.finditer(r"innerHTML\s*\+?=", html):
+        # walk forward to the terminating ';' at depth 0 (paran/brace/bracket)
+        i = m.end()
+        depth = 0
+        quote = None
+        while i < len(html):
+            ch = html[i]
+            if quote:
+                if ch == "\\":
+                    i += 2
+                    continue
+                if ch == quote:
+                    quote = None
+            else:
+                if ch in "'\"`":
+                    quote = ch
+                elif ch in "([{":
+                    depth += 1
+                elif ch in ")]}":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif ch == ";" and depth == 0:
+                    break
+            i += 1
+        yield html[m.start() : i + 1]
+
+
+def test_innerhtml_templates_escape_every_dynamic_value() -> None:
+    """Any ${...} inside an innerHTML template literal must be esc()-wrapped
+    (or an explicitly allowlisted non-text value: class names, px offsets,
+    generated indices). A new unescaped interpolation fails CI."""
+    bad: list[str] = []
+    for window in _statement_windows_containing_innerhtml(ADMIN_PANEL_HTML):
+        j = 0
+        while j < len(window):
+            if window[j] != "`":
+                j += 1
+                continue
+            k = j + 1
+            while k < len(window):
+                if window[k] == "\\":
+                    k += 2
+                    continue
+                if window[k] == "`":
+                    break
+                k += 1
+            tmpl = window[j + 1 : k]
+            idx = 0
+            while idx < len(tmpl):
+                ch = tmpl[idx]
+                if ch == "$" and idx + 1 < len(tmpl) and tmpl[idx + 1] == "{":
+                    d = 0
+                    e = idx + 2
+                    while e < len(tmpl):
+                        ec = tmpl[e]
+                        if ec == "`":
+                            # nested template literal: skip its body wholesale
+                            n = e + 1
+                            while n < len(tmpl):
+                                if tmpl[n] == "\\":
+                                    n += 2
+                                    continue
+                                if tmpl[n] == "`":
+                                    break
+                                n += 1
+                            e = n
+                            continue
+                        if ec == "{":
+                            d += 1
+                        elif ec == "}":
+                            if d == 0:
+                                break
+                            d -= 1
+                        e += 1
+                    expr = tmpl[idx + 2 : e].strip()
+                    ok = expr in ALLOWLIST
+                    if not ok and expr:
+                        # nested template literal truncated the extraction:
+                        # accept a prefix of an allowlisted composite expr
+                        ok = any("`" in a and a.startswith(expr) for a in ALLOWLIST)
+                    if "esc(" not in expr and "escn(" not in expr and not ok:
+                        bad.append(expr)
+                    idx = e
+                idx += 1
+            j = k + 1
+    assert not bad, f"unescaped template interpolation(s) in innerHTML template: {bad}"
+
+
+def _extract_fn(script: str, name: str) -> str:
+    """Extract a single-line `function name(){...}` panel function."""
+    for line in script.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(f"function {name}(") and stripped.rstrip().endswith("}"):
+            return stripped
+    # multi-line fall-back: balanced, string-aware brace matcher
+    start = script.index(f"function {name}(")
+    i = script.index("{", start)
+    depth = 0
+    j = i
+    while j < len(script):
+        c = script[j]
+        if c in "'\"`":
+            q = c
+            j += 1
+            while j < len(script):
+                if script[j] == "\\":
+                    j += 2
+                    continue
+                if script[j] == q:
+                    break
+                j += 1
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return script[start : j + 1]
+        j += 1
+    raise AssertionError(f"function {name}() not terminated in panel script")
+
+
+def _run_node(program: str) -> None:
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "probe.js"
+        path.write_text(program)
+        proc = subprocess.run(["node", str(path)], capture_output=True, text=True, timeout=60)
+        assert proc.returncode == 0, (proc.stdout or "") + (proc.stderr or "")
+        assert "ESCAPED" in proc.stdout, proc.stdout
+
+
+MALICIOUS_STATS = {
+    "total_requests": "<img src=x onerror=alert(1)>",
+    "allowed": "</td><script>alert(2)</script>",
+    "denied": 'x"><svg onload=alert(3)>',
+    "escalated": "'; alert(4); '",
+    "avg_latency_us": "<u>&</u>",
+    "tools": {
+        "<tr onclick=alert(5)>": {
+            "allow": "</td><td onclick=alert(6)>",
+            "deny": "<img src=q onerror=alert(7)>",
+            "escalate": "'\"",
+        }
+    },
+}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_malicious_stats_object_is_escaped() -> None:
+    """feed loadStats a hostile stats payload: no raw markup may survive."""
+    block = _extract_script_blocks(ADMIN_PANEL_HTML)[0]
+    program = (
+        "const captured={};"
+        "global.document={getElementById:(id)=>"
+        "{if(!captured[id])captured[id]={innerHTML:''};return captured[id];}};"
+        "function api(){return Promise.resolve({json:()=>Promise.resolve("
+        + __import__("json").dumps(MALICIOUS_STATS)
+        + ")});}"
+        + _extract_fn(block, "esc")
+        + _extract_fn(block, "escn")
+        + "let alert=()=>{};"
+        + _extract_fn(block, "loadStats")
+        + "\n(async()=>{"
+        "loadStats();"
+        "await new Promise(r=>setTimeout(r,30));"
+        "const g=captured.statsGrid.innerHTML,t=captured.toolTableBody.innerHTML;"
+        "const rawBad=/[<](img|script|svg)\\b|[<]u\\b|[<]td onclick/.test(g+t);"
+        "const escOk=g.includes('&lt;img')&&t.includes('&lt;img src=q')&&g.includes('&lt;u&gt;');"
+        "if(rawBad||!escOk){console.log('RAW:',g,'|',t);process.exit(1);}"
+        "console.log('ESCAPED');"
+        "})();"
+    )
+    _run_node(program)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_loadUsers_renders_mfa_states_and_escapes_user_id() -> None:
+    """Both users render; the malicious user_id is escaped; Disable only on the
+    MFA-enabled row (T-B2 render contract, dynamic state)."""
+    block = _extract_script_blocks(ADMIN_PANEL_HTML)[0]
+    users = [
+        {
+            "user_id": '<u id="evil">',
+            "api_key_label": "k1",
+            "role": "viewer",
+            "name": "A",
+            "mfa_enabled": True,
+        },
+        {"user_id": "u2", "api_key_label": "", "role": "admin", "name": "B", "mfa_enabled": False},
+    ]
+    program = (
+        "const captured={};"
+        "global.document={getElementById:(id)=>"
+        "{if(!captured[id])captured[id]={innerHTML:''};return captured[id];}};"
+        "function api(){return Promise.resolve({json:()=>Promise.resolve("
+        + __import__("json").dumps({"users": users})
+        + ")});}"
+        + _extract_fn(block, "esc")
+        + _extract_fn(block, "escn")
+        + "let alert=()=>{};"
+        + _extract_fn(block, "loadUsers")
+        + "\n(async()=>{"
+        "loadUsers();"
+        "await new Promise(r=>setTimeout(r,30));"
+        "const h=captured.userTableBody.innerHTML;"
+        "const ok=h.includes('Enabled')&&h.includes('Off')"
+        "&&h.includes('&lt;u id=&quot;evil&quot;&gt;')"
+        "&&!h.includes('<u id=\"evil\">')"
+        "&&h.split(\"userMfaAction(event,'disable')\").length===2"
+        "&&h.includes(\"userMfaAction(event,'setup')\");"
+        "if(!ok){console.log('BAD:',h);process.exit(1);}"
+        "console.log('ESCAPED');"
+        "})();"
+    )
+    _run_node(program)
