@@ -394,7 +394,7 @@ class TestAdminAPI:
     def test_users_create(self, admin_client):
         resp = admin_client.post(
             "/api/users",
-            json={"api_key": "new-key", "role": "operator", "name": "New Op"},
+            json={"api_key": "new-operator-key-0123456789", "role": "operator", "name": "New Op"},
             headers={"Authorization": "admin-key"},
         )
         assert resp.status_code == 200

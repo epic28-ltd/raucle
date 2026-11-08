@@ -45,14 +45,32 @@ rate limiting at the proxy layer (100 requests/minute).
 ## API Key Management
 
 - API keys are required for all admin panel endpoints
-- Keys use constant-time comparison (`hmac.compare_digest`)
-- Keys can have expiry timestamps for rotation
-- The default admin key is created from `RAUCLE_ADMIN_KEY` at startup
-- Additional users can be created via the admin panel with role-based
-  access control (admin, operator, auditor)
+- Keys are stored as SHA-256 digests: `users.jsonl` never contains a usable
+  key. A file written by an older version (plaintext `api_key`) is migrated
+  and rewritten on load
+- Keys are looked up by digest, so no plaintext comparison happens at all;
+  the digest of a presented key is the dictionary key
+- Keys can have expiry timestamps for rotation; expired keys are refused at
+  authentication
+- `POST /api/users` mints a 256-bit key when none is supplied and returns it
+  exactly once. A caller-supplied key must be at least 24 characters
+- The bootstrap admin comes from `RAUCLE_ADMIN_KEY_FILE` (the secret-file
+  pattern) or `RAUCLE_ADMIN_KEY`, and is created **only when the store holds
+  no admin**. Removing an admin in the panel, or rotating the environment
+  key, is therefore not undone by the next restart
+- Users are addressed by a stable handle (`user_id`, derived from the key
+  digest) on the admin routes, so the panel never needs to hold key material.
+  The full key remains accepted in the same path for scripted use
 - Admin users persist to disk (default `<data-dir>/users.jsonl`, override
-  with `RAUCLE_USERS_FILE`); MFA secrets survive restarts. Demo-mode
-  synthetic users are in-memory only by design.
+  with `RAUCLE_USERS_FILE`). The MFA *enabled* flag is persisted with the
+  secret, so MFA survives a restart. TOTP codes may be reused within their
+  own window (the panel polls) but a code from an earlier window is refused
+  as a replay
+- Known residual: `totp_secret` is stored in plaintext beside the digest, and
+  TOTP is presented per request rather than exchanged for a session token.
+  Protecting the secret needs a master-key source, and per-request TOTP is
+  not session security; both belong with the identity work rather than here
+- Demo-mode synthetic users are in-memory only by design
 
 ## Gate authentication (agent callers)
 
