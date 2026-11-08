@@ -307,8 +307,12 @@ class Capability:
        ``forbidden_values`` is a **best-effort denylist**: the gate enforces it
        on the argument *names* the policy declares and cannot see the tool's full
        parameter schema, so a forbidden value supplied under a different
-       parameter name is not caught. For security-critical fields prefer the
-       fail-closed positive constraints — ``allowed_values`` (whitelist),
+       parameter name is not caught. X1 (schema-bound enforcement) narrows
+       this: when the gate is constructed with a
+       :class:`~raucle.tool_schema.ToolSchemaRegistry` the call's argument
+       values are validated against the tool's declared schema and a
+       type-confused value denies. For security-critical fields still prefer
+       the fail-closed positive constraints — ``allowed_values`` (whitelist),
        ``required_present``, and ``max_value``/``min_value`` bounds.
     """
 
@@ -1628,6 +1632,7 @@ class CapabilityGate:
         trusted_proofs: dict[str, ProofResult] | None = None,
         revoked_token_ids: set[str] | None = None,
         pq_public_keys: dict[str, str] | None = None,
+        tool_schemas: Any = None,
     ) -> None:
         """Construct a CapabilityGate.
 
@@ -1685,6 +1690,16 @@ class CapabilityGate:
                 self._pq_public_keys[kid] = pq_public_key_from_pem(pem)
             except Exception:
                 self._pq_public_keys[kid] = None
+        # X1: optional schema-bound enforcement. A tool WITHOUT a registered
+        # schema keeps name-based constraint checks only (fail-closed over the
+        # declared-rule set); a tool WITH one additionally validates the call's
+        # argument values against that schema — a type-confused value denies
+        # with a named schema_violation reason regardless of numeric bounds.
+        from raucle.tool_schema import ToolSchemaRegistry
+
+        if tool_schemas is not None and not isinstance(tool_schemas, ToolSchemaRegistry):
+            raise ValueError("tool_schemas must be a ToolSchemaRegistry or None")
+        self._tool_schemas = tool_schemas
 
     def revoke(self, token_id: str) -> None:
         """Add a token id to this gate's revocation denylist.
@@ -1828,6 +1843,20 @@ class CapabilityGate:
         server-side log only; the decision reason is caller-visible and
         must not leak evaluation internals."""
         try:
+            # X1 (stage 7a): schema-bound value validation FIRST — a call
+            # whose arguments are type-confused against the tool's declared
+            # parameter schema denies regardless of any numeric bound (the
+            # acceptance case: amount:number denies "99999" with no max
+            # bound). Tools without a registered schema skip this stage.
+            if self._tool_schemas is not None:
+                schema_reasons = self._tool_schemas.violations(token.tool, args)
+                if schema_reasons:
+                    return GateDecision(
+                        False,
+                        f"schema_violation: {schema_reasons[0]}",
+                        token.token_id,
+                        attributable=True,
+                    )
             why = _check_constraints(token.constraints, args)
         except Exception:  # pragma: no cover - defensive
             logger.exception("constraint evaluation raised for token %s; denying", token.token_id)
@@ -2249,13 +2278,16 @@ def _check_constraints(c: dict[str, Any], args: dict[str, Any]) -> str | None:
     argument name. Numeric bounds additionally reject non-numeric values
     (and booleans) with a DENY rather than raising.
 
-    Caveat (documented limitation): the gate enforces on the argument *names*
-    declared in the policy. It does not know the tool's parameter schema, so a
-    ``forbidden_values`` blacklist can still be evaded if the tool reads the
-    forbidden value under a different parameter name. Prefer ``allowed_values``
-    whitelists (which fail closed) over ``forbidden_values`` blacklists for
-    security-critical fields; binding the gate to the tool's declared schema is
-    tracked as a future hardening.
+    Caveat (X1 status): the gate enforces on the argument *names*
+    declared in the policy. It does not know the tool's parameter schema
+    at this function level, so a ``forbidden_values`` blacklist can still
+    be evaded if the tool reads the forbidden value under a different
+    parameter name. Prefer ``allowed_values`` whitelists (which fail
+    closed) over ``forbidden_values`` blacklists for security-critical
+    fields. X1's schema-bound stage (``ToolSchemaRegistry`` wired into
+    ``CapabilityGate``) validates argument *values* against the tool's
+    declared input schema before these rule checks run — see
+    docs/spec/x1-schema-enforcement.md.
     """
     # Registry-driven fail-closed guard: any constraint kind that is not in the
     # Modelled Language Registry must DENY rather than be silently ignored. The

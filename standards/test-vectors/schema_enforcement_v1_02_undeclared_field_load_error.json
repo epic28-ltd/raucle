@@ -1,0 +1,25 @@
+{
+  "inputSchema": {
+    "properties": {
+      "amount": {
+        "type": "number"
+      }
+    },
+    "type": "object"
+  },
+  "load": {
+    "error_kind": "SchemaPolicyLoadError",
+    "message": "tool 'transfer': policy rule references undeclared field 'recipient'",
+    "outcome": "error"
+  },
+  "name": "policy rule referencing an undeclared field is a load-time error",
+  "policy_rule": {
+    "forbidden_values": {
+      "recipient": [
+        "US133000000121212121212"
+      ]
+    }
+  },
+  "spec": "raucle-schema-enforcement/v1",
+  "tool": "transfer"
+}
