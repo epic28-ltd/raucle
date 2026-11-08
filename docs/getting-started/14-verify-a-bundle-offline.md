@@ -28,12 +28,25 @@ Then, against the bundle you downloaded (for this demo bundle, the
 repository clone works directly):
 
 ```bash
+$ raucle demo verify docs/demo-bundle
+```
+
+or equivalently, with the pinned published digest from the CI workflow
+(docs/demo-bundle/README.md documents the mechanism):
+
+```bash
+$ raucle demo verify docs/demo-bundle --pinned sha256:<published digest>
+```
+
+The long form is the underlying command, shown here for auditors:
+
+```bash
 $ python -m raucle.cli audit-pack verify docs/demo-bundle
 audit pack: docs/demo-bundle
   index signature             PASS
   integrity (member hashes)   PASS
   manifest signature          PASS
-  signer (not pinned)         603db302b076c824 [internal consistency only]
+  signer (not pinned)         0beeb691a4f66883 [internal consistency only]
   receipt chain (offline)     PASS (3 receipts)
   manifest reproducible       PASS
   RESULT: VERIFIED

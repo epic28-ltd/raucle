@@ -1,0 +1,61 @@
+{
+  "$id": "https://raucle.dev/schemas/raucle-conformance-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Raucle conformance record (raucle-conformance/v1)",
+  "description": "Machine-checkable record of which published standards/ and docs/spec vector suites pass against a Raucle build, served at /.well-known/raucle-conformance and pinned by the CI conformance-data job.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tool_version", "all_passed", "suites", "data_digest"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "raucle-conformance/v1"
+    },
+    "tool_version": {
+      "type": "string",
+      "description": "raucle.__version__ of the build the record was generated for."
+    },
+    "all_passed": {
+      "type": "boolean",
+      "description": "True only if every listed suite passed."
+    },
+    "data_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "sha256 of the record's full canonical JSON (indent=2, sort_keys) EXCLUDING this field; consumers can verify the artifact independently. CI pins it by re-running the generator and comparing bytes."
+    },
+    "suites": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "source", "passed"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9.-]+$",
+            "description": "Stable suite identifier (e.g. provenance-receipt-v1)."
+          },
+          "title": {
+            "type": "string",
+            "description": "Human-readable suite name."
+          },
+          "source": {
+            "type": "string",
+            "description": "Repo-relative pytest target that verifies the vectors."
+          },
+          "vectors": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "Number of published vectors in the suite (null when not file-derivable)."
+          },
+          "passed": {
+            "type": "boolean",
+            "description": "True when that pytest target passed against this build."
+          }
+        }
+      }
+    }
+  }
+}

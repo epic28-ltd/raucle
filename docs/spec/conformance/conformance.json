@@ -1,0 +1,43 @@
+{
+  "all_passed": true,
+  "data_digest": "sha256:06e306bcc7155b2e8669137aff97e4776d52b0aad6a31b71253a42455b230d47",
+  "schema_version": "raucle-conformance/v1",
+  "suites": [
+    {
+      "id": "provenance-receipt-v1",
+      "passed": true,
+      "source": "tests/test_spec_conformance.py",
+      "title": "Raucle Provenance Receipt v1 canonical vectors (docs/spec/provenance/v1)",
+      "vectors": 5
+    },
+    {
+      "id": "nelson14-delegation-gate",
+      "passed": true,
+      "source": "tests/nelson14_vectors.py",
+      "title": "Nelson14 delegation-gate escalation vectors",
+      "vectors": null
+    },
+    {
+      "id": "epaec-v1",
+      "passed": true,
+      "source": "tests/test_epaec_vectors.py",
+      "title": "EPAEC v1 end-to-end conformance vectors (tests/vectors/epaec-v1.json)",
+      "vectors": null
+    },
+    {
+      "id": "eqr-v1",
+      "passed": true,
+      "source": "tests/test_eqr_gate.py",
+      "title": "Evidence-Quality Rank (eqr:v1) vectors (standards/test-vectors)",
+      "vectors": null
+    },
+    {
+      "id": "dataflow-v1",
+      "passed": true,
+      "source": "tests/test_dataflow_rules.py",
+      "title": "Data-flow taint deny vectors (standards/test-vectors)",
+      "vectors": null
+    }
+  ],
+  "tool_version": "0.22.0"
+}
