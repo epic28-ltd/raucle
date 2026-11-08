@@ -25,7 +25,8 @@ from raucle.gateway_app import ADMIN_PANEL_HTML
 
 
 def test_receipt_rows_carry_hash_in_data_attribute() -> None:
-    assert 'data-hash="' + "'+r.receipt_hash+'" in ADMIN_PANEL_HTML
+    """The hash rides a data attribute (no quote conflicts) and is escaped."""
+    assert "data-hash=\"'+esc(r.receipt_hash||'')+'" in ADMIN_PANEL_HTML
 
 
 def test_broken_showAncestry_onclick_escape_is_gone() -> None:

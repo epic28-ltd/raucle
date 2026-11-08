@@ -345,6 +345,37 @@ def _handle_gate_tool_call(
     return response
 
 
+# ---------------------------------------------------------------------------
+# Security headers
+# ---------------------------------------------------------------------------
+
+_CSP = (
+    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+    "img-src 'self' data:; connect-src 'self'; form-action 'none'; "
+    "frame-ancestors 'none'; base-uri 'none'"
+)
+
+
+def _install_security_headers(app: FastAPI) -> None:
+    """Add the response headers both apps should always carry (RED-033).
+
+    ``script-src 'unsafe-inline'`` is required by the single-string panel
+    design (inline handlers and one inline script block). That weakens CSP to
+    a containment control rather than an XSS barrier, which is why the output
+    escaping above matters; the directive still blocks external script
+    loads, framing, form posts and base-tag rewrites.
+    """
+
+    @app.middleware("http")
+    async def _security_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("Content-Security-Policy", _CSP)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        return response
+
+
 def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
     """Create the gateway API app (agent-facing)."""
     app = FastAPI(
@@ -374,6 +405,8 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         app.add_middleware(SlowAPIMiddleware)
     except ImportError:
         pass  # slowapi not installed, no rate limiting
+
+    _install_security_headers(app)
 
     @app.get("/api/live-pulse", response_class=None)
     def live_pulse() -> JSONResponse:  # type: ignore[name-defined]
@@ -559,6 +592,7 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
         version="0.1.0",
     )
 
+    _install_security_headers(app)
     _register_health_routes(app, gateway)
     _register_stats_routes(app, gateway, check_auth, check_access)
     _register_learn_routes(app, gateway, check_auth, check_access)
@@ -2264,7 +2298,7 @@ function renderFlow() {
   document.getElementById('srcList').innerHTML=srcEntries.length?srcEntries.map(([n,d])=>{
     let pct=Math.round(d.a/d.t*100);
     let dot=d.a>d.d?'dot-allow':d.d>d.a?'dot-deny':'dot-escalate';
-    return `<div class="flow-item${selectedSource===n?' active':''}" id="src-${esc(n)}" onclick="toggleSource('${esc(n)}')">
+    return `<div class="flow-item${selectedSource===n?' active':''}" id="src-${esc(n)}" data-name="${esc(n)}" onclick="flowItemClick(event,'source')">
       <div class="flow-item-name"><span class="flow-item-dot ${dot}"></span>${esc(n)}</div>
       <div class="flow-item-meta">${d.t} calls: ${d.a||0}A / ${d.d||0}D / ${d.e||0}E</div>
       <div class="flow-item-bar"><div class="flow-item-bar-fill" style="width:${pct}%;background:#171717"></div></div>
@@ -2278,7 +2312,7 @@ function renderFlow() {
     let pct=Math.round(d.a/d.t*100);
     let dot=d.a>d.d?'dot-allow':d.d>d.a?'dot-deny':'dot-escalate';
     let pol=d.p?d.p.split('/').pop():'';
-    return `<div class="flow-item" id="mid-${esc(n)}" onclick="filterByTool('${esc(n)}')">
+    return `<div class="flow-item" id="mid-${esc(n)}" data-name="${esc(n)}" onclick="flowItemClick(event,'tool')">
       <div class="flow-item-name"><span class="flow-item-dot ${dot}"></span>${esc(n)}</div>
       <div class="flow-item-meta">${d.t} calls: ${d.a||0}A / ${d.d||0}D / ${d.e||0}E ${pol?'<span class="protocol-tag">'+esc(pol)+'</span>':''}</div>
       <div class="flow-item-bar"><div class="flow-item-bar-fill" style="width:${pct}%;background:#171717"></div></div>
@@ -2291,7 +2325,7 @@ function renderFlow() {
   document.getElementById('dstList').innerHTML=dstEntries.length?dstEntries.map(([n,d])=>{
     let pct=Math.round(d.a/d.t*100);
     let dot=d.a>d.d?'dot-allow':d.d>d.a?'dot-deny':'dot-escalate';
-    return `<div class="flow-item${selectedDest===n?' active':''}" id="dst-${esc(n)}" onclick="toggleDest('${esc(n)}')">
+    return `<div class="flow-item${selectedDest===n?' active':''}" id="dst-${esc(n)}" data-name="${esc(n)}" onclick="flowItemClick(event,'dest')">
       <div class="flow-item-name"><span class="flow-item-dot ${dot}"></span>${esc(n)}</div>
       <div class="flow-item-meta">${d.t} calls: ${d.a||0}A / ${d.d||0}D / ${d.e||0}E</div>
       <div class="flow-item-bar"><div class="flow-item-bar-fill" style="width:${pct}%;background:#171717"></div></div>
@@ -2357,6 +2391,18 @@ function drawFlowLines(conns) {
   });
 }
 
+function flowItemClick(ev,kind){
+  const el=ev.currentTarget||ev.target.closest('.flow-item');
+  const n=el?el.dataset.name:null; if(n===null||n===undefined)return;
+  if(kind==='source')toggleSource(n);
+  else if(kind==='dest')toggleDest(n);
+  else filterByTool(n);
+}
+function userMfaAction(ev,action){
+  const el=ev.currentTarget||ev.target.closest('[data-user-id]');
+  const id=el?el.dataset.userId:null; if(!id)return;
+  if(action==='setup')setupMfa(id); else disableMfa(id);
+}
 function toggleSource(n){selectedSource=selectedSource===n?null:n;renderFlow();renderConnTable();}
 function toggleDest(n){selectedDest=selectedDest===n?null:n;renderFlow();renderConnTable();}
 function filterByTool(t){document.getElementById('midFilter').value=t;renderFlow();renderConnTable();}
@@ -2535,11 +2581,11 @@ function loadReceipts(){
       tr.style.borderBottom='1px solid #f0f1f4';
       const dec=r.decision; const color=dec==='allow'?'#16a34a':(dec==='deny'?'#dd2f45':'#d97706');
       tr.innerHTML='<td style="padding:6px 10px">'+new Date((r.iat||0)*1000).toISOString().replace('T',' ').slice(0,19)+'</td>'
-        +'<td style="padding:6px 10px">'+(r.tool||'')+'</td>'
-        +'<td style="padding:6px 10px">'+(r.agent_id||'')+'</td>'
-        +'<td style="padding:6px 10px;color:'+color+';font-weight:600">'+dec+'</td>'
-        +'<td style="padding:6px 10px;font-family:monospace;font-size:11px">'+(r.trace_id?(r.trace_id.slice(0,12)+'…'):'')+'</td>'
-        +'<td style="padding:6px 10px"><a href="javascript:void(0)" style="color:#3a3f4b" data-hash="'+r.receipt_hash+'" onclick="rcptRowClick(event)">trace</a></td>';
+        +'<td style="padding:6px 10px">'+esc(r.tool||'')+'</td>'
+        +'<td style="padding:6px 10px">'+esc(r.agent_id||'')+'</td>'
+        +'<td style="padding:6px 10px;color:'+color+';font-weight:600">'+esc(r.decision||'')+'</td>'
+        +'<td style="padding:6px 10px;font-family:monospace;font-size:11px">'+esc(r.trace_id?r.trace_id.slice(0,12)+'…':'')+'</td>'
+        +'<td style="padding:6px 10px"><a href="javascript:void(0)" style="color:#3a3f4b" data-hash="'+esc(r.receipt_hash||'')+'" onclick="rcptRowClick(event)">trace</a></td>';
       rows.appendChild(tr);
     });
     rcptCursor=d.next_cursor||null;
@@ -2567,7 +2613,7 @@ function exportReceipts(){
 }
 function loadSIEM(){api('/api/siem').then(r=>r.json()).then(d=>{document.getElementById('siemEnabled').checked=d.enabled;document.getElementById('siemBackend').value=d.backend||'';document.getElementById('siemUrl').value=d.url||'';});}
 function saveSIEM(){api('/api/siem',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:document.getElementById('siemEnabled').checked,backend:document.getElementById('siemBackend').value,url:document.getElementById('siemUrl').value,token:document.getElementById('siemToken').value})}).then(r=>r.json()).then(d=>alert('Saved'));}
-function loadUsers(){api('/api/users').then(r=>r.json()).then(d=>{let tb=document.getElementById('userTableBody');tb.innerHTML='';d.users.forEach(u=>{const uid=esc(u.user_id||'');tb.innerHTML+=`<tr><td>${esc(u.user_id||'')}</td><td>${esc(u.api_key_label||'')}</td><td>${esc(u.role)}</td><td>${esc(u.name||'')}</td><td>${u.mfa_enabled?'<span style="color:#22c55e;font-size:12px">Enabled</span>':'<span style="color:#a3a3a3;font-size:12px">Off</span>'}</td><td><button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" onclick="setupMfa('${uid}')">Setup MFA</button>${u.mfa_enabled?` <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" onclick="disableMfa('${uid}')">Disable</button>`:''}</td></tr>`;});});}
+function loadUsers(){api('/api/users').then(r=>r.json()).then(d=>{let tb=document.getElementById('userTableBody');tb.innerHTML='';d.users.forEach(u=>{const uid=esc(u.user_id||'');tb.innerHTML+=`<tr><td>${esc(u.user_id||'')}</td><td>${esc(u.api_key_label||'')}</td><td>${esc(u.role)}</td><td>${esc(u.name||'')}</td><td>${u.mfa_enabled?'<span style="color:#22c55e;font-size:12px">Enabled</span>':'<span style="color:#a3a3a3;font-size:12px">Off</span>'}</td><td><button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-user-id="${uid}" onclick="userMfaAction(event,'setup')">Setup MFA</button>${u.mfa_enabled?` <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-user-id="${uid}" onclick="userMfaAction(event,'disable')">Disable</button>`:''}</td></tr>`;});});}
 function addUser(){api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:document.getElementById('newKey').value,role:document.getElementById('newRole').value,name:document.getElementById('newName').value})}).then(r=>r.json()).then(d=>{alert('Added');loadUsers();});}
 let mfaSetupKey='';
 function setupMfa(key){
@@ -2685,7 +2731,7 @@ window.addEventListener('load', () => {
 function buildScenarioPicker() {
   const bar = document.getElementById('scenarioPicker');
   if (!bar) return;
-  const mk = (label, val) => `<button class="scenario-btn${(demoScenarioFilter===val)?' active':''}" onclick="setDemoScenario('${val}')">${label}</button>`;
+  const mk = (label, val) => `<button class="scenario-btn${(demoScenarioFilter===val)?' active':''}" data-scenario="${esc(val)}" onclick="scenarioClick(event)">${esc(label)}</button>`;
   let html = mk('All', 'all');
   DEMO_SCENARIOS.forEach(s => html += mk(s[0].toUpperCase()+s.slice(1), s));
   bar.innerHTML = html;
@@ -2693,6 +2739,10 @@ function buildScenarioPicker() {
 
 let demoScenarioFilter = 'all';
 function setDemoScenario(v) { demoScenarioFilter = v; buildScenarioPicker(); loadConnections(); topoRefresh(); }
+function scenarioClick(ev){
+  const el=ev.currentTarget||ev.target.closest('[data-scenario]');
+  if(el&&el.dataset.scenario)setDemoScenario(el.dataset.scenario);
+}
 
 function showMainDemo() {
   // Default to the connections tab where the live topology lives
