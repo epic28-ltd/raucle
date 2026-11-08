@@ -29,7 +29,9 @@ import json
 import logging
 import os
 import re
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -81,6 +83,41 @@ def _log_safe(value: object) -> str:
     """Collapse control characters out of an untrusted value so nothing
     newline-bearing reaches a log line (S5145)."""
     return "".join(ch if ch.isprintable() and ch not in "\r\n\t\x1b" else "?" for ch in str(value))
+
+
+class _FileCache:
+    """Read-through cache for operator registries, keyed on (mtime_ns, size).
+
+    Every gate call re-read and re-parsed the revocation list, the trace
+    quarantine and lease suspension registries, the trust registry and the
+    delegation ledger. Those files are append-only and unbounded, so the cost
+    of a call grew with their length.
+
+    Correctness: any write changes the mtime or the size, which invalidates the
+    entry, so a revocation still lands on the next call. A stat failure raises
+    into the caller's deny path rather than silently serving a stale set.
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[str, tuple[tuple[int, int], Any]] = {}
+        self._lock = threading.Lock()
+
+    def get(self, path: str, loader: Callable[[], Any], *, key: str | None = None) -> Any:
+        stat = os.stat(path)
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        cache_key = key or path
+        with self._lock:
+            hit = self._entries.get(cache_key)
+            if hit is not None and hit[0] == stamp:
+                return hit[1]
+        value = loader()
+        with self._lock:
+            self._entries[cache_key] = (stamp, value)
+        return value
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
 
 
 def _admin_key_from_env() -> str:
@@ -399,6 +436,52 @@ class GatewayStats:
 # ---------------------------------------------------------------------------
 
 
+def siem_target_allowed(url: str) -> bool:
+    """True when *url* is an http(s) destination the forwarder may POST to.
+
+    The SIEM target is operator-configurable, so it is an outbound-request
+    primitive on the gateway host. Reject anything that is not http(s) or that
+    points at loopback, link-local or private address space, unless
+    ``RAUCLE_SIEM_ALLOW_PRIVATE=1`` names an internal collector deliberately.
+
+    Literal addresses and the obvious local names are covered. A hostname that
+    resolves to a private address is not detected here (that needs DNS at
+    validation time, which a config write should not do); that residual is
+    documented in docs/gateway-security.md.
+    """
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    text = (url or "").strip()
+    if not text:
+        return False
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return False
+    host = parts.hostname.lower()
+    if os.environ.get("RAUCLE_SIEM_ALLOW_PRIVATE", "").lower() in ("1", "true", "yes"):
+        return True
+    if host in ("localhost", "localhost.localdomain") or host.endswith(
+        (".local", ".internal", ".localdomain")
+    ):
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # a public DNS name; resolution-time trust is out of scope
+    return not (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_multicast
+        or address.is_unspecified
+    )
+
+
 class SIEMForwarder:
     """Forward gate decisions to a SIEM system.
 
@@ -414,6 +497,13 @@ class SIEMForwarder:
         self._buffer: list[dict[str, Any]] = []
 
     def forward(self, event: dict[str, Any]) -> None:
+        # A configured target is validated here as well as at config-write
+        # time: a stored bad URL must not become a request. Backends that build
+        # their own endpoint from vendor settings (Azure/Sentinel) leave ``url``
+        # empty and are covered by their own host construction.
+        if self.url and not siem_target_allowed(self.url):
+            logger.warning("SIEM target refused; event dropped (destination not permitted)")
+            return
         """Send a gate decision event to the configured SIEM."""
         if not self.enabled:
             self._buffer.append(event)
@@ -982,6 +1072,7 @@ class RaucleGateway:
         # an explicit path is given (the flat file has no segments to
         # rebuild from, so the index must be fed live only).
         self._receipt_index = None
+        self._file_cache = _FileCache()
         idx_path = config.receipt_index_path or (
             str(Path(config.receipt_store_dir) / "index.sqlite") if config.receipt_store_dir else ""
         )
@@ -1839,8 +1930,11 @@ class RaucleGateway:
         reg_path = self.config.registry_path
         if reg_path:
             try:
-                reg = TrustRegistry(path=reg_path)
-                issuers = reg.as_issuer_map()  # {key_id: pem}, revoked dropped
+                issuers = self._file_cache.get(
+                    reg_path,
+                    lambda: TrustRegistry(path=reg_path).as_issuer_map(),  # revoked dropped
+                    key=f"{reg_path}|issuers",
+                )
             except Exception as exc:  # missing registry file, etc.
                 logger.warning("trust registry unavailable for gate auth: %s", exc)
         if not issuers:
@@ -1850,13 +1944,17 @@ class RaucleGateway:
             issuers = {self._issuer.key_id: self._issuer.public_key_pem}
         # Rebuilt per call so registry revocations propagate immediately.
         # as_issuer_map is a fold over the registry - cheap at realistic sizes.
+        delegations = self.config.delegations_file
+        resolver = None
+        if delegations and Path(delegations).exists():
+            resolver = self._file_cache.get(
+                delegations,
+                lambda: DelegationLedger(delegations).resolver(),
+                key=f"{delegations}|resolver",
+            )
         return CapabilityGate(
             trusted_issuers=issuers,
-            parent_resolver=(
-                DelegationLedger(self.config.delegations_file).resolver()
-                if self.config.delegations_file and Path(self.config.delegations_file).exists()
-                else None
-            ),
+            parent_resolver=resolver,
             revoked_token_ids=self._load_revoked_ids(),
         )
 
@@ -2891,6 +2989,11 @@ class RaucleGateway:
         path = self.config.revocations_file
         if not path or not Path(path).exists():
             return set()
+        return self._file_cache.get(path, lambda: self._read_revoked_ids(path))
+
+    @staticmethod
+    def _read_revoked_ids(path: str) -> set[str]:
+        """Parse the revocation registry into a set of token ids."""
         ids: set[str] = set()
         with open(path, encoding="utf-8") as fh:
             for line in fh:
@@ -2910,6 +3013,15 @@ class RaucleGateway:
         the tamper evidence for tampering the registries don't cover."""
         if not path or not Path(path).exists():
             return {}
+        return self._file_cache.get(
+            path,
+            lambda: self._read_registry_last_state(path, id_field),
+            key=f"{path}|{id_field}",
+        )
+
+    @staticmethod
+    def _read_registry_last_state(path: str, id_field: str) -> dict[str, str]:
+        """Last-record-wins state map for a containment registry."""
         states: dict[str, str] = {}
         with open(path, encoding="utf-8") as fh:
             for line in fh:

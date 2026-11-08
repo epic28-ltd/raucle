@@ -7,7 +7,6 @@ This module provides:
 
 from __future__ import annotations
 
-import io
 import json
 import logging
 import secrets
@@ -23,6 +22,8 @@ from raucle.gateway import (
     RaucleGateway,
     UserManager,
 )
+
+logger = logging.getLogger(__name__)
 
 _BEARER_PREFIX = "Bearer "
 
@@ -1407,51 +1408,41 @@ def _register_receipt_routes(
 
         from fastapi.responses import StreamingResponse
 
-        buf = _collect_export_receipts(gateway, since=since, until=until)
         return StreamingResponse(
-            iter([buf.getvalue().encode("utf-8")]),
+            _iter_export_lines(gateway, since=since, until=until),
             media_type="application/x-ndjson",
             headers={"Content-Disposition": 'attachment; filename="receipts.jsonl"'},
         )
 
 
-def _collect_export_receipts(
-    gateway: RaucleGateway, *, since: int | None, until: int | None
-) -> io.StringIO:
-    """Collect the time-bounded JSONL export from the segmented store (or
-    the legacy flat file). Bounded to a time range so responses stay
-    finite; the audit pack remains the regulator path."""
-    buf = io.StringIO()
+def _export_paths(gateway: RaucleGateway) -> list[Path]:
+    """The chain files an export reads: segments, or the legacy flat file."""
     if gateway._receipt_store is not None:
-        for seg in gateway._receipt_store.segments():
-            _append_export_lines(seg, buf, since=since, until=until)
-        return buf
+        return list(gateway._receipt_store.segments())
     from raucle._paths import validate_path
 
     path = validate_path(gateway.config.receipt_store, must_exist=False)
-    if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.strip() and _line_in_range(line, since, until):
-                buf.write(line.strip() + "\n")
-    return buf
+    return [path] if path.exists() else []
 
 
-def _append_export_lines(
-    path: Path, buf: io.StringIO, *, since: int | None, until: int | None
-) -> None:
-    """Stream one segment's valid, in-range envelope lines into *buf*.
-    Malformed lines are skipped: egress carries verifiable records only."""
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                json.loads(line)
-            except Exception:
-                continue
-            if _line_in_range(line, since, until):
-                buf.write(line + "\n")
+def _iter_export_lines(gateway: RaucleGateway, *, since: int | None, until: int | None) -> Any:
+    """Yield the time-bounded JSONL export one line at a time.
+
+    RED-036: the previous implementation buffered the whole chain in a
+    StringIO and sent it as one chunk, so an export of a multi-gigabyte chain
+    held it in memory in the gateway process. Malformed lines are skipped:
+    egress carries verifiable records only.
+    """
+    count = 0
+    for path in _export_paths(gateway):
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or not _line_in_range(line, since, until):
+                    continue
+                count += 1
+                yield line + "\n"
+    logger.debug("receipt export streamed %d records", count)
 
 
 def _line_in_range(line: str, since: int | None, until: int | None) -> bool:
@@ -1503,6 +1494,15 @@ def _register_siem_routes(
     ) -> dict[str, Any]:
         user = check_auth(authorization, x_totp)
         check_access(user, "config")
+        from raucle.gateway import siem_target_allowed
+
+        if req.url and not siem_target_allowed(req.url):
+            raise HTTPException(
+                400,
+                "siem url must be an http(s) destination outside loopback, "
+                "link-local and private address space (set RAUCLE_SIEM_ALLOW_PRIVATE=1 "
+                "for an internal collector)",
+            )
         gateway.config.siem_enabled = req.enabled
         gateway.config.siem_backend = req.backend
         gateway.config.siem_url = req.url
@@ -1766,6 +1766,17 @@ def _register_config_routes(
             return _no_change_response()
 
         touched = [f for f in EVIDENCE_PATH_FIELDS if f in updates]
+        if updates.get("siem_url"):
+            from raucle.gateway import siem_target_allowed
+
+            if not siem_target_allowed(updates["siem_url"]):
+                raise HTTPException(
+                    400,
+                    "siem_url must be an http(s) destination outside loopback, "
+                    "link-local and private address space (set "
+                    "RAUCLE_SIEM_ALLOW_PRIVATE=1 for an internal collector)",
+                )
+
         if touched and user.role != "admin":
             raise HTTPException(
                 403,
