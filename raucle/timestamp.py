@@ -136,7 +136,10 @@ def new_nonce() -> int:
 
 def submit_timestamp_request(url: str, request_der: bytes, timeout: float = 10.0) -> bytes:
     """POST a TimeStampReq to an RFC 3161 TSA over HTTP."""
-    req = urllib.request.Request(  # noqa: S310 - TSAs are caller-chosen
+    from raucle.url_guard import validate_url
+
+    validate_url(url, purpose="timestamp request")
+    req = urllib.request.Request(  # noqa: S310 - TSAs are caller-chosen, SSRF-guarded
         url,
         data=request_der,
         headers={"Content-Type": _TS_QUERY_CONTENT_TYPE},

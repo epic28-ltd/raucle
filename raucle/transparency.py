@@ -179,6 +179,9 @@ class SCITTAnchorClient:
         max_polls: int = 20,
     ) -> None:
         self._service_url = service_url.rstrip("/")
+        from raucle.url_guard import validate_url
+
+        validate_url(self._service_url, purpose="transparency service")
         self._token = token  # parameter only, never a module global
         self._timeout = timeout
         self._poll_interval = poll_interval
@@ -272,6 +275,9 @@ class SCITTAnchorClient:
     def _request(
         self, method: str, url: str, body: bytes | None = None
     ) -> tuple[int, dict[str, str], dict[str, Any]]:
+        from raucle.url_guard import validate_url
+
+        validate_url(url, purpose="transparency service request")
         req = urllib.request.Request(url, data=body, method=method)
         for key, value in self._headers().items():
             req.add_header(key, value)

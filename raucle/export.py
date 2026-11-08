@@ -38,7 +38,9 @@ Statistics::
 from __future__ import annotations
 
 import json
+import logging
 import time
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -350,3 +352,65 @@ class AttackLog:
 
     def __iter__(self):  # type: ignore[override]
         return iter(self._entries)
+
+
+# ---------------------------------------------------------------------------
+# Streaming export sink (T-B3)
+# ---------------------------------------------------------------------------
+
+
+logger = logging.getLogger("raucle.export")
+
+
+@dataclass
+class StreamFaultRecord:
+    """A recorded client-disconnect during a streamed export."""
+
+    records_written: int
+    source: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": "stream_disconnect",
+            "source": self.source,
+            "records_written": self.records_written,
+        }
+
+
+class StreamedExportSink:
+    """Instrument an export line generator: count writes, record disconnects.
+
+    Wraps any iterable of lines/chunks. Each yielded item counts as one
+    sink write. If the consumer closes the stream early (an ASGI client
+    disconnect closes the response generator via ``GeneratorExit``), the
+    fault is recorded on ``self.fault`` and logged — a partial export is
+    a recorded event, never a silent success.
+    """
+
+    def __init__(self, *, source: str = "receipts") -> None:
+        self.source = source
+        self.written = 0
+        self.fault: StreamFaultRecord | None = None
+
+    def stream(self, lines: Iterable[Any]) -> Iterator[Any]:
+        closer = getattr(lines, "close", None)
+        try:
+            for line in lines:
+                self.written += 1
+                yield line
+        except GeneratorExit:
+            if closer is not None:
+                closer()
+            self.close()
+            raise
+        logger.info("streamed export %s completed: %d records", self.source, self.written)
+
+    def close(self) -> None:
+        """Record a fault when the consumer closes the stream mid-flight."""
+        if self.fault is None:
+            self.fault = StreamFaultRecord(records_written=self.written, source=self.source)
+            logger.warning(
+                "streamed export %s disconnected by client after %d records",
+                self.source,
+                self.written,
+            )
