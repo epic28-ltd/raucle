@@ -211,25 +211,45 @@ class ReceiptIndex:
         The repair path: the chain is the truth; the index is disposable.
         Returns the number of receipts indexed.
         """
+        self._clear()
+        count = 0
+        for seg in store.segments():
+            with open(seg, encoding="utf-8") as fh:
+                count += self._index_lines(fh, segment=seg.name)
+        return count
+
+    def rebuild_from_flat_file(self, path: str | Path) -> int:
+        """Drop and rebuild the projection from a flat JSONL receipt chain.
+
+        The legacy sink: ``receipt_store`` as a single file with no
+        ``receipt_store_dir``. Before RED-034 a configured index was fed only
+        on the segmented path, so the admin panel reported an empty chain
+        while the store held every receipt.
+        """
+        self._clear()
+        with open(path, encoding="utf-8") as fh:
+            return self._index_lines(fh)
+
+    def _clear(self) -> None:
         with self._lock:
             self._conn.execute("DELETE FROM receipts")
             self._conn.commit()
+
+    def _index_lines(self, lines: Any, segment: str | None = None) -> int:
+        """Index every receipt envelope in an iterable of JSONL lines."""
         count = 0
-        for seg in store.segments():
-            seg_name = seg.name
-            with open(seg, encoding="utf-8") as fh:
-                for line_no, line in enumerate(fh, start=1):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        record = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if "receipt_hash" not in record or "jws" not in record:
-                        continue  # not a receipt envelope
-                    self.index_receipt(record, segment=seg_name, line_no=line_no)
-                    count += 1
+        for line_no, line in enumerate(lines, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "receipt_hash" not in record or "jws" not in record:
+                continue  # not a receipt envelope
+            self.index_receipt(record, segment=segment, line_no=line_no)
+            count += 1
         return count
 
     # ------------------------------------------------------------------

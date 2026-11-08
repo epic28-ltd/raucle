@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Fixed - RED-034: the receipt index is fed on every sink
+
+- The SQLite receipt projection was updated only inside the segmented-store
+  branch of `_sign_and_store_receipt`. A deployment that set
+  `RAUCLE_RECEIPT_INDEX_PATH` without `RAUCLE_RECEIPT_STORE_DIR` (the flat
+  file sink) wrote every receipt to the chain and none to the index, so the
+  admin panel reported `total 0` against a store holding the whole chain. The
+  chain was intact; the audit view was empty, which is the more dangerous
+  failure because it looks like a quiet week.
+- The insert now runs after whichever sink wrote the line, and a boot with an
+  empty index rebuilds from a flat file as well as from segments
+  (`ReceiptIndex.rebuild_from_flat_file`, with the line walker shared between
+  both rebuild paths).
+- Index write failures still degrade queries and never touch the chain; that
+  contract is pinned by a test.
+- Tests: `tests/test_receipt_index_sinks.py` (new, 7 cases).
+
 ### Fixed - RED-033: panel output escaping and security headers
 
 - The receipts table interpolated `tool`, `agent_id`, `decision`, `trace_id`
