@@ -265,6 +265,65 @@ class TestRaucleGateway:
         assert result["status"] == "ok"
 
 
+@pytest.fixture
+def approval_only_gateway(tmp_path):
+    """A rule whose only human gate is an approval threshold (no numeric
+    ceiling), so a type-confused argument reaches the threshold evaluator."""
+    path = tmp_path / "approval-policies.yaml"
+    path.write_text(
+        """
+version: 1
+issuer: test.bank
+policies:
+  - tool: pay
+    agent_id: agent:pay
+    ttl_seconds: 300
+    require_approval_when:
+      amount_gt: 5000
+  - tool: refund
+    agent_id: agent:pay
+    ttl_seconds: 300
+    require_approval_when:
+      amount_eq: 10000
+"""
+    )
+    cfg = GatewayConfig(
+        policy_file=str(path),
+        receipt_store=str(tmp_path / "receipts.jsonl"),
+        audit_chain=str(tmp_path / "audit.jsonl"),
+        admin_api_key="test-admin-key",
+        signer_backend="local",
+    )
+    return RaucleGateway(cfg)
+
+
+class TestApprovalThresholdGatePath:
+    """RED-031: the gate-path consequences of type-confused thresholds."""
+
+    def test_numeric_text_escalates_instead_of_crashing(self, approval_only_gateway):
+        result = approval_only_gateway.check_tool_call("pay", {"amount": "99999"})
+        assert result["decision"] == "escalate"
+        assert result["receipt_id"]
+
+    def test_numeric_text_matches_eq_threshold(self, approval_only_gateway):
+        """Previously: "10000" == 10000 is False, so the call was ALLOWED."""
+        result = approval_only_gateway.check_tool_call("refund", {"amount": "10000"})
+        assert result["decision"] == "escalate"
+
+    def test_decision_path_fault_is_a_receipted_deny(self, approval_only_gateway, monkeypatch):
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("simulated internal failure")
+
+        monkeypatch.setattr(approval_only_gateway._approvals, "consume", _boom)
+        result = approval_only_gateway.check_tool_call(
+            "pay", {"amount": 7500}, approval_id="appr-1"
+        )
+        assert result["decision"] == "deny"
+        assert result["reason"].startswith("gate_fault:")
+        assert "simulated internal failure" not in result["reason"]
+        assert result["receipt_id"]
+
+
 # ---------------------------------------------------------------------------
 # Admin Panel API
 # ---------------------------------------------------------------------------

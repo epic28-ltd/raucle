@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Fixed - RED-031: approval thresholds evaluate fail-closed
+
+- An approval threshold is a human check, so an argument that cannot be
+  shown to sit below it now ESCALATES. Comparisons previously ran on raw
+  caller types: `amount="99999"` against `amount_gt: 5000` raised
+  `TypeError` out of `check_tool_call`, which surfaced as an HTTP 500 with
+  no receipt written, and a type-mismatched `eq` threshold (`"10000"` vs
+  `amount_eq: 10000`) compared False and let the call proceed to ALLOW
+  without the approval the policy demanded. Operands are now classified
+  (number / string / incomparable; bools and non-finite floats are not
+  numbers), numeric text compares numerically, and any mixed or
+  unclassifiable pair escalates. Unknown operators escalate rather than
+  falling through to equality.
+- The decision path gained a receipted fault boundary: any exception raised
+  while deciding (data-flow evaluation, EQR, approval consumption, SIEM)
+  becomes a `gate_fault: internal error during decision (<ExcType>)` DENY
+  with a receipt, instead of an unaudited 500. The reason carries the
+  exception type only, never its message, which can quote caller-supplied
+  values.
+- Tests: `tests/test_policy.py` (+8 cases) and `tests/test_gateway.py`
+  (`TestApprovalThresholdGatePath`, +3 cases).
+
 ### Tests - dark-corners remediation round 2
 
 - SCITT anchoring (`raucle/transparency.py`): the poll/HTTP edge states get
