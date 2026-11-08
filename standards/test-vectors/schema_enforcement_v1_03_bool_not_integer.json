@@ -1,0 +1,20 @@
+{
+  "args": {
+    "n": true
+  },
+  "decision": {
+    "decision": "deny",
+    "reason": "schema_violation: schema_violation: field 'n' is declared 'integer' but value is 'boolean'"
+  },
+  "inputSchema": {
+    "properties": {
+      "n": {
+        "type": "integer"
+      }
+    },
+    "type": "object"
+  },
+  "name": "boolean value denies an integer-typed field",
+  "spec": "raucle-schema-enforcement/v1",
+  "tool": "t"
+}
