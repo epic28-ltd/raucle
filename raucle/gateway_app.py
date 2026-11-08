@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import secrets
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,10 @@ from raucle.gateway import (
 )
 
 _BEARER_PREFIX = "Bearer "
+
+# RED-032: operator-supplied admin keys carry a floor; prefer the server
+# minting one (``POST /api/users`` with no api_key).
+_MIN_ADMIN_KEY_CHARS = 24
 
 # RED-013: a request-size bound enforced pre-gate. An oversized payload
 # is REJECTED (HTTP 413) before any verdict processing — it never reaches
@@ -129,9 +134,16 @@ class RevokeRequest(BaseModel):
 
 
 class UserCreateRequest(BaseModel):
-    """Create a new admin panel user."""
+    """Create a new admin panel user.
 
-    api_key: str
+    ``api_key`` is optional (RED-032): when omitted the server mints a
+    256-bit key and returns it exactly once. An operator-supplied key must
+    carry at least ``_MIN_ADMIN_KEY_CHARS`` characters.
+    """
+
+    api_key: str = Field(
+        default="", description="Optional caller-supplied key; omit to have one generated"
+    )
     role: str = Field(..., description="admin, operator, or auditor")
     name: str = Field(default="")
 
@@ -392,7 +404,10 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         "/health",
         responses={"401": {"description": "Health token required but missing/incorrect"}},
     )
-    def health(authorization: str | None = Header(None)) -> dict[str, str]:
+    def health(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, str]:
         if gateway.config.health_check_token:
             key = authorization or ""
             if key.startswith(_BEARER_PREFIX):
@@ -484,7 +499,17 @@ def _check_auth(
     authorization: str | None,
     x_totp: str | None,
 ) -> GatewayUser:
-    """Extract and validate the API key and optional TOTP code."""
+    """Extract and validate the API key and optional TOTP code.
+
+    Routes that call this helper directly (rather than declaring it as a
+    dependency) pass the FastAPI ``Header`` default object, not ``None``.
+    Coerce anything that is not a string to ``None`` so a missing optional
+    header behaves as missing instead of reaching the comparators.
+    """
+    if not isinstance(authorization, str):
+        authorization = None
+    if not isinstance(x_totp, str) or not x_totp.strip():
+        x_totp = None
     if authorization is None:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
     key = authorization
@@ -506,7 +531,7 @@ def _check_auth(
 
 def _check_access(users: UserManager, user: GatewayUser, resource: str) -> None:
     """Raise 403 unless the user's role may access *resource*."""
-    if not users.can_access(user.api_key, resource):
+    if not users.can_access(user.user_id, resource):
         raise HTTPException(
             status_code=403, detail=f"Role '{user.role}' cannot access '{resource}'"
         )
@@ -555,7 +580,10 @@ def _register_health_routes(app: FastAPI, gateway: RaucleGateway) -> None:
         "/health",
         responses={"401": {"description": "Health token required but missing/incorrect"}},
     )
-    def admin_health(authorization: str | None = Header(None)) -> dict[str, str]:
+    def admin_health(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, str]:
         if gateway.config.health_check_token:
             key = authorization or ""
             if key.startswith(_BEARER_PREFIX):
@@ -606,8 +634,11 @@ def _register_stats_routes(
             "403": {"description": "Invalid API key or insufficient role"},
         },
     )
-    def get_stats(authorization: str | None = Header(None)) -> dict[str, Any]:
-        user = check_auth(authorization)
+    def get_stats(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        user = check_auth(authorization, x_totp)
         check_access(user, "stats")
         return gateway.get_stats()
 
@@ -625,9 +656,10 @@ def _register_stats_routes(
         source: str = "",
         destination: str = "",
         authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
         """Return recent connections, optionally filtered."""
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "stats")
         connections = gateway.get_connections(limit=500)
         # Apply filters
@@ -665,8 +697,11 @@ def _register_learn_routes(
             "403": {"description": "Insufficient role"},
         },
     )
-    def learn_summary(authorization: str | None = Header(None)) -> dict[str, Any]:
-        user = check_auth(authorization)
+    def learn_summary(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        user = check_auth(authorization, x_totp)
         check_access(user, "policies")
         return gateway.learn_summary()
 
@@ -678,8 +713,11 @@ def _register_learn_routes(
             "200": {"description": "Draft policy YAML (empty string if nothing learned)"},
         },
     )
-    def learn_draft(authorization: str | None = Header(None)) -> dict[str, Any]:
-        user = check_auth(authorization)
+    def learn_draft(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        user = check_auth(authorization, x_totp)
         check_access(user, "policies")
         return {"yaml": gateway.draft_policy()}
 
@@ -690,8 +728,11 @@ def _register_learn_routes(
             "403": {"description": "Insufficient role"},
         },
     )
-    def learn_clear(authorization: str | None = Header(None)) -> dict[str, Any]:
-        user = check_auth(authorization)
+    def learn_clear(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        user = check_auth(authorization, x_totp)
         check_access(user, "policies")
         gateway._learn_clear()
         return {"status": "cleared"}
@@ -742,11 +783,12 @@ def _register_policy_routes(
     def get_policies(
         file: str = "",
         authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
         """Get policy file content. If policy_dir is set, list all files."""
         from raucle._paths import validate_path
 
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "policies")
         if gateway.config.policy_dir:
             return _policy_dir_response(gateway.config.policy_dir, validate_path, file)
@@ -768,9 +810,11 @@ def _register_policy_routes(
         },
     )
     def update_policies(
-        req: PolicyUpdateRequest, authorization: str | None = Header(None)
+        req: PolicyUpdateRequest,
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "policies")
         # SECURITY: validate user-supplied YAML before writing to disk,
         # then write the CANONICALLY RE-SERIALISED document (not the raw
@@ -813,8 +857,11 @@ def _register_policy_routes(
             "403": {"description": "Invalid API key or insufficient role"},
         },
     )
-    def reload_policies(authorization: str | None = Header(None)) -> dict[str, Any]:
-        user = check_auth(authorization)
+    def reload_policies(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        user = check_auth(authorization, x_totp)
         check_access(user, "policies")
         return gateway.reload_policies()
 
@@ -826,9 +873,11 @@ def _register_policy_routes(
         },
     )
     def validate_policy(
-        req: PolicyUpdateRequest, authorization: str | None = Header(None)
+        req: PolicyUpdateRequest,
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "policies")
         return _validate_policy_content(req.content)
 
@@ -854,8 +903,11 @@ def _register_authority_routes(
             "403": {"description": "Invalid API key or insufficient role"},
         },
     )
-    def list_approvals(authorization: str | None = Header(None)) -> dict[str, Any]:
-        user = check_auth(authorization)
+    def list_approvals(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        user = check_auth(authorization, x_totp)
         check_access(user, "receipts")
         approvals = gateway._approvals.pending()
         return {"count": len(approvals), "approvals": approvals}
@@ -873,8 +925,9 @@ def _register_authority_routes(
         request_id: str,
         req: ApprovalDecisionRequest,
         authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "policies")
         from raucle.approvals import ApprovalError
 
@@ -895,11 +948,14 @@ def _register_authority_routes(
             "403": {"description": "Invalid API key or insufficient role"},
         },
     )
-    def list_activation_requests(authorization: str | None = Header(None)) -> dict[str, Any]:
+    def list_activation_requests(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
         """P1.6c: pending policy-activation requests with their blast-radius
         delta summary, so the activate path shows the delta before
         confirmation."""
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "receipts")
         rows = gateway._activations.pending()
         return {"count": len(rows), "activation_requests": rows}
@@ -917,9 +973,10 @@ def _register_authority_routes(
         request_id: str,
         req: ApprovalDecisionRequest,
         authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
         """Receipted decision on an activation request carrying the delta."""
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "policies")
         from raucle.activation import ActivationError
 
@@ -940,8 +997,11 @@ def _register_authority_routes(
             "403": {"description": "Invalid API key or insufficient role"},
         },
     )
-    def policy_ledger(authorization: str | None = Header(None)) -> dict[str, Any]:
-        user = check_auth(authorization)
+    def policy_ledger(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        user = check_auth(authorization, x_totp)
         check_access(user, "receipts")
         entries = gateway.get_policy_ledger()
         integrity = gateway.verify_policy_ledger()
@@ -955,9 +1015,11 @@ def _register_authority_routes(
         },
     )
     def authority_envelope(
-        agent_id: str, authorization: str | None = Header(None)
+        agent_id: str,
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "receipts")
         envelope, jws = gateway.build_authority_envelope(agent_id)
         return {"envelope": envelope, "jws": jws}
@@ -970,9 +1032,12 @@ def _register_authority_routes(
         },
     )
     def suspend_agent(
-        agent_id: str, req: SuspendRequest, authorization: str | None = Header(None)
+        agent_id: str,
+        req: SuspendRequest,
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         # Admin only: suspending an agent is the kill switch
         check_access(user, "users")
         return gateway.suspend_agent(agent_id, reason=req.reason, actor=user.name or user.role)
@@ -985,10 +1050,12 @@ def _register_authority_routes(
         },
     )
     def revoke_capability(
-        req: RevokeRequest, authorization: str | None = Header(None)
+        req: RevokeRequest,
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
         """A3: revoke a capability and its whole subtree, receipted."""
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "users")
         return gateway.revoke_capability(
             req.token_id, reason=req.reason, actor=user.name or user.role
@@ -1002,11 +1069,14 @@ def _register_authority_routes(
         },
     )
     def revoke_agent_chains(
-        agent_id: str, req: SuspendRequest, authorization: str | None = Header(None)
+        agent_id: str,
+        req: SuspendRequest,
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
         """A3 owner-departure: revoke every delegated chain of an identity in
         one receipted operation (the lifecycle audit trail)."""
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "users")
         return gateway.revoke_agent_chains(
             agent_id, reason=req.reason, actor=user.name or user.role
@@ -1118,6 +1188,7 @@ def _register_receipt_routes(
         until: int | None = None,
         cursor: str | None = None,
         authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
         """Query receipts newest-first with filters + cursor pagination.
 
@@ -1125,7 +1196,7 @@ def _register_receipt_routes(
         the segmented store's bounded-memory recent() when not. No params =
         newest-first, same shape as before.
         """
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "receipts")
         if gateway._receipt_index is not None:
             return _receipt_page_via_index(
@@ -1155,13 +1226,14 @@ def _register_receipt_routes(
         receipt_hash: str,
         max_depth: int = 50,
         authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
         """Walk a receipt's full causal ancestry (parents DAG).
 
         The incident-responder question: everything upstream of this
         decision. Index-backed; cycle-safe; depth-capped.
         """
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "receipts")
         if gateway._receipt_index is None:
             raise HTTPException(
@@ -1183,6 +1255,7 @@ def _register_receipt_routes(
         depth: int = 5,
         breadth: int = 200,
         authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
         """Resolve the complete authority graph for one decision receipt.
 
@@ -1198,7 +1271,7 @@ def _register_receipt_routes(
             resolve_chain_graph_for_gateway,
         )
 
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "receipts")
         graph = resolve_chain_graph_for_gateway(
             gateway,
@@ -1222,6 +1295,7 @@ def _register_receipt_routes(
         since: int | None = None,
         until: int | None = None,
         authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> Any:
         """Bulk egress: stream receipts as JSONL for the caller's own data
         platform (C4). The chain of record stays ours; the copy is theirs.
@@ -1230,7 +1304,7 @@ def _register_receipt_routes(
         the legacy flat file. Bounded to a time range to keep responses
         finite; the audit pack remains the regulator path.
         """
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "receipts")
 
         from fastapi.responses import StreamingResponse
@@ -1303,8 +1377,11 @@ def _register_siem_routes(
             "403": {"description": "Invalid API key or insufficient role"},
         },
     )
-    def get_siem_config(authorization: str | None = Header(None)) -> dict[str, Any]:
-        user = check_auth(authorization)
+    def get_siem_config(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        user = check_auth(authorization, x_totp)
         check_access(user, "config")
         return {
             "enabled": gateway.siem.enabled,
@@ -1322,9 +1399,11 @@ def _register_siem_routes(
         },
     )
     def update_siem_config(
-        req: SIEMConfigRequest, authorization: str | None = Header(None)
+        req: SIEMConfigRequest,
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "config")
         gateway.config.siem_enabled = req.enabled
         gateway.config.siem_backend = req.backend
@@ -1349,12 +1428,22 @@ def _register_user_routes(
             "403": {"description": "Invalid API key or insufficient role"},
         },
     )
-    def list_users(authorization: str | None = Header(None)) -> dict[str, Any]:
-        user = check_auth(authorization)
+    def list_users(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        user = check_auth(authorization, x_totp)
         check_access(user, "users")
         return {
             "users": [
-                {"api_key": u.api_key[:8] + "...", "role": u.role, "name": u.name}
+                {
+                    "user_id": u.user_id,
+                    "api_key_label": u.key_label,
+                    "role": u.role,
+                    "name": u.name,
+                    "mfa_enabled": u.mfa_enabled,
+                    "expires_at": u.expires_at,
+                }
                 for u in users.list_users()
             ]
         }
@@ -1368,14 +1457,30 @@ def _register_user_routes(
         },
     )
     def create_user(
-        req: UserCreateRequest, authorization: str | None = Header(None)
+        req: UserCreateRequest,
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "users")
         if req.role not in ("admin", "operator", "auditor"):
             raise HTTPException(400, "role must be admin, operator, or auditor")
-        new_user = users.add_user(req.api_key, req.role, req.name)
-        return {"status": "ok", "api_key": new_user.api_key[:8] + "...", "role": new_user.role}
+        supplied = (req.api_key or "").strip()
+        if supplied and len(supplied) < _MIN_ADMIN_KEY_CHARS:
+            raise HTTPException(
+                400,
+                f"api_key must be at least {_MIN_ADMIN_KEY_CHARS} characters, "
+                "or omit it to have one generated",
+            )
+        api_key = supplied or ("adm_" + secrets.token_hex(32))
+        new_user = users.add_user(api_key, req.role, req.name)
+        # The plaintext key is returned exactly once; only its digest is stored.
+        return {
+            "status": "ok",
+            "user_id": new_user.user_id,
+            "api_key": api_key,
+            "role": new_user.role,
+        }
 
     @app.delete(
         "/api/users/{api_key}",
@@ -1385,8 +1490,12 @@ def _register_user_routes(
             "404": {"description": "User not found"},
         },
     )
-    def delete_user(api_key: str, authorization: str | None = Header(None)) -> dict[str, Any]:
-        user = check_auth(authorization)
+    def delete_user(
+        api_key: str,
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        user = check_auth(authorization, x_totp)
         check_access(user, "users")
         if users.remove_user(api_key):
             return {"status": "ok"}
@@ -1400,14 +1509,18 @@ def _register_user_routes(
             "404": {"description": "User not found"},
         },
     )
-    def setup_mfa(api_key: str, authorization: str | None = Header(None)) -> dict[str, Any]:
+    def setup_mfa(
+        api_key: str,
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
         """Generate a TOTP secret and provisioning URI for a user.
 
         Returns the secret and otpauth:// URI. The user must scan the
         QR code with their authenticator app and then call /mfa/verify
         with the first 6-digit code to confirm MFA setup.
         """
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "users")
         result = users.setup_mfa(api_key)
         if result is None:
@@ -1432,9 +1545,10 @@ def _register_user_routes(
         api_key: str,
         code: str = "",
         authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
         """Verify the first TOTP code and enable MFA for the user."""
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "users")
         if not code:
             raise HTTPException(400, "code parameter is required")
@@ -1450,9 +1564,13 @@ def _register_user_routes(
             "404": {"description": "User not found"},
         },
     )
-    def disable_mfa(api_key: str, authorization: str | None = Header(None)) -> dict[str, Any]:
+    def disable_mfa(
+        api_key: str,
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
         """Disable MFA for a user. Requires admin role."""
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "users")
         if users.disable_mfa(api_key):
             return {"status": "ok", "mfa_enabled": False}
@@ -1500,8 +1618,11 @@ def _register_config_routes(
     """Gateway configuration view and update."""
 
     @app.get("/api/config")
-    def get_config(authorization: str | None = Header(None)) -> dict[str, Any]:
-        user = check_auth(authorization)
+    def get_config(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        user = check_auth(authorization, x_totp)
         check_access(user, "config")
         c = gateway.config
         return {
@@ -1531,6 +1652,7 @@ def _register_config_routes(
     def update_config(
         req: ConfigUpdateRequest,
         authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
         """Update gateway configuration. Writes to YAML config file.
 
@@ -1538,7 +1660,7 @@ def _register_config_routes(
         Changes are applied to the running gateway and persisted to disk.
         Some changes (ports, host, signer) require a restart to take effect.
         """
-        user = check_auth(authorization)
+        user = check_auth(authorization, x_totp)
         check_access(user, "config")
 
         updates = {k: v for k, v in req.model_dump().items() if v is not None}
@@ -2445,7 +2567,7 @@ function exportReceipts(){
 }
 function loadSIEM(){api('/api/siem').then(r=>r.json()).then(d=>{document.getElementById('siemEnabled').checked=d.enabled;document.getElementById('siemBackend').value=d.backend||'';document.getElementById('siemUrl').value=d.url||'';});}
 function saveSIEM(){api('/api/siem',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:document.getElementById('siemEnabled').checked,backend:document.getElementById('siemBackend').value,url:document.getElementById('siemUrl').value,token:document.getElementById('siemToken').value})}).then(r=>r.json()).then(d=>alert('Saved'));}
-function loadUsers(){api('/api/users').then(r=>r.json()).then(d=>{let tb=document.getElementById('userTableBody');tb.innerHTML='';d.users.forEach(u=>{tb.innerHTML+=`<tr><td>${esc(u.api_key)}</td><td>${esc(u.role)}</td><td>${esc(u.name||'')}</td><td>${u.mfa_enabled?'<span style="color:#22c55e;font-size:12px">Enabled</span>':'<span style="color:#a3a3a3;font-size:12px">Off</span>'}</td><td><button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" onclick="setupMfa('${esc(u.api_key)}')">Setup MFA</button>${u.mfa_enabled?` <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" onclick="disableMfa('${esc(u.api_key)}')">Disable</button>`:''}</td></tr>`;});});}
+function loadUsers(){api('/api/users').then(r=>r.json()).then(d=>{let tb=document.getElementById('userTableBody');tb.innerHTML='';d.users.forEach(u=>{const uid=esc(u.user_id||'');tb.innerHTML+=`<tr><td>${esc(u.user_id||'')}</td><td>${esc(u.api_key_label||'')}</td><td>${esc(u.role)}</td><td>${esc(u.name||'')}</td><td>${u.mfa_enabled?'<span style="color:#22c55e;font-size:12px">Enabled</span>':'<span style="color:#a3a3a3;font-size:12px">Off</span>'}</td><td><button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" onclick="setupMfa('${uid}')">Setup MFA</button>${u.mfa_enabled?` <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" onclick="disableMfa('${uid}')">Disable</button>`:''}</td></tr>`;});});}
 function addUser(){api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:document.getElementById('newKey').value,role:document.getElementById('newRole').value,name:document.getElementById('newName').value})}).then(r=>r.json()).then(d=>{alert('Added');loadUsers();});}
 let mfaSetupKey='';
 function setupMfa(key){

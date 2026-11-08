@@ -146,25 +146,32 @@ def test_admin_users_mfa_and_delete(stack):
     h = _hdr(key, code)
     assert (
         client.post(
-            "/api/users", headers=h, json={"api_key": "op-2", "role": "operator", "name": "Op2"}
+            "/api/users",
+            headers=h,
+            json={"api_key": "op-2-key-0123456789012345", "role": "operator", "name": "Op2"},
         ).status_code
         == 200
     )
-    r = client.post("/api/users/op-2/mfa/setup", headers=h)
+    r = client.post("/api/users/op-2-key-0123456789012345/mfa/setup", headers=h)
     assert r.status_code == 200, r.text
     assert "secret" in r.json(), r.text
     secret = r.json()["secret"]
     code2 = str(totp.TOTP(secret).now())
-    r = client.post("/api/users/op-2/mfa/verify", headers=h, params={"code": code2})
+    r = client.post(
+        "/api/users/op-2-key-0123456789012345/mfa/verify", headers=h, params={"code": code2}
+    )
     assert r.status_code == 200, r.text
     assert (
-        client.post("/api/users/op-2/mfa/verify", headers=h, params={"code": ""}).status_code == 400
+        client.post(
+            "/api/users/op-2-key-0123456789012345/mfa/verify", headers=h, params={"code": ""}
+        ).status_code
+        == 400
     )
-    r = client.post("/api/users/op-2/mfa/disable", headers=h)
+    r = client.post("/api/users/op-2-key-0123456789012345/mfa/disable", headers=h)
     assert r.status_code == 200
     assert r.json()["mfa_enabled"] is False
     assert client.delete("/api/users/ghost", headers=h).status_code == 404
-    assert client.delete("/api/users/op-2", headers=h).status_code == 200
+    assert client.delete("/api/users/op-2-key-0123456789012345", headers=h).status_code == 200
 
 
 def test_health_token_enforced_on_both_apps(tmp_path, monkeypatch):

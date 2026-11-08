@@ -83,6 +83,31 @@ def _log_safe(value: object) -> str:
     return "".join(ch if ch.isprintable() and ch not in "\r\n\t\x1b" else "?" for ch in str(value))
 
 
+def _admin_key_from_env() -> str:
+    """Bootstrap admin key from the environment.
+
+    ``RAUCLE_ADMIN_KEY_FILE`` wins when it names a readable file (the Docker
+    / Kubernetes secret pattern the deployment docs describe); otherwise
+    ``RAUCLE_ADMIN_KEY`` is used. A file that is named but unreadable is a
+    configuration error worth shouting about, not a silent fallback.
+    """
+    path = os.environ.get("RAUCLE_ADMIN_KEY_FILE", "").strip()
+    if path:
+        try:
+            value = Path(path).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            logger.warning(
+                "RAUCLE_ADMIN_KEY_FILE is set but unreadable (%s); no bootstrap admin key",
+                exc.__class__.__name__,
+            )
+            return ""
+        if value:
+            return value
+        logger.warning("RAUCLE_ADMIN_KEY_FILE %s is empty; no bootstrap admin key", path)
+        return ""
+    return os.environ.get("RAUCLE_ADMIN_KEY", "")
+
+
 def _deployment_trust_from_env() -> dict:
     """Load the pinned deployment trust root from the environment.
 
@@ -229,7 +254,7 @@ class GatewayConfig:
             host=os.environ.get("RAUCLE_GATEWAY_HOST", "0.0.0.0"),
             port=int(os.environ.get("RAUCLE_GATEWAY_PORT", "8080")),
             admin_port=int(os.environ.get("RAUCLE_ADMIN_PORT", "8081")),
-            admin_api_key=os.environ.get("RAUCLE_ADMIN_KEY", ""),
+            admin_api_key=_admin_key_from_env(),
             health_check_token=os.environ.get("RAUCLE_HEALTH_KEY", ""),
             signer_backend=os.environ.get("RAUCLE_SIGNER", "local"),
             kms_key_id=os.environ.get("RAUCLE_KMS_KEY_ID", ""),
@@ -459,13 +484,20 @@ class SIEMForwarder:
 
 @dataclass
 class GatewayUser:
-    """An admin panel user."""
+    """An admin panel user.
 
-    api_key: str
+    The API key itself is never retained after creation: the store holds
+    only its SHA-256 digest (RED-032). ``user_id`` is a hash-derived public
+    handle so routes and the panel can name a user without knowing or
+    displaying key material.
+    """
+
     role: str  # admin, operator, auditor
     name: str = ""
     created_at: float = field(default_factory=lambda: time.time())
     expires_at: float | None = None  # None = never expires
+    api_key_hash: str = ""  # sha256 hex of the key; the store key
+    user_id: str = ""  # stable public handle, derived from the hash
     # TOTP MFA fields
     totp_secret: str = ""  # base32 secret, empty = MFA not set up
     mfa_enabled: bool = False  # True after user verifies first TOTP code
@@ -479,6 +511,28 @@ class GatewayUser:
         """True if this user must provide a TOTP code to authenticate."""
         return self.mfa_enabled and bool(self.totp_secret)
 
+    @property
+    def key_label(self) -> str:
+        """Non-secret label for display: a hash fragment, never a key."""
+        return "sha256:" + self.api_key_hash[:8] + "..." if self.api_key_hash else ""
+
+
+def _hash_api_key(api_key: str) -> str:
+    """SHA-256 hex digest of an admin API key (RED-032).
+
+    Unsalted is deliberate: the key is 256 bits of caller-chosen entropy at
+    worst and usually a generated token, so a rainbow table buys nothing,
+    and an unsalted digest keeps lookup a single dict hit.
+    """
+    import hashlib
+
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+
+def _derive_user_id(key_hash: str) -> str:
+    """A stable public handle for a user, derived from the key digest."""
+    return "usr-" + key_hash[:12]
+
 
 class UserManager:
     """API-key-based user management with optional TOTP MFA.
@@ -491,12 +545,18 @@ class UserManager:
     Keys can have an optional expiry timestamp (Unix epoch seconds).
     Expired keys are automatically rejected on authentication.
 
+    Storage (RED-032): only the SHA-256 digest of each key is written, so
+    ``users.jsonl`` is not a credential file. A record written by an earlier
+    version (plaintext ``api_key``) is migrated on load and rewritten in the
+    same construction. A corrupt file fails closed.
+
     MFA:
     - Call setup_mfa() to generate a TOTP secret and provisioning URI
     - User scans the QR code with their authenticator app
     - Call verify_mfa() with the first 6-digit code to confirm setup
     - After that, every API call must include X-TOTP header with a valid code
     - MFA can be disabled by an admin via disable_mfa()
+    - The enabled flag is persisted, so MFA survives a restart
     """
 
     def __init__(self, persist_path: str | Path | None = None) -> None:
@@ -508,6 +568,8 @@ class UserManager:
         historical in-memory manager (demo mode relies on this).
         """
         self._users: dict[str, GatewayUser] = {}
+        # TOTP replay guard: user_id -> (accepted code, matched counter).
+        self._last_totp: dict[str, tuple[str, int]] = {}
         self._persist_path = Path(persist_path) if persist_path else None
         if self._persist_path is not None:
             self._load_users()
@@ -519,6 +581,7 @@ class UserManager:
         path = self._persist_path
         if not path.exists():
             return
+        migrated = False
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             line = line.strip()
             if not line:
@@ -531,15 +594,34 @@ class UserManager:
                 ) from exc
             if not isinstance(rec, dict):
                 raise ValueError(f"user store {path} is corrupt (line {lineno})")
+            key_hash = rec.get("api_key_hash") or ""
+            if not key_hash:
+                legacy_key = rec.get("api_key") or ""
+                if not legacy_key:
+                    raise ValueError(
+                        f"user store {path} is corrupt (line {lineno}: no key material)"
+                    )
+                key_hash = _hash_api_key(legacy_key)
+                migrated = True
             user = GatewayUser(
-                api_key=rec["api_key"],
                 role=rec["role"],
                 name=rec.get("name", ""),
                 expires_at=rec.get("expires_at"),
+                api_key_hash=key_hash,
+                user_id=rec.get("user_id") or _derive_user_id(key_hash),
             )
             if rec.get("totp_secret"):
                 user.totp_secret = rec["totp_secret"]
-            self._users[user.api_key] = user
+                # Files written before RED-032 carry no mfa_enabled flag: a
+                # verified secret means the user had enabled MFA, so restore
+                # it rather than silently downgrading them to key-only auth.
+                user.mfa_enabled = bool(rec.get("mfa_enabled", True))
+            else:
+                user.mfa_enabled = bool(rec.get("mfa_enabled", False))
+            self._users[user.api_key_hash] = user
+        if migrated:
+            logger.info("user store %s migrated to hashed API keys", path)
+            self._persist_users()
 
     def _persist_users(self) -> None:
         import contextlib as _contextlib
@@ -553,10 +635,12 @@ class UserManager:
         records = []
         for user in self._users.values():
             rec = {
-                "api_key": user.api_key,
+                "user_id": user.user_id,
+                "api_key_hash": user.api_key_hash,
                 "role": user.role,
                 "name": user.name,
                 "expires_at": user.expires_at,
+                "mfa_enabled": user.mfa_enabled,
             }
             if getattr(user, "totp_secret", None):
                 rec["totp_secret"] = user.totp_secret
@@ -582,29 +666,53 @@ class UserManager:
         name: str = "",
         expires_at: float | None = None,
     ) -> GatewayUser:
-        user = GatewayUser(api_key=api_key, role=role, name=name, expires_at=expires_at)
-        self._users[api_key] = user
+        """Register *api_key* for a new user. The plaintext is not stored."""
+        key_hash = _hash_api_key(api_key)
+        user = GatewayUser(
+            role=role,
+            name=name,
+            expires_at=expires_at,
+            api_key_hash=key_hash,
+            user_id=_derive_user_id(key_hash),
+        )
+        self._users[key_hash] = user
         self._persist_users()
         return user
 
     def get_user(self, api_key: str) -> GatewayUser | None:
-        import hmac as _hmac
+        """Resolve a presented key to its user, or None when unknown/expired."""
+        if not api_key or not isinstance(api_key, str):
+            return None
+        user = self._users.get(_hash_api_key(api_key))
+        if user is None or user.is_expired():
+            return None
+        return user
 
-        for stored_key, user in self._users.items():
-            if _hmac.compare_digest(stored_key, api_key):
-                if user.is_expired():
-                    return None
-                return user
+    def resolve(self, handle: str) -> GatewayUser | None:
+        """Resolve a full API key OR a ``user_id`` handle to its user.
+
+        Admin routes take a handle in the path. Accepting both keeps the
+        existing full-key URLs working while giving the panel a way to name
+        a user without ever holding key material.
+        """
+        if not handle or not isinstance(handle, str):
+            return None
+        user = self.get_user(handle)
+        if user is not None:
+            return user
+        for candidate in self._users.values():
+            if candidate.user_id == handle:
+                return None if candidate.is_expired() else candidate
         return None
 
-    def setup_mfa(self, api_key: str) -> dict[str, str] | None:
+    def setup_mfa(self, handle: str) -> dict[str, str] | None:
         """Generate a TOTP secret and provisioning URI for a user.
 
         Returns dict with 'secret' and 'uri' keys, or None if user not found.
         The secret is stored on the user but MFA is not enabled until
         verify_mfa() is called with a valid code.
         """
-        user = self._users.get(api_key)
+        user = self.resolve(handle)
         if user is None:
             return None
         try:
@@ -613,69 +721,104 @@ class UserManager:
             return None
         secret = pyotp.random_base32()
         user.totp_secret = secret
-        self._persist_users()
         user.mfa_enabled = False  # not enabled until verified
+        self._persist_users()
         totp = pyotp.TOTP(secret)
         issuer = "Raucle Gateway"
-        label = user.name or api_key[:8]
-        uri = totp.provisioning_uri(name=label, issuer_name=issuer)
+        uri = totp.provisioning_uri(name=user.user_id, issuer_name=issuer)
         return {"secret": secret, "uri": uri}
 
-    def verify_mfa(self, api_key: str, code: str) -> bool:
+    def verify_mfa(self, handle: str, code: str) -> bool:
         """Verify a TOTP code and enable MFA for the user.
 
         Call after setup_mfa() once the user has scanned the QR code.
-        If the code is valid, MFA is enabled for future authentication.
+        If the code is valid, MFA is enabled and the flag is persisted so it
+        survives a restart (RED-032).
         """
-        user = self._users.get(api_key)
+        user = self.resolve(handle)
         if user is None or not user.totp_secret:
             return False
-        try:
-            import pyotp
-
-            totp = pyotp.TOTP(user.totp_secret)
-            if totp.verify(code, valid_window=1):
-                user.mfa_enabled = True
-                return True
-        except Exception:
-            pass
-        return False
+        if not self._totp_accepts(user, code):
+            return False
+        user.mfa_enabled = True
+        self._persist_users()
+        return True
 
     def verify_totp(self, user: GatewayUser, code: str) -> bool:
         """Verify a TOTP code for an already-enabled user. Does not enable."""
         if not user.totp_secret:
             return False
+        return self._totp_accepts(user, code)
+
+    def _totp_accepts(self, user: GatewayUser, code: str) -> bool:
+        """TOTP verification with a stale-code (replay) guard.
+
+        The admin API is bearer-style: every request carries the key and a
+        TOTP code, and the panel polls several times a minute. Refusing reuse
+        inside the current window would break that, so the guard targets the
+        case replay actually matters: a code from a PREVIOUS window arriving
+        again. A code may be reused while its counter is still the current
+        one; once the window rolls over it is refused.
+
+        Honest limit: this is a mitigation, not session security. A genuine
+        session-token exchange (key + code -> short-lived bearer) is the real
+        fix and belongs with the identity work, not here.
+        """
+        if not isinstance(code, str):
+            return False
+        code = code.strip()
+        if not code.isdigit():
+            return False
         try:
             import pyotp
-
-            totp = pyotp.TOTP(user.totp_secret)
-            return totp.verify(code, valid_window=1)
-        except Exception:
+        except ImportError:
             return False
+        totp = pyotp.TOTP(user.totp_secret)
+        try:
+            now = int(time.time())
+        except (OverflowError, OSError):  # pragma: no cover - clock pathology
+            return False
+        current_counter = now // totp.interval
+        matched: int | None = None
+        for offset in (-1, 0, 1):
+            counter = current_counter + offset
+            if totp.at(counter * totp.interval) == code:
+                matched = counter
+                break
+        if matched is None:
+            return False
+        last = self._last_totp.get(user.user_id)
+        if last is not None and last[0] == code and matched < current_counter:
+            logger.warning("stale TOTP code refused for %s", user.user_id)
+            return False
+        self._last_totp[user.user_id] = (code, matched)
+        return True
 
-    def disable_mfa(self, api_key: str) -> bool:
+    def disable_mfa(self, handle: str) -> bool:
         """Disable MFA for a user. Returns True if successful."""
-        user = self._users.get(api_key)
+        user = self.resolve(handle)
         if user is None:
             return False
         user.totp_secret = ""
-        self._persist_users()
         user.mfa_enabled = False
+        self._persist_users()
         return True
 
     def list_users(self) -> list[GatewayUser]:
         return list(self._users.values())
 
-    def remove_user(self, api_key: str) -> bool:
-        if api_key in self._users:
-            del self._users[api_key]
-            self._persist_users()
-            return True
-        return False
+    def remove_user(self, handle: str) -> bool:
+        user = self.resolve(handle)
+        if user is None:
+            return False
+        self._users.pop(user.api_key_hash, None)
+        self._last_totp.pop(user.user_id, None)
+        self._persist_users()
+        return True
 
-    def can_access(self, api_key: str, resource: str) -> bool:
-        """Check if a user can access a resource."""
-        user = self._users.get(api_key)
+    def can_access(self, handle: str, resource: str) -> bool:
+        """Check if a user (by key or user_id) can access a resource."""
+        user = self.resolve(handle)
         if user is None:
             return False
         if user.role == "admin":

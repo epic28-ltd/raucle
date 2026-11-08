@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### Fixed - RED-032: admin identity durability, hashed keys, MFA honesty
+
+- MFA was silently disabled for every operator on restart: the TOTP secret
+  was persisted, the `mfa_enabled` flag never was, and the loader never
+  restored it. The flag is now written and restored, and a record written by
+  an earlier version (secret present, no flag) is read as enabled rather than
+  downgrading the operator to key-only auth.
+- `users.jsonl` stored API keys and TOTP secrets in plaintext, keyed by the
+  key itself. Keys are now stored as SHA-256 digests, looked up by digest,
+  and a legacy file is migrated in place on load (the plaintext leaves disk
+  in the same construction). Users are addressed on the admin routes by a
+  stable `user_id` handle derived from the digest, so the panel no longer
+  needs to hold key material; the full key is still accepted for scripts.
+- `POST /api/users` now mints a 256-bit key when none is supplied and
+  returns it once. A supplied key must be at least 24 characters.
+- The env bootstrap admin was re-added on **every** boot, resurrecting an
+  admin removed in the panel and keeping a rotated key valid for ever.
+  Bootstrap now runs only when the store holds no admin.
+- `RAUCLE_ADMIN_KEY_FILE` is implemented: it was documented in
+  `docs/gateway-security.md` and `docs/deployment-security.md` and never read
+  by any code, so the documented Docker/Kubernetes secret pattern silently
+  produced a gateway with no admin at all. An unreadable file now logs a
+  warning and yields no key rather than falling back.
+- MFA made the panel unusable: only three of thirty admin routes accepted an
+  `X-TOTP` header, and the shared checker was called with FastAPI's `Header`
+  default object rather than the value, so every other route raised or
+  403'd for an MFA-enabled operator. All admin routes now declare and pass
+  the header, and the checker coerces non-string values to "absent".
+  `/api/users` also returned a truncated key while the MFA routes took a full
+  key, so an admin could not enable MFA for anyone but themselves.
+- TOTP replay: a code from a previous window is refused. Reuse inside the
+  current window stays allowed because the panel polls several times a
+  minute; a real session-token exchange is the honest fix and is scoped with
+  the identity work.
+- Tests: `tests/test_admin_identity_durability.py` (new, 24 cases covering
+  restart durability, hashing and migration, user_id routing, key minting
+  and the entropy floor, bootstrap semantics, `RAUCLE_ADMIN_KEY_FILE` and the
+  replay guard).
+
 ### Fixed - RED-031: approval thresholds evaluate fail-closed
 
 - An approval threshold is a human check, so an argument that cannot be

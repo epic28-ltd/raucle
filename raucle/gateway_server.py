@@ -67,8 +67,9 @@ def main() -> None:
 
     if not config.admin_api_key:
         logger.warning(
-            "RAUCLE_ADMIN_KEY is not set. Admin panel will be open with no auth. "
-            "Set RAUCLE_ADMIN_KEY to secure it."
+            "No admin key configured (RAUCLE_ADMIN_KEY / RAUCLE_ADMIN_KEY_FILE). "
+            "The admin panel will serve its login page but accept no credentials "
+            "until a user exists. Set one to administer the gateway."
         )
 
     # Initialise gateway
@@ -80,9 +81,14 @@ def main() -> None:
         "RAUCLE_USERS_FILE", str(Path(config.receipt_store).parent / "users.jsonl")
     )
     users = UserManager(persist_path=users_file)
-    if config.admin_api_key:
+    # Bootstrap only when the store holds no admin. Re-adding the env key on
+    # every boot resurrected an admin removed in the panel and kept a rotated
+    # key valid for ever (RED-032).
+    if config.admin_api_key and not any(u.role == "admin" for u in users.list_users()):
         users.add_user(config.admin_api_key, "admin", "Default Admin")
-        logger.info("Default admin user created from RAUCLE_ADMIN_KEY")
+        logger.info("Bootstrap admin created from the configured admin key")
+    elif config.admin_api_key:
+        logger.info("Admin user store already holds an admin; configured key not re-applied")
 
     # Read-only demo account (auditor role): powers the admin panel's
     # View Demo button. Dashboard, connections and receipts only; every
