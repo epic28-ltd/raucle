@@ -38,9 +38,25 @@ location / {
 
 ## Rate Limiting
 
-The gateway includes built-in rate limiting via `slowapi` (200 requests
-per minute on `/gate`, 1000/min default). Caddy also provides per-IP
-rate limiting at the proxy layer (100 requests/minute).
+## Rate limiting
+
+The gateway includes built-in rate limiting via `slowapi`:
+
+| Limit | Default | Override |
+|---|---|---|
+| `/gate` (per route) | 200/minute | `RAUCLE_GATE_ROUTE_LIMIT` |
+| All other routes | 1000/minute | `RAUCLE_GATE_RATE_LIMIT` |
+
+The limit key is the socket peer address, so behind a TLS-terminating proxy
+every caller shares one bucket. Set `RAUCLE_TRUST_PROXY=1` when, and only
+when, the gateway sits behind a proxy that sets `X-Forwarded-For`; the
+left-most entry is then used as the client identity. This is the same
+convention `raucle/server.py` uses for its token bucket.
+
+`slowapi` ships in the `server` extra. If it is not installed the gateway logs
+a warning at boot and runs without limiting; it does not pretend to have a
+limit it does not have. Caddy provides a separate per-IP limit at the proxy
+layer (100 requests/minute in the reference Caddyfile).
 
 ## API Key Management
 

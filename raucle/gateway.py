@@ -1091,9 +1091,15 @@ class RaucleGateway:
                 logger.exception("receipt index rebuild failed; queries degraded, chain unaffected")
         if self._gate_auth_mode == "off":
             logger.warning(
-                "gate auth mode is 'off': declared agent_id is TRUSTED. "
-                "Suitable only for trusted internal networks; set "
-                "RAUCLE_GATE_AUTH=apikey or token for authenticated deployment."
+                "\n"
+                "  ================================================================\n"
+                "   GATE AUTHENTICATION IS OFF\n"
+                "   Every caller is trusted: the agent_id it declares in the\n"
+                "   request body is the identity written into the receipt chain.\n"
+                "   Anyone who can reach this port can act as any agent.\n"
+                "   This is suitable only for a trusted internal network.\n"
+                "   Set RAUCLE_GATE_AUTH=apikey or token before exposing the gate.\n"
+                "  ================================================================"
             )
         elif self._gate_auth_mode == "apikey":
             from raucle.agent_credentials import AgentCredentialStore

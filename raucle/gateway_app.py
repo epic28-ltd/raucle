@@ -177,6 +177,7 @@ class ConfigUpdateRequest(BaseModel):
     siem_token: str | None = None
     compliance_framework: str | None = None
     registry_path: str | None = None
+    gate_auth: str | None = None
     health_check_token: str | None = None
 
 
@@ -364,6 +365,39 @@ _CSP = (
 )
 
 
+class _NullLimiter:
+    """Stand-in limiter so route decorators are unconditional.
+
+    slowapi is an optional dependency. When it is absent the gateway logs a
+    warning and this object makes ``@_limiter.limit(...)`` a no-op, rather than
+    the route definition branching on whether the library imported.
+    """
+
+    def limit(self, *_args: Any, **_kwargs: Any) -> Any:
+        def _decorator(func: Any) -> Any:
+            return func
+
+        return _decorator
+
+
+def _client_key(request: Request) -> str:
+    """Rate-limit key for the caller, proxy-aware.
+
+    Behind a TLS-terminating proxy every request's socket peer is the proxy, so
+    a plain remote-address key becomes one global bucket. The left-most
+    X-Forwarded-For entry is trusted ONLY when RAUCLE_TRUST_PROXY is set, the
+    same convention raucle/server.py uses for its token bucket (RED-037).
+    """
+    import os
+
+    if os.environ.get("RAUCLE_TRUST_PROXY", "").lower() in ("1", "true", "yes"):
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip() or "unknown"
+    client = getattr(request, "client", None)
+    return client.host if client and client.host else "unknown"
+
+
 def _install_security_headers(app: FastAPI) -> None:
     """Add the response headers both apps should always carry (RED-033).
 
@@ -391,17 +425,16 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         description="AI agent governance gateway",
         version="0.1.0",
     )
-    _limiter = None
+    _limiter: Any = _NullLimiter()
     try:
         import os
 
         from slowapi import Limiter
         from slowapi.errors import RateLimitExceeded
         from slowapi.middleware import SlowAPIMiddleware
-        from slowapi.util import get_remote_address
 
         _limit_default = os.environ.get("RAUCLE_GATE_RATE_LIMIT", "1000/minute")
-        _limiter = Limiter(key_func=get_remote_address, default_limits=[_limit_default])
+        _limiter = Limiter(key_func=_client_key, default_limits=[_limit_default])
         app.state.limiter = _limiter
         app.add_exception_handler(
             RateLimitExceeded,
@@ -412,7 +445,13 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         )
         app.add_middleware(SlowAPIMiddleware)
     except ImportError:
-        pass  # slowapi not installed, no rate limiting
+        _limiter = _NullLimiter()
+        # RED-037: silently running without a rate limit is the failure mode
+        # worth shouting about, because the deployment believes it has one.
+        logger.warning(
+            "slowapi is not installed: the gateway is running WITHOUT rate limiting. "
+            'Install the "server" extra (pip install "raucle[server]") to enable it.'
+        )
 
     _install_security_headers(app)
 
@@ -422,6 +461,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         return JSONResponse(_live_pulse_payload(gateway))  # type: ignore[name-defined]
 
     @app.post("/gate", responses={413: {"description": "payload exceeds canonical size bound"}})
+    @_limiter.limit(os.environ.get("RAUCLE_GATE_ROUTE_LIMIT", "200/minute"))
     def gate_tool_call(
         request: Request,
         req: GateRequest,
@@ -1742,6 +1782,7 @@ def _register_config_routes(
             "siem_token_configured": bool(c.siem_token),
             "compliance_framework": c.compliance_framework,
             "registry_path": c.registry_path,
+            "gate_auth": c.gate_auth,
             "health_check_token_set": bool(c.health_check_token),
             "config_file": c.config_file,
         }
@@ -1766,6 +1807,9 @@ def _register_config_routes(
             return _no_change_response()
 
         touched = [f for f in EVIDENCE_PATH_FIELDS if f in updates]
+        if "gate_auth" in updates and updates["gate_auth"] not in ("off", "apikey", "token"):
+            raise HTTPException(400, "gate_auth must be one of: off, apikey, token")
+
         if updates.get("siem_url"):
             from raucle.gateway import siem_target_allowed
 
