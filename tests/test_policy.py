@@ -348,6 +348,36 @@ class TestApprovalThreshold:
         thresholds = ApprovalThreshold.from_dict({"unknown_field": 100})
         assert len(thresholds) == 0
 
+    @pytest.mark.parametrize("value", ["99999", None, {"a": 1}, [1], object()])
+    def test_incomparable_value_escalates_fail_closed(self, value):
+        """RED-031: an argument whose type cannot be compared must ESCALATE.
+
+        Before the fix a string raised TypeError out of the gate (HTTP 500
+        with no receipt) and a mismatched type on an ``eq`` threshold
+        silently skipped escalation, which allowed the call.
+        """
+        t = ApprovalThreshold(field="amount", operator="gt", value=5000)
+        assert t.matches({"amount": value}) is True
+
+    def test_eq_threshold_matches_across_numeric_spellings(self):
+        """RED-031: numeric text matches a numeric threshold instead of
+        falling through the comparison and quietly passing the call."""
+        t = ApprovalThreshold(field="amount", operator="eq", value=10000)
+        assert t.matches({"amount": "10000"}) is True
+        assert t.matches({"amount": 10000}) is True
+        assert t.matches({"amount": "10000.0"}) is True
+        assert t.matches({"amount": 10001}) is False
+
+    def test_boolean_is_not_a_number(self):
+        """bool is an int subclass; True must not satisfy a numeric threshold."""
+        t = ApprovalThreshold(field="amount", operator="gt", value=0)
+        assert t.matches({"amount": True}) is True
+
+    def test_gte_and_lte_still_work(self):
+        assert ApprovalThreshold(field="n", operator="gte", value=10).matches({"n": 10})
+        assert ApprovalThreshold(field="n", operator="lte", value=10).matches({"n": 10})
+        assert not ApprovalThreshold(field="n", operator="lte", value=10).matches({"n": 11})
+
 
 class TestCheckApprovalNeeded:
     """The check_approval_needed function."""

@@ -2015,8 +2015,58 @@ class RaucleGateway:
         _intent_hint: dict[str, Any] | None,
         _acting_for: str,
     ) -> dict[str, Any]:
+        """Decide, then receipt and log - with a receipted fault boundary.
+
+        Invariant (RED-031): no exception raised while deciding may reach
+        the HTTP layer. A crash there is an unaudited 500: the agent sees an
+        opaque failure and the evidence chain records nothing about the
+        attempt. Any fault is converted into a deny carrying the exception
+        TYPE only (messages can quote caller-controlled values) and is
+        receipted like every other decision.
+        """
+        try:
+            return self._decide_and_finish_inner(
+                result,
+                start,
+                matched_rule,
+                dataflow_reason,
+                token,
+                tool,
+                args,
+                actual_agent_id,
+                trace_id=trace_id,
+                approval_id=approval_id,
+                _intent_hint=_intent_hint,
+                _acting_for=_acting_for,
+            )
+        except Exception as exc:  # noqa: BLE001 - the gate must never crash open
+            logger.exception("gate fault during decision for tool %s", tool)
+            return self._deny_result(
+                result,
+                f"gate_fault: internal error during decision ({type(exc).__name__})",
+                start,
+                siem=False,
+            )
+
+    def _decide_and_finish_inner(
+        self,
+        result: dict[str, Any],
+        start: float,
+        matched_rule: Any,
+        dataflow_reason: str,
+        token: Any,
+        tool: str,
+        args: dict[str, Any],
+        actual_agent_id: str,
+        *,
+        trace_id: str,
+        approval_id: str,
+        _intent_hint: dict[str, Any] | None,
+        _acting_for: str,
+    ) -> dict[str, Any]:
         """Evaluate the matched rule against the call, then receipt,
         log and forward the decision result."""
+
         # The data-flow deny fires before constraint evaluation: it only
         # ever denies, and ESCALATE must not bypass it (never widens
         # authority). The reason is named and cited by the receipt.

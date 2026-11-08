@@ -33,6 +33,7 @@ Compile and mint::
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -332,6 +333,28 @@ class PolicyFile:
 # ---------------------------------------------------------------------------
 
 
+_THRESHOLD_OPERATORS = frozenset({"gt", "lt", "gte", "lte", "eq"})
+
+
+def _threshold_value(value: Any) -> tuple[str, Any]:
+    """Classify an approval-threshold operand as ``number``, ``string`` or
+    ``incomparable`` (RED-031).
+
+    Booleans are excluded from numbers (``bool`` subclasses ``int``) and
+    non-finite floats are rejected, so an argument cannot slip a bound by
+    arriving as ``True`` or ``NaN``.
+    """
+    if isinstance(value, bool):
+        return ("incomparable", None)
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return ("incomparable", None)
+        return ("number", value)
+    if isinstance(value, str):
+        return ("string", value)
+    return ("incomparable", None)
+
+
 @dataclass
 class ApprovalThreshold:
     """A threshold that requires human approval before execution.
@@ -346,11 +369,34 @@ class ApprovalThreshold:
     value: Any
 
     def matches(self, args: dict[str, Any]) -> bool:
-        """Check if the given args trigger this approval threshold."""
+        """Check if the given args trigger this approval threshold.
+
+        Fail-closed (RED-031): a threshold is a human check, so an argument
+        that cannot be shown to sit *below* it must escalate. Comparisons
+        run on normalised values, never on raw caller types: a bare
+        ``str > int`` raised `TypeError` out of the gate (HTTP 500, no
+        receipt) and a type-mismatched ``eq`` silently skipped escalation,
+        which allowed a call the policy meant a human to see.
+        """
         if self.field not in args:
             return False
-        actual = args[self.field]
-        expected = self.value
+        actual_kind, actual = _threshold_value(args[self.field])
+        expected_kind, expected = _threshold_value(self.value)
+        if actual_kind == "incomparable" or expected_kind == "incomparable":
+            return True
+        if actual_kind != expected_kind:
+            # Numeric text against a numeric threshold compares numerically,
+            # so "10000" and 10000 mean the same thing. Any other mixed pair
+            # cannot be compared meaningfully, so it escalates.
+            if {actual_kind, expected_kind} != {"number", "string"}:
+                return True
+            try:
+                actual = float(actual)
+                expected = float(expected)
+            except (TypeError, ValueError):
+                return True
+        if self.operator not in _THRESHOLD_OPERATORS:
+            return True
         if self.operator == "gt":
             return actual > expected
         if self.operator == "lt":
@@ -359,9 +405,7 @@ class ApprovalThreshold:
             return actual >= expected
         if self.operator == "lte":
             return actual <= expected
-        if self.operator == "eq":
-            return actual == expected
-        return False
+        return actual == expected
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> list[ApprovalThreshold]:
