@@ -1,0 +1,41 @@
+{
+  "args": {
+    "amount": "99999",
+    "recipient": "alice@example"
+  },
+  "bound_rule": {
+    "agent_id": "agent:pay",
+    "required_present": [
+      "amount"
+    ],
+    "tool": "send_money"
+  },
+  "decision": {
+    "decision": "deny",
+    "reason": "schema_violation: schema_violation: field 'amount' is declared 'number' but value is 'str'"
+  },
+  "inputSchema": {
+    "properties": {
+      "amount": {
+        "type": "number"
+      },
+      "recipient": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "recipient",
+      "amount"
+    ],
+    "type": "object"
+  },
+  "name": "type-confused amount denies with no max bound (acceptance case)",
+  "note": "The rule carries no max_value; the DENY comes purely from the schema binding (amount is declared number, value is str).",
+  "policy_rule": {
+    "required_present": [
+      "amount"
+    ]
+  },
+  "spec": "raucle-schema-enforcement/v1",
+  "tool": "send_money"
+}

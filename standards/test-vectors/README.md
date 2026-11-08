@@ -39,6 +39,18 @@ A conforming implementation replays the recorded chain state deterministically: 
 same (rule, prior outputs, destination class) triple always yields the same
 verdict, and unknown taint tags / unknown destination classes deny fail-closed.
 
+## `schema-enforcement:v1` vectors
+
+| File | What it verifies |
+|---|---|
+| `schema_enforcement_v1_01_type_confusion_denies.json` | The X1 acceptance case (backlog 1964): `amount` declared `number`, the policy rule carries **no** max bound, and the string `"99999"` still DENIES with a named `schema_violation` reason. A conforming gate binds the rule to the tool's inputSchema and refuses type-confused values. |
+| `schema_enforcement_v1_02_undeclared_field_load_error.json` | A policy rule referencing a field the tool does not declare is a LOAD-TIME ERROR (`SchemaPolicyLoadError`) naming the tool and the field — config load refuses, it never boots. |
+| `schema_enforcement_v1_03_bool_not_integer.json` | The bool/int coercion edge: `true` denies an `integer`-typed field (a Python-specific hole if a reimplementation is careless). |
+
+A conforming implementation: binds the rule at load (same error for 02),
+validates call args against the declared schema, and produces the same
+deny reasons for 01/03.
+
 ## `gate-decision:v1` schema
 
 `gate_decision_v1_schema.json` — the field-shape reference. The reference implementation in `raucle/audit.py` emits events conforming to this shape; production deployments may add `x-`-prefixed extension fields without breaking the canonical-body hashing.

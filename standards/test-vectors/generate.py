@@ -18,12 +18,9 @@ from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from raucle import capability as _cap_mod
-from raucle.capability import (
-    Capability,
-    CapabilityGate,
-    CapabilityIssuer,
-)
+from raucle.capability import Capability, CapabilityIssuer
 from raucle.prove import JSONSchemaProver
+from raucle.tool_schema import SchemaPolicyLoadError, ToolSchemaRegistry
 
 OUT = Path(__file__).parent
 
@@ -174,6 +171,102 @@ def gate_decision_vectors() -> None:
     write_json(OUT / "gate_decision_v1_schema.json", schema)
 
 
+def schema_enforcement_vectors() -> None:
+    """X1: schema-bound enforcement vectors (schema_enforcement:v1).
+
+    The acceptance case is vector 01: the tool declares `amount` as a
+    number, the policy carries NO bound on it, and the string "99999"
+    must still DENY because it is type-confused against the schema.
+    Reasons are produced by the reference implementation, so the JSON is
+    a byte-stable conformance artifact.
+    """
+    accept_schema = {
+        "type": "object",
+        "properties": {
+            "recipient": {"type": "string"},
+            "amount": {"type": "number"},
+        },
+        "required": ["recipient", "amount"],
+    }
+
+    # 01: the acceptance case.
+    reg = ToolSchemaRegistry()
+    reg.register("send_money", accept_schema)
+    reasons = reg.violations("send_money", {"recipient": "alice@example", "amount": "99999"})
+    assert reasons, "acceptance vector must assert the schema_violation deny"
+    write_json(
+        OUT / "schema_enforcement_v1_01_type_confusion_denies.json",
+        {
+            "spec": "raucle-schema-enforcement/v1",
+            "name": "type-confused amount denies with no max bound (acceptance case)",
+            "tool": "send_money",
+            "inputSchema": accept_schema,
+            "policy_rule": {"required_present": ["amount"]},
+            "bound_rule": {
+                "tool": "send_money",
+                "agent_id": "agent:pay",
+                "required_present": ["amount"],
+            },
+            "args": {"recipient": "alice@example", "amount": "99999"},
+            "decision": {
+                "decision": "deny",
+                "reason": f"schema_violation: {reasons[0]}",
+            },
+            "note": (
+                "The rule carries no max_value; the DENY comes purely from the "
+                "schema binding (amount is declared number, value is str)."
+            ),
+        },
+    )
+
+    # 02: undeclared policy field is a load-time error.
+    load_schema = {"type": "object", "properties": {"amount": {"type": "number"}}}
+    reg2 = ToolSchemaRegistry()
+    reg2.register("transfer", load_schema)
+    load_err = _load_error_capture(reg2, "transfer")
+    write_json(
+        OUT / "schema_enforcement_v1_02_undeclared_field_load_error.json",
+        {
+            "spec": "raucle-schema-enforcement/v1",
+            "name": "policy rule referencing an undeclared field is a load-time error",
+            "tool": "transfer",
+            "inputSchema": load_schema,
+            "policy_rule": {"forbidden_values": {"recipient": ["US133000000121212121212"]}},
+            "load": {
+                "outcome": "error",
+                "error_kind": "SchemaPolicyLoadError",
+                "message": load_err,
+            },
+        },
+    )
+
+    # 03: bool/int coercion edge — true is not an integer.
+    reg3 = ToolSchemaRegistry()
+    reg3.register("t", {"type": "object", "properties": {"n": {"type": "integer"}}})
+    bool_reasons = reg3.violations("t", {"n": True})
+    assert bool_reasons
+    write_json(
+        OUT / "schema_enforcement_v1_03_bool_not_integer.json",
+        {
+            "spec": "raucle-schema-enforcement/v1",
+            "name": "boolean value denies an integer-typed field",
+            "tool": "t",
+            "inputSchema": {"type": "object", "properties": {"n": {"type": "integer"}}},
+            "args": {"n": True},
+            "decision": {"decision": "deny", "reason": f"schema_violation: {bool_reasons[0]}"},
+        },
+    )
+
+
+def _load_error_capture(reg: ToolSchemaRegistry, tool: str) -> str:
+    """Bind a rule referencing an undeclared field and capture the message."""
+    try:
+        reg.bind_policy(tool, {"forbidden_values": {"recipient": ["x"]}})
+    except SchemaPolicyLoadError as exc:
+        return str(exc)
+    raise AssertionError("expected SchemaPolicyLoadError")
+
+
 def main() -> None:
     print("=== cap:v1 vectors ===")
     cap_vectors()
@@ -181,6 +274,8 @@ def main() -> None:
     proof_vectors()
     print("\n=== gate-decision:v1 schema ===")
     gate_decision_vectors()
+    print("\n=== schema-enforcement:v1 vectors ===")
+    schema_enforcement_vectors()
     print(f"\nAll vectors written under {OUT}")
 
 
