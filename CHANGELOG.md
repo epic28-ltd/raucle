@@ -26,6 +26,8 @@
   AuditVerifier), the drain catch-up contract, and the fault-receipt
   verification roundtrip.
 
+=======
+>>>>>>> 1733a30 (feat: the receipt-bound bilateral policy diff + threat model as code (EPIC S2, S3))
 ### Added - EPIC S2: the receipt-bound bilateral policy diff
 
 - The counterfactual replay report (`raucle.counterfactual`) can now be

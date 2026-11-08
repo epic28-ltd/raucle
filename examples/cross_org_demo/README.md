@@ -25,3 +25,20 @@ The point: trust comes from the shared registry, not a per-pair key swap. That
 is the network effect — each org that publishes makes the next cross-org
 verification trivial. The exit code is a CI self-test
 ([tests/test_handshake.py](../../tests/test_handshake.py)).
+
+## The receipt-bound bilateral policy diff (EPIC S2)
+
+`policy_diff_demo.py` — same two-org setting, after the incident review:
+
+```bash
+pip install 'raucle[server,compliance]'
+python examples/cross_org_demo/policy_diff_demo.py
+```
+
+Org A replays its incident chain against the stricter alternative policy,
+SIGNS the resulting diff (chain head + both policy digests + the verdict),
+and Org B verifies it OFFLINE with a key resolved from the shared registry:
+the replay is re-run and must match the signed summary exactly. The demo
+ends with the dishonesty check — a retyped verdict fails closed.
+
+[EPIC S2 details in `raucle/policy_diff.py`.]
