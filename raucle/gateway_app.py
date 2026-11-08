@@ -782,6 +782,24 @@ def _register_stats_routes(
         return gateway.get_stats()
 
     @app.get(
+        "/api/faults",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+        },
+    )
+    def get_faults(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        """Query the persisted fault counter + the last boot self-test (X4)."""
+        user = check_auth(authorization, x_totp)
+        check_access(user, "stats")
+        counts = gateway.fault_counts()
+        boot = getattr(gateway, "boot_selftest_result", None)
+        return {"faults": counts, "boot_selftest": boot}
+
+    @app.get(
         "/api/connections",
         responses={
             "401": {"description": "MFA required or missing Authorization header"},
