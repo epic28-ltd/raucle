@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Fixed - RED-036: per-call registry cost, export memory, SIEM target
+
+- Every gate call re-read and re-parsed the revocation list, the trace
+  quarantine registry, the lease suspension registry, the trust registry and
+  the delegation ledger. Those files are append-only and unbounded, so the
+  cost of a call grew with their length. All five now go through one
+  read-through cache keyed on `(mtime_ns, size)`: a write invalidates the
+  entry, so a revocation still lands on the next call, and a stat failure
+  raises into the deny path rather than serving a stale set.
+- The receipt export buffered the whole chain in a `StringIO` and sent it as
+  one chunk, so a multi-gigabyte chain was held in the gateway process. It is
+  now a generator feeding `StreamingResponse` line by line.
+- The SIEM target was posted to verbatim. It is now validated both when
+  configured and at forward time: `http(s)` only, no loopback, link-local,
+  private, reserved or multicast literal addresses, and no `.local` /
+  `.internal` names, with `RAUCLE_SIEM_ALLOW_PRIVATE=1` as the deliberate
+  opt-in for an internal collector. A hostname that resolves to a private
+  address is not detected (that needs DNS at validation time); the residual is
+  documented rather than pretended away.
+- `PolicyRule.matches` used `fnmatch`, which normalises case on Windows only,
+  so the same policy could match differently per host. It now uses
+  `fnmatchcase`, so matching is case-sensitive everywhere.
+- Tests: `tests/test_gate_cost_and_targets.py` (new, 17 cases).
+
 ### Fixed - RED-035: evidence paths are guarded, the demo key is a posture
 
 - `PUT /api/config` accepted any absolute path for `audit_chain`,

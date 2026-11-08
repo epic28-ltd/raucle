@@ -144,13 +144,22 @@ class PolicyRule:
     source_file: str = ""
 
     def matches(self, source: str, destination: str) -> bool:
-        """Check if this rule applies to the given source/destination."""
+        """Check if this rule applies to the given source/destination.
+
+        ``fnmatchcase`` rather than ``fnmatch``: the latter normalises case on
+        Windows only, so the same policy would match differently per host and
+        a rule that holds in CI could silently not apply in production.
+        """
         import fnmatch
 
-        if self.source and self.source != "*" and not fnmatch.fnmatch(source or "", self.source):
+        if (
+            self.source
+            and self.source != "*"
+            and not fnmatch.fnmatchcase(source or "", self.source)
+        ):
             return False
         if self.destination and self.destination != "*":
-            return fnmatch.fnmatch(destination or "", self.destination)
+            return fnmatch.fnmatchcase(destination or "", self.destination)
         return True
 
     def to_mint_kwargs(self) -> dict[str, Any]:

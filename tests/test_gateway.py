@@ -159,7 +159,8 @@ class TestSIEMForwarder:
         forwarder.forward({"event": "test"})
         assert len(forwarder.buffered_events()) == 1
 
-    def test_enabled_sends(self, gateway_config):
+    def test_enabled_sends(self, gateway_config, monkeypatch):
+        monkeypatch.setenv("RAUCLE_SIEM_ALLOW_PRIVATE", "1")
         gateway_config.siem_enabled = True
         gateway_config.siem_backend = "elastic"
         gateway_config.siem_url = "http://localhost:9200/raucle/_doc"
