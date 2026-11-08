@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Fixed - RED-033: panel output escaping and security headers
+
+- The receipts table interpolated `tool`, `agent_id`, `decision`, `trace_id`
+  and the receipt hash into `innerHTML` unescaped. A gate receipt carries
+  caller-influenced text (`x_gate.agent_id` is echoed from the request), so
+  one `POST /gate` was enough to plant script that ran in an operator's
+  session with the admin key in page scope. Every field is now escaped.
+- Four inline handlers interpolated values into a **JavaScript-string**
+  context: `onclick="toggleSource('${esc(n)}')"` and friends, for source,
+  tool, destination and user id. HTML escaping does not protect a JS string,
+  because the browser decodes entities before parsing the attribute. Those
+  handlers now carry their value in a `data-` attribute and are served by one
+  delegated handler each (`flowItemClick`, `userMfaAction`, `scenarioClick`),
+  the pattern the receipt ancestry row already used.
+- Both FastAPI apps now return `Content-Security-Policy` (`default-src
+  'none'`, no external scripts, `frame-ancestors 'none'`, `base-uri 'none'`),
+  `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy`. Note the
+  honest limit: the single-string panel needs `script-src 'unsafe-inline'`,
+  so CSP is containment, not an XSS barrier; the escaping is the control.
+- Tests: `tests/test_admin_panel_render.py` (new, 7 cases) pins the escaping
+  contract, the data-attribute rule and the headers on both apps, so the
+  class cannot come back silently.
+
 ### Fixed - RED-032: admin identity durability, hashed keys, MFA honesty
 
 - MFA was silently disabled for every operator on restart: the TOTP secret
