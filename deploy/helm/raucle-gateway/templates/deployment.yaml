@@ -42,14 +42,27 @@ spec:
             - name: RAUCLE_DEMO_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "raucle-gateway.fullname" . }}-secrets
+                  name: {{ include "raucle-gateway.fullname" $ }}-secrets
                   key: RAUCLE_DEMO_KEY
+            {{- end }}
+            {{- if .Values.config.demoMode }}
+            # RED-035: the demo key is served only when demo mode is on.
+            - name: RAUCLE_DEMO_MODE
+              value: "1"
+            {{- end }}
+            - name: RAUCLE_GATE_ROUTE_LIMIT
+              value: {{ .Values.config.gateRouteRateLimit | quote }}
+            - name: RAUCLE_GATE_RATE_LIMIT
+              value: {{ .Values.config.gateRateLimit | quote }}
+            {{- with .Values.config.trustProxy }}
+            - name: RAUCLE_TRUST_PROXY
+              value: {{ . | quote }}
             {{- end }}
             {{- with .Values.config.healthKey }}
             - name: RAUCLE_HEALTH_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "raucle-gateway.fullname" . }}-secrets
+                  name: {{ include "raucle-gateway.fullname" $ }}-secrets
                   key: RAUCLE_HEALTH_KEY
             {{- end }}
             - name: RAUCLE_GATEWAY_HOST

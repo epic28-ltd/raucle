@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Fixed - Helm chart: demo key could not render, and two knobs were unwired
+
+- `{{- with .Values.config.demoKey }}` rebinds `.` to the *value*, so the
+  `include "raucle-gateway.fullname" .` inside it was handed a string and
+  `helm template` failed with "can't evaluate field Values in type string".
+  Setting `config.demoKey` could never render the chart. `config.healthKey`
+  had the same defect. Both now use the root context (`$`).
+- The chart did not set `RAUCLE_DEMO_MODE`, so a Helm install with a demo key
+  served `/api/demo-key` as 404 after RED-035, and it did not set the
+  per-route rate limit introduced by RED-037. `config.demoMode`,
+  `config.gateRouteRateLimit` (default `200/minute`, matching the code),
+  `config.gateRateLimit` and the optional `config.trustProxy` are now wired.
+- `deploy/prod.env.example` documents every production variable the
+  remediation touched, each with its contract, and deliberately carries no
+  working secret.
+- Tests: `tests/test_helm_chart_contract.py` (new, 8 cases) pins the
+  with-scope rule, the wiring, and the agreement between the chart default and
+  the code default. Helm is not in CI, so the assertions are source-level.
+
 ### Tests - RED-038: seam coverage for the classes the suite missed
 
 Every finding in the 8 Nov review was in a seam rather than in a rule the

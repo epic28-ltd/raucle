@@ -210,3 +210,20 @@ class TestLimiterEdgePaths:
         monkeypatch.setenv("RAUCLE_TRUST_PROXY", "1")
         req = type("R", (), {"headers": {"x-forwarded-for": " , 10.0.0.9"}, "client": None})()
         assert _client_key(req) == "unknown"
+
+
+class TestTrustBoundaryDocs:
+    """T-B1: the trust-boundary note exists in the security guide."""
+
+    def test_outbound_url_trust_boundary_note_is_present(self):
+        from pathlib import Path
+
+        doc = Path(__file__).resolve().parents[1] / "docs" / "gateway-security.md"
+        text = doc.read_text(encoding="utf-8")
+        assert "## Trust boundary: outbound URL fetching" in text
+        assert "raucle/url_guard.py" in text
+        assert "RAUCLE_ALLOW_PRIVATE_URLS" in text
+        assert "raucle.timestamp.submit_timestamp_request" in text
+        assert "raucle.transparency.SCITTAnchorClient" in text
+        for phrase in ("http://", "https://", "loopback", "link-local", "RFC1918"):
+            assert phrase in text
