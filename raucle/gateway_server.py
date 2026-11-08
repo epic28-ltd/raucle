@@ -96,9 +96,16 @@ def main() -> None:
     import os as _os
 
     demo_key = _os.environ.get("RAUCLE_DEMO_KEY", "")
-    if demo_key:
+    demo_mode = _os.environ.get("RAUCLE_DEMO_MODE", "").lower() in ("1", "true", "yes")
+    if demo_key and demo_mode:
         users.add_user(demo_key, "auditor", "Demo (read-only)")
         logger.info("Read-only demo user created from RAUCLE_DEMO_KEY")
+    elif demo_key:
+        logger.warning(
+            "RAUCLE_DEMO_KEY is set without RAUCLE_DEMO_MODE: the key is not "
+            "registered and /api/demo-key stays closed. Set RAUCLE_DEMO_MODE=1 "
+            "for a public demo instance."
+        )
 
     logger.info("Starting gateway API on %s:%d", config.host, config.port)
     logger.info("Starting admin panel on %s:%d", config.host, config.admin_port)

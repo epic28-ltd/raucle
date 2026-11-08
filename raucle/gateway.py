@@ -237,6 +237,10 @@ class GatewayConfig:
 
     # Registry
     registry_path: str = "/data/registry.jsonl"
+    # Root that evidence files (policy, receipts, audit chain, registries,
+    # keys) must sit inside when an admin redirects them through the panel
+    # (RED-035). Empty = the parent of ``receipt_store``.
+    data_root: str = ""
     # Authority attribution (PR-E): human approvals, policy change ledger
     approval_ttl_seconds: int = 300
     policy_ledger_path: str = ""  # when unset, no ledger is written
@@ -276,6 +280,7 @@ class GatewayConfig:
             registry_path=os.environ.get("RAUCLE_REGISTRY_PATH", "/data/registry.jsonl"),
             approval_ttl_seconds=int(os.environ.get("RAUCLE_APPROVAL_TTL", "300")),
             policy_ledger_path=os.environ.get("RAUCLE_POLICY_LEDGER", ""),
+            data_root=os.environ.get("RAUCLE_DATA_ROOT", ""),
             gate_auth=os.environ.get("RAUCLE_GATE_AUTH", "off"),
             revocations_file=os.environ.get("RAUCLE_REVOCATIONS_FILE", ""),
             trace_quarantine_file=os.environ.get("RAUCLE_TRACE_QUARANTINE_FILE", ""),

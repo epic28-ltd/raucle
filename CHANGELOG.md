@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Fixed - RED-035: evidence paths are guarded, the demo key is a posture
+
+- `PUT /api/config` accepted any absolute path for `audit_chain`,
+  `receipt_store`, `policy_file`, the registries and the signing key, then
+  persisted it. An operator key could point the audit chain at any file on the
+  host and the gateway would start writing there at the next restart, which
+  moves the evidence trail the product exists to produce. Changes to those
+  fields now require the `admin` role, must be absolute, and must resolve
+  inside the data root (`RAUCLE_DATA_ROOT`, defaulting to the receipt
+  directory). A violation is a 400 naming every bad field, and the in-memory
+  config is rolled back so nothing half-applies. Only the fields actually being
+  changed are checked, so an existing layout cannot block an unrelated edit.
+- `/api/demo-key` returned an auditor key, unauthenticated, whenever
+  `RAUCLE_DEMO_KEY` was set. That key reads the entire receipt chain, and it
+  lived in the same user table as real operators. It is now served only when
+  `RAUCLE_DEMO_MODE` is on, and a demo key set without the mode logs a boot
+  warning instead of registering a user.
+- `ConfigUpdateRequest` now exposes the remaining evidence fields
+  (`policy_seal_file`, `policy_ledger_path`, `receipt_store_dir`,
+  `receipt_index_path`, `revocations_file`, `delegations_file`,
+  `signer_key_path`), so the guard covers what the API can actually set.
+- Tests: `tests/test_config_evidence_guard.py` (new, 10 cases) and one boot
+  test for the demo-mode rule.
+
 ### Fixed - RED-034: the receipt index is fed on every sink
 
 - The SQLite receipt projection was updated only inside the segmented-store

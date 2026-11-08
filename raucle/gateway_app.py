@@ -159,8 +159,15 @@ class ConfigUpdateRequest(BaseModel):
     kms_region: str | None = None
     policy_file: str | None = None
     policy_dir: str | None = None
+    policy_seal_file: str | None = None
+    policy_ledger_path: str | None = None
     receipt_store: str | None = None
+    receipt_store_dir: str | None = None
+    receipt_index_path: str | None = None
     audit_chain: str | None = None
+    revocations_file: str | None = None
+    delegations_file: str | None = None
+    signer_key_path: str | None = None
     audit_persist: bool | None = None
     audit_log_file: str | None = None
     siem_enabled: bool | None = None
@@ -527,6 +534,61 @@ def _validate_policy_content(content: str) -> dict[str, Any]:
         return {"valid": False, "error": str(exc)}
 
 
+# Fields that decide WHERE evidence lands. Redirecting one changes the audit
+# story, so an operator may not move it and the target must sit inside the
+# data root (RED-035).
+EVIDENCE_PATH_FIELDS = (
+    "policy_file",
+    "policy_dir",
+    "receipt_store",
+    "receipt_store_dir",
+    "receipt_index_path",
+    "audit_chain",
+    "audit_log_file",
+    "registry_path",
+    "revocations_file",
+    "delegations_file",
+    "policy_seal_file",
+    "policy_ledger_path",
+    "signer_key_path",
+)
+
+
+def _evidence_root(config: Any) -> Path:
+    """The directory evidence files must stay inside."""
+    root = getattr(config, "data_root", "") or ""
+    if root:
+        return Path(root).resolve()
+    return Path(config.receipt_store).resolve().parent
+
+
+def _validate_evidence_paths(config: Any, fields: tuple[str, ...] | list[str]) -> list[str]:
+    """Absolute paths contained by the data root, or named refusals.
+
+    Only the fields being changed are checked: an existing deployment may
+    legitimately hold evidence files outside the root, and a change to one
+    path must not be refused because of the value of another.
+
+    ``raucle._paths.validate_path`` only resolves and checks existence, so it
+    is not a containment barrier; this comparison is.
+    """
+    root = _evidence_root(config)
+    errors: list[str] = []
+    for field in fields:
+        value = getattr(config, field, "") or ""
+        if not value:
+            continue
+        path = Path(value)
+        if not path.is_absolute():
+            errors.append(f"{field} must be an absolute path")
+            continue
+        try:
+            path.resolve().relative_to(root)
+        except ValueError:
+            errors.append(f"{field} must sit inside the data root {root}")
+    return errors
+
+
 def _check_auth(
     users: UserManager,
     authorization: str | None,
@@ -646,7 +708,9 @@ def _register_health_routes(app: FastAPI, gateway: RaucleGateway) -> None:
         import os
 
         dk = os.environ.get("RAUCLE_DEMO_KEY", "")
-        if not dk:
+        if not dk or os.environ.get("RAUCLE_DEMO_MODE", "").lower() not in ("1", "true", "yes"):
+            # A demo key on a production instance would publish read access to
+            # the receipt chain, so it is served only when demo mode is on.
             raise HTTPException(404, "demo mode not configured")
         return {"demo_key": dk}
 
@@ -1701,7 +1765,23 @@ def _register_config_routes(
         if not updates:
             return _no_change_response()
 
+        touched = [f for f in EVIDENCE_PATH_FIELDS if f in updates]
+        if touched and user.role != "admin":
+            raise HTTPException(
+                403,
+                "moving evidence paths (policy, receipts, audit chain, registries, keys) "
+                "requires the admin role",
+            )
+
+        snapshot = {f: getattr(gateway.config, f, "") for f in EVIDENCE_PATH_FIELDS}
         changed = gateway.config.update_from_dict(updates)
+        errors = _validate_evidence_paths(gateway.config, touched)
+        if errors:
+            for field, value in snapshot.items():
+                setattr(gateway.config, field, value)
+            raise HTTPException(
+                status_code=400, detail={"code": "bad_evidence_path", "errors": errors}
+            )
         changed += _apply_secret_updates(gateway, req)
 
         try:

@@ -93,6 +93,7 @@ def test_main_bootstrap_from_env_registers_admin_and_demo(
     monkeypatch.setenv("RAUCLE_ADMIN_PORT", "8181")
     monkeypatch.setenv("RAUCLE_ADMIN_KEY", "k-admin")
     monkeypatch.setenv("RAUCLE_DEMO_KEY", "k-demo")
+    monkeypatch.setenv("RAUCLE_DEMO_MODE", "1")
     monkeypatch.setenv("RAUCLE_SIGNER", "local")
     monkeypatch.setenv("RAUCLE_POLICY_FILE", "")
     monkeypatch.setenv("RAUCLE_RECEIPT_STORE", str(tmp_path / "receipts.jsonl"))
@@ -111,6 +112,25 @@ def test_main_bootstrap_from_env_registers_admin_and_demo(
     mgr = UserManager(persist_path=str(users_file))
     assert mgr.get_user("k-admin").role == "admin"
     assert mgr.get_user("k-demo").role == "auditor"
+
+
+def test_demo_key_without_demo_mode_is_not_registered(stub_uvicorn, tmp_path, monkeypatch) -> None:
+    """RED-035: a demo key on a production instance must not become a user."""
+    users_file = tmp_path / "users.jsonl"
+    monkeypatch.setenv("RAUCLE_ADMIN_KEY", "k-admin")
+    monkeypatch.setenv("RAUCLE_DEMO_KEY", "k-demo")
+    monkeypatch.delenv("RAUCLE_DEMO_MODE", raising=False)
+    monkeypatch.setenv("RAUCLE_POLICY_FILE", "")
+    monkeypatch.setenv("RAUCLE_RECEIPT_STORE", str(tmp_path / "receipts.jsonl"))
+    monkeypatch.setenv("RAUCLE_AUDIT_CHAIN", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv("RAUCLE_REGISTRY_PATH", str(tmp_path / "registry.jsonl"))
+    monkeypatch.setenv("RAUCLE_AGENT_CREDENTIALS", str(tmp_path / "creds.jsonl"))
+    monkeypatch.setenv("RAUCLE_USERS_FILE", str(users_file))
+
+    gateway_server.main()
+
+    mgr = UserManager(persist_path=str(users_file))
+    assert mgr.get_user("k-demo") is None
 
 
 def test_main_without_admin_key_still_boots_both_servers(
