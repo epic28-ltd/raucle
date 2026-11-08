@@ -85,13 +85,22 @@ layer (100 requests/minute in the reference Caddyfile).
 - Known residual: `totp_secret` is stored in plaintext beside the digest, and
   TOTP is presented per request rather than exchanged for a session token.
   Protecting the secret needs a master-key source, and per-request TOTP is
-  not session security; both belong with the identity work rather than here
+  not session security; both belong with the identity work rather than here.
+  Recorded in the U2 residual register as R13
+  (`docs/threat-model/v1.md`) — the API-key digest scheme (RED-032) itself
+  is not affected
 - Demo-mode synthetic users are in-memory only by design
 
 ## Gate authentication (agent callers)
 
 `RAUCLE_GATE_AUTH` controls how the `/gate` endpoint identifies agents.
 Pick per deployment posture:
+
+> **Decision record (8 November 2026):** keeping `off` as the shipped
+> default is an explicit owner decision, not an oversight. See residual
+> R14 in `docs/threat-model/v1.md`. Shipped mitigations: the boot banner
+> warning below, and `GET/PUT /api/config` (`gate_auth`), which lets an
+> operator switch to `apikey` or `token` without a redeploy.
 
 | Mode | Mechanism | Use when |
 |---|---|---|
@@ -119,6 +128,18 @@ co-resident control cannot resist a compromised host process. The hard
 boundary is the out-of-process gate plus credential isolation: agents hold
 tokens, never raw tool secrets; tool execution verifies the gate's
 signature before running anything.
+
+### Operator registry caching
+
+The revocation list, trace quarantine and lease suspension registries,
+trust registry and delegation ledger are served through a read-through
+cache keyed on `(mtime_ns, size)` (`_FileCache`, `raucle/gateway.py`), so
+gate calls do not re-read unbounded append-only files. Residual: an edit
+that changes a file's contents without changing its size or mtime — an
+in-place same-byte-length rewrite — can be served stale. This is recorded
+as residual R16 in `docs/threat-model/v1.md` and shares its fix with the
+unsigned-policy file residual (R5/M5 there): work them together, not
+twice.
 
 ## Signed gate receipts
 
@@ -232,6 +253,14 @@ Gate decisions are forwarded to SIEM in real-time. Supported backends:
 - Azure Sentinel (Log Analytics)
 
 Failed SIEM forwards are buffered in memory and retried.
+
+Known residual: SIEM target validation (`siem_target_allowed`,
+`raucle/gateway.py`) rejects non-HTTP(S) destinations and literal loopback,
+link-local and private addresses, but it does not resolve DNS — a hostname
+that resolves to a private address is not detected at validation time.
+Protection today is the host's egress posture; `RAUCLE_SIEM_ALLOW_PRIVATE=1`
+is the deliberate opt-in for internal collectors.
+Recorded in the U2 residual register as R15 (`docs/threat-model/v1.md`).
 
 ## Authority attribution endpoints (PR-E)
 
