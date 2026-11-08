@@ -178,3 +178,35 @@ class TestGateAuthPosture:
         )
         assert resp.status_code == 200
         assert gateway.config.gate_auth == "token"
+
+
+class TestLimiterEdgePaths:
+    def test_null_limiter_is_transparent(self):
+        """The no-slowapi stand-in must not change the route function."""
+        from raucle.gateway_app import _NullLimiter
+
+        def handler() -> str:
+            return "x"
+
+        assert _NullLimiter().limit("1/minute")(handler) is handler
+
+    def test_missing_slowapi_serves_without_limiting(self, tmp_path, monkeypatch):
+        """RED-037: no slowapi must warn and keep serving, not crash."""
+        import sys
+
+        # A None entry makes ``import slowapi`` raise ImportError at call time.
+        monkeypatch.setitem(sys.modules, "slowapi", None)
+        client = _app(tmp_path)
+        resp = client.post("/gate", json={"tool": "pay", "args": {"account": "ACC-001"}})
+        assert resp.status_code == 200
+        assert resp.json()["decision"] == "allow"
+
+    def test_trusted_proxy_without_a_header_falls_back_to_peer(self, monkeypatch):
+        monkeypatch.setenv("RAUCLE_TRUST_PROXY", "1")
+        req = type("R", (), {"headers": {}, "client": type("C", (), {"host": "10.0.0.9"})()})()
+        assert _client_key(req) == "10.0.0.9"
+
+    def test_empty_forwarded_entry_is_unknown(self, monkeypatch):
+        monkeypatch.setenv("RAUCLE_TRUST_PROXY", "1")
+        req = type("R", (), {"headers": {"x-forwarded-for": " , 10.0.0.9"}, "client": None})()
+        assert _client_key(req) == "unknown"
