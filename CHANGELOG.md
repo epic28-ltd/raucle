@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Fixed - RED-037: rate limits that exist, mean the right thing, and are documented
+
+- `docs/gateway-security.md` claimed "200 requests per minute on `/gate`". No
+  per-route limit existed: only a 1000/minute default for every route. `/gate`
+  now carries the documented limit (`RAUCLE_GATE_ROUTE_LIMIT`, default
+  200/minute) as a real decorator, and the other routes keep the default
+  (`RAUCLE_GATE_RATE_LIMIT`).
+- The limiter keyed on the socket peer address, so behind a TLS-terminating
+  proxy every caller shared one bucket. `RAUCLE_TRUST_PROXY=1` now honours the
+  left-most `X-Forwarded-For` entry, the same convention `raucle/server.py`
+  already used for its token bucket.
+- A missing `slowapi` left the gateway with no rate limiting and no signal.
+  It now logs a conspicuous boot warning, and the route decorator is
+  unconditional through a null limiter so the route definition does not branch
+  on the import.
+- The gate-auth banner is now a multi-line block naming the consequence ("the
+  agent_id it declares is the identity written into the receipt chain"), and
+  `gate_auth` is exposed on `GET/PUT /api/config` with validation, so an
+  operator can change the posture from the panel the banner points them at
+  instead of only from the environment.
+- Tests: `tests/test_gate_rate_limit.py` (new, 9 cases), including a test that
+  the documented number and the code agree.
+
 ### Fixed - RED-036: per-call registry cost, export memory, SIEM target
 
 - Every gate call re-read and re-parsed the revocation list, the trace
