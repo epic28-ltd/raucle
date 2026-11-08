@@ -58,6 +58,7 @@ docstrings of the `_cmd_*` handlers in `raucle/cli.py`.)
 | authorship | sign session-stop receipts; 2 on verifier failure |
 | audit-export | build signed report; 1 on chain error |
 | audit-pack | build/verify custody pack; 2 on verification failure |
+| demo | verify shipped demo bundle; 0 VERIFIED, 1 on tamper/pin mismatch, 2 on missing bundle |
 | mcp | MCP bundle ops; 1 on schema errors |
 | provenance | emit/verify receipts; 2 on verification failure |
 | feed | publish/verify/subscribe feeds; 2 on signature failure |
