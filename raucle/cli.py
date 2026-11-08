@@ -700,6 +700,29 @@ def _build_parser() -> argparse.ArgumentParser:
         "only 'internally consistent', not 'from this custodian'",
     )
 
+    # -- demo ----------------------------------------------------------------
+    demo_p = subparsers.add_parser(
+        "demo",
+        help="One-command verification of the shipped demo bundle",
+    )
+    demo_sub = demo_p.add_subparsers(dest="demo_command")
+    demo_verify = demo_sub.add_parser(
+        "verify",
+        help="Verify the shipped demo bundle (docs/demo-bundle) fully offline",
+    )
+    demo_verify.add_argument(
+        "pack",
+        nargs="?",
+        default=None,
+        help="Bundle directory (default: the shipped docs/demo-bundle)",
+    )
+    demo_verify.add_argument(
+        "--pinned",
+        help="Published bundle digest (sha256:<hex>) to compare against — the "
+        "value lives OUTSIDE the bundle (e.g. CI, downstream pinners), so "
+        "doctoring the bundle can never update it silently",
+    )
+
     # -- mcp ----------------------------------------------------------------
     mcp_p = subparsers.add_parser("mcp", help="Model Context Protocol operations")
     mcp_sub = mcp_p.add_subparsers(dest="mcp_command")
@@ -2172,6 +2195,90 @@ def _cmd_audit_pack_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_demo_verify(args: argparse.Namespace) -> int:
+    """One-command offline verification of the shipped demo bundle.
+
+    Wraps ``audit-pack verify`` and adds the canonical published-digest
+    comparison (see :mod:`raucle.demo_bundle`). Exits non-zero if the pack
+    fails verification or the digest does not match ``--pinned``.
+    """
+    from raucle.audit_pack import verify_pack
+    from raucle.demo_bundle import (
+        DIGEST_ALGO,
+        bundle_digest,
+        locate_demo_bundle,
+        pack_index_summary,
+    )
+
+    try:
+        pack_dir = locate_demo_bundle(args.pack)
+        summary = pack_index_summary(pack_dir)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError, OSError) as exc:
+        print(f"demo verify failed: {exc}", file=sys.stderr)
+        return 2
+    if not (Path(pack_dir) / "PACK.json").is_file():
+        print(f"demo verify failed: no PACK.json in {pack_dir}", file=sys.stderr)
+        return 2
+    print(
+        f"demo bundle: {pack_dir}\n"
+        f"  kind                        {summary['kind']}\n"
+        f"  members                     {summary['member_count']}\n"
+        f"  custodian signer            {summary['audit_key_id']}\n",
+        file=sys.stderr,
+    )
+
+    verdict = verify_pack(pack_dir)
+    for line in (
+        ("index signature", verdict.index_signature_ok),
+        ("integrity (member hashes)", verdict.integrity_ok),
+        ("manifest signature", verdict.manifest_signature_ok),
+        ("receipt chain (offline)", verdict.chain_valid),
+        ("manifest reproducible", verdict.reproducible),
+    ):
+        label, ok = line
+        print(f"  {label:<28}{'PASS' if ok else 'FAIL'}", file=sys.stderr)
+    if verdict.signer_trusted is None:
+        print(
+            f"  signer (not pinned)         {verdict.signer_key_id} [internal consistency only]",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"  signer matches pinned key   {'PASS' if verdict.signer_trusted else 'FAIL'} "
+            f"({verdict.signer_key_id})",
+            file=sys.stderr,
+        )
+
+    try:
+        digest = bundle_digest(pack_dir)
+    except (ValueError, OSError) as exc:
+        print(f"demo verify failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"  bundle digest {DIGEST_ALGO}\n    {digest}", file=sys.stderr)
+
+    pinned = getattr(args, "pinned", None)
+    pinned_ok: bool | None = None
+    if pinned:
+        pinned_ok = pinned == digest
+        print(
+            f"  pinned published digest     {'PASS' if pinned_ok else 'FAIL'} ({pinned})",
+            file=sys.stderr,
+        )
+        if not pinned_ok:
+            print(
+                "    - published digest mismatch: bundle differs from the pinned value; "
+                "re-pin only via a reviewable change with the cause named",
+                file=sys.stderr,
+            )
+
+    if verdict.reasons:
+        for reason in verdict.reasons:
+            print(f"    - {reason}", file=sys.stderr)
+    ok = verdict.ok and pinned_ok is not False
+    print(f"  RESULT: {'VERIFIED' if ok else 'REJECTED'}", file=sys.stderr)
+    return 0 if ok else 1
+
+
 def _cmd_verify_receipt(args: argparse.Namespace) -> int:
     from raucle.verdicts import VerdictVerificationError, VerdictVerifier
 
@@ -3190,6 +3297,7 @@ def _dispatch(argv: list[str] | None = None) -> int:
         ("audit", "keygen"): _cmd_audit_keygen,
         ("audit-pack", "build"): _cmd_audit_pack_build,
         ("audit-pack", "verify"): _cmd_audit_pack_verify,
+        ("demo", "verify"): _cmd_demo_verify,
         ("mcp", "serve"): _cmd_mcp_serve,
         ("mcp", "scan"): _cmd_mcp_scan,
         ("provenance", "keygen"): _cmd_provenance_keygen,

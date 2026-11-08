@@ -162,6 +162,40 @@ jobs:
               || { echo "::error::conformance skipped language '$lang' (toolchain not set up?)"; exit 1; }
           done
 
+  demo-bundle-verify:
+    name: "Demo bundle (S1): one-command verifiable + pinned digest"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: pip install -e .
+      - name: Verify the shipped demo bundle against the published digest
+        run: |
+          set -e
+          # The pinned value lives OUTSIDE the bundle — in this file — so a
+          # doctoring PR can never update it silently. Re-pinning is a
+          # separate reviewable change and must name the cause.
+          raucle demo verify docs/demo-bundle --pinned sha256:232061a6b6f81e8298322a69e06cb88df20ab07ed9c91a199a97212069f3bfa0
+
+  conformance-data:
+    name: "Standards conformance data (S4): generated == committed"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Regenerate conformance data and compare to the committed file
+        run: |
+          set -e
+          python scripts/gen_conformance_data.py --check
+          echo "✓ committed conformance data matches a fresh generation"
+
   build:
     name: Build Package
     runs-on: ubuntu-latest
