@@ -81,9 +81,7 @@ def validate_url(url: str, *, purpose: str = "request") -> None:
     if not host:
         raise ValueError(f"refusing {purpose}: URL has no host")
     if parts.username is not None or parts.password is not None:
-        raise ValueError(
-            f"refusing {purpose}: userinfo (user:pass@) in URLs is not accepted"
-        )
+        raise ValueError(f"refusing {purpose}: userinfo (user:pass@) in URLs is not accepted")
     if allow_private_urls():
         return
     if is_private_target(host):
@@ -91,4 +89,3 @@ def validate_url(url: str, *, purpose: str = "request") -> None:
             f"refusing {purpose}: {host!r} targets loopback/link-local/private "
             "address space; set RAUCLE_ALLOW_PRIVATE_URLS to override explicitly"
         )
-

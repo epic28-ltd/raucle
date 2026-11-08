@@ -1448,6 +1448,7 @@ def _register_receipt_routes(
         check_access(user, "receipts")
 
         from fastapi.responses import StreamingResponse
+
         from raucle.export import StreamedExportSink
 
         sink = StreamedExportSink(source="receipts")

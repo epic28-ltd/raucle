@@ -403,16 +403,12 @@ class StreamedExportSink:
                 closer()
             self.close()
             raise
-        logger.info(
-            "streamed export %s completed: %d records", self.source, self.written
-        )
+        logger.info("streamed export %s completed: %d records", self.source, self.written)
 
     def close(self) -> None:
         """Record a fault when the consumer closes the stream mid-flight."""
         if self.fault is None:
-            self.fault = StreamFaultRecord(
-                records_written=self.written, source=self.source
-            )
+            self.fault = StreamFaultRecord(records_written=self.written, source=self.source)
             logger.warning(
                 "streamed export %s disconnected by client after %d records",
                 self.source,

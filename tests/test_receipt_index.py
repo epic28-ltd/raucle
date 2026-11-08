@@ -334,7 +334,7 @@ class TestStreamedExportSinkUnit:
 
     def test_close_after_completion_records_nothing(self):
         sink = self._sink()
-        gen = sink.stream((f"x{i}" for i in range(2)))
+        gen = sink.stream(f"x{i}" for i in range(2))
         assert len(list(gen)) == 2
         gen.close()
         assert sink.fault is None
@@ -412,12 +412,14 @@ policies:
 
     def test_early_client_close_is_recorded(self, indexed_gateway, caplog):
         gw, admin = indexed_gateway
-        with caplog.at_level(logging.WARNING, logger="raucle.export"):
-            with admin.stream("GET", "/api/receipts/export", headers=self.AUTH) as resp:
-                seen = []
-                for line in resp.iter_lines():
-                    seen.append(line)
-                    break  # the client hung up after the first record
+        with (
+            caplog.at_level(logging.WARNING, logger="raucle.export"),
+            admin.stream("GET", "/api/receipts/export", headers=self.AUTH) as resp,
+        ):
+            seen = []
+            for line in resp.iter_lines():
+                seen.append(line)
+                break  # the client hung up after the first record
         assert len(seen) == 1
         disconnects = [r for r in caplog.records if "disconnected" in r.getMessage()]
         assert disconnects, "disconnect was not recorded"

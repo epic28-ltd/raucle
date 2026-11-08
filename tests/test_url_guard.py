@@ -135,7 +135,6 @@ def test_transparency_client_rejects_non_http_scheme():
 
 def test_transparency_client_request_rejects_private_url(monkeypatch, block_private):
     """Location-header-derived URLs get the same guard at _request time."""
-    block_private  # fixture already active
     client = SCITTAnchorClient("https://8.8.8.8")
     with pytest.raises(ValueError, match="RAUCLE_ALLOW_PRIVATE_URLS"):
         client._request("POST", "http://127.0.0.1:9999/entries", b"{}")
