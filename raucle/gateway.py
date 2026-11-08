@@ -269,6 +269,11 @@ class GatewayConfig:
     audit_persist: bool = False  # persist connection log to disk
     audit_log_file: str = "/data/gateway-audit.jsonl"
 
+    # Fault evidence (X4): the receipted-fault counter persists here and the
+    # boot self-test drives the gate with hostile types at startup.
+    fault_counter_path: str = ""
+    boot_selftest: bool = True
+
     # Compliance
     compliance_framework: str = "eu-ai-act"  # eu-ai-act, iso-42001, soc2
 
@@ -313,6 +318,9 @@ class GatewayConfig:
             audit_persist=os.environ.get("RAUCLE_AUDIT_PERSIST", "").lower()
             in ("1", "true", "yes"),
             audit_log_file=os.environ.get("RAUCLE_AUDIT_LOG", "/data/gateway-audit.jsonl"),
+            fault_counter_path=os.environ.get("RAUCLE_FAULT_COUNTER", "").strip(),
+            boot_selftest=os.environ.get("RAUCLE_BOOT_SELFTEST", "1").lower()
+            not in ("0", "false", "no"),
             compliance_framework=os.environ.get("RAUCLE_COMPLIANCE_FRAMEWORK", "eu-ai-act"),
             registry_path=os.environ.get("RAUCLE_REGISTRY_PATH", "/data/registry.jsonl"),
             approval_ttl_seconds=int(os.environ.get("RAUCLE_APPROVAL_TTL", "300")),
@@ -1137,6 +1145,34 @@ class RaucleGateway:
         self._policy_bytes = None
         self._policy_bytes_status: dict[str, Any] | None = None
         self._init_policy_bytes()
+
+        # Fault evidence (X4): receipted faults are counted and persisted;
+        # a restart cannot launder the record (RED-038 round-trip).
+        from raucle.fault_counter import FaultCounter
+
+        self.fault_counter = FaultCounter(config.fault_counter_path or None)
+        self.boot_selftest_result: dict[str, Any] | None = None
+
+    def run_boot_selftest_at_startup(self) -> dict[str, Any]:
+        """Boot self-test (X4): drive the approval path, the constraint
+        evaluator and the receipt emitter with hostile types, receipting
+        each probe's result. Called once at gateway startup (see
+        run_both_servers); never blocks launch - a crash of the self-test
+        itself is logged, not raised, and leaves ``boot_selftest_result``.
+        """
+        if not self.config.boot_selftest:
+            return {}
+        from raucle.boot_selftest import run_boot_selftest
+
+        try:
+            self.boot_selftest_result = run_boot_selftest(self)
+        except Exception:
+            logger.exception("boot self-test crashed outside its own probes")
+        return self.boot_selftest_result or {}
+
+    def fault_counts(self) -> dict[str, Any]:
+        """Query the persisted fault counter (X4): totals by type and tool."""
+        return self.fault_counter.counts()
 
     def _init_policy_bytes(self) -> None:
         """Wire the policy-bytes verifier when a seal file is configured.
@@ -2295,12 +2331,30 @@ class RaucleGateway:
             )
         except Exception as exc:  # noqa: BLE001 - the gate must never crash open
             logger.exception("gate fault during decision for tool %s", tool)
-            return self._deny_result(
+            result = self._deny_result(
                 result,
                 f"gate_fault: internal error during decision ({type(exc).__name__})",
                 start,
                 siem=False,
             )
+            # Fault evidence (X4): the receipted fault is COUNTED (persisted,
+            # queryable) and SIEM-forwarded. The event carries the exception
+            # TYPE only - messages may quote caller-controlled values.
+            try:
+                fault_type = type(exc).__name__ or "Unknown"
+                self.fault_counter.increment(fault_type, tool)
+                self.siem.forward(
+                    {
+                        "event": "gate_fault",
+                        "fault_type": fault_type,
+                        "tool": tool,
+                        "receipt_id": result.get("receipt_id"),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+            except Exception:
+                logger.exception("fault-counter/SIEM recording failed for a gate fault")
+            return result
 
     def _decide_and_finish_inner(
         self,

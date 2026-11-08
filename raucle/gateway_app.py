@@ -7,8 +7,11 @@ This module provides:
 
 from __future__ import annotations
 
+import base64 as _base64
+import hashlib as _hashlib
 import json
 import logging
+import re as _re
 import secrets
 from pathlib import Path
 from typing import Any
@@ -358,11 +361,37 @@ def _handle_gate_tool_call(
 # Security headers
 # ---------------------------------------------------------------------------
 
-_CSP = (
-    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
-    "img-src 'self' data:; connect-src 'self'; form-action 'none'; "
-    "frame-ancestors 'none'; base-uri 'none'"
-)
+
+def _panel_script_hashes() -> list[str]:
+    """SHA-256 CSP hashes of every inline script block the panel/topology
+    pages ship. ``script-src`` is hash-pinned (no ``unsafe-inline``), so a
+    modified script block stops executing - the CI script-hash test turns
+    that stale-hash failure into a red build instead of a dead panel."""
+
+    out: list[str] = []
+    for html in (ADMIN_PANEL_HTML, TOPOLOGY_HTML):
+        for m in _re.finditer(r"<script[^>]*>(.*?)</script>", html, _re.S):
+            body = m.group(1)
+            if body.strip():
+                digest = _hashlib.sha256(body.encode()).digest()
+                out.append("'sha256-" + _base64.b64encode(digest).decode() + "'")
+    return out
+
+
+def _panel_csp() -> str:
+    """Content-Security-Policy for the admin panel and topology pages.
+
+    Inline scripts are hash-pinned; inline event handlers are gone (all
+    dispatch runs through the delegated data-hi listener), so ``script-src``
+    no longer accepts ``unsafe-inline``. ``style-src 'unsafe-inline'`` stays:
+    the single-string panel ships its stylesheet inline.
+    """
+
+    return (
+        "default-src 'none'; script-src " + " ".join(_panel_script_hashes()) + "; "
+        "style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
+        "form-action 'none'; frame-ancestors 'none'; base-uri 'none'"
+    )
 
 
 class _NullLimiter:
@@ -399,19 +428,19 @@ def _client_key(request: Request) -> str:
 
 
 def _install_security_headers(app: FastAPI) -> None:
-    """Add the response headers both apps should always carry (RED-033).
+    """Add the response headers both apps should always carry (RED-033,
+    T-S6).
 
-    ``script-src 'unsafe-inline'`` is required by the single-string panel
-    design (inline handlers and one inline script block). That weakens CSP to
-    a containment control rather than an XSS barrier, which is why the output
-    escaping above matters; the directive still blocks external script
-    loads, framing, form posts and base-tag rewrites.
+    ``script-src`` is hash-pinned: inline event handlers were removed from
+    the panel markup (dispatch runs through the delegated ``data-hi``
+    listener), so ``unsafe-inline`` is no longer needed in script-src and a
+    hostile inline script cannot execute on the panel pages.
     """
 
     @app.middleware("http")
     async def _security_headers(request: Request, call_next):
         response = await call_next(request)
-        response.headers.setdefault("Content-Security-Policy", _CSP)
+        response.headers.setdefault("Content-Security-Policy", _panel_csp())
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
@@ -780,6 +809,24 @@ def _register_stats_routes(
         user = check_auth(authorization, x_totp)
         check_access(user, "stats")
         return gateway.get_stats()
+
+    @app.get(
+        "/api/faults",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+        },
+    )
+    def get_faults(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        """Query the persisted fault counter + the last boot self-test (X4)."""
+        user = check_auth(authorization, x_totp)
+        check_access(user, "stats")
+        counts = gateway.fault_counts()
+        boot = getattr(gateway, "boot_selftest_result", None)
+        return {"faults": counts, "boot_selftest": boot}
 
     @app.get(
         "/api/connections",
@@ -1441,15 +1488,19 @@ def _register_receipt_routes(
 
         Streams from the segmented store's segments (bounded memory), or
         the legacy flat file. Bounded to a time range to keep responses
-        finite; the audit pack remains the regulator path.
+        finite; the audit pack remains the regulator path. A client
+        disconnect mid-stream is recorded by the export sink (T-B3).
         """
         user = check_auth(authorization, x_totp)
         check_access(user, "receipts")
 
         from fastapi.responses import StreamingResponse
 
+        from raucle.export import StreamedExportSink
+
+        sink = StreamedExportSink(source="receipts")
         return StreamingResponse(
-            _iter_export_lines(gateway, since=since, until=until),
+            sink.stream(_iter_export_lines(gateway, since=since, until=until)),
             media_type="application/x-ndjson",
             headers={"Content-Disposition": 'attachment; filename="receipts.jsonl"'},
         )
@@ -2057,14 +2108,14 @@ body.demo .btn-primary{display:none}
 <div id="login" class="content login">
   <div class="card">
     <div class="card-title">Sign In</div>
-    <input class="input" id="apiKey" type="password" placeholder="API Key" onkeydown="if(event.key==='Enter')login()">
+    <input class="input" id="apiKey" type="password" placeholder="API Key">
     <div id="totpRow" class="hidden" style="margin-top:12px">
-      <input class="input" id="totpInput" placeholder="6-digit TOTP code" maxlength="6" style="width:100%" onkeydown="if(event.key==='Enter')loginWithTotp()">
-      <button class="btn" style="width:100%;margin-top:8px" onclick="loginWithTotp()">Verify & Sign In</button>
+      <input class="input" id="totpInput" placeholder="6-digit TOTP code" maxlength="6" style="width:100%">
+      <button class="btn" style="width:100%;margin-top:8px" data-hi="loginWithTotp()">Verify & Sign In</button>
     </div>
-    <button class="btn" style="width:100%;margin-top:12px" onclick="login()">Sign In</button>
+    <button class="btn" style="width:100%;margin-top:12px" data-hi="login()">Sign In</button>
     <div style="text-align:center;margin:16px 0 8px;color:#737373;font-size:0.8rem">or</div>
-    <button class="btn" style="width:100%;background:#171717;color:#fff" onclick="enterDemo()">View Demo</button>
+    <button class="btn" style="width:100%;background:#171717;color:#fff" id="enterDemoBtn" data-hi="enterDemo()">View Demo</button>
     <div style="margin-top:10px;font-size:0.75rem;color:#737373;text-align:center">
       Read-only demonstration across banking, government and health scenarios.
     </div>
@@ -2079,21 +2130,21 @@ body.demo .btn-primary{display:none}
       DEMO MODE
     </span>
     <span style="font-size:0.82rem;color:#3a3f4b">Read-only view of a live deployment with simulated agent traffic.</span>
-    <button class="tour-replay" onclick="tourRestart()">Replay tour</button>
+    <button class="tour-replay" data-hi="tourRestart()">Replay tour</button>
     <span style="flex:1"></span>
     <div id="scenarioPicker" style="display:flex;gap:8px"></div>
-    <button class="btn" style="padding:6px 14px;font-size:0.8rem" onclick="location.reload()">Exit Demo</button>
+    <button class="btn" style="padding:6px 14px;font-size:0.8rem" data-hi="reloadPage()">Exit Demo</button>
   </div>
   <div class="tabs">
-    <div class="tab active" onclick="showTab('dashboard',this)">Dashboard</div>
-    <div class="tab" onclick="showTab('connections',this)">Connections</div>
-    <div class="tab" onclick="showTab('policies',this)" data-tab-id="policies">Policies</div>
-    <div class="tab" onclick="showTab('learn',this)" data-tab-id="learn">Learn</div>
-    <div class="tab" onclick="showTab('receipts',this)">Receipts</div>
-    <div class="tab" onclick="showTab('siem',this)" data-tab-id="siem">SIEM</div>
-    <div class="tab" onclick="showTab('users',this)" data-tab-id="users">Users</div>
-    <div class="tab" onclick="showTab('config',this)" data-tab-id="config">Config</div>
-    <div class="tab" onclick="window.location.href='/topology'" style="color:var(--active-green)" data-tab-id="topo-link">Topology</div>
+    <div class="tab active" data-hi="showTab('dashboard',this)">Dashboard</div>
+    <div class="tab" data-hi="showTab('connections',this)">Connections</div>
+    <div class="tab" data-hi="showTab('policies',this)" data-tab-id="policies">Policies</div>
+    <div class="tab" data-hi="showTab('learn',this)" data-tab-id="learn">Learn</div>
+    <div class="tab" data-hi="showTab('receipts',this)">Receipts</div>
+    <div class="tab" data-hi="showTab('siem',this)" data-tab-id="siem">SIEM</div>
+    <div class="tab" data-hi="showTab('users',this)" data-tab-id="users">Users</div>
+    <div class="tab" data-hi="showTab('config',this)" data-tab-id="config">Config</div>
+    <div class="tab" data-hi="gotoTopology()" style="color:var(--active-green)" data-tab-id="topo-link">Topology</div>
   </div>
   <div class="content">
 
@@ -2112,13 +2163,13 @@ body.demo .btn-primary{display:none}
       <div class="card">
         <div class="card-title"><span class="live-dot"></span>Live Topology</div>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-          <select class="input" id="topoDecisionFilter" style="width:auto" onchange="topoRender()">
+          <select class="input" id="topoDecisionFilter" style="width:auto">
             <option value="">All Decisions</option>
             <option value="allow">Allow</option>
             <option value="deny">Deny</option>
             <option value="escalate">Escalate</option>
           </select>
-          <label class="toggle"><input type="checkbox" id="topoMotion" checked onchange="topoRender()"> Animated traffic</label>
+          <label class="toggle"><input type="checkbox" id="topoMotion" checked> Animated traffic</label>
           <span style="flex:1"></span>
           <span style="font-size:0.75rem;color:#8b919e">Zoomed to the busiest nodes at first. Drag to pan, scroll to zoom, click a node to filter the table below.</span>
         </div>
@@ -2126,16 +2177,16 @@ body.demo .btn-primary{display:none}
           <svg class="topo-svg" id="topoSvg"></svg>
           <div class="topo-content" id="topoContent"></div>
           <div class="topo-controls">
-            <button class="topo-ctrl" title="Zoom in" onclick="topoZoomIn()">
+            <button class="topo-ctrl" title="Zoom in" data-hi="topoZoomIn()">
               <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
             </button>
-            <button class="topo-ctrl" title="Zoom out" onclick="topoZoomOut()">
+            <button class="topo-ctrl" title="Zoom out" data-hi="topoZoomOut()">
               <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
             </button>
-            <button class="topo-ctrl" title="Fit to view" onclick="topoFit()">
+            <button class="topo-ctrl" title="Fit to view" data-hi="topoFit()">
               <svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
             </button>
-            <button class="topo-ctrl" title="Fullscreen" onclick="topoFullscreen()">
+            <button class="topo-ctrl" title="Fullscreen" data-hi="topoFullscreen()">
               <svg viewBox="0 0 24 24" id="topoFsIcon"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/><line x1="3" y1="3" x2="21" y2="21"/></svg>
             </button>
           </div>
@@ -2145,27 +2196,27 @@ body.demo .btn-primary{display:none}
         <div class="card-title"><span class="live-dot"></span>Traffic Flow</div>
         <div class="filter-bar">
           <div class="dir-toggle">
-            <button class="active" onclick="setDirFilter('all',this)">All</button>
-            <button onclick="setDirFilter('inbound',this)">Inbound</button>
-            <button onclick="setDirFilter('outbound',this)">Outbound</button>
+            <button class="active" data-hi="setDirFilter('all',this)">All</button>
+            <button data-hi="setDirFilter('inbound',this)">Inbound</button>
+            <button data-hi="setDirFilter('outbound',this)">Outbound</button>
           </div>
-          <select class="input" id="filterDecision" onchange="loadConnections(lastLimit||200)">
+          <select class="input" id="filterDecision">
             <option value="">All Decisions</option>
             <option value="allow">Allow</option>
             <option value="deny">Deny</option>
             <option value="escalate">Escalate</option>
           </select>
-          <button class="btn btn-secondary" onclick="demoExample()">Show example</button>
-          <button class="btn btn-secondary" onclick="loadRecent()">Load recent</button>
-          <label class="toggle"><input type="checkbox" id="liveMode" onchange="loadConnections(lastLimit)"> Live (off by default)</label>
+          <button class="btn btn-secondary" data-hi="demoExample()">Show example</button>
+          <button class="btn btn-secondary" data-hi="loadRecent()">Load recent</button>
+          <label class="toggle"><input type="checkbox" id="liveMode"> Live (off by default)</label>
         </div>
         <div class="card" id="connPathCard" style="margin:14px 0 0">
           <div class="card-title">Request path &middot; live <span class="count" id="pathCount"></span></div>
           <div id="pathPills" style="display:flex;gap:6px;margin:10px 0;flex-wrap:wrap">
-            <button class="btn btn-secondary active" onclick="setDecisionFilter('all',this)">All</button>
-            <button class="btn btn-secondary" onclick="setDecisionFilter('allow',this)">Approved</button>
-            <button class="btn btn-secondary" onclick="setDecisionFilter('deny',this)">Denied</button>
-            <button class="btn btn-secondary" onclick="setDecisionFilter('escalate',this)">Escalated</button>
+            <button class="btn btn-secondary active" data-hi="setDecisionFilter('all',this)">All</button>
+            <button class="btn btn-secondary" data-hi="setDecisionFilter('allow',this)">Approved</button>
+            <button class="btn btn-secondary" data-hi="setDecisionFilter('deny',this)">Denied</button>
+            <button class="btn btn-secondary" data-hi="setDecisionFilter('escalate',this)">Escalated</button>
           </div>
           <div id="connPath"></div>
         </div>
@@ -2174,17 +2225,17 @@ body.demo .btn-primary{display:none}
           <div class="flow-cols">
             <div class="flow-col">
               <div class="flow-col-header">Inbound Sources <span class="count" id="srcCount">0</span></div>
-              <div class="flow-col-filter"><input id="srcFilter" placeholder="Filter sources..." oninput="renderFlow()"></div>
+              <div class="flow-col-filter"><input id="srcFilter" placeholder="Filter sources..."></div>
               <div class="flow-col-body" id="srcList"></div>
             </div>
             <div class="flow-col flow-col-mid">
               <div class="flow-col-header">Gate Processing <span class="count" id="midCount">0</span></div>
-              <div class="flow-col-filter"><input id="midFilter" placeholder="Filter by tool..." oninput="renderFlow()"></div>
+              <div class="flow-col-filter"><input id="midFilter" placeholder="Filter by tool..."></div>
               <div class="flow-col-body" id="midList"></div>
             </div>
             <div class="flow-col">
               <div class="flow-col-header">Outbound Destinations <span class="count" id="dstCount">0</span></div>
-              <div class="flow-col-filter"><input id="dstFilter" placeholder="Filter destinations..." oninput="renderFlow()"></div>
+              <div class="flow-col-filter"><input id="dstFilter" placeholder="Filter destinations..."></div>
               <div class="flow-col-body" id="dstList"></div>
             </div>
           </div>
@@ -2203,7 +2254,7 @@ body.demo .btn-primary{display:none}
       <div class="card"><div class="card-title">Policy Files</div>
         <div class="file-list" id="fileList"></div>
         <textarea class="editor" id="policyEditor"></textarea>
-        <div class="actions"><button class="btn" onclick="validatePolicy()">Validate</button><button class="btn" onclick="savePolicy()">Save & Deploy</button><button class="btn btn-secondary" onclick="reloadPolicy()">Reload</button></div>
+        <div class="actions"><button class="btn" data-hi="validatePolicy()">Validate</button><button class="btn" data-hi="savePolicy()">Save & Deploy</button><button class="btn btn-secondary" data-hi="reloadPolicy()">Reload</button></div>
       </div>
     </div>
     <div id="tab-learn" class="hidden">
@@ -2218,9 +2269,9 @@ body.demo .btn-primary{display:none}
           adjust, then Save & Deploy.
         </p>
         <div class="actions" style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn" onclick="loadLearn()">Refresh</button>
-          <button class="btn" onclick="copyDraftToEditor()">Copy into Policy Editor</button>
-          <button class="btn" onclick="clearLearn()">Clear Observations</button>
+          <button class="btn" data-hi="loadLearn()">Refresh</button>
+          <button class="btn" data-hi="copyDraftToEditor()">Copy into Policy Editor</button>
+          <button class="btn" data-hi="clearLearn()">Clear Observations</button>
         </div>
         <div id="learnSummary" style="margin-top:14px;font-size:0.85rem"></div>
         <pre id="learnDraft" style="margin-top:10px;max-height:420px;overflow:auto;background:#f8f9fb;border:1px solid #e5e7ec;border-radius:10px;padding:14px;font-size:0.78rem">No observations yet.</pre>
@@ -2235,9 +2286,9 @@ body.demo .btn-primary{display:none}
             <option value="">any decision</option><option>allow</option><option>deny</option><option>escalate</option>
           </select>
           <input id="rcpt-filter-trace" class="input" style="width:150px" placeholder="trace_id">
-          <button class="btn" onclick="loadReceipts()">Filter</button>
-          <button class="btn" onclick="clearRcptFilters()">Clear</button>
-          <button class="btn" onclick="exportReceipts()">Export JSONL</button>
+          <button class="btn" data-hi="loadReceipts()">Filter</button>
+          <button class="btn" data-hi="clearRcptFilters()">Clear</button>
+          <button class="btn" data-hi="exportReceipts()">Export JSONL</button>
         </div>
         <div style="overflow-x:auto">
           <table id="rcptTable" style="width:100%;border-collapse:collapse;font-size:12px">
@@ -2253,8 +2304,8 @@ body.demo .btn-primary{display:none}
           </table>
         </div>
         <div style="display:flex;gap:10px;margin-top:12px;align-items:center">
-          <button class="btn" id="rcpt-prev" onclick="rcptPage(false)">Newer</button>
-          <button class="btn" id="rcpt-next" onclick="rcptPage(true)">Older</button>
+          <button class="btn" id="rcpt-prev" data-hi="rcptPage(false)">Newer</button>
+          <button class="btn" id="rcpt-next" data-hi="rcptPage(true)">Older</button>
           <span id="rcpt-count" style="font-size:12px;color:#737373"></span>
         </div>
       </div>
@@ -2267,13 +2318,13 @@ body.demo .btn-primary{display:none}
       <label class="toggle" style="margin-bottom:16px"><input type="checkbox" id="siemEnabled"> Enabled</label>
       <div style="display:flex;flex-direction:column;gap:8px;max-width:400px">
         <input class="input" id="siemBackend" placeholder="splunk / elastic / sentinel"><input class="input" id="siemUrl" placeholder="SIEM endpoint URL"><input class="input" id="siemToken" type="password" placeholder="SIEM token">
-      </div><div class="actions"><button class="btn" onclick="saveSIEM()">Save</button></div></div>
+      </div><div class="actions"><button class="btn" data-hi="saveSIEM()">Save</button></div></div>
     </div>
     <div id="tab-users" class="hidden">
       <div class="card"><div class="card-title">Add User</div>
         <div style="display:flex;flex-direction:column;gap:8px;max-width:400px">
           <input class="input" id="newKey" placeholder="API Key"><input class="input" id="newRole" placeholder="admin / operator / auditor"><input class="input" id="newName" placeholder="Name">
-        </div><div class="actions"><button class="btn" onclick="addUser()">Add</button></div></div>
+        </div><div class="actions"><button class="btn" data-hi="addUser()">Add</button></div></div>
       <div class="card"><div class="card-title">Users</div>
         <table><thead><tr><th>Key</th><th>Role</th><th>Name</th><th>MFA</th><th>Actions</th></tr></thead>
         <tbody id="userTableBody"></tbody></table>
@@ -2285,8 +2336,8 @@ body.demo .btn-primary{display:none}
         <div style="font-family:ui-monospace,monospace;font-size:13px;padding:12px;background:#fafafa;border-radius:8px;border:1px solid #e5e5e5;margin-bottom:12px;word-break:break-all" id="mfaSecret"></div>
         <div style="font-size:12px;color:#737373;margin-bottom:8px" id="mfaUri"></div>
         <div style="display:flex;gap:8px;align-items:center">
-          <input class="input" id="mfaCodeInput" placeholder="6-digit code" style="width:140px" maxlength="6" onkeydown="if(event.key==='Enter')confirmMfa()">
-          <button class="btn" onclick="confirmMfa()">Confirm</button>
+          <input class="input" id="mfaCodeInput" placeholder="6-digit code" style="width:140px" maxlength="6">
+          <button class="btn" data-hi="confirmMfa()">Confirm</button>
         </div>
       </div>
     </div>
@@ -2324,8 +2375,8 @@ body.demo .btn-primary{display:none}
           <div><label style="font-size:12px;color:#737373;display:block;margin-bottom:4px">Health Check Token</label><input class="input" id="cfg-health_check_token" type="password" placeholder="(unchanged)" style="width:100%"></div>
         </div>
         <div class="actions">
-          <button class="btn" onclick="saveConfig()">Save Config</button>
-          <button class="btn btn-secondary" onclick="loadConfig()">Reset</button>
+          <button class="btn" data-hi="saveConfig()">Save Config</button>
+          <button class="btn btn-secondary" data-hi="loadConfig()">Reset</button>
         </div>
         <div id="configStatus" style="margin-top:12px;font-size:13px"></div>
         <div style="margin-top:16px"><pre id="configView" style="display:none"></pre></div>
@@ -2377,10 +2428,11 @@ function showTab(t,el) {
 function api(p,o){const h={'Authorization':key,...((o||{}).headers||{})};if(totpCode)h['X-TOTP']=totpCode;return fetch(p,{...(o||{}),headers:h});}
 function loadAll(){loadStats();}
 function loadStats(){api('/api/stats').then(r=>r.json()).then(d=>{
-  document.getElementById('statsGrid').innerHTML=`<div class="stat"><div class="stat-value">${d.total_requests||0}</div><div class="stat-label">Total</div></div><div class="stat"><div class="stat-value">${d.allowed||0}</div><div class="stat-label">Allowed</div></div><div class="stat"><div class="stat-value">${d.denied||0}</div><div class="stat-label">Denied</div></div><div class="stat"><div class="stat-value">${d.escalated||0}</div><div class="stat-label">Escalated</div></div><div class="stat"><div class="stat-value">${d.avg_latency_us||0}</div><div class="stat-label">Avg us</div></div>`;
-  let tb=document.getElementById('toolTableBody');tb.innerHTML='';Object.entries(d.tools||{}).forEach(([t,s])=>tb.innerHTML+=`<tr><td>${esc(t)}</td><td>${s.allow||0}</td><td>${s.deny||0}</td><td>${s.escalate||0}</td></tr>`);
+  document.getElementById('statsGrid').innerHTML=`<div class="stat"><div class="stat-value">${escn(d.total_requests)}</div><div class="stat-label">Total</div></div><div class="stat"><div class="stat-value">${escn(d.allowed)}</div><div class="stat-label">Allowed</div></div><div class="stat"><div class="stat-value">${escn(d.denied)}</div><div class="stat-label">Denied</div></div><div class="stat"><div class="stat-value">${escn(d.escalated)}</div><div class="stat-label">Escalated</div></div><div class="stat"><div class="stat-value">${escn(d.avg_latency_us)}</div><div class="stat-label">Avg us</div></div>`;
+  let tb=document.getElementById('toolTableBody');tb.innerHTML='';Object.entries(d.tools||{}).forEach(([t,s])=>tb.innerHTML+=`<tr><td>${esc(t)}</td><td>${escn(s.allow)}</td><td>${escn(s.deny)}</td><td>${escn(s.escalate)}</td></tr>`);
 });}
 function esc(s){return s?s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])):'--';}
+function escn(v){return esc(String(v===undefined||v===null?0:v));}
 function setDirFilter(d,el){dirFilter=d;document.querySelectorAll('.dir-toggle button').forEach(b=>b.classList.remove('active'));el.classList.add('active');loadConnections(lastLimit||200);}
 
 // === Netbird-style flow graph ===
@@ -2433,9 +2485,9 @@ function renderFlow() {
   document.getElementById('srcList').innerHTML=srcEntries.length?srcEntries.map(([n,d])=>{
     let pct=Math.round(d.a/d.t*100);
     let dot=d.a>d.d?'dot-allow':d.d>d.a?'dot-deny':'dot-escalate';
-    return `<div class="flow-item${selectedSource===n?' active':''}" id="src-${esc(n)}" data-name="${esc(n)}" onclick="flowItemClick(event,'source')">
+    return `<div class="flow-item${selectedSource===n?' active':''}" id="src-${esc(n)}" data-name="${esc(n)}" data-hi="flowItemClick(event,'source')">
       <div class="flow-item-name"><span class="flow-item-dot ${dot}"></span>${esc(n)}</div>
-      <div class="flow-item-meta">${d.t} calls: ${d.a||0}A / ${d.d||0}D / ${d.e||0}E</div>
+      <div class="flow-item-meta">${escn(d.t)} calls: ${escn(d.a)}A / ${escn(d.d)}D / ${escn(d.e)}E</div>
       <div class="flow-item-bar"><div class="flow-item-bar-fill" style="width:${pct}%;background:#171717"></div></div>
     </div>`;
   }).join(''):'<div class="flow-empty">No sources</div>';
@@ -2447,9 +2499,9 @@ function renderFlow() {
     let pct=Math.round(d.a/d.t*100);
     let dot=d.a>d.d?'dot-allow':d.d>d.a?'dot-deny':'dot-escalate';
     let pol=d.p?d.p.split('/').pop():'';
-    return `<div class="flow-item" id="mid-${esc(n)}" data-name="${esc(n)}" onclick="flowItemClick(event,'tool')">
+    return `<div class="flow-item" id="mid-${esc(n)}" data-name="${esc(n)}" data-hi="flowItemClick(event,'tool')">
       <div class="flow-item-name"><span class="flow-item-dot ${dot}"></span>${esc(n)}</div>
-      <div class="flow-item-meta">${d.t} calls: ${d.a||0}A / ${d.d||0}D / ${d.e||0}E ${pol?'<span class="protocol-tag">'+esc(pol)+'</span>':''}</div>
+      <div class="flow-item-meta">${escn(d.t)} calls: ${escn(d.a)}A / ${escn(d.d)}D / ${escn(d.e)}E ${pol?'<span class="protocol-tag">'+esc(pol)+'</span>':''}</div>
       <div class="flow-item-bar"><div class="flow-item-bar-fill" style="width:${pct}%;background:#171717"></div></div>
     </div>`;
   }).join(''):'<div class="flow-empty">No gate activity</div>';
@@ -2460,9 +2512,9 @@ function renderFlow() {
   document.getElementById('dstList').innerHTML=dstEntries.length?dstEntries.map(([n,d])=>{
     let pct=Math.round(d.a/d.t*100);
     let dot=d.a>d.d?'dot-allow':d.d>d.a?'dot-deny':'dot-escalate';
-    return `<div class="flow-item${selectedDest===n?' active':''}" id="dst-${esc(n)}" data-name="${esc(n)}" onclick="flowItemClick(event,'dest')">
+    return `<div class="flow-item${selectedDest===n?' active':''}" id="dst-${esc(n)}" data-name="${esc(n)}" data-hi="flowItemClick(event,'dest')">
       <div class="flow-item-name"><span class="flow-item-dot ${dot}"></span>${esc(n)}</div>
-      <div class="flow-item-meta">${d.t} calls: ${d.a||0}A / ${d.d||0}D / ${d.e||0}E</div>
+      <div class="flow-item-meta">${escn(d.t)} calls: ${escn(d.a)}A / ${escn(d.d)}D / ${escn(d.e)}E</div>
       <div class="flow-item-bar"><div class="flow-item-bar-fill" style="width:${pct}%;background:#171717"></div></div>
     </div>`;
   }).join(''):'<div class="flow-empty">No destinations</div>';
@@ -2549,7 +2601,7 @@ function renderConnTable() {
     let badge=c.decision==='allow'?'badge-allow':c.decision==='deny'?'badge-deny':'badge-escalate';
     let time=c.timestamp?c.timestamp.substring(11,19):'--:--:--';
     let policy=c.policy?c.policy.split('/').pop():'--';
-    tb.innerHTML+=`<tr class="conn-row" onclick="selectConn(${i});showPath(${i})" data-idx="${i}"><td>${esc(time)}</td><td>${esc(c.source)}</td><td>${esc(c.tool)}</td><td>${esc(policy)}</td><td><span class="${badge}">${esc(c.decision)}</span></td><td>${esc(c.destination)}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${esc(c.reason)}</td><td>${c.latency_us||0}us</td></tr>`;
+    tb.innerHTML+=`<tr class="conn-row" data-idx="${i}"><td>${esc(time)}</td><td>${esc(c.source)}</td><td>${esc(c.tool)}</td><td>${esc(policy)}</td><td><span class="${badge}">${esc(c.decision)}</span></td><td>${esc(c.destination)}</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis">${esc(c.reason)}</td><td>${escn(c.latency_us)}us</td></tr>`;
   });
 }
 function selectConn(i){document.querySelectorAll('.conn-row').forEach(r=>r.classList.remove('selected'));let row=document.querySelector(`.conn-row[data-idx="${i}"]`);if(row)row.classList.add('selected');}
@@ -2593,7 +2645,7 @@ function renderPathTail(){
     const gi=latestConns.indexOf(c);
     const badge=c.decision==='allow'?'badge-allow':c.decision==='deny'?'badge-deny':'badge-escalate';
     const t=String(c.timestamp||'').slice(11,19);
-    let row='<div class="path-row" style="display:flex;gap:10px;align-items:center;padding:8px 4px;border-bottom:1px solid #f0f0f0;cursor:pointer" onclick="pathRowClick('+gi+')">'+
+    let row='<div class="path-row" style="display:flex;gap:10px;align-items:center;padding:8px 4px;border-bottom:1px solid #f0f0f0;cursor:pointer" data-gi="'+gi+'">'+
       '<span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:#a3a3a3">'+esc(t)+'</span>'+
       '<span style="font-size:12px;font-weight:500;min-width:150px">'+esc(c.agent_id||c.source||'')+'</span>'+
       '<span style="font-size:12px;color:#737373">&rarr; '+esc(c.tool||'')+'</span>'+
@@ -2720,7 +2772,7 @@ function loadReceipts(){
         +'<td style="padding:6px 10px">'+esc(r.agent_id||'')+'</td>'
         +'<td style="padding:6px 10px;color:'+color+';font-weight:600">'+esc(r.decision||'')+'</td>'
         +'<td style="padding:6px 10px;font-family:monospace;font-size:11px">'+esc(r.trace_id?r.trace_id.slice(0,12)+'…':'')+'</td>'
-        +'<td style="padding:6px 10px"><a href="javascript:void(0)" style="color:#3a3f4b" data-hash="'+esc(r.receipt_hash||'')+'" onclick="rcptRowClick(event)">trace</a></td>';
+        +'<td style="padding:6px 10px"><a href="#" style="color:#3a3f4b" data-hash="'+esc(r.receipt_hash||'')+'" data-hi="rcptRowClick(event)">trace</a></td>';
       rows.appendChild(tr);
     });
     rcptCursor=d.next_cursor||null;
@@ -2748,7 +2800,7 @@ function exportReceipts(){
 }
 function loadSIEM(){api('/api/siem').then(r=>r.json()).then(d=>{document.getElementById('siemEnabled').checked=d.enabled;document.getElementById('siemBackend').value=d.backend||'';document.getElementById('siemUrl').value=d.url||'';});}
 function saveSIEM(){api('/api/siem',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:document.getElementById('siemEnabled').checked,backend:document.getElementById('siemBackend').value,url:document.getElementById('siemUrl').value,token:document.getElementById('siemToken').value})}).then(r=>r.json()).then(d=>alert('Saved'));}
-function loadUsers(){api('/api/users').then(r=>r.json()).then(d=>{let tb=document.getElementById('userTableBody');tb.innerHTML='';d.users.forEach(u=>{const uid=esc(u.user_id||'');tb.innerHTML+=`<tr><td>${esc(u.user_id||'')}</td><td>${esc(u.api_key_label||'')}</td><td>${esc(u.role)}</td><td>${esc(u.name||'')}</td><td>${u.mfa_enabled?'<span style="color:#22c55e;font-size:12px">Enabled</span>':'<span style="color:#a3a3a3;font-size:12px">Off</span>'}</td><td><button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-user-id="${uid}" onclick="userMfaAction(event,'setup')">Setup MFA</button>${u.mfa_enabled?` <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-user-id="${uid}" onclick="userMfaAction(event,'disable')">Disable</button>`:''}</td></tr>`;});});}
+function loadUsers(){api('/api/users').then(r=>r.json()).then(d=>{let tb=document.getElementById('userTableBody');tb.innerHTML='';d.users.forEach(u=>{const uid=esc(u.user_id||'');tb.innerHTML+=`<tr><td>${esc(u.user_id||'')}</td><td>${esc(u.api_key_label||'')}</td><td>${esc(u.role)}</td><td>${esc(u.name||'')}</td><td>${u.mfa_enabled?'<span style="color:#22c55e;font-size:12px">Enabled</span>':'<span style="color:#a3a3a3;font-size:12px">Off</span>'}</td><td><button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-user-id="${uid}" data-hi="userMfaAction(event,'setup')">Setup MFA</button>${u.mfa_enabled?` <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-user-id="${uid}" data-hi="userMfaAction(event,'disable')">Disable</button>`:''}</td></tr>`;});});}
 function addUser(){api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:document.getElementById('newKey').value,role:document.getElementById('newRole').value,name:document.getElementById('newName').value})}).then(r=>r.json()).then(d=>{alert('Added');loadUsers();});}
 let mfaSetupKey='';
 function setupMfa(key){
@@ -2760,7 +2812,7 @@ function setupMfa(key){
       document.getElementById('mfaUri').textContent=d.uri;
       // Generate QR code using Google Charts API fallback to text display
       const qrUrl=`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(d.uri)}`;
-      document.getElementById('mfaQrCode').innerHTML=`<img src="${qrUrl}" width="200" height="200" style="border-radius:8px;border:1px solid #e5e5e5" alt="QR Code for TOTP setup" />`;
+      document.getElementById('mfaQrCode').innerHTML=`<img src="${esc(qrUrl)}" width="200" height="200" style="border-radius:8px;border:1px solid #e5e5e5" alt="QR Code for TOTP setup" />`;
       document.getElementById('mfaCodeInput').value='';
       document.getElementById('mfaCodeInput').focus();
     } else { alert('MFA setup failed: '+(d.detail||'unknown')); }
@@ -2858,7 +2910,7 @@ window.addEventListener('load', () => {
   const q = new URLSearchParams(window.location.search);
   const h = window.location.hash || '';
   if (q.get('demo') === '1' || h.startsWith('#demo')) {
-    const btn = document.querySelector('[onclick*="enterDemo"]');
+    const btn = document.getElementById('enterDemoBtn');
     if (btn) btn.click();
   }
 });
@@ -2866,7 +2918,7 @@ window.addEventListener('load', () => {
 function buildScenarioPicker() {
   const bar = document.getElementById('scenarioPicker');
   if (!bar) return;
-  const mk = (label, val) => `<button class="scenario-btn${(demoScenarioFilter===val)?' active':''}" data-scenario="${esc(val)}" onclick="scenarioClick(event)">${esc(label)}</button>`;
+  const mk = (label, val) => `<button class="scenario-btn${(demoScenarioFilter===val)?' active':''}" data-scenario="${esc(val)}" data-hi="scenarioClick(event)">${esc(label)}</button>`;
   let html = mk('All', 'all');
   DEMO_SCENARIOS.forEach(s => html += mk(s[0].toUpperCase()+s.slice(1), s));
   bar.innerHTML = html;
@@ -2883,7 +2935,7 @@ function showMainDemo() {
   // Default to the connections tab where the live topology lives
   const connTab = document.querySelector('.tab[data-tab-id], .tab');
   document.querySelectorAll('.tab').forEach(x => {
-    if (x.getAttribute('onclick') && x.getAttribute('onclick').includes("'connections'")) x.click();
+    if (x.dataset.tabId === 'connections') x.click();
   });
   loadAll();
 }
@@ -2906,7 +2958,7 @@ const TOUR_STEPS = [
 function tourShow(){
   const s=TOUR_STEPS[tourStep];
   if(!s){tourEnd(true);return;}
-  document.querySelectorAll('.tab').forEach(x=>{const oc=x.getAttribute('onclick')||'';if(oc.includes("'"+s.tab+"'"))x.click();});
+  document.querySelectorAll('.tab').forEach(x=>{if(x.dataset.tabId===s.tab)x.click();});
   setTimeout(()=>{
     const el=document.querySelector(s.target)||document.getElementById('tab-'+s.tab);
     if(!el){tourStep++;tourShow();return;}
@@ -2916,11 +2968,11 @@ function tourShow(){
     if(by+170>window.innerHeight-12) by=Math.max(12,r.top-186);
     const host=document.getElementById('tourHost');
     host.innerHTML=`<div class="tour-card" style="left:${bx}px;top:${by}px">
-      <div class="tour-step">Step ${tourStep+1} of ${TOUR_STEPS.length} · ${s.title}</div>
-      <div class="tour-body">${s.body}</div>
+      <div class="tour-step">Step ${tourStep+1} of ${TOUR_STEPS.length} · ${esc(s.title)}</div>
+      <div class="tour-body">${esc(s.body)}</div>
       <div class="tour-actions">
-        <button class="tour-skip" onclick="tourEnd(false)">Skip tour</button>
-        <button class="tour-next" onclick="tourNext()">${tourStep+1<TOUR_STEPS.length?'Next':'Start exploring'}</button>
+        <button class="tour-skip" data-hi="tourEnd(false)">Skip tour</button>
+        <button class="tour-next" data-hi="tourNext()">${tourStep+1<TOUR_STEPS.length?'Next':'Start exploring'}</button>
       </div>
       <div class="tour-dots">${TOUR_STEPS.map((_,i)=>`<span class="${i===tourStep?'on':''}"></span>`).join('')}</div>
     </div>`;
@@ -3339,7 +3391,7 @@ function loadLearn(){
     } else if(!Object.keys(s.tools||{}).length){
       el.innerHTML='Learn mode is on. No unmatched calls recorded yet.';
     } else {
-      let rows=Object.entries(s.tools).map(([t,d])=>`<tr><td>${esc(t)}</td><td>${d.calls}</td><td>${esc((d.agents||[]).join(', ')||'-')}</td></tr>`).join('');
+      let rows=Object.entries(s.tools).map(([t,d])=>`<tr><td>${esc(t)}</td><td>${escn(d.calls)}</td><td>${esc((d.agents||[]).join(', ')||'-')}</td></tr>`).join('');
       el.innerHTML='<table><tr><th>Observed tool</th><th>Denied calls</th><th>Agents</th></tr>'+rows+'</table>';
     }
   }).catch(()=>{});
@@ -3359,6 +3411,8 @@ function clearLearn(){
   api('/api/learn/clear',{method:'POST'}).then(()=>loadLearn());
 }
 
+if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy()};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
+(function(){[['srcFilter','input',renderFlow],['midFilter','input',renderFlow],['dstFilter','input',renderFlow],['topoDecisionFilter','change',topoRender],['topoMotion','change',topoRender],['filterDecision','change',function(){loadConnections(lastLimit||200);}],['liveMode','change',function(){loadConnections(lastLimit);}]].forEach(function(x){const el=document.getElementById(x[0]);if(el&&el.addEventListener)el.addEventListener(x[1],x[2]);});[['apiKey',login],['totpInput',loginWithTotp],['mfaCodeInput',confirmMfa]].forEach(function(x){const el=document.getElementById(x[0]);if(el)el.addEventListener('keydown',function(ev){if(ev.key==='Enter')x[1]();});});const cb=document.getElementById('connBody');if(cb)cb.addEventListener('click',function(ev){const tr=ev.target.closest('tr.conn-row');if(!tr)return;const i=+tr.dataset.idx;selectConn(i);showPath(i);});const pb=document.getElementById('connPath');if(pb)pb.addEventListener('click',function(ev){const r=ev.target.closest('.path-row');if(!r||r.dataset.gi===undefined)return;pathRowClick(+r.dataset.gi);});})();
 </script>
 </body>
 </html>"""
@@ -3455,14 +3509,14 @@ body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:var
   </div>
   <div class="topology-controls">
     <span><span class="live-indicator"></span>Live</span>
-    <select class="filter-select" id="decisionFilter" onchange="updateData()">
+    <select class="filter-select" id="decisionFilter">
       <option value="">All Decisions</option>
       <option value="allow">Allow</option>
       <option value="deny">Deny</option>
       <option value="escalate">Escalate</option>
     </select>
-    <button class="topo-btn" onclick="fitView()">Fit View</button>
-    <button class="topo-btn" id="motionBtn" onclick="toggleMotion()">Motion: On</button>
+    <button class="topo-btn" id="topoFitBtn">Fit View</button>
+    <button class="topo-btn" id="motionBtn">Motion: On</button>
   </div>
 </div>
 <div class="topology-canvas" id="canvas">
@@ -3470,7 +3524,7 @@ body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:var
   <div class="topology-content" id="content"></div>
 </div>
 <div class="details-panel" id="detailsPanel">
-  <button class="close-btn" onclick="closeDetails()">&times;</button>
+  <button class="close-btn" id="detailsCloseBtn">&times;</button>
   <h2 id="detailTitle"></h2>
   <div id="detailBody"></div>
 </div>
@@ -3666,8 +3720,8 @@ function showNodeDetails(node) {
   document.getElementById('detailTitle').textContent = node.label;
   let html = '';
   if (node.subtitle) html += `<div class="detail-row"><span class="detail-label">Address</span><span class="detail-value">${esc(node.subtitle)}</span></div>`;
-  html += `<div class="detail-row"><span class="detail-label">Type</span><span class="detail-value">${node.type}</span></div>`;
-  html += `<div class="detail-row"><span class="detail-label">Status</span><span class="detail-status"><span class="node-dot ${node.status||'inactive'}"></span>${node.status || 'unknown'}</span></div>`;
+  html += `<div class="detail-row"><span class="detail-label">Type</span><span class="detail-value">${esc(node.type)}</span></div>`;
+  html += `<div class="detail-row"><span class="detail-label">Status</span><span class="detail-status"><span class="node-dot ${node.status||'inactive'}"></span>${esc(node.status || 'unknown')}</span></div>`;
   if (node.metadata) {
     Object.entries(node.metadata).forEach(([k,v]) => {
       html += `<div class="detail-row"><span class="detail-label">${esc(k)}</span><span class="detail-value">${esc(String(v))}</span></div>`;
@@ -3680,7 +3734,7 @@ function showNodeDetails(node) {
     conns.forEach(e => {
       const other = e.source === node.id ? e.target : e.source;
       const otherNode = topologyNodes.find(n => n.id === other);
-      html += `<div class="detail-row"><span class="detail-label">${esc(otherNode?.label || other)}</span><span class="detail-value" style="color:${e.colour||getEdgeColor(e.status)}">${e.label || e.status}</span></div>`;
+      html += `<div class="detail-row"><span class="detail-label">${esc(otherNode?.label || other)}</span><span class="detail-value" style="color:${e.colour||getEdgeColor(e.status)}">${esc(e.label || e.status)}</span></div>`;
     });
   }
   document.getElementById('detailBody').innerHTML = html;
@@ -3695,10 +3749,10 @@ function showEdgeDetails(edge) {
   let html = '';
   html += `<div class="detail-row"><span class="detail-label">From</span><span class="detail-value">${esc(srcNode?.label || edge.source)}</span></div>`;
   html += `<div class="detail-row"><span class="detail-label">To</span><span class="detail-value">${esc(dstNode?.label || edge.target)}</span></div>`;
-  if (edge.protocol) html += `<div class="detail-row"><span class="detail-label">Protocol</span><span class="detail-value">${edge.protocol.toUpperCase()}</span></div>`;
-  if (edge.ports) html += `<div class="detail-row"><span class="detail-label">Ports</span><span class="detail-value">${edge.ports}</span></div>`;
-  html += `<div class="detail-row"><span class="detail-label">Status</span><span class="detail-status"><span class="node-dot ${edge.status==='active'?'active':'blocked'}"></span>${edge.status || 'unknown'}</span></div>`;
-  if (edge.trafficRate !== undefined) html += `<div class="detail-row"><span class="detail-label">Traffic Rate</span><span class="detail-value">${edge.trafficRate}/s</span></div>`;
+  if (edge.protocol) html += `<div class="detail-row"><span class="detail-label">Protocol</span><span class="detail-value">${esc(edge.protocol.toUpperCase())}</span></div>`;
+  if (edge.ports) html += `<div class="detail-row"><span class="detail-label">Ports</span><span class="detail-value">${esc(String(edge.ports))}</span></div>`;
+  html += `<div class="detail-row"><span class="detail-label">Status</span><span class="detail-status"><span class="node-dot ${edge.status==='active'?'active':'blocked'}"></span>${esc(edge.status || 'unknown')}</span></div>`;
+  if (edge.trafficRate !== undefined) html += `<div class="detail-row"><span class="detail-label">Traffic Rate</span><span class="detail-value">${escn(edge.trafficRate)}/s</span></div>`;
   if (edge.metadata) {
     Object.entries(edge.metadata).forEach(([k,v]) => {
       html += `<div class="detail-row"><span class="detail-label">${esc(k)}</span><span class="detail-value">${esc(String(v))}</span></div>`;
@@ -3880,7 +3934,7 @@ function startPolling() {
 updateData();
 startPolling();
 window.addEventListener('resize', () => { render(); fitView(); });
-</script>
+(function(){const ids=[['topoFitBtn','click',fitView],['motionBtn','click',toggleMotion],['detailsCloseBtn','click',closeDetails],['decisionFilter','change',updateData]];ids.forEach(function(x){const el=document.getElementById(x[0]);if(el)el.addEventListener(x[1],x[2]);});})();</script>
 </body>
 </html>"""
 

@@ -371,3 +371,43 @@ agent's gateway credential and writes an `x_stop` receipt recording
 who stopped the agent, when, and why. Revocation propagates to
 enforcement on the next call; the receipt means the containment
 itself is attributable evidence in the incident review.
+
+## Trust boundary: outbound URL fetching
+
+Raucle makes outbound HTTP calls from a small, knowable surface. The
+gateway itself does no arbitrary outbound fetching: caller-controlled
+URL fetching (`file:`, `ftp:`, arbitrary hosts) is not a gateway
+feature, and the outbound call sites that exist are guarded
+(`raucle/url_guard.py`, T-S4):
+
+* `raucle.timestamp.submit_timestamp_request` - RFC 3161 timestamp
+  authority URLs (operator-configured TSA).
+* `raucle.transparency.SCITTAnchorClient` - the SCITT transparency
+  service base URL (operator-configured).
+
+The shared guard, `raucle.url_guard.validate_url`, runs immediately
+before every `urlopen` at these call sites and enforces:
+
+1. scheme allow-list: only `http://` and `https://`;
+2. host deny-list: loopback, link-local (including the cloud metadata
+   address), RFC1918 private, reserved, multicast and unspecified
+   addresses, plus `localhost` and `.local`/`.internal`/`.localdomain`
+   names;
+3. an explicit escape hatch: `RAUCLE_ALLOW_PRIVATE_URLS` opts in to
+   private targets deliberately (loopback test doubles, on-prem TSA or
+   transparency service). There is no silent fallback: a rejected URL
+   raises with the opt-in named in the message, so an SSRF attempt and
+   a misconfiguration look different in the logs.
+
+Documented limit: the guard classifies the URL syntactically. A public
+DNS name that resolves to a private address is not caught here
+(resolution-time trust); `raucle/feed.py` pins resolved addresses for
+its own fetcher, and new outbound call sites with DNS-resolution
+requirements should follow that pattern. The gateway's SIEM forwarder
+enforces an equivalent check (`GatewayConfig` SIEM URL validation).
+
+The streamed receipt export (`GET /api/receipts/export`, C4 egress)
+records a disconnect fault when a consumer closes the stream early
+(`StreamedExportSink.write` counts and the fault lands in the log as
+`stream_disconnect`), so partial copies of the chain are attributable
+events rather than silent successes.
