@@ -39,6 +39,10 @@ persistence:
 config:
   adminKey: ""            # REQUIRED - set via --set or a Secret
   demoKey: ""             # public read-only evaluator key (optional)
+  demoMode: false         # REQUIRED true with demoKey: /api/demo-key 404s otherwise
+  gateRouteRateLimit: "200/minute"  # per-route limit on /gate (RED-037)
+  gateRateLimit: "1000/minute"      # default limit for the other routes
+  trustProxy: ""          # "1" only when behind a proxy that sets X-Forwarded-For
   gateAuth: "apikey"       # off | apikey | token (off = trusted internal only)
   signer: "local"         # local | aws | azure
   kmsKeyId: ""
