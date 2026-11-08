@@ -12,7 +12,10 @@ pytest.importorskip("pydantic")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+CWD = Path(__file__).resolve().parent
+REPO_ROOT = CWD.parent
+from raucle import gateway_app as gw_app  # noqa: E402 for the 503-branch monkeypatch
+
 DATA_PATH = REPO_ROOT / "docs" / "spec" / "conformance" / "conformance.json"
 SCHEMA_PATH = REPO_ROOT / "docs" / "spec" / "conformance" / "raucle-conformance-v1.schema.json"
 README_PATH = REPO_ROOT / "docs" / "spec" / "conformance" / "README.md"
@@ -83,6 +86,17 @@ class TestConformanceEndpoint:
             cwd=REPO_ROOT,
         )
         assert result.returncode == 0, result.stderr
+
+    def test_endpoint_503_when_artifact_absent(self, tmp_path, monkeypatch):
+        client = _client(tmp_path)
+
+        def _fake_is_file(self):  # hide the repo-level artifact from the endpoint
+            return False
+
+        monkeypatch.setattr(gw_app.Path, "is_file", _fake_is_file)
+        resp = client.get("/.well-known/raucle-conformance")
+        assert resp.status_code == 503
+        assert "gen_conformance_data" in resp.json()["detail"]
 
     def test_spec_docs_exist(self):
         assert README_PATH.is_file()
