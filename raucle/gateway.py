@@ -986,8 +986,11 @@ class RaucleGateway:
             self._receipt_index = ReceiptIndex(sqlite_path=idx_path)
             # Feed any pre-existing chain into a fresh index
             try:
-                if self._receipt_store is not None and self._receipt_index.count() == 0:
-                    self._receipt_index.rebuild_from_store(self._receipt_store)
+                if self._receipt_index.count() == 0:
+                    if self._receipt_store is not None:
+                        self._receipt_index.rebuild_from_store(self._receipt_store)
+                    elif Path(config.receipt_store).exists():
+                        self._receipt_index.rebuild_from_flat_file(config.receipt_store)
             except Exception:
                 logger.exception("receipt index rebuild failed; queries degraded, chain unaffected")
         if self._gate_auth_mode == "off":
@@ -1309,14 +1312,6 @@ class RaucleGateway:
         line = json.dumps({"receipt_hash": receipt_hash, "jws": jws}, ensure_ascii=False)
         if self._receipt_store is not None:
             self._receipt_store.append_line(line)
-            if self._receipt_index is not None:
-                import json as _json
-
-                try:
-                    self._receipt_index.index_receipt(_json.loads(line))
-                except Exception:
-                    # Index failure degrades queries, never the chain
-                    logger.exception("receipt index insert failed (query degraded)")
         else:
             if self._receipt_writer is None:
                 path = Path(self.config.receipt_store)
@@ -1328,6 +1323,13 @@ class RaucleGateway:
                 )
             self._receipt_writer.write(line + "\n")
             self._receipt_writer.flush()
+        if self._receipt_index is not None:
+            # RED-034: every sink feeds the index, not just the segmented one.
+            try:
+                self._receipt_index.index_receipt(json.loads(line))
+            except Exception:
+                # Index failure degrades queries, never the chain
+                logger.exception("receipt index insert failed (query degraded)")
         return receipt_hash
 
     def _emit_authority_receipt(
