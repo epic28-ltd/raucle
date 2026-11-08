@@ -40,6 +40,10 @@ async def run_both_servers(
     gateway_app = create_gateway_app(gateway)
     admin_app = create_admin_app(gateway, users)
 
+    # X4: the boot self-test drives the gate with hostile types and
+    # receipts its results before the servers accept traffic.
+    gateway.run_boot_selftest_at_startup()
+
     gateway_config = uvicorn.Config(
         gateway_app,
         host=config.host,
