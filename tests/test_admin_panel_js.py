@@ -37,7 +37,9 @@ def test_broken_showAncestry_onclick_escape_is_gone() -> None:
 
 
 def test_row_click_delegation_is_registered_once() -> None:
-    assert ADMIN_PANEL_HTML.count("rcptRowClick") == 2  # listener fn + attach
+    # listener fn + one dispatcher entry + the data-hi attributes on rows
+    assert ADMIN_PANEL_HTML.count('data-hi="rcptRowClick(event)"') >= 1
+    assert ADMIN_PANEL_HTML.count('"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev)') == 1
 
 
 def test_login_field_canvas_present_and_reduced_motion_safe() -> None:
@@ -386,3 +388,87 @@ def test_loadUsers_renders_mfa_states_and_escapes_user_id() -> None:
         "})();"
     )
     _run_node(program)
+
+
+# ---------------------------------------------------------------------------
+# T-S6: CSP hardening - no inline event handlers, hash-pinned script-src
+# ---------------------------------------------------------------------------
+
+
+def test_panel_has_no_inline_event_handlers() -> None:
+    """Inline handler attributes are gone: dispatch is data-hi + delegation."""
+    from raucle.gateway_app import TOPOLOGY_HTML as _topo
+
+    for html in (ADMIN_PANEL_HTML, _topo):
+        assert not re.search(
+            r'on(?:click|change|input|keydown|submit|load|mouseover|blur\\)="', html
+        )
+        assert "javascript:" not in html
+
+
+def test_every_data_hi_value_has_a_dispatcher_entry() -> None:
+    """A data-hi attribute with no __HI entry is a dead button (silent)."""
+    missing = sorted(
+        {m.group(1) for m in re.finditer(r'data-hi="([^"]*)"', ADMIN_PANEL_HTML)}
+        - {m.group(1) for m in re.finditer(r'"([^"]*)":\(ev,el\)=>', ADMIN_PANEL_HTML)}
+    )
+    assert not missing, f"data-hi values without dispatcher entry: {missing}"
+
+
+def test_csp_script_src_is_hash_pinned() -> None:
+    """script-src must be sha256-pinned: no unsafe-inline, stale-hash-safe."""
+    from raucle.gateway_app import _panel_csp, _panel_script_hashes
+
+    csp = _panel_csp()
+    src = csp.split("script-src ", 1)[1]
+    script_src = src.split(";", 1)[0]
+    assert "'unsafe-inline'" not in script_src
+    assert "'unsafe-eval'" not in script_src
+    hashes = _panel_script_hashes()
+    assert len(hashes) >= 2, "panel and topology pages each ship a script block"
+    for h in hashes:
+        assert h in src
+    # every shipped inline script block is covered by the CSP
+    import base64
+    import hashlib
+
+    from raucle.gateway_app import TOPOLOGY_HTML as _topo
+
+    shipped: list[str] = []
+    for html in (ADMIN_PANEL_HTML, _topo):
+        for b in re.findall(r"<script[^>]*>(.*?)</script>", html, re.S):
+            if b.strip():
+                shipped.append(
+                    "'sha256-"
+                    + base64.b64encode(hashlib.sha256(b.encode()).digest()).decode()
+                    + "'"
+                )
+    assert sorted(shipped) == sorted(hashes)
+
+
+def test_csp_header_on_panel_and_topology() -> None:
+    """Smoke: the served pages carry the hardened CSP header."""
+    from fastapi.testclient import TestClient
+
+    from raucle.gateway import GatewayConfig, RaucleGateway, UserManager
+    from raucle.gateway_app import create_admin_app
+
+    cfg = GatewayConfig(
+        policy_file="",
+        receipt_store=str(tempfile.mkdtemp() + "/receipts.jsonl"),
+        audit_chain=str(tempfile.mkdtemp() + "/audit.jsonl"),
+        admin_api_key="admin-key-0123456789abcdef",
+        signer_backend="local",
+    )
+    gateway = RaucleGateway(cfg)
+    users = UserManager()
+    users.add_user(cfg.admin_api_key, "admin", "Admin")
+    client = TestClient(create_admin_app(gateway, users))
+    for path in ("/", "/topology"):
+        r = client.get(path, headers={"Authorization": "admin-key-0123456789abcdef"})
+        assert r.status_code == 200, path
+        csp = r.headers["Content-Security-Policy"]
+        assert "script-src 'sha256-" in csp
+        assert "'unsafe-inline'" not in csp.split("style-src", 1)[0]
+        # the served page is the same source the CSP hash pins
+        assert "<!DOCTYPE html>" in r.text
