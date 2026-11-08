@@ -165,16 +165,18 @@ class ReceiptIndex:
 
     def index_receipt(
         self, record: dict[str, Any], segment: str | None = None, line_no: int | None = None
-    ) -> None:
+    ) -> bool:
         """Decode a receipt envelope and project it into the index.
 
-        Unknown/malformed receipts are skipped silently by design: the
-        index never rejects chain content, it only fails to accelerate it.
+        Unknown/malformed receipts are skipped by design: the index never
+        rejects chain content, it only fails to accelerate it. Returns whether
+        the record was indexed, so a rebuild count states what actually
+        happened rather than how many lines were attempted.
         """
         try:
             payload = self._decode_payload(record)
         except Exception:
-            return
+            return False
         x_gate = payload.get("x_gate") or {}
         parents = json.dumps(payload.get("parents") or [])
         with self._lock:
@@ -204,6 +206,7 @@ class ReceiptIndex:
                 ),
             )
             self._conn.commit()
+        return True
 
     def rebuild_from_store(self, store: Any) -> int:
         """Drop and rebuild the projection from a SegmentedReceiptStore.
@@ -248,8 +251,8 @@ class ReceiptIndex:
                 continue
             if "receipt_hash" not in record or "jws" not in record:
                 continue  # not a receipt envelope
-            self.index_receipt(record, segment=segment, line_no=line_no)
-            count += 1
+            if self.index_receipt(record, segment=segment, line_no=line_no):
+                count += 1
         return count
 
     # ------------------------------------------------------------------

@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Tests - RED-038: seam coverage for the classes the suite missed
+
+Every finding in the 8 Nov review was in a seam rather than in a rule the
+suite already tested: an evaluator that raised on an unconsidered type, a
+persisted flag nobody wrote, a value interpolated in the wrong context, an
+index fed on one sink and not the other, a boundary checked against the wrong
+field set. Two new suites generalise those.
+
+- `tests/test_policy_properties.py`: the constraint and approval evaluators are
+  total over a fixed adversarial corpus (null, booleans, non-finite floats,
+  numeric text, empty and 4 KiB strings, tuples, sets, nested dicts). A
+  non-number cannot satisfy a numeric bound, a stringified number cannot slip
+  a numeric bound, collections are checked element-wise, a forbidden value is
+  found inside a collection, and every approval operator is total for every
+  value. The monotonicity property is pinned too: a larger amount never needs
+  less scrutiny than a smaller one.
+- `tests/test_restart_roundtrip.py`: every store that writes to disk is
+  created, mutated, reloaded and compared on observable behaviour - users
+  (including the MFA flag), agent credentials (including rotation), the
+  delegation ledger (including attenuation) and the receipt index (rebuilt
+  projection agrees with the original).
+- Deliberately no Hypothesis: it is not in the dependency tree, and adding a
+  dev dependency is a supply-chain decision rather than a testing one. A fixed
+  corpus covers this failure class, which is type confusion rather than deep
+  input-space exploration.
+- `ReceiptIndex.index_receipt` now returns whether it indexed the record, so a
+  rebuild count states what happened rather than how many lines were attempted
+  (an undecodable envelope used to be counted as indexed).
+
 ### Fixed - RED-037: rate limits that exist, mean the right thing, and are documented
 
 - `docs/gateway-security.md` claimed "200 requests per minute on `/gate`". No
