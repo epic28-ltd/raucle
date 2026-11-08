@@ -1441,15 +1441,18 @@ def _register_receipt_routes(
 
         Streams from the segmented store's segments (bounded memory), or
         the legacy flat file. Bounded to a time range to keep responses
-        finite; the audit pack remains the regulator path.
+        finite; the audit pack remains the regulator path. A client
+        disconnect mid-stream is recorded by the export sink (T-B3).
         """
         user = check_auth(authorization, x_totp)
         check_access(user, "receipts")
 
         from fastapi.responses import StreamingResponse
+        from raucle.export import StreamedExportSink
 
+        sink = StreamedExportSink(source="receipts")
         return StreamingResponse(
-            _iter_export_lines(gateway, since=since, until=until),
+            sink.stream(_iter_export_lines(gateway, since=since, until=until)),
             media_type="application/x-ndjson",
             headers={"Content-Disposition": 'attachment; filename="receipts.jsonl"'},
         )

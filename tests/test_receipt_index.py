@@ -6,6 +6,8 @@ chain. These tests pin that contract.
 """
 
 import json
+import logging
+import re
 
 import pytest
 
@@ -295,3 +297,137 @@ class TestReceiptIndex:
         result = index.ancestry("sha256:nonexistent")
         assert result["nodes"] == []
         assert result["edges"] == []
+
+
+# ---------------------------------------------------------------------------
+# T-B3: streamed export disconnect — sink write count matches, or fault recorded
+# ---------------------------------------------------------------------------
+
+
+class TestStreamedExportSinkUnit:
+    """The sink itself: write counting + disconnect fault recording."""
+
+    def _sink(self):
+        from raucle.export import StreamedExportSink
+
+        return StreamedExportSink(source="unit")
+
+    def test_full_iteration_write_count_matches_source(self):
+        lines = [f"line{i}" for i in range(7)]
+        sink = self._sink()
+        out = list(sink.stream(iter(lines)))
+        assert out == lines
+        assert sink.written == 7
+        assert sink.fault is None
+
+    def test_early_close_records_fault_and_count(self):
+        lines = [f"line{i}" for i in range(7)]
+        sink = self._sink()
+        gen = sink.stream(iter(lines))
+        got = [next(gen) for _ in range(3)]
+        assert got == ["line0", "line1", "line2"]
+        gen.close()  # the consumer went away mid-stream
+        assert sink.fault is not None
+        assert sink.fault.records_written == 3
+        assert sink.written == 3
+        assert sink.fault.to_dict()["type"] == "stream_disconnect"
+
+    def test_close_after_completion_records_nothing(self):
+        sink = self._sink()
+        gen = sink.stream((f"x{i}" for i in range(2)))
+        assert len(list(gen)) == 2
+        gen.close()
+        assert sink.fault is None
+        assert sink.written == 2
+
+
+class TestStreamedExportOverHTTP:
+    """Gateway /api/receipts/export: full stream counts match the index;
+    an early client close is recorded as a fault."""
+
+    POLICY = """
+version: 1
+issuer: test.bank
+policies:
+  - tool: lookup_balance
+    agent_id: agent:svc
+    ttl_seconds: 60
+    constraints:
+      allow:
+        account: ["ACC-001", "ACC-002"]
+"""
+
+    @pytest.fixture
+    def indexed_gateway(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from raucle.gateway import GatewayConfig, RaucleGateway, UserManager
+        from raucle.gateway_app import create_admin_app, create_gateway_app
+
+        policy = tmp_path / "policies.yaml"
+        policy.write_text(self.POLICY)
+        config = GatewayConfig(
+            host="127.0.0.1",
+            admin_api_key="admin-key",
+            signer_backend="local",
+            policy_file=str(policy),
+            receipt_store=str(tmp_path / "flat.jsonl"),
+            audit_chain=str(tmp_path / "audit.jsonl"),
+            registry_path=str(tmp_path / "reg.jsonl"),
+            emit_receipts=True,
+            receipt_store_dir=str(tmp_path / "segs"),
+            receipt_segment_max_bytes=1_000_000,
+            receipt_index_path=str(tmp_path / "idx.sqlite"),
+        )
+        gw = RaucleGateway(config)
+        users = UserManager()
+        users.add_user("admin-key", "admin", "Admin")
+        gate = TestClient(create_gateway_app(gw))
+        for i in range(5):
+            resp = gate.post(
+                "/gate",
+                json={
+                    "tool": "lookup_balance",
+                    "args": {"account": "ACC-001"},
+                    "agent_id": "agent:svc",
+                },
+                headers={"X-Trace-Id": f"trace-{i}"},
+            )
+            assert resp.status_code == 200, resp.text
+        return gw, TestClient(create_admin_app(gw, users))
+
+    AUTH = {"Authorization": "admin-key"}
+
+    def test_full_stream_write_count_matches_index(self, indexed_gateway, caplog):
+        gw, admin = indexed_gateway
+        expected = gw._receipt_index.count()
+        assert expected > 0
+        with caplog.at_level(logging.INFO, logger="raucle.export"):
+            resp = admin.get("/api/receipts/export", headers=self.AUTH)
+        lines = [line for line in resp.text.splitlines() if line.strip()]
+        assert len(lines) == expected
+        indexed = {n["receipt_hash"] for n in gw._receipt_index.query(limit=expected)}
+        assert len(indexed) == expected
+        assert any(f"completed: {expected} records" in r.message for r in caplog.records)
+
+    def test_early_client_close_is_recorded(self, indexed_gateway, caplog):
+        gw, admin = indexed_gateway
+        with caplog.at_level(logging.WARNING, logger="raucle.export"):
+            with admin.stream("GET", "/api/receipts/export", headers=self.AUTH) as resp:
+                seen = []
+                for line in resp.iter_lines():
+                    seen.append(line)
+                    break  # the client hung up after the first record
+        assert len(seen) == 1
+        disconnects = [r for r in caplog.records if "disconnected" in r.getMessage()]
+        assert disconnects, "disconnect was not recorded"
+        m = re.fullmatch(
+            r"streamed export receipts disconnected by client after (\d+) records",
+            disconnects[0].getMessage(),
+        )
+        assert m is not None, disconnects[0].getMessage()
+        # the sink wrote a bounded amount then stopped; the disconnect
+        # is recorded with the actual write count (TestClient's line
+        # iterator may have buffered more records than the one returned)
+        assert int(m.group(1)) >= len(seen)
+        assert int(m.group(1)) < gw._receipt_index.count()
