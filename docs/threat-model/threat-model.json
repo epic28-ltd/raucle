@@ -1,0 +1,338 @@
+{
+  "version": 1,
+  "source": "docs/threat-model/v1.md",
+  "method": "STRIDE per boundary; every documented control is mapped to the module that implements it and the tests that pin it, or explicitly out-of-scope with a reason. The CI job (scripts/threat_model_check.py) fails when a mapped control loses its tests or when the document and this mapping drift apart.",
+  "threats": [
+    {
+      "id": "T1",
+      "title": "Issuing-side trust boundary: operator/gateway minting keys",
+      "controls": [
+        {
+          "id": "C-T1-1",
+          "description": "Signer abstraction with KMS/HSM backends so private keys need not live as disk PEM in production",
+          "module": "raucle/kms.py",
+          "tests": [
+            "tests/test_kms.py"
+          ],
+          "status": "mapped"
+        },
+        {
+          "id": "C-T1-2",
+          "description": "Trust registry one-active-key-per-issuer-name rule acts as the impersonation control (rotation via versioned issuer identities)",
+          "module": "raucle/trust_registry.py",
+          "tests": [
+            "tests/test_trust_registry.py"
+          ],
+          "status": "mapped"
+        },
+        {
+          "id": "C-T1-3",
+          "description": "Mixed-generation chains verify whole with all generations' public keys",
+          "module": "raucle/provenance.py",
+          "tests": [
+            "tests/test_provenance.py"
+          ],
+          "status": "mapped"
+        },
+        {
+          "id": "C-T1-4",
+          "description": "Single-rooted trust: no multiparty mint in the current code (residual 1, mitigation M1 mint-time quorum)",
+          "module": "raucle/approvals.py",
+          "tests": [],
+          "status": "out_of_scope",
+          "reason": "Named future mitigation M1 (P0) in docs/threat-model/v1.md; no control exists yet, so there is nothing to pin"
+        },
+        {
+          "id": "C-T1-5",
+          "description": "Production signer assertion: a prod profile with RAUCLE_SIGNER unset runs local PEM silently (residual 2)",
+          "module": "raucle/kms.py",
+          "tests": [],
+          "status": "out_of_scope",
+          "reason": "Named future mitigation M2 (P0) in docs/threat-model/v1.md; the startup assertion is not implemented yet"
+        }
+      ]
+    },
+    {
+      "id": "T2",
+      "title": "Evidence boundary: receipt chain, verifier, SCITT anchor",
+      "controls": [
+        {
+          "id": "C-T2-1",
+          "description": "Hash chain + Merkle root + signed checkpoint for the receipt chain",
+          "module": "raucle/audit.py",
+          "tests": [
+            "tests/test_audit.py",
+            "tests/test_audit_chain_rows.py"
+          ],
+          "status": "mapped"
+        },
+        {
+          "id": "C-T2-2",
+          "description": "Fail-closed offline verifier: strict alg/crit enforcement, no downgrade, named errors (ProvenanceVerifier)",
+          "module": "raucle/provenance.py",
+          "tests": [
+            "tests/test_provenance.py",
+            "tests/test_sec_provenance.py"
+          ],
+          "status": "mapped"
+        },
+        {
+          "id": "C-T2-3",
+          "description": "Harness finding contract: findings split claim from truth and ghost citations fail named at verification",
+          "module": "raucle/provenance.py",
+          "tests": [
+            "tests/test_harness_findings.py"
+          ],
+          "status": "mapped"
+        },
+        {
+          "id": "C-T2-4",
+          "description": "Anchor cadence automation, anchor-lag alarm and dual-notarisation (residual 3)",
+          "module": "raucle/transparency.py",
+          "tests": [],
+          "status": "out_of_scope",
+          "reason": "Named future mitigation M3 (P1) in docs/threat-model/v1.md"
+        },
+        {
+          "id": "C-T2-5",
+          "description": "Receipt-index INSERT OR REPLACE collapses byte-identical attempts; repair contract exists but operators who never rebuild undercount (residual 4)",
+          "module": "raucle/receipt_index.py",
+          "tests": [],
+          "status": "out_of_scope",
+          "reason": "Named future mitigation M4 (P2) in docs/threat-model/v1.md"
+        },
+        {
+          "id": "C-T2-6",
+          "description": "Gate chaos mode (S5): named fault injection (dropped receipts, delayed index writes, mis-ordered chain entries) proves the offline checks catch every evidence-write fault; off by default, refused outside DEV builds and behind any auth mode other than off",
+          "module": "raucle/chaos.py",
+          "tests": [
+            "tests/test_gate_chaos.py"
+          ],
+          "status": "mapped"
+        }
+      ]
+    },
+    {
+      "id": "T3",
+      "title": "Enforcement boundary: policy engine and approvals",
+      "controls": [
+        {
+          "id": "C-T3-1",
+          "description": "Fail-closed data-flow rules: deny on taint meeting an unallow-listed destination class and on unknown destinations even in evaluation mode",
+          "module": "raucle/policy.py",
+          "tests": [
+            "tests/test_policy.py",
+            "tests/test_policy_properties.py",
+            "tests/test_policy_bytes.py"
+          ],
+          "status": "mapped"
+        },
+        {
+          "id": "C-T3-2",
+          "description": "Approvals are receipted decisions",
+          "module": "raucle/approvals.py",
+          "tests": [
+            "tests/test_gateway.py"
+          ],
+          "status": "mapped"
+        },
+        {
+          "id": "C-T3-3",
+          "description": "Unsigned policy/revocations/containment state: filesystem write equals control-plane takeover, no tamper detection on policy bytes today (residual 5, mitigation M5 seal-on-load)",
+          "module": "raucle/policy.py",
+          "tests": [],
+          "status": "out_of_scope",
+          "reason": "Named future mitigation M5 (P0) in docs/threat-model/v1.md; the load path does not verify a seal yet"
+        }
+      ]
+    },
+    {
+      "id": "T4",
+      "title": "Adoption boundary: the URL-switch gate proxy (passthrough)",
+      "controls": [
+        {
+          "id": "C-T4-1",
+          "description": "Server-side policy consultation on the real gateway engine, denies never reach the upstream, receipts minted for allow and deny, loopback-only default, hop-header stripping and origin-form checks",
+          "module": "raucle/urlgate.py",
+          "tests": [
+            "tests/test_urlgate.py"
+          ],
+          "status": "mapped"
+        },
+        {
+          "id": "C-T4-2",
+          "description": "Passthrough trust assumption: upstream response content is not verified and streamed SSE bytes are not inspected (documented limitation)",
+          "module": "raucle/urlgate.py",
+          "tests": [],
+          "status": "out_of_scope",
+          "reason": "Named residual in docs/threat-model/v1.md; output-side assurance stops at the passthrough wall until a post-hoc digest exists (M12)"
+        },
+        {
+          "id": "C-T4-3",
+          "description": "Upstream hostport pinned in the receipt so a verifier detects proxy/upstream drift",
+          "module": "raucle/urlgate.py",
+          "tests": [],
+          "status": "out_of_scope",
+          "reason": "Named future mitigation M6 (P2) in docs/threat-model/v1.md"
+        }
+      ]
+    },
+    {
+      "id": "T5",
+      "title": "Containment: the halt as asset and attack surface",
+      "controls": [
+        {
+          "id": "C-T5-1",
+          "description": "Every transition is a signed, auditable, reversible receipt; fail-closed rollback on receipt-emission failure; flock serialisation; named errors for malformed scope, missing prerequisites and double-holds",
+          "module": "raucle/containment.py",
+          "tests": [
+            "tests/test_containment.py",
+            "tests/test_containment_receipt_anchor.py",
+            "tests/test_containment_v1.py"
+          ],
+          "status": "mapped"
+        },
+        {
+          "id": "C-T5-2",
+          "description": "Unauthenticated operator authority: no quorum, no allowlist, no alerting on holds (residual 6, mitigation M7)",
+          "module": "raucle/containment.py",
+          "tests": [],
+          "status": "out_of_scope",
+          "reason": "Named future mitigation M7 (P1) in docs/threat-model/v1.md"
+        }
+      ]
+    },
+    {
+      "id": "T6",
+      "title": "Portal boundary (raucle-cloud): durable ingest queue and bounded rows",
+      "controls": [
+        {
+          "id": "C-T6-1",
+          "description": "Bounded-disclosure projection: no reason column at all, so deny reasons quoting constraint values cannot leak",
+          "module": "portal/projection.py",
+          "tests": [],
+          "status": "out_of_scope",
+          "reason": "raucle-cloud is the private line: the module and its tests live outside this OSS repository and cannot be pinned from here"
+        },
+        {
+          "id": "C-T6-2",
+          "description": "Stop-the-world recovery under chain re-ingest (residual 7, mitigation M8)",
+          "module": "portal/store.py",
+          "tests": [],
+          "status": "out_of_scope",
+          "reason": "raucle-cloud is the private line, and the mitigation is future work (M8) in any case"
+        },
+        {
+          "id": "C-T6-3",
+          "description": "Silent skips during ingest need a counter column and reconciliation against the chain tail (residual 8, mitigation M9)",
+          "module": "portal/projection.py",
+          "tests": [],
+          "status": "out_of_scope",
+          "reason": "raucle-cloud is the private line, and the mitigation is future work (M9)"
+        }
+      ]
+    },
+    {
+      "id": "T7",
+      "title": "Connector boundary (pulled data: Entra, Okta, GitHub audit)",
+      "controls": [
+        {
+          "id": "C-T7-1",
+          "description": "Injected transport with recorded fixtures; deterministic, spec-pinned mappings with a vector corpus against drift; vendor Retry-After carried on RateLimitError; opaque cursor paging with at-cursor dedupe; honest unknown attribution",
+          "module": "raucle/connectors/",
+          "tests": [
+            "tests/test_connectors_entra.py",
+            "tests/test_connectors_okta.py",
+            "tests/test_connectors_github.py"
+          ],
+          "status": "mapped"
+        },
+        {
+          "id": "C-T7-2",
+          "description": "Vendor-origin trust: connector events carry zero cryptographic binding to the source; cursor persistence is caller duty today (residual 10, mitigation M10)",
+          "module": "raucle/connectors/base.py",
+          "tests": [],
+          "status": "out_of_scope",
+          "reason": "Named future mitigation M10 (P2) in docs/threat-model/v1.md"
+        }
+      ]
+    },
+    {
+      "id": "T8",
+      "title": "Bilateral outcomes and the executors' co-signature",
+      "controls": [
+        {
+          "id": "C-T8-1",
+          "description": "Closed outcome vocabulary enforced at emission and re-checked at verification; co-signature binds outcome, output hash and executor key id over canonical JSON",
+          "module": "raucle/bilateral.py",
+          "tests": [
+            "tests/test_x_bilateral.py"
+          ],
+          "status": "mapped"
+        },
+        {
+          "id": "C-T8-2",
+          "description": "Executor keys through the KMS boundary and versioned-identity rotation (residual 11)",
+          "module": "raucle/kms.py",
+          "tests": [],
+          "status": "out_of_scope",
+          "reason": "Named residual in docs/threat-model/v1.md; reuse of M2's startup assertion for executor signers is future work"
+        }
+      ]
+    },
+    {
+      "id": "T9",
+      "title": "Red tooling and assurance console (evidence about evidence)",
+      "controls": [
+        {
+          "id": "C-T9-1",
+          "description": "Findings split claim from truth; exported artefacts never upgrade bad evidence (failed chains render failed, first line, non-zero exit)",
+          "module": "raucle/audit_export.py",
+          "tests": [
+            "tests/test_harness_findings.py",
+            "tests/test_audit_export.py"
+          ],
+          "status": "mapped"
+        },
+        {
+          "id": "C-T9-2",
+          "description": "Fence-aware docs-alignment checking of assurance docs",
+          "module": "scripts/check_docs_alignment.py",
+          "tests": [],
+          "status": "out_of_scope",
+          "reason": "The checker exists only in open-agent-assurance; porting it to the OSS repo is named future work M11"
+        }
+      ]
+    }
+  ],
+  "residuals": [
+    {
+      "id": "R13",
+      "title": "TOTP secret stored in plaintext beside hashed API keys",
+      "ref": "RED-032",
+      "status": "out_of_scope",
+      "reason": "Protecting the secret needs a master-key source; deployment decision recorded 2026-11-08 in docs/threat-model/v1.md"
+    },
+    {
+      "id": "R14",
+      "title": "Gate authentication default off is an explicit owner decision",
+      "ref": "RAUCLE_GATE_AUTH",
+      "status": "out_of_scope",
+      "reason": "Owner decision 2026-11-08 kept off as shipped default for demo/back-compat; mitigations recorded (boot banner, /api/config, hardening checklist)"
+    },
+    {
+      "id": "R15",
+      "title": "SIEM target validation does not resolve DNS",
+      "ref": "RED-036",
+      "status": "out_of_scope",
+      "reason": "Known residual; DNS resolution at config-write time is the candidate fix, egress allow-list is the deployment guidance; RAUCLE_SIEM_ALLOW_PRIVATE is the explicit opt-in"
+    },
+    {
+      "id": "R16",
+      "title": "_FileCache same-size edit staleness",
+      "ref": "RAUCLE_GATE_AUTH-adjacent registry caches",
+      "status": "out_of_scope",
+      "reason": "Accepted residual: registries are operator-managed append-only files, so the risk needs a hostile in-place same-byte-length rewrite; M5 seal-on-load closes both this and R5"
+    }
+  ]
+}

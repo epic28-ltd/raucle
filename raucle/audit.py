@@ -985,4 +985,12 @@ def sink_from_env() -> HashChainSink | None:
             raise ConfigurationError(
                 f"audit signer (env {ENV_AUDIT_KEY}) failed to load: {exc}"
             ) from exc
-    return HashChainSink(path, signer=signer)
+    sink = HashChainSink(path, signer=signer)
+    # S5 chaos: wrap the audit sink for named misorder fault injection
+    # (default-off; from_env refuses outside DEV builds).
+    from raucle.chaos import ChaosAuditSink, ChaosFaultController
+
+    controller = ChaosFaultController.from_env()
+    if controller._faults_remaining:  # noqa: SLF001 - in-package wiring
+        sink = ChaosAuditSink(sink, controller)
+    return sink
