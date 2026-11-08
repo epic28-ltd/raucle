@@ -1061,6 +1061,11 @@ class RaucleGateway:
             raise ValueError(
                 f"invalid RAUCLE_GATE_AUTH {self._gate_auth_mode!r}: expected off, apikey or token"
             )
+        # S5 chaos controller: OFF unless RAUCLE_ENV=dev AND RAUCLE_CHAOS=1;
+        # refuses to enable behind a gateway that is not gate_auth="off".
+        from raucle.chaos import ChaosFaultController
+
+        self._chaos = ChaosFaultController.from_env(gate_auth=self._gate_auth_mode)
         self._agent_creds = None
         self._caller_gate = None
         # Segmented receipt store (B2). Legacy flat file remains the default
@@ -1448,6 +1453,14 @@ class RaucleGateway:
         jws = signing_input.decode("ascii") + "." + _b64url_encode(sig)
         receipt_hash = _HASH_PREFIX + _sha256_hex(jws.encode("ascii"))
         line = json.dumps({"receipt_hash": receipt_hash, "jws": jws}, ensure_ascii=False)
+        # S5 chaos: drop_receipt withholds the receipt from every sink
+        # (the caller still receives the hash it claims - that gap is
+        # exactly what the offline reconciliation flags, by name).
+        if self._chaos.fault_active("drop_receipt", receipt_hash):
+            logger.warning(
+                "RAUCLE_CHAOS drop_receipt: receipt %s withheld from the store", receipt_hash
+            )
+            return receipt_hash
         if self._receipt_store is not None:
             self._receipt_store.append_line(line)
         else:
@@ -1463,11 +1476,20 @@ class RaucleGateway:
             self._receipt_writer.flush()
         if self._receipt_index is not None:
             # RED-034: every sink feeds the index, not just the segmented one.
-            try:
-                self._receipt_index.index_receipt(json.loads(line))
-            except Exception:
-                # Index failure degrades queries, never the chain
-                logger.exception("receipt index insert failed (query degraded)")
+            # S5 chaos: delay_index_write defers this write to the drain queue.
+            if self._chaos.fault_active("delay_index_write", receipt_hash):
+                self._chaos.pending_index_writes.append(json.loads(line))
+                logger.warning(
+                    "RAUCLE_CHAOS delay_index_write: index write deferred for %s", receipt_hash
+                )
+            else:
+                try:
+                    self._receipt_index.index_receipt(json.loads(line))
+                    # a lagging projection catches up on the next real write
+                    self._chaos.drain_pending_index_writes(self._receipt_index)
+                except Exception:
+                    # Index failure degrades queries, never the chain
+                    logger.exception("receipt index insert failed (query degraded)")
         return receipt_hash
 
     def _emit_authority_receipt(

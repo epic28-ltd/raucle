@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+### Added - EPIC S5: gate chaos mode (default-off)
+
+- `RAUCLE_CHAOS=1` (read through `raucle._env.env`) enables three NAMED
+  faults against the gate's evidence writes, each firing exactly once per
+  run and recorded: `drop_receipt` (a receipt withheld from the store
+  while the caller still holds its hash), `delay_index_write` (the index
+  projection lags the chain until `drain_pending_index_writes` catches it
+  up) and `misorder_chain` (`ChaosAuditSink` lands a chain record after
+  its successor, breaking the index sequence the offline verifier
+  checks).
+- Blast radius is deliberately narrow: chaos requires `RAUCLE_ENV=dev`,
+  is off in every other profile, and a gateway REFUSES to enable it when
+  `RAUCLE_GATE_AUTH` is not `off` - a fault-injecting evidence writer
+  behind real authentication is refused at construction with a named
+  error.
+- Every injection can be emitted as a NAMED FAULT RECEIPT
+  (`raucle/chaos.py::emit_fault_receipt`): a signed compact JWS naming
+  the fault, verifiable offline under the gate identity's public key,
+  failing closed under any other key or after tampering.
+- Tests: `tests/test_gate_chaos.py` (new, 9 cases) pins default-off, both
+  refusals, each named fault with its offline flag (offline_flags /
+  AuditVerifier), the drain catch-up contract, and the fault-receipt
+  verification roundtrip.
+
+### Added - EPIC S2: the receipt-bound bilateral policy diff
+
+- The counterfactual replay report (`raucle.counterfactual`) can now be
+  signed into a receipt-bound diff document
+  (`raucle.policy_diff.sign_policy_diff_document`): a compact JWS
+  (`alg=EdDSA` only, canonical payload, integer epochs) binding the chain
+  head, the SHA-256 digests of BOTH policy files and the replay's bounded
+  summary and actions.
+- Verification is offline and fail-closed
+  (`verify_policy_diff_document`): given only the public key and the
+  referenced material, the counterparty re-checks the signature, the
+  document hash, every binding, and RE-RUNS the replay; a tampered
+  summary, a wrong key, a swapped chain, an edited policy file or a wiped
+  stored input each fail with a NAMED error. A retyped verdict - the
+  thing this feature exists to prevent - cannot pass.
+- Cross-org demo `examples/cross_org_demo/policy_diff_demo.py`: Org A
+  signs, Org B verifies offline with a key resolved from the shared
+  trust registry; ends with the failure case demonstrated live.
+
+### Added - EPIC S3: threat model as code, with a CI guard
+
+- `docs/threat-model/threat-model.json` maps every control documented in
+  `docs/threat-model/v1.md` (T1-T9) to its module and the tests that pin
+  it, or marks it explicitly out-of-scope with a reason (future
+  mitigations M1-M12, the private-line portal controls, the U2 residual
+  register R13-R16).
+- `scripts/threat_model_check.py` fails when a mapped control loses its
+  test, when a control is mapped without tests, when an out-of-scope
+  control carries no reason, and when a new `## T<n>` section in the
+  source document is not declared in the mapping.
+- The `threat-model` CI job (`.github/workflows/ci.yml`) runs the checker
+  on every push and pull request: a control that loses its test goes
+  red, not silently.
+
 ### Fixed - Helm chart: demo key could not render, and two knobs were unwired
 
 - `{{- with .Values.config.demoKey }}` rebinds `.` to the *value*, so the
