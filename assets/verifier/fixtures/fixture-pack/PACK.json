@@ -1,0 +1,33 @@
+{
+  "kind": "raucle-audit-pack/v1",
+  "generated_at": 1700000000,
+  "tool_version": "0.22.0",
+  "audit_key_id": "e9514763c3271537",
+  "require_pq": false,
+  "members": [
+    {
+      "path": "chain.jsonl",
+      "role": "receipt-chain",
+      "sha256": "sha256:e1ac473d7dbeb32403f54c74aa14d598d18223586f1106886e83e9465e68dd97"
+    },
+    {
+      "path": "manifest.json",
+      "role": "signed-manifest",
+      "sha256": "sha256:70718c00f441811ed4c60f9ca034b66db6c48a1021506d20510532c1b5b9da1b"
+    },
+    {
+      "path": "report.html",
+      "role": "human-report",
+      "sha256": "sha256:1f9f4850c7a0be71505831065dc6de0c35b97d5eefabe89440984177aaefb8b0"
+    },
+    {
+      "path": "pubkeys/6a1521989e13ddb8.pem",
+      "role": "public-key",
+      "sha256": "sha256:6a1521989e13ddb82ec636d66c0af8ff387f5b505d72a78efe97f4beffdd93e3",
+      "key_id": "6a1521989e13ddb8"
+    }
+  ],
+  "verify": "raucle audit-pack verify <dir>",
+  "audit_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAEBi8uCfigNiZxKUGDMbi8S9RbdexmprF6WTb4ioc1oc=\n-----END PUBLIC KEY-----\n",
+  "index_signature": "uvroBdTv7dlQ+TrK8AZkJsJgDHTWYiKSur739o303TAduOB8lFsDHBeAGpdgX8wVmLu/QFS9cv4ROzfIrl9dAQ=="
+}

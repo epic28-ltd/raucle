@@ -12,6 +12,9 @@ htmlcov/
 # Private key material — never commit
 *.pem
 *.key
+# …except the X2 verifier fixture PUBLIC keys (public material, must ship so
+# the committed fixture pack verifies in CI)
+!assets/verifier/fixtures/fixture-pack/pubkeys/*.pem
 
 # Sibling reference-implementation repos cloned during multi-repo work
 # (raucle-receipt-{ts,go,rs}, raucle-bench). These live in their own repos.

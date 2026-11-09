@@ -136,6 +136,8 @@ Beyond per-call enforcement, raucle ships the cross-organisation trust primitive
 
 **Time-source anchoring** ([`timestamp`](raucle/timestamp.py), [spec](docs/spec/time-source-v1.md)) — three documented modes: internal (NTP discipline with stated drift bounds), TSA-attested (customer-chosen RFC 3161 authority, hash-only requests, raucle stays TSA-agnostic), and OpenTimestamps for vendor-neutral long-horizon anchoring, with retimestamping guidance for long-lived archives.
 
+**Browser verifiers** ([`x2-verifier.html`](assets/verifier/x2-verifier.html), [spec](docs/spec/x2-verifier-page.md)) — a single static HTML page, no install and no trust in the operator, that re-verifies audit packs and receipt chains *entirely in the browser*: WebCrypto Ed25519 + SHA-256 over WebCrypto, hash-pinned assets, zero external references and zero network I/O after load (asserted in CI), per-receipt named failure detail, and the verification recipe rendered so any reader can reproduce the checks by hand. The committed fixture pack proves named-clean in a headless CI run of the page's own script.
+
 The registry, handshake, passport, and compliance modules went through nine rounds of iterative adversarial security review (independent codex auditor, find → fix → re-verify) before merging; every fix carries a regression test. The conformance re-verification layer is new and has not yet been through that review cycle; treat it as experimental until it has.
 
 ---
