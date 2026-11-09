@@ -61,6 +61,8 @@ def _config(tmp_path) -> ContainmentConfig:
         receipts_path=str(tmp_path / "containment-receipts.jsonl"),
         state_dir=str(tmp_path / "containment"),
         actor="op",
+        # v1 quarantine/lease tests pin the v0 single-approver hold path
+        global_min_approvers=1,
     )
 
 
@@ -477,7 +479,9 @@ class TestCLIV1:
         (tmp_path / "revocations.jsonl").touch()
         (tmp_path / "delegations.jsonl").touch()
         # hold rendering (global scope: final tail branch), then HELD status
-        out = self._cli_raw(tmp_path, "hold", "global", "--reason", "drill")
+        out = self._cli_raw(
+            tmp_path, "hold", "global", "--global-min-approvers", "1", "--reason", "drill"
+        )
         assert "containment held: scope=global" in out
         assert "receipt:" in out
         out = self._cli_raw(tmp_path, "status")

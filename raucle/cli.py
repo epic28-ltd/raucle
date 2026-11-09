@@ -451,6 +451,23 @@ def _build_parser() -> argparse.ArgumentParser:
     cont_resume = cont_sub.add_parser(
         "resume", help="Restore the pre-hold policy/revocations bytes exactly (receipted)"
     )
+    cont_ap = cont_sub.add_parser(
+        "approve-hold",
+        help="Add one distinct approver to a pending M-of-N hold (receipted); "
+        "applies the stop when the quorum is met",
+    )
+    cont_ab = cont_sub.add_parser(
+        "abort-hold", help="Abort a still-pending M-of-N hold (receipted)"
+    )
+    cont_arm = cont_sub.add_parser(
+        "arm-button",
+        help="Arm the emergency authority stop button for this deployment "
+        "(default-off; itself a receipted operator transition)",
+    )
+    cont_disarm = cont_sub.add_parser(
+        "disarm-button",
+        help="Disarm the emergency authority stop button (receipted)",
+    )
     cont_status = cont_sub.add_parser("status", help="Show the current containment state")
     cont_q = cont_sub.add_parser(
         "quarantine",
@@ -469,6 +486,46 @@ def _build_parser() -> argparse.ArgumentParser:
         "reinstate-lease", help="Reinstate a suspended credential lease (receipted)"
     )
     cont_hold.add_argument("scope", choices=["global", "agent", "chain"], help="Scope of the stop")
+    cont_hold.add_argument(
+        "--via-button",
+        action="store_true",
+        help=(
+            "Invoke the emergency authority stop BUTTON path: refused while the "
+            "button is disarmed (default-off per deployment; arm with arm-button)"
+        ),
+    )
+    cont_hold.add_argument(
+        "--global-min-approvers",
+        type=int,
+        default=int(os.environ.get("RAUCLE_GLOBAL_MIN_APPROVERS", "2")),
+        help=(
+            "M-of-N quorum for GLOBAL-scope holds (default 2 per the "
+            "emergency-authority decision; env $RAUCLE_GLOBAL_MIN_APPROVERS); "
+            "per-agent/chain holds stay single-approver"
+        ),
+    )
+    cont_ap.add_argument(
+        "--approver",
+        required=True,
+        help="Distinct approver identity recorded on the approval receipt",
+    )
+    cont_ab.add_argument(
+        "--approver",
+        required=True,
+        help="Operator identity recorded on the abort receipt",
+    )
+    cont_arm.add_argument(
+        "--approver",
+        required=True,
+        help="Operator identity arming the button (recorded on the arm receipt)",
+    )
+    cont_disarm.add_argument(
+        "--approver",
+        required=True,
+        help="Operator identity disarming the button (recorded on the disarm receipt)",
+    )
+    for cont_cmd in (cont_ap, cont_ab, cont_arm, cont_disarm):
+        cont_cmd.add_argument("--reason", default="", help=_CONTAINMENT_REASON_HELP)
     cont_hold.add_argument(
         "scope_id",
         nargs="?",
@@ -2316,9 +2373,22 @@ def _containment_dispatch(manager: Any, sub: str, args: argparse.Namespace) -> d
     """Route a containment subcommand to its manager call and return the result."""
     reason = getattr(args, "reason", "")
     if sub == "hold":
-        return manager.hold(scope=args.scope, scope_id=args.scope_id, reason=reason)
+        return manager.hold(
+            scope=args.scope,
+            scope_id=args.scope_id,
+            reason=reason,
+            via_button=getattr(args, "via_button", False),
+        )
     if sub == "resume":
         return manager.resume(reason=reason)
+    if sub == "approve-hold":
+        return manager.approve_hold(approver=args.approver)
+    if sub == "abort-hold":
+        return manager.abort_hold(approver=args.approver)
+    if sub == "arm-button":
+        return manager.arm_button(operator=args.approver, reason=reason)
+    if sub == "disarm-button":
+        return manager.disarm_button(operator=args.approver, reason=reason)
     if sub == "quarantine":
         return manager.quarantine_trace(args.target_id, reason=reason)
     if sub == "release":
@@ -2346,7 +2416,8 @@ def _cmd_containment(args: argparse.Namespace) -> int:
     if not sub:
         print(
             "Error: containment requires a subcommand: "
-            "hold | resume | status | quarantine | release | suspend-lease | reinstate-lease"
+            "hold | resume | approve-hold | abort-hold | arm-button | disarm-button | "
+            "status | quarantine | release | suspend-lease | reinstate-lease"
         )
         return 1
 
@@ -2359,6 +2430,7 @@ def _cmd_containment(args: argparse.Namespace) -> int:
         lease_suspensions_file=getattr(args, "lease_file", ""),
         state_dir=os.path.expanduser(getattr(args, "state_dir", "~/.raucle/containment")),
         actor=getattr(args, "actor", "operator"),
+        global_min_approvers=getattr(args, "global_min_approvers", 2),
     )
     manager = ContainmentManager(config)
     try:
@@ -2396,7 +2468,36 @@ def _containment_render(result: dict, config: Any, sub: str) -> None:
         print(f"  receipt: {result['receipt_id']}")
         print(verify_line)
         return
-    # hold / resume
+    # hold / resume / approve-hold / arm-button / disarm-button
+    if sub == "arm-button":
+        print("emergency authority stop button: ARMED (receipted operator transition)")
+        print(f"  armed by: {result['operator']}")
+        print(f"  receipt: {result['receipt_id']}")
+        print(verify_line)
+        return
+    if sub == "disarm-button":
+        print("emergency authority stop button: DISARMED (receipted operator transition)")
+        print(f"  disarmed by: {result['operator']}")
+        print(f"  receipt: {result['receipt_id']}")
+        print(verify_line)
+        return
+    if result.get("status") == "pending" and sub in ("hold", "approve-hold"):
+        approvers = result.get("approvers", [])
+        required = int(result.get("min_approvers") or 0)
+        outstanding = result.get("outstanding")
+        if outstanding is None:
+            outstanding = required - len(approvers)
+        print(
+            f"containment hold PENDING approval: scope={result['scope']}"
+            f" ({len(approvers)}/{required} distinct approvers receipted)"
+        )
+        if result.get("scope_id"):
+            print(f"  id: {result['scope_id']}")
+        print(f"  outstanding approvals required: {outstanding}")
+        print(f"  receipt: {result['receipt_id']}")
+        print("  approve with: raucle containment approve-hold --approver <identity>")
+        print(verify_line)
+        return
     final_line = f"containment {result['status']}: scope={result['scope']}"
     if result.get("scope_id"):
         final_line += f" id={result['scope_id']}"
@@ -2418,6 +2519,14 @@ def _containment_status_render(result: dict) -> None:
             print("quarantined traces: " + ", ".join(quarantined))
         if suspended:
             print("suspended leases: " + ", ".join(suspended))
+        button = result.get("emergency_stop_button") or {}
+        if button.get("armed"):
+            print(
+                f"emergency authority stop button: ARMED at {button.get('armed_at', '?')}"
+                f" by {button.get('operator', '?')}"
+            )
+        else:
+            print("emergency authority stop button: DISARMED (default-off per deployment)")
         return
     scope_line = f"HELD          scope={result['scope']}"
     if result.get("scope_id"):

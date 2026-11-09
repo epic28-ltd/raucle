@@ -56,6 +56,9 @@ def _config(tmp_path) -> ContainmentConfig:
         receipts_path=str(tmp_path / "containment-receipts.jsonl"),
         state_dir=str(tmp_path / "containment"),
         actor="op",
+        # These tests exercise the v0 single-approver hold mechanics, not the
+        # B1 default global quorum (default N=2 is covered by its own tests).
+        global_min_approvers=1,
     )
 
 
@@ -442,6 +445,8 @@ class TestHostilePaths:
                 "containment",
                 "hold",
                 "global",
+                "--global-min-approvers",
+                "1",
                 "--reason",
                 "drill",
                 "--policy-file",
