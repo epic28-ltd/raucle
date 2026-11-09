@@ -257,6 +257,149 @@ def schema_enforcement_vectors() -> None:
         },
     )
 
+    # 04: OpenAPI secondary source — type-confusion enforcement holds for a
+    # schema derived from an OpenAPI fragment (requestBody path).
+    openapi_fragment = {
+        "paths": {
+            "/payments": {
+                "post": {
+                    "operationId": "create_payment",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {"amount": {"type": "number"}},
+                                }
+                            }
+                        }
+                    },
+                }
+            }
+        }
+    }
+    reg4 = ToolSchemaRegistry()
+    reg4.register_from_openapi_fragment(openapi_fragment)
+    oa_reasons = reg4.violations("create_payment", {"amount": "99999"})
+    assert oa_reasons
+    write_json(
+        OUT / "schema_enforcement_v1_04_openapi_type_confusion_denies.json",
+        {
+            "spec": "raucle-schema-enforcement/v1",
+            "name": "OpenAPI secondary source: type-confused amount denies",
+            "source": "openapi_fragment",
+            "openapi_fragment": openapi_fragment,
+            "tool": "create_payment",
+            "args": {"amount": "99999"},
+            "decision": {
+                "decision": "deny",
+                "reason": f"schema_violation: {oa_reasons[0]}",
+            },
+        },
+    )
+
+    # 05: OpenAPI secondary source — undeclared policy field is a load-time
+    # error against the fragment-derived schema.
+    reg5 = ToolSchemaRegistry()
+    reg5.register_from_openapi_fragment(openapi_fragment)
+    oa_load_err = _load_error_capture(reg5, "create_payment")
+    write_json(
+        OUT / "schema_enforcement_v1_05_openapi_undeclared_field_load_error.json",
+        {
+            "spec": "raucle-schema-enforcement/v1",
+            "name": "OpenAPI secondary source: undeclared policy field is a load-time error",
+            "source": "openapi_fragment",
+            "openapi_fragment": openapi_fragment,
+            "tool": "create_payment",
+            "policy_rule": {"forbidden_values": {"recipient": ["x"]}},
+            "load": {
+                "outcome": "error",
+                "error_kind": "SchemaPolicyLoadError",
+                "message": oa_load_err,
+            },
+        },
+    )
+
+    # 06: MCP + OpenAPI registering the same tool with different schemas is
+    # a load-time conflict, never silently last-write-wins.
+    reg6 = ToolSchemaRegistry()
+    mcp_schema = {"type": "object", "properties": {"amount": {"type": "number"}}}
+    reg6.register_from_mcp_tools([{"name": "send_money", "inputSchema": mcp_schema}])
+    conflicting_fragment = {
+        "paths": {
+            "/payments": {
+                "post": {
+                    "operationId": "send_money",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {"amount": {"type": "string"}},
+                                }
+                            }
+                        }
+                    },
+                }
+            }
+        }
+    }
+    conflict_err = _source_conflict_capture(reg6, conflicting_fragment)
+    write_json(
+        OUT / "schema_enforcement_v1_06_mcp_openapi_conflict_load_error.json",
+        {
+            "spec": "raucle-schema-enforcement/v1",
+            "name": "MCP + OpenAPI conflict for one tool fails at load",
+            "primary_source": {"payload": [{"name": "send_money", "inputSchema": mcp_schema}]},
+            "secondary_source": {
+                "openapi_fragment": conflicting_fragment,
+                "tool": "send_money",
+            },
+            "load": {
+                "outcome": "error",
+                "error_kind": "SchemaPolicyLoadError",
+                "message": conflict_err,
+            },
+        },
+    )
+
+    # 07: a tool with NEITHER source stays on the named legacy path.
+    reg7 = ToolSchemaRegistry()
+    assert not reg7.has_schema("legacy_tool")
+    legacy_args = {"anything": {"deep": ["value"]}}
+    assert reg7.violations("legacy_tool", legacy_args) == []
+    try:
+        reg7.bind_policy("legacy_tool", {"required_present": ["amount"]})
+        raise AssertionError("expected SchemaPolicyLoadError for the schema-less tool")
+    except SchemaPolicyLoadError as exc:
+        legacy_load_err = str(exc)
+    write_json(
+        OUT / "schema_enforcement_v1_07_neither_source_named_legacy.json",
+        {
+            "spec": "raucle-schema-enforcement/v1",
+            "name": "tool with neither MCP schema nor OpenAPI fragment keeps the named legacy path",
+            "tool": "legacy_tool",
+            "registered": False,
+            "call_args": legacy_args,
+            "call": {"outcome": "legacy_name_based_path", "schema_violations": []},
+            "load": {
+                "outcome": "error_on_schema_bind",
+                "error_kind": "SchemaPolicyLoadError",
+                "message": legacy_load_err,
+            },
+        },
+    )
+
+
+def _source_conflict_capture(reg: ToolSchemaRegistry, fragment: dict) -> str:
+    """Register an OpenAPI fragment that conflicts with a registered MCP
+    schema and capture the load error message."""
+    try:
+        reg.register_from_openapi_fragment(fragment)
+    except SchemaPolicyLoadError as exc:
+        return str(exc)
+    raise AssertionError("expected SchemaPolicyLoadError for the MCP/OpenAPI conflict")
+
 
 def _load_error_capture(reg: ToolSchemaRegistry, tool: str) -> str:
     """Bind a rule referencing an undeclared field and capture the message."""

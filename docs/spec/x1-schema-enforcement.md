@@ -64,7 +64,13 @@ schema:
 * **Secondary — OpenAPI fragment:** `register_from_openapi_fragment()`
   consumes `{"paths": {...}}` operations with an `operationId` and a
   JSON `requestBody` schema or query `parameters`; schema-less
-  operations fail at load.
+  operations fail at load. The secondary source carries the identical
+  contracts as the primary: undeclared-field rules fail at load
+  (vectors 04–05), and registering the same tool from both sources with
+  differing schemas is a load-time conflict, never last-write-wins
+  (vector 06). A tool with NEITHER source keeps the legacy name-based
+  path — a named, inspectable condition (`has_schema == False`, schema
+  bind fails with a named load error), never a silent skip (vector 07).
 
 ## Conformance vectors
 
@@ -76,6 +82,10 @@ schema:
 | `schema_enforcement_v1_01_type_confusion_denies.json` | The acceptance case: `amount: number` denies `"99999"` with no max bound. |
 | `schema_enforcement_v1_02_undeclared_field_load_error.json` | A rule referencing an undeclared field is a named load-time error. |
 | `schema_enforcement_v1_03_bool_not_integer.json` | The bool/int coercion edge: `true` denies an `integer` field. |
+| `schema_enforcement_v1_04_openapi_type_confusion_denies.json` | Secondary source (OpenAPI fragment): type-confused `amount` denies on a tool registered from `paths`→`requestBody`. |
+| `schema_enforcement_v1_05_openapi_undeclared_field_load_error.json` | Secondary source: a rule referencing an undeclared field is a named load-time error against the fragment-derived schema. |
+| `schema_enforcement_v1_06_mcp_openapi_conflict_load_error.json` | MCP (primary) + OpenAPI (secondary) registering one tool with differing schemas fails at load — never last-write-wins. |
+| `schema_enforcement_v1_07_neither_source_named_legacy.json` | A tool with neither source keeps the documented legacy name-based path, and the condition is named, not silent (`has_schema` false; schema-bind is a named load error). |
 
 ## Policy-file contract
 
