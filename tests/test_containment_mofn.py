@@ -59,6 +59,8 @@ def _manager(tmp_path: Path, min_approvers: int) -> ContainmentManager:
             state_dir=str(tmp_path / "containment"),
             actor="op",
             min_approvers=min_approvers,
+            # pins the v0 single-approver path under test for every quorum M
+            global_min_approvers=1,
         )
     )
 
@@ -246,6 +248,13 @@ def test_m2_abort_is_receipted_and_clears(tmp_path: Path):
     assert policy.read_bytes() == before
     assert manager.status() == {
         "held": False,
+        # B3: the emergency-stop button state is always visible in status
+        "emergency_stop_button": {
+            "armed": False,
+            "armed_at": "",
+            "operator": "",
+            "receipt_id": "",
+        },
         "quarantined_traces": [],
         "suspended_leases": [],
     }

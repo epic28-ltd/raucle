@@ -70,6 +70,7 @@ def env(tmp_path):
         receipts_path=str(tmp_path / "receipts.jsonl"),
         state_dir=str(tmp_path / "containment"),
         actor="op",
+        global_min_approvers=1,
     )
     return issuer, ledger_path, cfg
 
@@ -160,6 +161,7 @@ def test_restamped_snapshot_resume_refused_and_receipted(tmp_path):
         receipts_path=str(tmp_path / "receipts.jsonl"),
         state_dir=str(tmp_path / "containment"),
         actor="op",
+        global_min_approvers=1,
     )
     mgr = ContainmentManager(cfg)
     mgr.hold(scope="global", reason="drill")
@@ -197,6 +199,7 @@ def test_restamped_bytes_alone_still_refuse(tmp_path):
         receipts_path=str(tmp_path / "receipts.jsonl"),
         state_dir=str(tmp_path / "containment"),
         actor="op",
+        global_min_approvers=1,
     )
     mgr = ContainmentManager(cfg)
     mgr.hold(scope="global")
@@ -219,6 +222,7 @@ def test_resume_refuses_when_hold_receipt_stream_is_gone(tmp_path):
         receipts_path=str(tmp_path / "receipts.jsonl"),
         state_dir=str(tmp_path / "containment"),
         actor="op",
+        global_min_approvers=1,
     )
     mgr = ContainmentManager(cfg)
     mgr.hold(scope="global")
@@ -239,6 +243,7 @@ def test_normal_resume_still_restores_bytes(tmp_path):
         receipts_path=str(tmp_path / "receipts.jsonl"),
         state_dir=str(tmp_path / "containment"),
         actor="op",
+        global_min_approvers=1,
     )
     mgr = ContainmentManager(cfg)
     mgr.hold(scope="global")

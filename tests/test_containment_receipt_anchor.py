@@ -38,6 +38,8 @@ def _config(tmp_path: pathlib.Path) -> ContainmentConfig:
         receipts_path=str(tmp_path / "containment-receipts.jsonl"),
         state_dir=str(tmp_path / "state"),
         actor="operator",
+        # receipt-stream anchor tests pin the v0 single-approver hold path
+        global_min_approvers=1,
     )
 
 

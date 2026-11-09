@@ -61,7 +61,15 @@ VERDICT_HOLD_PENDING = "containment_hold_pending"
 VERDICT_HOLD_APPROVAL = "containment_hold_approval"
 VERDICT_HOLD_ABORT = "containment_hold_abort"
 
+# B3 (killswitch decisions 9 Nov): the emergency authority stop button is
+# DEFAULT-OFF per deployment; arming it is itself a receipted, visible
+# operator transition (symmetric arm/disarm receipts).
+VERDICT_BUTTON_ARM = "containment_button_arm"
+VERDICT_BUTTON_DISARM = "containment_button_disarm"
+
 _HOLD_PENDING_KIND = "hold_pending"
+_ARM_FILE = "emergency-stop-arm.json"
+_ERR_BUTTON_DISARMED = "emergency_stop_button_disarmed"
 
 # v1: targeted containment (per-trace / per-lease, two-sided receipts).
 VERDICT_TRACE_QUARANTINE = "containment_trace_quarantine"
@@ -262,6 +270,15 @@ class ContainmentConfig:
     #: receipted pending state that each additional distinct approver
     #: (``approve_hold``) advances until the quorum is met.
     min_approvers: int = 1
+    #: B1 (killswitch decision 1, 9 Nov): the GLOBAL-scope stop is M-of-N
+    #: with a DEFAULT quorum N=2, wired through this same pending/approval
+    #: machinery (mitigation M3). Per-agent and per-chain scopes stay
+    #: single-approver (``min_approvers``). Overridable per deployment:
+    #: set 1 to restore the v0 single-approver global path (demo drill), or
+    #: >2 for a tighter quorum. A global hold never uses a quorum BELOW
+    #: this value from ``min_approvers`` alone — ``global_min_approvers``
+    #: is the global floor.
+    global_min_approvers: int = 2
 
 
 class ContainmentManager:
@@ -271,6 +288,10 @@ class ContainmentManager:
         if config.min_approvers < 1:
             raise ContainmentError(
                 f"minimal approver quorum must be >= 1, got {config.min_approvers}"
+            )
+        if config.global_min_approvers < 1:
+            raise ContainmentError(
+                f"global approver quorum must be >= 1, got {config.global_min_approvers}"
             )
         self.config = config
         self.state_dir = Path(config.state_dir or "~/.raucle/containment").expanduser()
@@ -491,15 +512,41 @@ class ContainmentManager:
 
     # -- transitions ---------------------------------------------------------
 
-    def hold(self, *, scope: str, scope_id: str = "", reason: str = "") -> dict[str, Any]:
+    def hold(
+        self,
+        *,
+        scope: str,
+        scope_id: str = "",
+        reason: str = "",
+        via_button: bool = False,
+    ) -> dict[str, Any]:
         """Apply the stop for *scope* and receipt it. Fail-closed.
 
-        With the default quorum (``min_approvers == 1``) the stop is
-        applied immediately. With an opt-in quorum above 1 the hold
-        enters a receipted *pending* state instead and only applies
-        once enough DISTINCT approvers have receipted it via
-        :meth:`approve_hold` (M-of-N, mitigation M3).
+        With the effective quorum for the scope equal to 1 the stop is
+        applied immediately. With a quorum above 1 the hold enters a
+        receipted *pending* state instead and only applies once enough
+        DISTINCT approvers have receipted it via :meth:`approve_hold`
+        (M-of-N, mitigation M3).
+
+        B1 (killswitch decision 1): the effective quorum for the
+        GLOBAL scope defaults to N=2 (``global_min_approvers``), so a
+        global stop is M-of-N out of the box; agent and chain scopes
+        stay single-approver (``min_approvers``). Each quorum is
+        overridable per deployment via config.
+
+        B3 (killswitch decision 2): ``via_button=True`` is the
+        emergency authority stop BUTTON path — refused with a named
+        error while the button is disarmed (default-off per
+        deployment); arm it first with :meth:`arm_button` (itself a
+        receipted, visible operator transition).
         """
+        if via_button and not self.button_armed():
+            raise ContainmentError(
+                f"{_ERR_BUTTON_DISARMED}: the emergency authority stop button is "
+                "not armed for this deployment (default-off); arm it first with "
+                "arm-button — that arm action is itself a receipted, visible "
+                "operator transition"
+            )
         if scope not in SCOPES:
             raise ContainmentError(
                 f"malformed scope: '{scope}' (expected one of {', '.join(SCOPES)})"
@@ -509,9 +556,15 @@ class ContainmentManager:
         state = self._read_state()
         if state:
             self._raise_state_busy(state)
-        if self.config.min_approvers > 1:
+        if self._quorum_for(scope) > 1:
             return self._open_pending_hold(scope, scope_id, reason)
         return self._hold_locked(scope, scope_id, reason)
+
+    def _quorum_for(self, scope: str) -> int:
+        """The effective M-of-N quorum for a scope (B1 wiring)."""
+        if scope == SCOPE_GLOBAL:
+            return max(self.config.global_min_approvers, self.config.min_approvers)
+        return self.config.min_approvers
 
     def _raise_state_busy(self, state: dict[str, Any]) -> None:
         """A named refusal for the two states that block a new hold."""
@@ -540,7 +593,7 @@ class ContainmentManager:
             if state:
                 self._raise_state_busy(state)
             actor = self.config.actor
-            required = self.config.min_approvers
+            required = self._quorum_for(scope)
             # RED-028: pin the operator keypair fingerprint at hold REQUEST
             # time so a later re-anchor is detectable at apply/resume time.
             operator_key_fingerprint = self._operator_key_fingerprint()
@@ -582,6 +635,7 @@ class ContainmentManager:
                 "scope_id": scope_id,
                 "min_approvers": required,
                 "approvers": [],
+                "outstanding": required,
                 "operator_key_fingerprint": operator_key_fingerprint,
                 "receipt_id": receipt_id,
             }
@@ -665,6 +719,113 @@ class ContainmentManager:
                     fcntl.flock(fd_lock, fcntl.LOCK_UN)
                 finally:
                     os.close(fd_lock)
+
+    # -- emergency authority stop button (B3: default-off per deployment) ----
+
+    def _arm_path(self) -> Path:
+        return self.state_dir / _ARM_FILE
+
+    def button_state(self) -> dict[str, Any]:
+        """The current emergency-stop button state for this deployment."""
+        path = self._arm_path()
+        if not path.exists():
+            return {"armed": False, "armed_at": "", "operator": "", "receipt_id": ""}
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            raise ContainmentError(f"emergency-stop arm state file is corrupt: {exc}") from exc
+        if record.get("armed") is not True:
+            return {"armed": False, "armed_at": "", "operator": "", "receipt_id": ""}
+        return {
+            "armed": True,
+            "armed_at": str(record.get("armed_at", "")),
+            "operator": str(record.get("operator", "")),
+            "receipt_id": str(record.get("receipt_id", "")),
+        }
+
+    def button_armed(self) -> bool:
+        """True only when the arm state says armed (default: off)."""
+        return self.button_state()["armed"]
+
+    def arm_button(self, *, operator: str, reason: str = "") -> dict[str, Any]:
+        """Arm the emergency authority stop button — a RECEIPTED operator
+        transition (B3, decision 2). The button is default-off per
+        deployment; this visible action flips it on, named, signed and
+        reversible via :meth:`disarm_button`."""
+        if not isinstance(operator, str) or not operator.strip():
+            raise ContainmentError("operator identity is required to arm the stop button")
+        operator = operator.strip()
+        if self.button_armed():
+            raise ContainmentError(
+                "emergency authority stop button is already armed "
+                f"(armed at {self.button_state()['armed_at']} by "
+                f"{self.button_state()['operator']}); disarm it first — "
+                "never re-arm silently"
+            )
+        receipt_id = self._emit_receipt(
+            verdict=VERDICT_BUTTON_ARM,
+            description="containment:button-arm",
+            extra={
+                "operator": operator,
+                "reason": reason,
+                "arm_state": "armed",
+                "operator_key_fingerprint": self._operator_key_fingerprint(),
+            },
+        )
+        self._write_atomic(
+            self._arm_path(),
+            json.dumps(
+                {
+                    "armed": True,
+                    "armed_at": _now_iso(),
+                    "operator": operator,
+                    "reason": reason,
+                    "receipt_id": receipt_id,
+                    "operator_key_fingerprint": self._operator_key_fingerprint(),
+                },
+                sort_keys=True,
+            ).encode("utf-8"),
+        )
+        return {
+            "status": "armed",
+            "operator": operator,
+            "receipt_id": receipt_id,
+            **self.button_state(),
+        }
+
+    def disarm_button(self, *, operator: str, reason: str = "") -> dict[str, Any]:
+        """Disarm the emergency authority stop button — a RECEIPTED
+        operator transition (the symmetric half of :meth:`arm_button`);
+        never a silent clear."""
+        if not isinstance(operator, str) or not operator.strip():
+            raise ContainmentError("operator identity is required to disarm the stop button")
+        operator = operator.strip()
+        armed_state = self.button_state()
+        if not armed_state["armed"]:
+            raise ContainmentError(
+                "emergency authority stop button is not armed; nothing to disarm"
+            )
+        receipt_id = self._emit_receipt(
+            verdict=VERDICT_BUTTON_DISARM,
+            description="containment:button-disarm",
+            extra={
+                "operator": operator,
+                "reason": reason,
+                "arm_state": "disarmed",
+                "arm_receipt_id": armed_state["receipt_id"],
+                "operator_key_fingerprint": self._operator_key_fingerprint(),
+            },
+        )
+        with contextlib.suppress(FileNotFoundError):
+            self._arm_path().unlink()
+        return {
+            "status": "disarmed",
+            "operator": operator,
+            "receipt_id": receipt_id,
+            "armed": False,
+            "armed_at": armed_state["armed_at"],
+            "previous_operator": armed_state["operator"],
+        }
 
     def abort_hold(self, *, approver: str) -> dict[str, Any]:
         """Cancel a still-pending hold: receipted, never a silent clear."""
@@ -1473,12 +1634,14 @@ class ContainmentManager:
         if not state:
             return {
                 "held": False,
+                "emergency_stop_button": self.button_state(),
                 "quarantined_traces": self._active_quarantines(),
                 "suspended_leases": self._active_lease_suspensions(),
             }
         if state.get("kind") == _HOLD_PENDING_KIND:
             return {
                 "held": False,
+                "emergency_stop_button": self.button_state(),
                 "pending_hold": {
                     "scope": state.get("scope", ""),
                     "scope_id": state.get("scope_id", ""),
@@ -1507,6 +1670,7 @@ class ContainmentManager:
             ),
             "quarantined_traces": self._active_quarantines(),
             "suspended_leases": self._active_lease_suspensions(),
+            "emergency_stop_button": self.button_state(),
             **self._receipt_integrity_fields(),
         }
 
