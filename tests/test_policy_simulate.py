@@ -452,7 +452,86 @@ def test_flip_refuses_tampered_receipt(sim_env):
 
 
 # ---------------------------------------------------------------------------
-# 6. SIEM event emitted
+# 7. caller-supplied refs are confined to the allow roots
+# ---------------------------------------------------------------------------
+
+
+def test_traversal_refs_refused_named(sim_env):
+    """A window/input-store/policy_ref outside the allow roots is refused."""
+    client = sim_env["admin"]
+    headers = {"Authorization": "Bearer operator-key"}
+    secret = sim_env["tmp_path"].parent / "outside-secret.yaml"
+    secret.write_text("version: 1\nissuer: x\npolicies: []\n")
+    try:
+        for ref_key, ref_value in (
+            ("window_ref", str(secret)),
+            ("input_store_ref", str(secret)),
+            ("policy_ref", str(secret)),
+        ):
+            payload = {ref_key: ref_value}
+            if ref_key != "policy_ref":
+                payload["candidate_policy_yaml"] = CANDIDATE_POLICY
+            resp = client.post("/api/policy/simulate", json=payload, headers=headers)
+            assert resp.status_code == 400, (ref_key, resp.text)
+            assert "outside the allowed roots" in resp.json()["detail"], ref_key
+    finally:
+        secret.unlink(missing_ok=True)
+
+
+def test_traversal_escapes_refused_named(sim_env):
+    """../ from an allowed root lands outside and is refused."""
+    resp = sim_env["admin"].post(
+        "/api/policy/simulate",
+        json={
+            "candidate_policy_yaml": CANDIDATE_POLICY,
+            "window_ref": str(sim_env["tmp_path"].resolve().parent / "escape.jsonl"),
+        },
+        headers={"Authorization": "Bearer operator-key"},
+    )
+    assert resp.status_code == 400
+    assert "outside the allowed roots" in resp.json()["detail"]
+
+
+def test_relative_ref_resolves_inside_roots(sim_env):
+    """A relative ref inside an allowed root resolves and simulates."""
+    gw = sim_env["gateway"]
+
+    body = simulate_policy(
+        gw,
+        candidate_policy_yaml=CANDIDATE_POLICY,
+        window_ref=sim_env["chain"].name,
+        input_store_ref=sim_env["store"].name,
+        ref_roots=[sim_env["tmp_path"]],
+    )
+    assert body["result"]["gate"]["actions_replayed"] == 2
+
+
+def test_simulate_ref_roots_config_extension(sim_env):
+    """Operator-configured extras widen the allow set."""
+    from dataclasses import replace
+
+
+    cfg = replace(
+        sim_env["config"],
+        simulate_ref_roots=(str(sim_env["tmp_path"].parent),),
+    )
+    from raucle.gateway_app import _sim_ref_roots
+
+    gw = type(sim_env["gateway"])(cfg)
+    roots = _sim_ref_roots(gw)
+    assert any(str(r).endswith(str(sim_env["tmp_path"].parent)) for r in roots)
+    body = simulate_policy(
+        gw,
+        candidate_policy_yaml=CANDIDATE_POLICY,
+        window_ref=str(sim_env["chain"]),
+        input_store_ref=str(sim_env["store"]),
+        ref_roots=roots,
+    )
+    assert body["result"]["gate"]["actions_replayed"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 8. SIEM event emitted
 # ---------------------------------------------------------------------------
 
 
