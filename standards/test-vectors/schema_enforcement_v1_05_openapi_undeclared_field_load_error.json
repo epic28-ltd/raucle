@@ -1,0 +1,41 @@
+{
+  "load": {
+    "error_kind": "SchemaPolicyLoadError",
+    "message": "tool 'create_payment': policy rule references undeclared field 'recipient'",
+    "outcome": "error"
+  },
+  "name": "OpenAPI secondary source: undeclared policy field is a load-time error",
+  "openapi_fragment": {
+    "paths": {
+      "/payments": {
+        "post": {
+          "operationId": "create_payment",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "amount": {
+                      "type": "number"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "policy_rule": {
+    "forbidden_values": {
+      "recipient": [
+        "x"
+      ]
+    }
+  },
+  "source": "openapi_fragment",
+  "spec": "raucle-schema-enforcement/v1",
+  "tool": "create_payment"
+}
