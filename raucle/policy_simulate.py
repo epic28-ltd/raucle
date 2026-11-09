@@ -45,6 +45,7 @@ import contextlib
 import hashlib
 import json
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -76,8 +77,45 @@ def _sha256_hex(data: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_restricted_ref(ref: str, roots: Sequence[Path], kind: str) -> Path:
+    """Resolve a caller-supplied file reference inside a fixed allow-root set.
+
+    The simulate surface lets an operator name a historical window file,
+    an input-store file or a policy-ref file. Those references arrive
+    from an HTTP request body, so they are untrusted: every one of them
+    must resolve INSIDE one of the pre-configured allow roots (the
+    gateway's own data/policy directories, plus any operator-configured
+    extras) or the refusal is named (``unknown_<kind>``). This is the
+    containment that breaks both the path-traversal flow (a caller
+    reaching an arbitrary file) and the filesystem-oracle flow (mapping
+    existence/read errors outside the roots back into the response).
+    """
+    if not roots:
+        raise SimulateError(
+            f"unknown_{kind}", f"{kind} references are disabled: no allow roots configured"
+        )
+    candidate = Path(ref)
+    if not candidate.is_absolute():
+        candidate = Path(roots[0]) / candidate
+    resolved = candidate.resolve()
+    for root in roots:
+        root_resolved = Path(root).resolve()
+        if resolved == root_resolved or resolved.is_relative_to(root_resolved):
+            break
+    else:
+        raise SimulateError(
+            f"unknown_{kind}", f"{kind} reference is outside the allowed roots: {ref}"
+        )
+    if not resolved.is_file():
+        raise SimulateError(f"unknown_{kind}", f"{kind} file not found: {ref}")
+    return resolved
+
+
 def resolve_candidate_policy(
-    *, candidate_policy_yaml: str | None = None, policy_ref: str | None = None
+    *,
+    candidate_policy_yaml: str | None = None,
+    policy_ref: str | None = None,
+    ref_roots: Sequence[Path] = (),
 ) -> tuple[str, str]:
     """Resolve and VALIDATE the candidate policy.
 
@@ -85,6 +123,7 @@ def resolve_candidate_policy(
     sources is accepted; the YAML must load and pass the full
     :class:`raucle.policy.PolicyFile` schema or the refusal is named
     (``invalid_candidate_policy``), never a bare parse traceback.
+    A ``policy_ref`` is resolved under ``ref_roots`` containment.
     """
     import yaml as _yaml
 
@@ -100,14 +139,17 @@ def resolve_candidate_policy(
             "candidate_policy_required",
             "exactly one of candidate_policy_yaml or policy_ref is required",
         )
-    try:
-        raw = (
-            candidate_policy_yaml
-            if candidate_policy_yaml is not None
-            else Path(policy_ref or "").read_text(encoding="utf-8")
-        )
-    except OSError as exc:
-        raise SimulateError("unknown_policy_ref", f"policy_ref unreadable: {exc}") from exc
+    if candidate_policy_yaml is not None:
+        raw = candidate_policy_yaml
+    else:
+        try:
+            raw = _resolve_restricted_ref(policy_ref or "", ref_roots, "policy_ref").read_text(
+                encoding="utf-8"
+            )
+        except SimulateError:
+            raise
+        except OSError as exc:
+            raise SimulateError("unknown_policy_ref", f"policy_ref unreadable: {exc}") from exc
     try:
         parsed = _yaml.safe_load(raw)
         if not isinstance(parsed, dict):
@@ -328,38 +370,40 @@ def simulate_policy(
     policy_ref: str | None = None,
     window_ref: str | None = None,
     input_store_ref: str | None = None,
+    ref_roots: Sequence[Path] = (),
 ) -> dict[str, Any]:
     """Simulate a candidate policy over a historical window, signed.
 
     Returns the deterministic simulation result plus the signed
-    receipt envelope ({receipt_hash, jws}) binding it.
+    receipt envelope ({receipt_hash, jws}) binding it. All caller
+    named file references are resolved under ``ref_roots``
+    containment (see :func:`_resolve_restricted_ref`).
     """
     canonical, candidate_hash = resolve_candidate_policy(
-        candidate_policy_yaml=candidate_policy_yaml, policy_ref=policy_ref
+        candidate_policy_yaml=candidate_policy_yaml,
+        policy_ref=policy_ref,
+        ref_roots=ref_roots,
     )
     window_path: Path | None = None
     if window_ref:
-        window_path = Path(window_ref)
-        if not window_path.is_file():
-            raise SimulateError("unknown_window", f"historical window not found: {window_ref}")
+        window_path = _resolve_restricted_ref(window_ref, ref_roots, "window")
+    store_path_resolved: Path | None = None
     if input_store_ref:
-        store_path = Path(input_store_ref)
-        if not store_path.is_file():
-            raise SimulateError("unknown_input_store", f"input store not found: {input_store_ref}")
+        store_path_resolved = _resolve_restricted_ref(input_store_ref, ref_roots, "input_store")
 
-    window_path = window_path.resolve() if window_path is not None else None
-    store_resolved = Path(input_store_ref).resolve() if input_store_ref else None
     engine = _simulated_report(
         window_path=window_path,
         canonical_policy=canonical,
-        input_store_path=store_resolved,
+        input_store_path=store_path_resolved,
     )
     window_hash = (
-        _sha256_bytes(Path(window_ref).read_bytes()) if window_ref else _HASH_PREFIX + "0" * 64
+        _sha256_bytes(window_path.read_bytes())
+        if window_path is not None
+        else _HASH_PREFIX + "0" * 64
     )
     store_hash = (
-        _sha256_bytes(Path(input_store_ref).read_bytes())
-        if input_store_ref
+        _sha256_bytes(store_path_resolved.read_bytes())
+        if store_path_resolved is not None
         else _HASH_PREFIX + "0" * 64
     )
     result: dict[str, Any] = {
