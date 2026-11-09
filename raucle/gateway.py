@@ -283,6 +283,10 @@ class GatewayConfig:
     # keys) must sit inside when an admin redirects them through the panel
     # (RED-035). Empty = the parent of ``receipt_store``.
     data_root: str = ""
+    # Allow roots for /api/policy/simulate caller-supplied file
+    # references (window / input store / policy_ref). Empty = the
+    # gateway's own policy + data directories are used.
+    simulate_ref_roots: tuple[str, ...] = ()
     # Authority attribution (PR-E): human approvals, policy change ledger
     approval_ttl_seconds: int = 300
     policy_ledger_path: str = ""  # when unset, no ledger is written

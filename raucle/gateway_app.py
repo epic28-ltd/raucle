@@ -139,6 +139,41 @@ class RevokeRequest(BaseModel):
     reason: str = Field(..., description="Why the authority is being revoked")
 
 
+class PolicySimulateRequest(BaseModel):
+    """X6: simulate a candidate policy over a historical window.
+
+    Exactly one of ``candidate_policy_yaml`` / ``policy_ref``.
+    ``window_ref`` points at a receipt-chain JSONL (the historical
+    window); ``input_store_ref`` at the replay input store alongside
+    it. Bounded disclosure: the result carries decisions and hashes,
+    never arg values or denial reasons.
+    """
+
+    candidate_policy_yaml: str | None = Field(
+        default=None, description="Candidate policy YAML bytes (policy bytes)"
+    )
+    policy_ref: str | None = Field(
+        default=None, description="Server-side path of the candidate policy"
+    )
+    window_ref: str | None = Field(
+        default=None, description="Historical window: receipt-chain JSONL path"
+    )
+    input_store_ref: str | None = Field(
+        default=None, description="Input store JSONL (recorded call args) for the window"
+    )
+
+
+class PolicySimulateApplyRequest(BaseModel):
+    """X6: the named flip path for a signed simulation result.
+
+    The simulation receipt must verify and the submitted candidate
+    policy must hash-match the one the simulation signed.
+    """
+
+    simulation_receipt: str = Field(..., description="The jws of the signed simulation receipt")
+    candidate_policy_yaml: str = Field(..., description="Candidate policy YAML bytes to land")
+
+
 class UserCreateRequest(BaseModel):
     """Create a new admin panel user.
 
@@ -826,6 +861,7 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     _register_stats_routes(app, gateway, check_auth, check_access)
     _register_learn_routes(app, gateway, check_auth, check_access)
     _register_policy_routes(app, gateway, check_auth, check_access)
+    _register_simulate_routes(app, gateway, users, check_access)
     _register_authority_routes(app, gateway, check_auth, check_access)
     _register_receipt_routes(app, gateway, check_auth, check_access)
     _register_siem_routes(app, gateway, check_auth, check_access)
@@ -1164,6 +1200,139 @@ def _register_policy_routes(
         user = check_auth(authorization, x_totp)
         check_access(user, "policies")
         return _validate_policy_content(req.content)
+
+
+def _sim_ref_roots(gateway: RaucleGateway) -> list:
+    """Allow roots for caller-supplied simulate file references.
+
+    The references arrive from an HTTP request body, so they are
+    confined to the gateway's own policy/data directories plus any
+    operator-configured extras (``GatewayConfig.simulate_ref_roots``).
+    """
+    from pathlib import Path as _Path
+
+    cfg = gateway.config
+    roots: set = set()
+    roots.update(_Path(r) for r in getattr(cfg, "simulate_ref_roots", ()) if r)
+    for attr in (
+        "policy_file",
+        "receipt_store",
+        "audit_chain",
+        "registry_path",
+        "agent_credentials_file",
+    ):
+        value = getattr(cfg, attr, "")
+        if value:
+            roots.add(_Path(value).resolve().parent)
+    return sorted(roots, key=str)
+
+
+def _register_simulate_routes(
+    app: FastAPI,
+    gateway: RaucleGateway,
+    users: UserManager,
+    check_access: Any,
+) -> None:
+    """X6 slice 1: deterministic, signed, flippable policy simulation.
+
+    Operator-plane only: the simulate/apply pair lives behind the admin
+    plane's key + role auth. Agent-plane keys (X-Api-Key credentials
+    issued by :class:`raucle.agent_credentials.AgentCredentialStore` for
+    gate calls) are DENY-BY-DEFAULT here: they authenticate gate
+    traffic, never policy control, and the refusal is named
+    (``agent_plane_key_denied``) so a leaked agent key probing this
+    surface is visible in the audit trail rather than a silent 403.
+    """
+    from raucle.policy_simulate import SimulateError
+
+    @app.post(
+        "/api/policy/simulate",
+        responses={
+            "400": {"description": "Named simulate refusal (invalid candidate, unknown window)"},
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Agent-plane key or insufficient role"},
+        },
+    )
+    def simulate(
+        req: PolicySimulateRequest,
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        user = _check_simulate_plane(gateway, users, authorization, x_totp)
+        check_access(user, "policies")
+        try:
+            from raucle.policy_simulate import simulate_policy
+
+            outcome = simulate_policy(
+                gateway,
+                candidate_policy_yaml=req.candidate_policy_yaml,
+                policy_ref=req.policy_ref,
+                window_ref=req.window_ref,
+                input_store_ref=req.input_store_ref,
+                ref_roots=_sim_ref_roots(gateway),
+            )
+        except SimulateError as exc:
+            raise HTTPException(exc.status_code, f"{exc.reason}: {exc.message}") from exc
+        return {
+            "result": outcome["result"],
+            "receipt_hash": outcome["receipt_hash"],
+            "jws": outcome["jws"],
+        }
+
+    @app.post(
+        "/api/policy/simulate/apply",
+        responses={
+            "400": {"description": "Named apply refusal (bad receipt, candidate hash mismatch)"},
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Agent-plane key or insufficient role"},
+        },
+    )
+    def simulate_apply(
+        req: PolicySimulateApplyRequest,
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        user = _check_simulate_plane(gateway, users, authorization, x_totp)
+        check_access(user, "policies")
+        try:
+            from raucle.policy_simulate import apply_simulated_policy
+
+            return apply_simulated_policy(
+                gateway,
+                simulation_receipt=req.simulation_receipt,
+                candidate_policy_yaml=req.candidate_policy_yaml,
+                actor=user.name or user.role,
+            )
+        except SimulateError as exc:
+            raise HTTPException(exc.status_code, f"{exc.reason}: {exc.message}") from exc
+
+
+def _check_simulate_plane(
+    gateway: RaucleGateway,
+    users: UserManager,
+    authorization: Any,
+    x_totp: str | None,
+) -> GatewayUser:
+    """Deny-by-default agent-plane check, then the standard operator auth.
+
+    A key that verifies against the agent credential store is an
+    agent-plane secret: refuse it NAMED before any other check, so it
+    can never authenticate (or even be mistaken for) an operator-plane
+    caller on the policy simulation surface.
+    """
+    creds = getattr(gateway, "_agent_creds", None)
+    if isinstance(authorization, str) and authorization.startswith(_BEARER_PREFIX):
+        presented = authorization[len(_BEARER_PREFIX) :]
+    elif isinstance(authorization, str):
+        presented = authorization
+    else:
+        presented = ""
+    if presented and creds is not None and creds.verify(presented) is not None:
+        raise HTTPException(
+            status_code=403,
+            detail="agent_plane_key_denied: agent-plane credentials may not call this endpoint",
+        )
+    return _check_auth(users, authorization, x_totp)
 
 
 def _register_authority_routes(
