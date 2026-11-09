@@ -546,7 +546,19 @@ def _build_parser() -> argparse.ArgumentParser:
     cont_resume.add_argument("--reason", default="", help=_CONTAINMENT_REASON_HELP)
     for cont_cmd in (cont_q, cont_r, cont_sl, cont_rl):
         cont_cmd.add_argument("--reason", default="", help=_CONTAINMENT_REASON_HELP)
-    for cont_cmd in (cont_hold, cont_resume, cont_status, cont_q, cont_r, cont_sl, cont_rl):
+    for cont_cmd in (
+        cont_hold,
+        cont_resume,
+        cont_ap,
+        cont_ab,
+        cont_arm,
+        cont_disarm,
+        cont_status,
+        cont_q,
+        cont_r,
+        cont_sl,
+        cont_rl,
+    ):
         cont_cmd.add_argument(
             "--policy-file",
             default=os.environ.get("RAUCLE_POLICY_FILE", ""),
@@ -2502,7 +2514,8 @@ def _containment_render(result: dict, config: Any, sub: str) -> None:
     if result.get("scope_id"):
         final_line += f" id={result['scope_id']}"
     print(final_line)
-    print(f"  target: {result['target_file']}")
+    if result.get("target_file"):
+        print(f"  target: {result['target_file']}")
     print(f"  receipt: {result['receipt_id']}")
     if result.get("restored_sha256"):
         print(f"  restored sha256: {result['restored_sha256']}")
@@ -3454,6 +3467,10 @@ def _dispatch(argv: list[str] | None = None) -> int:
         ("timestamp", "plan"): _cmd_timestamp,
         ("containment", "hold"): _cmd_containment,
         ("containment", "resume"): _cmd_containment,
+        ("containment", "approve-hold"): _cmd_containment,
+        ("containment", "abort-hold"): _cmd_containment,
+        ("containment", "arm-button"): _cmd_containment,
+        ("containment", "disarm-button"): _cmd_containment,
         ("containment", "status"): _cmd_containment,
         ("containment", "quarantine"): _cmd_containment,
         ("containment", "release"): _cmd_containment,
