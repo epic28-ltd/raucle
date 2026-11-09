@@ -799,7 +799,7 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     _register_stats_routes(app, gateway, check_auth, check_access)
     _register_learn_routes(app, gateway, check_auth, check_access)
     _register_policy_routes(app, gateway, check_auth, check_access)
-    _register_simulate_routes(app, gateway, users, check_auth, check_access)
+    _register_simulate_routes(app, gateway, users, check_access)
     _register_authority_routes(app, gateway, check_auth, check_access)
     _register_receipt_routes(app, gateway, check_auth, check_access)
     _register_siem_routes(app, gateway, check_auth, check_access)
@@ -1139,11 +1139,35 @@ def _register_policy_routes(
         return _validate_policy_content(req.content)
 
 
+def _sim_ref_roots(gateway: RaucleGateway) -> list:
+    """Allow roots for caller-supplied simulate file references.
+
+    The references arrive from an HTTP request body, so they are
+    confined to the gateway's own policy/data directories plus any
+    operator-configured extras (``GatewayConfig.simulate_ref_roots``).
+    """
+    from pathlib import Path as _Path
+
+    cfg = gateway.config
+    roots: set = set()
+    roots.update(_Path(r) for r in getattr(cfg, "simulate_ref_roots", ()) if r)
+    for attr in (
+        "policy_file",
+        "receipt_store",
+        "audit_chain",
+        "registry_path",
+        "agent_credentials_file",
+    ):
+        value = getattr(cfg, attr, "")
+        if value:
+            roots.add(_Path(value).resolve().parent)
+    return sorted(roots, key=str)
+
+
 def _register_simulate_routes(
     app: FastAPI,
     gateway: RaucleGateway,
     users: UserManager,
-    check_auth: Any,
     check_access: Any,
 ) -> None:
     """X6 slice 1: deterministic, signed, flippable policy simulation.
@@ -1182,6 +1206,7 @@ def _register_simulate_routes(
                 policy_ref=req.policy_ref,
                 window_ref=req.window_ref,
                 input_store_ref=req.input_store_ref,
+                ref_roots=_sim_ref_roots(gateway),
             )
         except SimulateError as exc:
             raise HTTPException(exc.status_code, f"{exc.reason}: {exc.message}") from exc
