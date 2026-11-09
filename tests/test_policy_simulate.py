@@ -510,7 +510,6 @@ def test_simulate_ref_roots_config_extension(sim_env):
     """Operator-configured extras widen the allow set."""
     from dataclasses import replace
 
-
     cfg = replace(
         sim_env["config"],
         simulate_ref_roots=(str(sim_env["tmp_path"].parent),),
