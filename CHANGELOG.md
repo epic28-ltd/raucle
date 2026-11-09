@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Added - X1: OpenAPI as the named secondary schema source
+
+- `ToolSchemaRegistry.register_from_openapi_fragment` (shipped with the
+  X1 gate slice) now has its full contract pinned by conformance vectors
+  04-07 and tests: undeclared-field rules fail at load against
+  OpenAPI-derived schemas (named tool + field), and registering the same
+  tool from the MCP primary and the OpenAPI secondary with differing
+  schemas is a load-time conflict, never silently last-write-wins.
+- A tool with NEITHER an MCP schema nor an OpenAPI fragment keeps the
+  documented legacy name-based path — a named, inspectable condition
+  (`has_schema == False`; any schema-bind is a named load error), not a
+  silent skip (`schema_enforcement_v1_07_neither_source_named_legacy.json`).
+
+### Added - X5: hot-path bench harness + async receipt sink
+
+- `bench/run_bench.py` measures the real production paths —
+  gate allow/deny, signed-receipt emit, receipt-store append, index
+  append, SIEM forward — and publishes p50/p99 + ceiling throughput.
+  Methodology and machine-honest recorded numbers:
+  `docs/nfr/x5-performance-bench.md`; results JSON committed per run
+  (`bench/results/`).
+- `raucle/async_receipt_sink.AsyncReceiptSink`: bounded single-consumer
+  queue in front of a receipt writer. Overflow is a NAMED failure event,
+  never silent: queue full raises `ReceiptSinkOverflow`, records a
+  `receipt_sink_overflow` event (bounded list + ERROR log naming the
+  sink, queue bound and lost receipt hash) and counts it. `close()`
+  drains and reports written/write_errors/lost — an unbounded queue is
+  refused at construction.
+
 ### Added - EPIC S5: gate chaos mode (default-off)
 
 - `RAUCLE_CHAOS=1` (read through `raucle._env.env`) enables three NAMED

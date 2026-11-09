@@ -1,0 +1,36 @@
+{
+  "args": {
+    "amount": "99999"
+  },
+  "decision": {
+    "decision": "deny",
+    "reason": "schema_violation: schema_violation: field 'amount' is declared 'number' but value is 'str'"
+  },
+  "name": "OpenAPI secondary source: type-confused amount denies",
+  "openapi_fragment": {
+    "paths": {
+      "/payments": {
+        "post": {
+          "operationId": "create_payment",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "amount": {
+                      "type": "number"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "source": "openapi_fragment",
+  "spec": "raucle-schema-enforcement/v1",
+  "tool": "create_payment"
+}
