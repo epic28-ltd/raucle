@@ -1,0 +1,11 @@
+{
+  "_comment": "sha256 pins for the X2 offline verifier page and its committed fixture pack; enforced by tests/test_x2_verifier.py. Regenerate with scripts/x2_asset_hashes.py after a deliberate asset change.",
+  "assets": {
+    "fixtures/fixture-pack/PACK.json": "58695919401e9362841219e2d1cf6a29a7f8861fd0800418264431b5919cd6bf",
+    "fixtures/fixture-pack/chain.jsonl": "e1ac473d7dbeb32403f54c74aa14d598d18223586f1106886e83e9465e68dd97",
+    "fixtures/fixture-pack/manifest.json": "70718c00f441811ed4c60f9ca034b66db6c48a1021506d20510532c1b5b9da1b",
+    "fixtures/fixture-pack/pubkeys/6a1521989e13ddb8.pem": "6a1521989e13ddb82ec636d66c0af8ff387f5b505d72a78efe97f4beffdd93e3",
+    "fixtures/fixture-pack/report.html": "1f9f4850c7a0be71505831065dc6de0c35b97d5eefabe89440984177aaefb8b0",
+    "x2-verifier.html": "9b414b5c3880a715de4836ec31eef36e3475920825cc678a9e6a42af4a249f35"
+  }
+}

@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<!-- raucle X2 slice 1: static offline verifier page.
+     Makes no network connections of any kind after load; all logic is inline and
+     nothing is loaded from any origin. tests/test_x2_verifier.py asserts this. -->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>raucle offline verifier — receipts &amp; audit packs</title>
+<style>
+  :root { font-family: system-ui, sans-serif; }
+  body { background: #fff; color: #111; margin: 2rem; max-width: 60rem; }
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: 1.05rem; margin-top: 2rem; }
+  .drop { border: 2px dashed #999; padding: 2rem; text-align: center; cursor: pointer; }
+  .drop.over { border-color: #111; }
+  textarea { width: 100%; height: 6rem; font-family: ui-monospace, monospace; font-size: .8rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .8rem; margin-top: .5rem; }
+  th, td { border: 1px solid #ccc; padding: .25rem .5rem; text-align: left;
+           word-break: break-all; }
+  th { background: #f4f4f4; }
+  #verdict { border: 2px solid #999; padding: .75rem 1rem; margin-top: 1rem; font-weight: 600; display: none; }
+  #verdict.verified { border-color: #111; }
+  #verdict.deny { border-color: #b00; color: #b00; }
+  ul.reasons { font-family: ui-monospace, monospace; font-size: .78rem; }
+  #recipe pre {
+    background: #f4f4f4; padding: .75rem; font-size: .72rem; overflow-x: auto;
+    border: 1px solid #ddd; white-space: pre-wrap;
+  }
+  input[type="file"] { display: block; margin: .5rem 0; }
+  .muted { color: #666; font-size: .8rem; }
+  .warn { color: #a6a; }
+</style>
+</head>
+<body>
+<h1>raucle offline verifier (X2 slice 1)</h1>
+<p class="muted">
+  Verifies raucle audit packs (<code>PACK.json</code>, manifest, receipt chain) or a bare
+  receipt chain / single receipt <em>entirely in your browser</em>. This page makes no
+  network connections after load — drop in files, get a verdict. Public keys must ship
+  inside the pack (that is what an audit pack is for); nothing is retrieved.
+</p>
+<h2>1 · Provide the artefact</h2>
+<div id="drop" class="drop">
+  drop the pack files here (select the whole pack directory, or the individual files)
+  <input id="files" type="file" multiple webkitdirectory />
+  <input id="multi" type="file" multiple accept=".json,.jsonl,.pem" />
+</div>
+<h2>— or paste a receipt / chain —</h2>
+<p class="muted">One receipt JWS per line, or <code>{"receipt_hash": …, "jws": …}</code> JSONL envelopes.
+Verify against the keys the pack carried (below) or a pasted PEM.</p>
+<textarea id="pastec" placeholder='{"receipt_hash":"sha256:…","jws":"…"}'></textarea>
+<textarea id="pastek" placeholder="optional: -----BEGIN PUBLIC KEY----- (one Ed25519 PEM; its base64 key_id is shown after verify)"></textarea>
+<button id="runpaste">verify pasted</button>
+<h2>2 · Verdict</h2>
+<div id="verdict"></div>
+<div id="packchecks"></div>
+<div id="results"></div>
+<h2>3 · The verification recipe this page runs</h2>
+<div id="recipe"><pre>
+Verification recipe — what this page checks, in order:
+
+1. PACK.json (index): a JSON object of kind 'raucle-audit-pack/v1'. Verify its
+   Ed25519 signature: re-serialise the index WITHOUT audit_public_key_pem and
+   index_signature in canonical JSON form (RFC 8785 / JCS: object keys sorted
+   by UTF-16 code unit, no insignificant whitespace, UTF-8, integers only),
+   and verify the base64 signature with the embedded audit public key.
+
+2. Integrity: every member file listed in the index must be present inside the
+   pack (no path escaping the pack root, no unindexed extra files), and its
+   sha256 must equal the index's recorded sha256. Anything tampered, missing,
+   added, or re-indexed fails here.
+
+3. manifest.json: verify its Ed25519 signature over the canonical form of its
+   'body' with the embedded signer public key; then check that signer_key_id
+   equals the first 16 hex chars of sha256 over the PEM bytes, and that the
+   manifest signer equals the PACK.json audit signer (one custodian).
+
+4. chain.jsonl: one JSON envelope per line, each exactly
+   {"receipt_hash": "sha256:<hex>", "jws": "<compact JWS>"} (duplicate JSON
+   keys rejected, unknown envelope fields rejected). For every receipt:
+     a. JWS is a 3-segment compact serialization (header.payload.signature);
+     b. header and payload decode to canonical JSON (JCS byte-equality);
+     c. header: alg 'EdDSA', typ 'provenance-receipt/v1', profile marker
+        'raucle/v1' == 'provenance', crit exactly ['raucle/v1'], no other
+        header keys; header kid == payload agent_key_id;
+     d. payload: typ 'provenance-receipt/v1', non-empty iss;
+     e. the Ed25519 signature over the raw signing input
+        (base64url(header) + '.' + base64url(payload)) verifies against the
+        bundled public key for agent_key_id — fail-closed: an unknown key id
+        is a denial, never a pass-through;
+     f. receipt_hash equals sha256 over the exact JWS ascii bytes;
+     g. every parent receipt_hash cited by the receipt appears in the chain.
+   Receipts declaring the PQ ('raucle/pq1') profile are DENIED here: the
+   ML-DSA-65 leg cannot be verified in-browser, and a partially verified
+   receipt must never be reported as verified. Packs that declare
+   require_pq are likewise denied outright.
+
+Trust note: a self-signed pack proves internal consistency only — anyone can
+rebuild and sign their own pack. Pin the custodian's audit key id (the
+signer shown on a verified pack) out of band to get 'this pack came from
+that custodian'.
+
+All of the above is recomputed locally from the dropped bytes alone. The page
+performs no network I/O — no keys or data leave the browser, and nothing is
+looked up anywhere.
+</pre></div>
+<script id="x2-verifier-core">
+"use strict";
+/* Verification core. Written to run identically in a browser and under Node's
+   vm (tests/test_x2_verifier.py drives this exact script against the committed
+   fixture pack), so the acceptance test exercises the shipped logic, not a
+   parallel implementation. DOM wiring at the bottom is guarded on `document`. */
+var X2V = (function () {
+  var _TYPE = new TextEncoder ? new TextEncoder() : null;
+  var _TD = new TextDecoder ? new TextDecoder("utf-8") : null;
+  var enc = function (s) { return _TYPE.encode(s); };
+  var dec = function (b) { return _TD.decode(b); };
+
+  function b64uDecode(s) {
+    var t = s.replace(/-/g, "+").replace(/_/g, "/");
+    var pad = (4 - (t.length % 4)) % 4;
+    var raw = atob(t + "=".repeat(pad));
+    var out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i += 1) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+  function b64Decode(s) {
+    s = s.replace(/\s+/g, "");
+    var raw = atob(s);
+    var out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i += 1) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+  function bytesEq(a, b) {
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+    return true;
+  }
+  function concat(a, b) {
+    var out = new Uint8Array(a.length + b.length);
+    out.set(a, 0); out.set(b, a.length);
+    return out;
+  }
+  async function sha256hex(bytes) {
+    var d = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(new Uint8Array(d)).map(function (x) {
+      return ("0" + x.toString(16)).slice(-2);
+    }).join("");
+  }
+  /* JCS (RFC 8785) per raucle's _canonical_json: sort object keys by UTF-16
+     code units, no whitespace, raw UTF-8, integers-and-stringables only —
+     floats and NaN/Infinity are rejected exactly as Python rejects them. */
+  function canon(obj, path) {
+    path = path || "$";
+    if (obj === null) return "null";
+    var t = typeof obj;
+    if (t === "number") {
+      if (!Number.isInteger(obj) || Math.abs(obj) > 1e15) {
+        throw new Error("non-integer number at " + path + " (floats are not signed material)");
+      }
+      return String(obj);
+    }
+    if (t === "boolean") return obj ? "true" : "false";
+    if (t === "string") return JSON.stringify(obj);
+    var i;
+    if (Array.isArray(obj)) {
+      var parts = [];
+      for (i = 0; i < obj.length; i += 1) parts.push(canon(obj[i], path + "[" + i + "]"));
+      return "[" + parts.join(",") + "]";
+    }
+    if (t === "object") {
+      var keys = Object.keys(obj).sort();
+      var out = [];
+      for (i = 0; i < keys.length; i += 1) {
+        out.push(JSON.stringify(keys[i]) + ":" + canon(obj[keys[i]], path + "." + keys[i]));
+      }
+      return "{" + out.join(",") + "}";
+    }
+    throw new Error("unsupported type at " + path);
+  }
+  function canonBytes(obj) { return enc(canon(obj)); }
+
+  /* JSON parser that rejects duplicate object keys — same object-smuggling
+     defence as the Python verifier's object_pairs_hook. */
+  function parseNoDup(text) {
+    var pos = 0;
+    function peek() { return text[pos]; }
+    function ws() { while (pos < text.length && " \t\r\n".indexOf(text[pos]) >= 0) pos += 1; }
+    function fail(msg) { throw new Error("json@" + pos + ": " + msg); }
+    function value(path) {
+      ws();
+      var c = peek();
+      if (c === "{") return object(path);
+      if (c === "[") return array(path);
+      if (c === '"') return string();
+      if (c === "t") { expect("true"); return true; }
+      if (c === "f") { expect("false"); return false; }
+      if (c === "n") { expect("null"); return null; }
+      return number(path);
+    }
+    function expect(word) {
+      if (text.substr(pos, word.length) !== word) fail("literal " + word);
+      pos += word.length;
+    }
+    function string() {
+      if (text[pos] !== '"') fail("string");
+      pos += 1;
+      var out = "";
+      while (pos < text.length) {
+        var c = text[pos];
+        if (c === '"') { pos += 1; return out; }
+        if (c === "\\") {
+          pos += 1;
+          var e = text[pos];
+          if (e === "u") {
+            out += String.fromCharCode(parseInt(text.substr(pos + 1, 4), 16));
+            pos += 5; continue;
+          }
+          out += ({ n: "\n", t: "\t", r: "\r", b: "\b", f: "\f", '"': '"', "\\": "\\", "/": "/" })[e];
+          if (out === undefined) fail("escape");
+          pos += 1; continue;
+        }
+        out += c; pos += 1;
+      }
+      fail("unterminated string");
+    }
+    function number(path) {
+      var m = /^-?\d+(\.\d+)?([eE][+-]?\d+)?/.exec(text.slice(pos));
+      if (!m) fail("number");
+      pos += m[0].length;
+      if (m[1] || m[2]) {
+        /* floats tolerated when parsed, rejected when canonicalised */
+        return parseFloat(m[0]);
+      }
+      return parseInt(m[0], 10);
+    }
+    function array(path) {
+      pos += 1; var out = [], i = 0;
+      ws();
+      if (peek() === "]") { pos += 1; return out; }
+      for (;;) {
+        out.push(value(path + "[" + i + "]")); i += 1; ws();
+        if (peek() === ",") { pos += 1; continue; }
+        if (peek() === "]") { pos += 1; return out; }
+        fail("array");
+      }
+    }
+    function object(path) {
+      pos += 1; var out = Object.create(null), seen = Object.create(null);
+      ws();
+      if (peek() === "}") { pos += 1; return out; }
+      for (;;) {
+        ws();
+        var k = string(); ws();
+        if (text[pos] !== ":") fail(":");
+        pos += 1;
+        if (seen[k]) fail("duplicate key " + JSON.stringify(k) + " at " + path);
+        seen[k] = true;
+        out[k] = value(path + "." + k); ws();
+        if (peek() === ",") { pos += 1; continue; }
+        if (peek() === "}") { pos += 1; return out; }
+        fail("object");
+      }
+    }
+    var v = value("$");
+    ws();
+    if (pos !== text.length) fail("trailing data");
+    return v;
+  }
+
+  /* Ed25519 public keys arrive as PEM SPKI; dig the fixed 32-byte raw key out. */
+  var _SPKI_ED25519 = "MCowBQYDK2VwAyEA"; // DER prefix, base64
+  function pemToRawEd25519(pem, label) {
+    var body = pem.replace(/-----BEGIN PUBLIC KEY-----/, "")
+      .replace(/-----END PUBLIC KEY-----/, "").replace(/\s+/g, "");
+    var der = b64Decode(body);
+    var prefix = b64Decode(_SPKI_ED25519);
+    if (der.length === 44 && bytesEq(der.subarray(0, 12), prefix.subarray(0, 12))) {
+      return der.subarray(12);
+    }
+    throw new Error(label + ": not an Ed25519 SPKI public key");
+  }
+  async function edVerify(rawPub, sig, msg) {
+    var key = await crypto.subtle.importKey("raw", rawPub, { name: "Ed25519" }, false, ["verify"]);
+    return crypto.subtle.verify({ name: "Ed25519" }, key, sig, msg);
+  }
+
+  /* --- receipt (chain line) verification ---------------------------------- */
+  var ENV_FIELDS = ["receipt_hash", "jws"];
+  async function verifyChainEnvelope(env, keymap, lineNo) {
+    /* keymap: kid -> raw public key bytes. Returns per-line result. */
+    var r = { line: lineNo, status: "green", reasons: [], jws: env.jws, hash: env.receipt_hash };
+    var fail = function (msg) { r.status = "red"; r.reasons.push(msg); };
+    var hdr, pay;
+    try {
+      var parts = String(env.jws).split(".");
+      if (parts.length !== 3) fail("JWS is not a 3-segment compact serialization (PQ hybrids unsupported here)");
+      if (parts.length === 3) {
+        hdr = JSON.parse(dec(b64uDecode(parts[0])));
+        pay = JSON.parse(dec(b64uDecode(parts[1])));
+        var hCanon = canonBytes(hdr), pCanon = canonBytes(pay);
+        if (!bytesEq(hCanon, b64uDecode(parts[0]))) fail("JOSE header is not canonical JSON (JCS)");
+        if (!bytesEq(pCanon, b64uDecode(parts[1]))) fail("payload is not canonical JSON (JCS)");
+        if (hdr.alg !== "EdDSA") fail("unexpected JWS alg " + JSON.stringify(hdr.alg));
+        if (hdr.typ !== "provenance-receipt/v1") fail("unexpected JOSE typ " + JSON.stringify(hdr.typ));
+        if (hdr["raucle/v1"] !== "provenance") fail("JOSE profile marker 'raucle/v1' is not 'provenance'");
+        if (hdr["raucle/pq1"] !== undefined) fail("PQ-hybrid receipt: ML-DSA-65 leg unverifiable in-browser");
+        if (!Array.isArray(hdr.crit) || hdr.crit.length !== 1 || hdr.crit[0] !== "raucle/v1") {
+          fail("crit must be exactly ['raucle/v1']");
+        }
+        var allowed = ["alg", "typ", "kid", "crit", "raucle/v1"];
+        Object.keys(hdr).forEach(function (k) {
+          if (allowed.indexOf(k) < 0 && k !== "raucle/pq1" && k !== "pqk") {
+            fail("unexpected JOSE header key(s): " + k);
+          }
+        });
+        if (hdr.kid !== pay.agent_key_id) fail("header kid does not match payload agent_key_id");
+        if (pay.typ !== "provenance-receipt/v1") fail("payload typ is not provenance-receipt/v1");
+        if (typeof pay.iss !== "string" || !pay.iss) fail("payload iss missing or empty");
+        r.kid = pay.agent_key_id; r.agent_id = pay.agent_id; r.operation = pay.operation;
+        var pub = keymap[pay.agent_key_id];
+        if (!pub) {
+          fail("no public key supplied for agent_key_id=" + pay.agent_key_id + " (fail-closed: signature unstated)");
+        } else {
+          var msg = enc(parts[0] + "." + parts[1]);
+          var sig = b64uDecode(parts[2]);
+          var ok = await edVerify(pub, sig, msg);
+          if (ok !== true) fail("Ed25519 signature did not verify against bundled key");
+        }
+        var h = await sha256hex(enc(String(env.jws)));
+        if (env.receipt_hash !== "sha256:" + h) {
+          fail("receipt_hash does not match recomputed sha256 over the JWS bytes (tampered or re-encoded)");
+        }
+      }
+    } catch (e) {
+      fail("malformed receipt: " + e.message);
+    }
+    return r;
+  }
+
+  async function verifyChainText(text, keymap) {
+    var rawLines = String(text).replace(/\r/g, "").split("\n").filter(function (l) { return l.trim(); });
+    var results = [];
+    var hashes = Object.create(null);
+    var valid = true;
+    for (var i = 0; i < rawLines.length; i += 1) {
+      var env;
+      try {
+        env = parseNoDup(rawLines[i]);
+        var extra = Object.keys(env).filter(function (k) { return ENV_FIELDS.indexOf(k) < 0; });
+        if (extra.length) throw new Error("unknown envelope field(s): " + extra.join(", "));
+        if (!env.receipt_hash || !env.jws) throw new Error("envelope must carry receipt_hash and jws");
+      } catch (e) {
+        results.push({ line: i + 1, status: "red", reasons: ["malformed chain line: " + e.message] });
+        valid = false;
+        continue;
+      }
+      var res = await verifyChainEnvelope(env, keymap, i + 1);
+      results.push(res);
+      if (res.status !== "green") valid = false;
+      hashes[env.receipt_hash] = true;
+    }
+    /* DAG containment: every cited parent must be a receipt_hash in this chain. */
+    results.forEach(function (res, idx) {
+      var env; var raw = rawLines[idx];
+      try { env = parseNoDup(raw); } catch (e) { return; }
+      try {
+        var jparts = String(env.jws).split(".");
+        var pay = JSON.parse(dec(b64uDecode(jparts[1])));
+        if (!Array.isArray(pay.parents)) return;
+        pay.parents.forEach(function (p) {
+          if (!hashes[p]) {
+            res.status = "red";
+            res.reasons.push("parent " + p + " does not appear in the chain (DAG violation)");
+            valid = false;
+          }
+        });
+      } catch (e) { /* already failing above */ }
+    });
+    return { valid: valid, receipt_count: results.length, lines: results };
+  }
+
+  /* --- audit pack verification ------------------------------------------- */
+  var INDEX_KIND = "raucle-audit-pack/v1";
+  var PACK_ALLOWED = { "PACK.json": 1, "chain.jsonl": 1, "manifest.json": 1, "report.html": 1 };
+  async function verifyIndex(index) {
+    var reasons = [];
+    var ok = true;
+    if (!index || index.kind !== INDEX_KIND) {
+      reasons.push("unexpected pack kind " + JSON.stringify(index && index.kind));
+      ok = false;
+    }
+    var pem = index.audit_public_key_pem, sig = index.index_signature;
+    if (!pem || !sig) { reasons.push("PACK.json is not signed (audit_public_key_pem / index_signature missing)"); ok = false; }
+    if (ok) {
+      var body = Object.create(null);
+      Object.keys(index).forEach(function (k) {
+        if (k !== "audit_public_key_pem" && k !== "index_signature") body[k] = index[k];
+      });
+      var raw;
+      try {
+        raw = pemToRawEd25519(pem, "audit key");
+      } catch (e) { reasons.push(e.message); ok = false; }
+      if (ok) {
+        var good = await edVerify(raw, b64Decode(sig), canonBytes(body));
+        if (good !== true) { reasons.push("index (PACK.json) signature did not verify"); ok = false; }
+      }
+    }
+    try {
+      var id = (await sha256hex(enc(String(pem)))).slice(0, 16);
+      return { ok: ok, signer: id, reasons: reasons };
+    } catch (e) {
+      return { ok: false, signer: null, reasons: reasons };
+    }
+  }
+
+  async function verifyManifest(manifest) {
+    var reasons = [];
+    try {
+      var pem = manifest.signer_public_key_pem;
+      var sigHex = String(manifest.signature).split(":")[1];
+      var raw = pemToRawEd25519(pem, "manifest signer key");
+      var sig = new Uint8Array(sigHex.match(/.{2}/g).map(function (h) { return parseInt(h, 16); }));
+      var good = await edVerify(raw, sig, canonBytes(manifest.body));
+      if (good !== true) reasons.push("manifest signature did not verify");
+      var id = (await sha256hex(enc(String(pem)))).slice(0, 16);
+      if (manifest.signer_key_id !== id) reasons.push("manifest signer_key_id does not match the key that verified");
+      return { ok: reasons.length === 0, signer: id, reasons: reasons };
+    } catch (e) {
+      return { ok: false, signer: null, reasons: ["manifest verify failed: " + e.message] };
+    }
+  }
+
+  async function verifyPack(files, opts) {
+    /* files: [{path, bytes(Uint8Array)}] with pack-relative paths (directories ok).
+       opts.expected_signer (optional 16-hex): pin the custodian's audit key id. */
+    opts = opts || {};
+    var verdict = {
+      ok: false, integrity_ok: false, index_signature_ok: false, manifest_signature_ok: false,
+      chain_valid: false, signer_key_id: null, signer_trusted: null, receipt_count: 0,
+      checks: [], lines: [], index: null,
+    };
+    var deny = function (m) { verdict.checks.push({ check: m.check, ok: false, reasons: m.reasons }); };
+    var byPath = Object.create(null);
+    files.forEach(function (f) { byPath[f.path] = f.bytes; });
+    function text(path) {
+      if (!byPath[path]) throw new Error("missing member " + path);
+      return dec(byPath[path]);
+    }
+    var idxRaw, index;
+    try {
+      idxRaw = text("PACK.json");
+      index = parseNoDup(idxRaw);
+      verdict.index = index;
+    } catch (e) {
+      deny({ check: "PACK.json parses without duplicate keys", reasons: [String(e.message)] });
+      return verdict;
+    }
+    var vidx = await verifyIndex(index);
+    verdict.index_signature_ok = vidx.ok;
+    verdict.signer_key_id = vidx.signer;
+    verdict.checks.push({ check: "PACK.json Ed25519 signature", ok: vidx.ok, reasons: vidx.reasons });
+    if (index.require_pq) {
+      verdict.checks.push({
+        check: "pack declares require_pq",
+        ok: false,
+        reasons: ["pack requires PQ-hybrid receipts; the browser verifier cannot verify ML-DSA-65 legs (fail-closed)"]
+      });
+      return verdict;
+    }
+    /* integrity: every member present, hashed, path-contained */
+    var integrityOK = true, reasons = [];
+    var members = index.members || [];
+    members.forEach(function (m) {
+      var p = String(m.path);
+      if (p.indexOf("..") >= 0 || p.charAt(0) === "/") {
+        integrityOK = false; reasons.push("member path escapes the pack: " + JSON.stringify(p)); return;
+      }
+      var b = byPath[p];
+      if (!b) { integrityOK = false; reasons.push("missing member " + p); return; }
+    });
+    var hashChecks = [];
+    if (integrityOK) {
+      for (var i = 0; i < members.length; i += 1) {
+        var m = members[i];
+        var h = "sha256:" + (await sha256hex(byPath[m.path]));
+        if (h !== m.sha256) {
+          integrityOK = false;
+          reasons.push("hash mismatch for " + m.path + " (tampered)");
+        } else {
+          hashChecks.push(m.path);
+        }
+      }
+      /* a member file present but NOT indexed is envelope malleability */
+      files.forEach(function (f) {
+        if (f.path === "PACK.json") return;
+        if (!members.some(function (m) { return m.path === f.path; })) {
+          integrityOK = false;
+          reasons.push("file " + f.path + " present but not indexed in PACK.json");
+        }
+      });
+    }
+    verdict.integrity_ok = integrityOK;
+    verdict.checks.push({
+      check: "member integrity (sha256, " + hashChecks.length + "/" + members.length + " hashed clean)",
+      ok: integrityOK, reasons: reasons,
+    });
+    if (verdict.index_signature_ok && opts.expected_signer) {
+      verdict.signer_trusted = verdict.signer_key_id === opts.expected_signer;
+      verdict.checks.push({
+        check: "custodian signer pin",
+        ok: verdict.signer_trusted,
+        reasons: verdict.signer_trusted ? [] : ["audit key id " + verdict.signer_key_id + " does not match pinned key " + opts.expected_signer],
+      });
+    }
+    /* manifest */
+    var vmRes = { ok: false, reasons: ["not run (missing or untrusted members)"] };
+    try {
+      var manifest = parseNoDup(text("manifest.json"));
+      vmRes = await verifyManifest(manifest);
+      if (vmRes.ok && vmRes.signer !== verdict.signer_key_id) {
+        vmRes.ok = false;
+        vmRes.reasons.push("manifest signer does not match index signer");
+      }
+    } catch (e) {
+      vmRes = { ok: false, reasons: [String(e.message)] };
+    }
+    verdict.manifest_signature_ok = vmRes.ok;
+    verdict.checks.push({ check: "manifest.json Ed25519 signature", ok: vmRes.ok, reasons: vmRes.reasons });
+    /* chain against bundled public keys */
+    var keymap = Object.create(null);
+    members.forEach(function (m) {
+      if (m.role === "public-key" && byPath[m.path]) {
+        try { keymap[m.key_id] = pemToRawEd25519(dec(byPath[m.path]), m.path); } catch (e) { /* named at verify time */ }
+      }
+    });
+    var chainRes = { valid: false, receipt_count: 0, lines: [] };
+    try {
+      chainRes = await verifyChainText(text("chain.jsonl"), keymap);
+      if (!chainRes.valid) {
+        /* per-line details carry the named reasons; a summary check too */
+      }
+    } catch (e) {
+      chainRes = { valid: false, receipt_count: 0, lines: [], errors: [String(e.message)] };
+    }
+    verdict.chain_valid = chainRes.valid;
+    verdict.receipt_count = chainRes.receipt_count;
+    verdict.lines = chainRes.lines;
+    verdict.checks.push({
+      check: "receipt chain vs bundled keys (" + chainRes.receipt_count + " receipts)",
+      ok: chainRes.valid,
+      reasons: (chainRes.errors || []).concat(chainRes.valid ? [] : ["per-receipt failures listed below"]),
+    });
+    verdict.ok = verdict.index_signature_ok && verdict.integrity_ok && verdict.manifest_signature_ok && verdict.chain_valid && verdict.signer_trusted !== false;
+    return verdict;
+  }
+
+  /* --- single pasted receipt --------------------------------------------- */
+  async function verifySingleJWS(jwsText, pem) {
+    var r = { status: "green", reasons: [], hash_ok: null, sig_ok: null };
+    var fail = function (m) { r.status = "red"; r.reasons.push(m); };
+    try {
+      var jws = String(jwsText).trim().split(/\s+/).filter(Boolean).join("");
+      if (jws.indexOf('{"receipt_hash"') === 0) {
+        var env = parseNoDup(jws);
+        jws = env.jws;
+      }
+      var parts = jws.split(".");
+      if (parts.length !== 3) fail("not a 3-segment compact JWS");
+      /* recompute the hash ourselves so hash_ok is stated even without a key */
+      var h = await sha256hex(enc(jws));
+      r.hash_ok = true;
+      r.receipt_hash = "sha256:" + h;
+      var line = await verifyChainEnvelope({ receipt_hash: r.receipt_hash, jws: jws }, Object.create(null), 0);
+      line.reasons.slice().reverse().forEach(function (msg) {
+        if (msg.indexOf("receipt_hash does not match") >= 0) r.hash_ok = false;
+      });
+      if (!r.hash_ok) fail("receipt_hash does not match recomputed sha256 over the JWS bytes");
+      if (line.reasons.length) {
+        line.reasons.forEach(function (msg) { if (msg !== "no public key supplied" + ("")) r.reasons.push(msg); });
+      }
+      if (pem) {
+        var raw = pemToRawEd25519(pem, "pasted key");
+        var ok = await edVerify(raw, b64uDecode(parts[2]), enc(parts[0] + "." + parts[1]));
+        r.sig_ok = ok === true;
+        r.key_id = (await sha256hex(enc(String(pem)))).slice(0, 16);
+      } else {
+        r.sig_ok = null;
+        r.reasons.push("no public key supplied — signature unverifiable (fail-closed); pass the bundle's PEM");
+      }
+      r.status = r.hash_ok && r.sig_ok !== false ? (r.sig_ok === true ? "green" : "warn") : "red";
+      var pay = JSON.parse(dec(b64uDecode(parts[1])));
+      r.agent_id = pay.agent_id; r.operation = pay.operation;
+    } catch (e) {
+      fail("malformed receipt: " + e.message);
+    }
+    return r;
+  }
+
+  return {
+    b64uDecode: b64uDecode, b64Decode: b64Decode, canonBytes: canonBytes, canon: canon,
+    parseNoDup: parseNoDup, sha256hex: sha256hex, pemToRawEd25519: pemToRawEd25519,
+    edVerify: edVerify, verifyChainText: verifyChainText, verifyChainEnvelope: verifyChainEnvelope,
+    verifyIndex: verifyIndex, verifyManifest: verifyManifest, verifyPack: verifyPack,
+    verifySingleJWS: verifySingleJWS,
+  };
+})();
+</script>
+<script id="x2-ui">
+"use strict";
+/* DOM wiring. Browser-only; node harness never executes this block. */
+(function () {
+  if (typeof document === "undefined") return;
+  var files = []; // [{path, bytes, base}]
+  var drop = document.getElementById("drop");
+  function collect(list) {
+    var out = [];
+    for (var i = 0; i < list.length; i += 1) {
+      var f = list[i];
+      var rel = f.webkitRelativePath || f.name;
+      out.push({ path: rel, name: f.name });
+    }
+    return out;
+  }
+  function readAll(list, cb) {
+    var todo = list.slice();
+    files = [];
+    (function next() {
+      if (!todo.length) return cb();
+      var f = todo.shift();
+      var r = new FileReader();
+      r.onload = function () {
+        var rel = f.webkitRelativePath || f.name;
+        files.push({ path: rel, bytes: new Uint8Array(r.result), base: rel.split("/")[0] });
+        next();
+      };
+      r.readAsArrayBuffer(f);
+    })();
+  }
+  function renderVerdict(el, ok, label, extra) {
+    el.style.display = "block";
+    el.className = ok ? "verified" : "deny";
+    el.textContent = (ok ? "VERIFIED — " : "DENY — ") + label + (extra ? " · " + extra : "");
+  }
+  function table(lines) {
+    var html = "<table><tr><th>line</th><th>agent</th><th>operation</th><th>key id</th><th>status</th><th>detail</th></tr>";
+    lines.forEach(function (l) {
+      html += "<tr><td>" + l.line + "</td><td>" + (l.agent_id || "") + "</td><td>" + (l.operation || "") +
+        "</td><td>" + (l.kid || "") + "</td><td>" + l.status.toUpperCase() + "</td><td>" +
+        (l.reasons.join("; ") || "signature green; receipt_hash green; parents green") + "</td></tr>";
+    });
+    return html + "</table>";
+  }
+  function checkList(checks) {
+    var html = "<ul class='reasons'>";
+    checks.forEach(function (c) {
+      html += "<li>" + (c.ok ? "✔" : "✘") + " " + c.check + (c.reasons.length ? " — " + c.reasons.join("; ") : "") + "</li>";
+    });
+    return html + "</ul>";
+  }
+  function normalisePaths() {
+    /* a directory drop yields <pack>/PACK.json paths; keep pack-relative */
+    var base = {};
+    files.forEach(function (f) {
+      var segs = f.path.split("/");
+      if (segs.length > 1) base[segs[0]] = true;
+    });
+    var names = Object.keys(base);
+    if (names.length === 1) {
+      files = files.map(function (f) {
+        var segs = f.path.split("/");
+        return { path: segs.slice(1).join("/"), bytes: f.bytes, base: segs[0] };
+      }).filter(function (f) { return f.path; });
+    }
+  }
+  function hasFile(name) {
+    return files.some(function (f) { return f.path === name; });
+  }
+  async function runPack() {
+    normalisePaths();
+    var V = document.getElementById("verdict"), R = document.getElementById("results"), C = document.getElementById("packchecks");
+    if (!hasFile("PACK.json")) return false;
+    try {
+      var v = await X2V.verifyPack(files);
+      renderVerdict(V, v.ok, "audit pack", v.receipt_count + " receipts" + (v.signer_key_id ? ", signer " + v.signer_key_id : ""));
+      C.innerHTML = checkList(v.checks);
+      R.innerHTML = table(v.lines);
+      return true;
+    } catch (e) {
+      renderVerdict(V, false, "pack verification error", String(e.message));
+      C.innerHTML = "";
+      R.innerHTML = "";
+      return true;
+    }
+  }
+  async function runChainOnly() {
+    var V = document.getElementById("verdict"), R = document.getElementById("results"), C = document.getElementById("packchecks");
+    var chainFile = files.find(function (f) { return /\.jsonl$/.test(f.path); });
+    if (!chainFile) return false;
+    var keymap = Object.create(null);
+    files.forEach(function (f) {
+      if (/\.pem$/.test(f.path)) {
+        var kid = f.path.split("/").pop().replace(/\.pem$/, "");
+        keymap[kid] = X2V.pemToRawEd25519(new TextDecoder().decode(f.bytes), f.path);
+      }
+    });
+    try {
+      var v = await X2V.verifyChainText(new TextDecoder().decode(chainFile.bytes), keymap);
+      renderVerdict(V, v.valid, "receipt chain (" + v.receipt_count + ")");
+      C.innerHTML = "";
+      R.innerHTML = table(v.lines);
+      return true;
+    } catch (e) {
+      renderVerdict(V, false, "chain error", String(e.message));
+      return true;
+    }
+  }
+  async function handleFiles(list) {
+    readAll(list, async function () {
+      await runPack() || await runChainOnly() || renderVerdict(
+        document.getElementById("verdict"), false, "no PACK.json or *.jsonl in the selection");
+    });
+  }
+  drop.addEventListener("dragover", function (e) { e.preventDefault(); drop.className = "drop over"; });
+  drop.addEventListener("dragleave", function () { drop.className = "drop"; });
+  drop.addEventListener("drop", function (e) {
+    e.preventDefault(); drop.className = "drop";
+    handleFiles(e.dataTransfer.files);
+  });
+  ["files", "multi"].forEach(function (id) {
+    document.getElementById(id).addEventListener("change", function (e) { handleFiles(e.target.files); });
+  });
+  document.getElementById("runpaste").addEventListener("click", async function () {
+    var V = document.getElementById("verdict"), R = document.getElementById("results"), C = document.getElementById("packchecks");
+    var jws = document.getElementById("pastec").value;
+    var pem = document.getElementById("pastek").value || null;
+    if (!jws.trim()) return;
+    try {
+      var r = await X2V.verifySingleJWS(jws, pem);
+      renderVerdict(V, r.status === "green", "receipt " + (r.agent_id || ""), r.receipt_hash ? r.receipt_hash.slice(0, 23) + "… (hash recompute green)" : "");
+      R.innerHTML = "<ul class='reasons'><li>signature: " + (r.sig_ok === true ? "green against pasted key " + r.key_id : r.sig_ok === false ? "RED — signature did not verify" : "unstated (no key)") + "</li><li>receipt_hash recompute: " + (r.hash_ok ? "green" : "RED") + "</li>" + r.reasons.map(function (x) { return "<li>" + x + "</li>"; }).join("") + "</ul>";
+      C.innerHTML = "";
+    } catch (e) {
+      renderVerdict(V, false, "receipt error", String(e.message));
+    }
+  });
+})();
+</script>
+</body>
+</html>

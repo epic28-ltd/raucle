@@ -1,0 +1,71 @@
+{
+  "body": {
+    "kind": "raucle-audit-export/v1",
+    "generated_at": 1700000000,
+    "tool_version": "0.22.0",
+    "chain_verdict": {
+      "valid": true,
+      "receipt_count": 2,
+      "signature_failures": 0,
+      "parent_link_failures": 0,
+      "taint_monotonicity_failures": 0,
+      "capability_violations": 0,
+      "unauthorised_sanitisations": 0,
+      "tampered_receipts": [],
+      "errors": []
+    },
+    "nodes": [
+      {
+        "id": "agent:billing-fixture/user_input",
+        "label": "agent:billing-fixture · user_input",
+        "kind": "operation",
+        "status": "green",
+        "evidence": [
+          "chain verified clean for this node's receipts"
+        ],
+        "receipt_hashes": [
+          "sha256:3dac2e744a40dd5bcd311fa846a32d53d0032bc59c7e71686b6e3a39716546e1"
+        ],
+        "proof_certificate": "",
+        "proof_status": "",
+        "lean_theorem": ""
+      },
+      {
+        "id": "agent:billing-fixture/ledger.post",
+        "label": "agent:billing-fixture → ledger.post",
+        "kind": "tool",
+        "status": "green",
+        "evidence": [
+          "chain verified clean for this node's receipts"
+        ],
+        "receipt_hashes": [
+          "sha256:a91d662f25afa37db578f7335edbbe5ddfd872899480a2b43de41edd4d99ac60"
+        ],
+        "proof_certificate": "",
+        "proof_status": "",
+        "lean_theorem": ""
+      }
+    ],
+    "obligations": [],
+    "global_findings": [],
+    "summary": {
+      "chain_valid": true,
+      "receipt_count": 2,
+      "global_findings": 0,
+      "green": 2,
+      "amber": 0,
+      "red": 0
+    },
+    "input_hashes": {
+      "chain_sha256": "sha256:e1ac473d7dbeb32403f54c74aa14d598d18223586f1106886e83e9465e68dd97",
+      "public_keys": {
+        "6a1521989e13ddb8": "sha256:6a1521989e13ddb82ec636d66c0af8ff387f5b505d72a78efe97f4beffdd93e3"
+      },
+      "capability_statements": {},
+      "proofs": []
+    }
+  },
+  "signature": "ed25519:edd59af641263155793efd281ab471b1cde6e779254286d4c983744e2a9208489b34d7cbf8695721a39e95c35d096e1d23c37abf3ae33fe33fce985d7e762801",
+  "signer_key_id": "e9514763c3271537",
+  "signer_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAEBi8uCfigNiZxKUGDMbi8S9RbdexmprF6WTb4ioc1oc=\n-----END PUBLIC KEY-----\n"
+}
