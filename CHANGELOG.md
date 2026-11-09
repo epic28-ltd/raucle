@@ -31,6 +31,25 @@
   drains and reports written/write_errors/lost — an unbounded queue is
   refused at construction.
 
+### Added - X3 slice 1: optional OIDC/SSO federation for the admin plane
+
+- Optional OpenID Connect identity-provider federation for the ADMIN plane,
+  OFF by default. Enabling (`RAUCLE_OIDC_ENABLED` + issuer/client id) starts
+  the RFC 6749 authorization-code flow with RFC 7636 PKCE (S256); discovery
+  + JWKS are fetched at startup and FAIL CLOSED on an unreachable or
+  mismatching issuer. The client secret never enters a config file (env or
+  0600 secret file; an inline `client_secret` refuses with a named
+  `OIDC_CONFIG_ERROR`). Verified subjects map onto the existing RED-032
+  admin user records; an unknown subject is a named `MAPPING_ERROR` — no
+  auto-provisioning (SCIM-lite is a named follow-up).
+- Receipted admin session tokens (T-S3): `POST /api/session/login` verifies
+  the key (and TOTP when MFA is on) once and exchanges it for a short-lived
+  `rst_` bearer session held by digest only; OIDC logins get the SAME
+  session semantics. Session open and close are signed provenance receipts
+  (`x_admin_session`), verifiable by the standard chain verifier. Raw-key
+  authentication is unchanged. Follow-ups: SCIM-lite provisioning, provider
+  key rotation, receipt sidecar.
+
 ### Added - EPIC S5: gate chaos mode (default-off)
 
 - `RAUCLE_CHAOS=1` (read through `raucle._env.env`) enables three NAMED
@@ -55,8 +74,6 @@
   AuditVerifier), the drain catch-up contract, and the fault-receipt
   verification roundtrip.
 
-=======
->>>>>>> 1733a30 (feat: the receipt-bound bilateral policy diff + threat model as code (EPIC S2, S3))
 ### Added - EPIC S2: the receipt-bound bilateral policy diff
 
 - The counterfactual replay report (`raucle.counterfactual`) can now be
