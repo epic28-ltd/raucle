@@ -297,6 +297,22 @@ class GatewayConfig:
     # nonce_cache. Portal credentials never flow to the gate.
     deployment_trust: dict = field(default_factory=dict)
 
+    # X3 slice 1: optional OIDC identity-provider federation for the ADMIN
+    # plane. OFF by default; enabling is an operator config choice. The
+    # client secret NEVER lives here - it is read from
+    # RAUCLE_OIDC_CLIENT_SECRET or RAUCLE_OIDC_CLIENT_SECRET_FILE at
+    # federation start. A config document carrying an inline client_secret
+    # refuses with a named error (see from_yaml).
+    oidc_enabled: bool = False
+    oidc_issuer: str = ""
+    oidc_client_id: str = ""
+    oidc_redirect_uri: str = ""
+    oidc_scope: str = "openid profile email"
+    # T-S3: admin-panel session tokens. TTL in seconds (default 1h); 0 or
+    # negative would disable sessions, so the loader floors it at 60.
+    admin_session_ttl: int = 3600
+    admin_sessions_max: int = 64
+
     @classmethod
     def from_env(cls) -> GatewayConfig:
         """Load configuration from environment variables."""
@@ -350,6 +366,13 @@ class GatewayConfig:
             ),
             receipt_index_path=os.environ.get("RAUCLE_RECEIPT_INDEX_PATH", ""),
             deployment_trust=_deployment_trust_from_env(),
+            oidc_enabled=os.environ.get("RAUCLE_OIDC_ENABLED", "").lower() in ("1", "true", "yes"),
+            oidc_issuer=os.environ.get("RAUCLE_OIDC_ISSUER", ""),
+            oidc_client_id=os.environ.get("RAUCLE_OIDC_CLIENT_ID", ""),
+            oidc_redirect_uri=os.environ.get("RAUCLE_OIDC_REDIRECT_URI", ""),
+            oidc_scope=os.environ.get("RAUCLE_OIDC_SCOPE", "openid profile email"),
+            admin_session_ttl=max(60, int(os.environ.get("RAUCLE_ADMIN_SESSION_TTL", "3600"))),
+            admin_sessions_max=max(1, int(os.environ.get("RAUCLE_ADMIN_SESSIONS_MAX", "64"))),
         )
 
     @classmethod
@@ -357,6 +380,12 @@ class GatewayConfig:
         """Load from a YAML config file."""
         with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
+        if isinstance(data, dict) and data.get("oidc", {}).get("client_secret"):
+            raise ValueError(
+                "OIDC_CONFIG_ERROR: client_secret must not live in the config "
+                "file; set RAUCLE_OIDC_CLIENT_SECRET (env) or "
+                "RAUCLE_OIDC_CLIENT_SECRET_FILE (0600 file) instead"
+            )
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
     def to_yaml(self) -> str:
@@ -608,6 +637,10 @@ class GatewayUser:
     # TOTP MFA fields
     totp_secret: str = ""  # base32 secret, empty = MFA not set up
     mfa_enabled: bool = False  # True after user verifies first TOTP code
+    # X3: bound OIDC subject (empty = the user authenticates by key only).
+    # Bound on the first successful OIDC login that maps claims onto this
+    # record; it lives in the persisted store, never in any config file.
+    oidc_sub: str = ""
 
     def is_expired(self) -> bool:
         if self.expires_at is None:
@@ -717,6 +750,7 @@ class UserManager:
                 api_key_hash=key_hash,
                 user_id=rec.get("user_id") or _derive_user_id(key_hash),
             )
+            user.oidc_sub = rec.get("oidc_sub") or ""
             if rec.get("totp_secret"):
                 user.totp_secret = rec["totp_secret"]
                 # Files written before RED-032 carry no mfa_enabled flag: a
@@ -751,6 +785,8 @@ class UserManager:
             }
             if getattr(user, "totp_secret", None):
                 rec["totp_secret"] = user.totp_secret
+            if user.oidc_sub:
+                rec["oidc_sub"] = user.oidc_sub
             records.append(rec)
         payload = "".join(_json.dumps(r) + "\n" for r in records)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -923,6 +959,17 @@ class UserManager:
         self._persist_users()
         return True
 
+    def persist(self) -> None:
+        """Public flush of the user store (used by OIDC subject binding)."""
+        self._persist_users()
+
+    def find_by_oidc_sub(self, sub: str) -> GatewayUser | None:
+        """Resolve a bound OIDC subject to its user, honouring expiry."""
+        for user in self._users.values():
+            if user.oidc_sub == sub:
+                return None if user.is_expired() else user
+        return None
+
     def can_access(self, handle: str, resource: str) -> bool:
         """Check if a user (by key or user_id) can access a resource."""
         user = self.resolve(handle)
@@ -935,6 +982,11 @@ class UserManager:
         if user.role == "auditor":
             return resource in ("stats", "receipts")
         return False
+
+
+# Claims consulted (in order) when binding an OIDC subject to a user for the
+# first time. The token subject itself is authoritative AFTER binding (X3).
+OIDC_MAP_USERNAME_CLAIMS = ("preferred_username", "email", "name")
 
 
 # ---------------------------------------------------------------------------
@@ -1526,6 +1578,22 @@ class RaucleGateway:
             extension_key: extension,
         }
         return self._sign_and_store_receipt(payload)
+
+    def _emit_admin_session_receipt(self, action: str, extension: dict[str, Any]) -> str | None:
+        """Emit a signed admin-session lifecycle receipt (X3 slice 1, T-S3).
+
+        Opening and closing an admin-panel session are receipted lifecycle
+        events, never silent state changes - the same doctrine as records
+        destroy. The extension binds the session's hash-derived public
+        handle (never the bearer token), the user_id, the auth method
+        (``key`` or ``oidc``) and the expiry, so both login paths leave an
+        identical evidence trail.
+        """
+        return self._emit_authority_receipt(
+            verdict="allowed",
+            extension_key="x_admin_session",
+            extension=extension,
+        )
 
     def _emit_gate_receipt(self, ctx: GateReceiptContext) -> str | None:
         """Emit a signed provenance receipt for a gate decision (PR-B).

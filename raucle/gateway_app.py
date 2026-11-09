@@ -13,6 +13,7 @@ import json
 import logging
 import re as _re
 import secrets
+import time
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from raucle.admin_session import SESSION_TOKEN_PREFIX, AdminSessionManager, SessionAuthError
 from raucle.gateway import (
     GatewayUser,
     RaucleGateway,
@@ -733,6 +735,7 @@ def _check_auth(
     users: UserManager,
     authorization: str | None,
     x_totp: str | None,
+    sessions: AdminSessionManager | None = None,
 ) -> GatewayUser:
     """Extract and validate the API key and optional TOTP code.
 
@@ -740,6 +743,12 @@ def _check_auth(
     dependency) pass the FastAPI ``Header`` default object, not ``None``.
     Coerce anything that is not a string to ``None`` so a missing optional
     header behaves as missing instead of reaching the comparators.
+
+    X3 slice 1: an ``rst_``-prefixed bearer token is an admin SESSION
+    token (T-S3). It resolves to the session's user with NO TOTP re-check
+    - the code was verified once at session open - and the session's own
+    expiry governs. An unknown/expired session is a plain 403, the same
+    shape as an invalid key, with zero disclosure about which failed.
     """
     if not isinstance(authorization, str):
         authorization = None
@@ -750,6 +759,15 @@ def _check_auth(
     key = authorization
     if key.startswith(_BEARER_PREFIX):
         key = key[len(_BEARER_PREFIX) :]
+    if key.startswith(SESSION_TOKEN_PREFIX):
+        if sessions is None:
+            # Session tokens exist but no manager is wired: refuse, never
+            # fall through to key comparison.
+            raise HTTPException(status_code=401, detail="Session tokens not enabled")
+        user = sessions.resolve(key)
+        if user is None:
+            raise HTTPException(status_code=403, detail="Invalid or expired session")
+        return user
     user = users.get_user(key)
     if user is None:
         raise HTTPException(status_code=403, detail="Invalid API key")
@@ -783,10 +801,54 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
         authorization: str | None = Header(None),
         x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> GatewayUser:
-        return _check_auth(users, authorization, x_totp)
+        return _check_auth(users, authorization, x_totp, sessions)
 
     def check_access(user: GatewayUser, resource: str) -> None:
         _check_access(users, user, resource)
+
+    # X3 slice 1 (T-S3): receipted admin sessions, shared by the key and
+    # OIDC login paths. Receipts ride the gateway signer only when receipt
+    # emission is configured; the manager degrades to receipt-less sessions
+    # otherwise (the composition root logs that gap, never silently).
+    sessions = AdminSessionManager(
+        users,
+        ttl_seconds=getattr(gateway.config, "admin_session_ttl", 3600),
+        max_sessions=getattr(gateway.config, "admin_sessions_max", 64),
+        receipt_emitter=(
+            gateway._emit_admin_session_receipt
+            if gateway is not None and hasattr(gateway, "_emit_admin_session_receipt")
+            else None
+        ),
+    )
+
+    # OIDC federation is OFF by default: an enabled config fetches the
+    # discovery document HERE, fail-closed - an unreachable or malformed
+    # issuer refuses the admin app construction, exactly the boot banner
+    # plus refusal the operator chose when enabling.
+    oidc_federation = None
+    if getattr(gateway.config, "oidc_enabled", False):
+        from raucle import admin_oidc
+
+        cfg = gateway.config
+        provider = admin_oidc.OIDCProviderConfig(
+            cfg.oidc_issuer,
+            cfg.oidc_client_id,
+            redirect_uri=cfg.oidc_redirect_uri,
+            scope=cfg.oidc_scope,
+        )
+        federation = admin_oidc.OIDCFederation(
+            provider,
+            admin_oidc.client_secret_from_env(),
+        )
+        federation.start()
+        oidc_federation = federation
+        logger.warning(
+            "X3 boot banner: OIDC federation ENABLED for admin plane; "
+            "provider issuer %s (client_id %s). Sessions after OIDC login "
+            "carry receipted lifecycle semantics (open + close).",
+            cfg.oidc_issuer,
+            cfg.oidc_client_id,
+        )
 
     app = FastAPI(
         title="Raucle Gateway Admin",
@@ -804,6 +866,7 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     _register_receipt_routes(app, gateway, check_auth, check_access)
     _register_siem_routes(app, gateway, check_auth, check_access)
     _register_user_routes(app, users, check_auth, check_access)
+    _register_session_routes(app, users, sessions, check_auth, check_access, oidc_federation)
     _register_config_routes(app, gateway, check_auth, check_access)
     _register_ui_routes(app)
 
@@ -2003,6 +2066,146 @@ def _apply_runtime_siem(gateway: RaucleGateway, changed: list[str]) -> None:
     for cfg_field, siem_field in siem_fields.items():
         if cfg_field in changed:
             setattr(gateway.siem, siem_field, getattr(gateway.config, cfg_field))
+
+
+class _SessionLoginRequest(BaseModel):
+    """Body for POST /api/session/login (the key+code -> bearer exchange)."""
+
+    api_key: str = Field(..., description="Admin API key (verified once, never stored)")
+    totp: str = Field("", description="6-digit TOTP code when MFA is enabled")
+
+
+class _OIDCCallbackRequest(BaseModel):
+    """Body for POST /api/oidc/callback: the provider redirect parameters."""
+
+    code: str = ""
+    state: str = ""
+    error: str = ""
+    error_description: str = ""
+
+
+# Single-use pending OIDC logins live at most this long before the caller
+# must restart the flow (state/nonce/PKCE verifier are all single-use).
+_OIDC_PENDING_TTL_SECONDS = 300
+
+
+def _register_session_routes(
+    app: FastAPI,
+    users: UserManager,
+    sessions: AdminSessionManager,
+    check_auth: Any,
+    check_access: Any,
+    oidc_federation: Any,
+) -> None:
+    """Admin session lifecycle (T-S3) + optional OIDC federation (X3).
+
+    GET  /api/session/config   - is OIDC enabled; never discloses secrets
+    POST /api/session/login    - api key (+TOTP) -> receipted bearer session
+    POST /api/session/logout   - closes the presented session, receipted
+    GET  /api/oidc/login       - builds provider authorization URL (PKCE)
+    POST /api/oidc/callback    - code+verifier exchange, mapping, session
+    """
+    # state -> {nonce, code_verifier, created_at}; single-use, bounded.
+    _pending_oidc: dict[str, dict[str, Any]] = {}
+
+    @app.get("/api/session/config")
+    def session_config() -> dict[str, Any]:
+        return {
+            "oidc_enabled": oidc_federation is not None,
+            "provider_issuer": (
+                oidc_federation.config.issuer_url if oidc_federation is not None else ""
+            ),
+            "session_ttl_seconds": sessions._ttl,
+        }
+
+    @app.post(
+        "/api/session/login",
+        responses={
+            "401": {"description": "MFA required or bad credentials"},
+            "403": {"description": "Invalid API key or TOTP"},
+            "503": {"description": "Session limit reached"},
+        },
+    )
+    def session_login(req: _SessionLoginRequest) -> dict[str, Any]:
+        try:
+            opened = sessions.open_with_key(req.api_key, req.totp or None)
+        except SessionAuthError as exc:
+            raise HTTPException(exc.status, exc.reason) from exc
+        user = opened["user"]
+        return {
+            "session_token": opened["token"],
+            "expires_at": opened["expires_at"],
+            "user_id": user.user_id,
+            "mfa": user.mfa_enabled,
+        }
+
+    @app.post("/api/session/logout", responses={"403": {"description": "Invalid session"}})
+    def session_logout(authorization: str | None = Header(None)) -> dict[str, Any]:
+        if not isinstance(authorization, str):
+            raise HTTPException(401, "Missing Authorization header")
+        token = authorization
+        if token.startswith(_BEARER_PREFIX):
+            token = token[len(_BEARER_PREFIX) :]
+        if not sessions.close(token):
+            raise HTTPException(403, "Invalid or expired session")
+        return {"status": "closed"}
+
+    @app.get("/api/oidc/login", responses={"503": {"description": "OIDC not enabled"}})
+    def oidc_login() -> dict[str, Any]:
+        if oidc_federation is None:
+            raise HTTPException(503, "OIDC federation is not enabled on this gateway")
+        from raucle import admin_oidc
+
+        state = "oidc_" + _hashlib.sha256(secrets.token_bytes(32)).hexdigest()[:32]
+        nonce = "n_" + secrets.token_hex(16)
+        verifier, challenge = admin_oidc.make_pkce_pair()
+        now = time.time()
+        stale = [
+            s
+            for s, rec in _pending_oidc.items()
+            if rec["created_at"] + _OIDC_PENDING_TTL_SECONDS < now
+        ]
+        for s in stale:
+            _pending_oidc.pop(s, None)
+        _pending_oidc[state] = {
+            "nonce": nonce,
+            "code_verifier": verifier,
+            "created_at": now,
+        }
+        url = oidc_federation.authorization_url(
+            oidc_federation.config.redirect_uri,
+            state=state,
+            nonce=nonce,
+            code_challenge=challenge,
+        )
+        return {"authorization_url": url, "state": state}
+
+    @app.post("/api/oidc/callback", responses={"503": {"description": "OIDC not enabled"}})
+    def oidc_callback(req: _OIDCCallbackRequest) -> dict[str, Any]:
+        if oidc_federation is None:
+            raise HTTPException(503, "OIDC federation is not enabled on this gateway")
+        if req.error:
+            raise HTTPException(401, f"provider refused the login: {req.error}")
+        from raucle import admin_oidc
+
+        pending = _pending_oidc.pop(req.state or "", None)
+        if pending is None or pending["created_at"] + _OIDC_PENDING_TTL_SECONDS < time.time():
+            raise HTTPException(401, f"{admin_oidc.EXCHANGE_ERROR}: unknown or replayed state")
+        claims = oidc_federation.exchange_code(
+            req.code,
+            pending["code_verifier"],
+            redirect_uri=oidc_federation.config.redirect_uri,
+            expected_nonce=pending["nonce"],
+        )
+        user = oidc_federation.map_user(users, claims)
+        opened = sessions.open_with_user(user)
+        return {
+            "session_token": opened["token"],
+            "expires_at": opened["expires_at"],
+            "user_id": user.user_id,
+            "subject": claims.get("sub", ""),
+            "auth_method": "oidc",
+        }
 
 
 def _register_config_routes(

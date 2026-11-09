@@ -82,14 +82,68 @@ layer (100 requests/minute in the reference Caddyfile).
   secret, so MFA survives a restart. TOTP codes may be reused within their
   own window (the panel polls) but a code from an earlier window is refused
   as a replay
-- Known residual: `totp_secret` is stored in plaintext beside the digest, and
-  TOTP is presented per request rather than exchanged for a session token.
-  Protecting the secret needs a master-key source, and per-request TOTP is
-  not session security; both belong with the identity work rather than here.
-  Recorded in the U2 residual register as R13
-  (`docs/threat-model/v1.md`) — the API-key digest scheme (RED-032) itself
-  is not affected
+- Known residual: `totp_secret` is stored in plaintext beside the digest.
+  Protecting the secret needs a master-key source; the per-request TOTP
+  residual IS now addressed: the TOTP code is verified once at session open
+  (`POST /api/session/login`) and exchanged for a short-lived receipted
+  bearer session (below) — see the U2 residual register entry R13
+  (`docs/threat-model/v1.md`) for the remaining secret-at-rest half
 - Demo-mode synthetic users are in-memory only by design
+
+## Admin session tokens (T-S3)
+
+The per-request bearer model (key + TOTP on every call) is augmented with a
+short-lived receipted session exchange:
+
+- `POST /api/session/login` verifies the API key (and the TOTP code for MFA
+  users) ONCE and returns a 256-bit bearer session token (``rst_`` prefix).
+  Only its SHA-256 digest is stored server-side — the session table is not a
+  credential file, same discipline as RED-032 admin keys.
+- Sessions expire (default 1h; `RAUCLE_ADMIN_SESSION_TTL`, floored at 60s)
+  and expiry is enforced on every resolve. Opening beyond
+  `RAUCLE_ADMIN_SESSIONS_MAX` refuses fail-closed rather than silently
+  evicting a live session.
+- Opening AND closing a session are signed evidence: provenance receipts
+  with an `x_admin_session` extension bind the session's hash-derived
+  public handle (never the token), the user_id, the auth method (`key` or
+  `oidc`) and the expiry. Logout is a receipted lifecycle event, never a
+  silent delete.
+- Removing a user kills their live sessions immediately (a session dies
+  with the identity it authenticated).
+- Raw key authentication (with per-request TOTP when MFA is on) still works
+  unchanged on every admin route for scripted use.
+
+## OIDC identity-provider federation (X3 slice 1, optional)
+
+The admin plane accepts a second login path against an operator-configured
+OpenID Connect provider. **Off by default** — enabling is an operator choice:
+
+- Configure `RAUCLE_OIDC_ENABLED=1` plus `RAUCLE_OIDC_ISSUER`,
+  `RAUCLE_OIDC_CLIENT_ID` and `RAUCLE_OIDC_REDIRECT_URI` (or the equivalent
+  `oidc:` YAML section). The provider is named in a boot banner when active.
+- The client secret NEVER goes in a config file: set
+  `RAUCLE_OIDC_CLIENT_SECRET` (env) or `RAUCLE_OIDC_CLIENT_SECRET_FILE`
+  (0600 secret-file pattern, same as the bootstrap admin key). A config
+  document carrying an inline `client_secret` refuses to load with a named
+  `OIDC_CONFIG_ERROR`.
+- At startup (only when enabled) the gateway fetches the provider's
+  `.well-known/openid-configuration` discovery document and JWKS. The fetch
+  is FAIL-CLOSED: an unreachable issuer, a document/issuer mismatch, a
+  non-https endpoint or an unusable JWKS refuses the admin app from booting.
+- Login is the RFC 6749 authorization-code flow with RFC 7636 PKCE (S256,
+  single-use state/nonce/verifier pending logins, 5-minute TTL). The
+  returned `id_token` is verified (RS256 against the provider JWKS; strict
+  `iss`/`aud`/`exp`/`nbf`/`nonce`) before anything else happens.
+- Identity mapping reuses the RED-032 user records: the verified subject
+  maps to an existing panel user (bound `oidc_sub`, else first match on
+  `preferred_username`/`email`/`name`, with the subject bound and persisted
+  on first login). An unknown subject is a NAMED `MAPPING_ERROR` — there is
+  no auto-provisioning in this slice (SCIM-lite provisioning is a named
+  follow-up).
+- A mapped user gets the SAME session as a key login (identical receipts,
+  expiry and closure semantics; `auth_method` records which path opened it).
+  Key rotation, receipt sidecar and provisioning are named follow-ups.
+
 
 ## Gate authentication (agent callers)
 
