@@ -44,6 +44,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import os
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -97,9 +98,12 @@ def _resolve_restricted_ref(ref: str, roots: Sequence[Path], kind: str) -> Path:
     candidate = Path(ref)
     if not candidate.is_absolute():
         candidate = Path(roots[0]) / candidate
-    resolved = candidate.resolve()
+    # Containment is decided on a pure string normalisation
+    # (os.path.abspath performs NO filesystem probing), so the decision
+    # itself cannot leak the filesystem layout back to the caller.
+    resolved = Path(os.path.abspath(candidate))
     for root in roots:
-        root_resolved = Path(root).resolve()
+        root_resolved = Path(os.path.abspath(root))
         if resolved == root_resolved or resolved.is_relative_to(root_resolved):
             break
     else:
