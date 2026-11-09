@@ -22,6 +22,8 @@ htmlcov/
 demo-output/
 /latency.json
 /results.json
+bench/.tmp/
+bench/results/latest.json
 paper/lean/.lake/
 paper/lean/lake-manifest.json
 .claude/

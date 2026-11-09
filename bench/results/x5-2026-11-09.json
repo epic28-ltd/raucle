@@ -1,0 +1,54 @@
+{
+  "bench": "x5-hot-path",
+  "env": {
+    "python_path": "/home/craigamcw/Projects/raucle/.venv/bin/python",
+    "iterations_per_path": 1500
+  },
+  "results": {
+    "gate_allow": {
+      "p50_us": 237.7,
+      "p99_us": 472.8,
+      "mean_us": 263.7,
+      "ceiling_ops_s": 3792.0
+    },
+    "gate_deny": {
+      "p50_us": 233.1,
+      "p99_us": 521.6,
+      "mean_us": 260.7,
+      "ceiling_ops_s": 3836.0
+    },
+    "receipt_emit": {
+      "p50_us": 81.5,
+      "p99_us": 169.9,
+      "mean_us": 91.2,
+      "ceiling_ops_s": 10959.0
+    },
+    "receipt_append": {
+      "p50_us": 10.1,
+      "p99_us": 19.7,
+      "mean_us": 10.6,
+      "ceiling_ops_s": 94172.0
+    },
+    "index_append": {
+      "p50_us": 35.4,
+      "p99_us": 68.8,
+      "mean_us": 38.8,
+      "ceiling_ops_s": 25780.0
+    },
+    "siem_forward": {
+      "p50_us": 12.6,
+      "p99_us": 28.7,
+      "mean_us": 13.5,
+      "ceiling_ops_s": 73957.0
+    },
+    "sink_submit": {
+      "p50_us": 1.0,
+      "p99_us": 2.7,
+      "mean_us": 1.1,
+      "ceiling_ops_s": 939712.0,
+      "async_submit_rate_ops_s": 8065.0,
+      "async_drain_write_rate_ops_s": 8747019.0,
+      "overflow_events": 0
+    }
+  }
+}
