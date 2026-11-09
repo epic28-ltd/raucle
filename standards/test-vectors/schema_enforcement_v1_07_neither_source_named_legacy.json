@@ -1,0 +1,22 @@
+{
+  "call": {
+    "outcome": "legacy_name_based_path",
+    "schema_violations": []
+  },
+  "call_args": {
+    "anything": {
+      "deep": [
+        "value"
+      ]
+    }
+  },
+  "load": {
+    "error_kind": "SchemaPolicyLoadError",
+    "message": "tool 'legacy_tool': policy rule present but the tool has no registered parameter schema (register the inputSchema first)",
+    "outcome": "error_on_schema_bind"
+  },
+  "name": "tool with neither MCP schema nor OpenAPI fragment keeps the named legacy path",
+  "registered": false,
+  "spec": "raucle-schema-enforcement/v1",
+  "tool": "legacy_tool"
+}

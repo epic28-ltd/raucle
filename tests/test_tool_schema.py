@@ -337,8 +337,149 @@ def test_openapi_operation_without_operation_id_is_load_error():
 
 
 # ---------------------------------------------------------------------------
-# Gate integration
+# OpenAPI as the secondary source: named legacy path, conflict at load
 # ---------------------------------------------------------------------------
+
+
+def test_openapi_secondary_undeclared_field_is_load_error():
+    """A rule referencing an undeclared field fails at load against an
+    OpenAPI-derived schema too — the secondary source gets the identical
+    load-time contract as MCP (named tool + field)."""
+    reg = ToolSchemaRegistry()
+    reg.register_from_openapi_fragment(
+        {
+            "paths": {
+                "/payments": {
+                    "post": {
+                        "operationId": "create_payment",
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {"amount": {"type": "number"}},
+                                    }
+                                }
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    )
+    with pytest.raises(SchemaPolicyLoadError) as exc:
+        reg.bind_policy("create_payment", {"forbidden_values": {"recipient": ["x"]}})
+    assert "create_payment" in str(exc.value)
+    assert "recipient" in str(exc.value)
+
+
+def test_openapi_secondary_gate_enforces_type_confusion():
+    """Gate enforcement holds when the schema came from the OpenAPI source."""
+    pytest.importorskip("cryptography")
+    from raucle.capability import CapabilityGate, CapabilityIssuer
+
+    iss = CapabilityIssuer.generate(issuer="platform.example")
+    reg = ToolSchemaRegistry()
+    reg.register_from_openapi_fragment(
+        {
+            "paths": {
+                "/payments": {
+                    "post": {
+                        "operationId": "create_payment",
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {"amount": {"type": "number"}},
+                                    }
+                                }
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    )
+    gate = CapabilityGate(trusted_issuers={iss.key_id: iss.public_key_pem}, tool_schemas=reg)
+    cap = iss.mint(agent_id="agent:pay", tool="create_payment")
+    deny = gate.check(cap, tool="create_payment", agent_id="agent:pay", args={"amount": "99999"})
+    assert deny.denied
+    assert "schema_violation" in deny.reason
+    allow = gate.check(cap, tool="create_payment", agent_id="agent:pay", args={"amount": 42})
+    assert allow.allowed, allow.reason
+
+
+def test_mcp_openapi_conflict_is_a_load_error():
+    """Registering the same tool from BOTH sources with different schemas
+    fails at load — a conflict is never resolved silently in favour of
+    whichever source registered last."""
+    reg = ToolSchemaRegistry()
+    reg.register_from_mcp_tools(
+        [
+            {
+                "name": "send_money",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"amount": {"type": "number"}},
+                },
+            }
+        ]
+    )
+    with pytest.raises(SchemaPolicyLoadError) as exc:
+        reg.register_from_openapi_fragment(
+            {
+                "paths": {
+                    "/payments": {
+                        "post": {
+                            "operationId": "send_money",
+                            "requestBody": {
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {"amount": {"type": "string"}},
+                                        }
+                                    }
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+        )
+    assert "send_money" in str(exc.value)
+    # identical schemas from both sources are idempotent
+    reg2 = ToolSchemaRegistry()
+    ident = {"type": "object", "properties": {"amount": {"type": "number"}}}
+    reg2.register_from_mcp_tools([{"name": "send_money", "inputSchema": ident}])
+    reg2.register_from_openapi_fragment(
+        {
+            "paths": {
+                "/p": {
+                    "post": {
+                        "operationId": "send_money",
+                        "requestBody": {"content": {"application/json": {"schema": ident}}},
+                    }
+                }
+            }
+        }
+    )
+    assert reg2.has_schema("send_money")
+
+
+def test_neither_source_means_named_legacy_path():
+    """A tool with NEITHER an MCP schema nor an OpenAPI fragment keeps the
+    documented legacy name-based path — and that is a NAMED condition, not
+    a silent one: has_schema is False, the call-time check is a no-op, and
+    any attempt to schema-bind its policy is a named load error."""
+    reg = ToolSchemaRegistry()
+    assert not reg.has_schema("legacy_tool")  # the named, inspectable state
+    assert reg.violations("legacy_tool", {"anything": {"deep": ["value"]}}) == []
+    with pytest.raises(SchemaPolicyLoadError) as exc:
+        reg.bind_policy("legacy_tool", {"required_present": ["amount"]})
+    assert "legacy_tool" in str(exc.value)
+    assert "registered parameter schema" in str(exc.value)
 
 
 def test_gate_denies_type_confused_args_with_named_reason():
@@ -446,6 +587,51 @@ def test_vector_02_load_error_message_matches():
         reg.bind_policy(v["tool"], v["policy_rule"])
     assert str(exc.value) == v["load"]["message"]
     assert v["tool"] in str(exc.value)
+
+
+def test_vector_07_neither_source_replays_named_legacy():
+    v = json.loads(
+        (_VECTORS / "schema_enforcement_v1_07_neither_source_named_legacy.json").read_text()
+    )
+    reg = ToolSchemaRegistry()
+    assert not reg.has_schema(v["tool"])
+    assert reg.violations(v["tool"], v["call_args"]) == v["call"]["schema_violations"]
+    with pytest.raises(SchemaPolicyLoadError) as exc:
+        reg.bind_policy(v["tool"], {"required_present": ["amount"]})
+    assert str(exc.value) == v["load"]["message"]
+
+
+def test_vector_04_openapi_type_confusion_replays():
+    v = json.loads(
+        (_VECTORS / "schema_enforcement_v1_04_openapi_type_confusion_denies.json").read_text()
+    )
+    reg = ToolSchemaRegistry()
+    reg.register_from_openapi_fragment(v["openapi_fragment"])
+    reasons = reg.violations(v["tool"], v["args"])
+    assert reasons
+    assert f"schema_violation: {reasons[0]}" == v["decision"]["reason"]
+
+
+def test_vector_05_openapi_load_error_message_matches():
+    v = json.loads(
+        (_VECTORS / "schema_enforcement_v1_05_openapi_undeclared_field_load_error.json").read_text()
+    )
+    reg = ToolSchemaRegistry()
+    reg.register_from_openapi_fragment(v["openapi_fragment"])
+    with pytest.raises(SchemaPolicyLoadError) as exc:
+        reg.bind_policy(v["tool"], v["policy_rule"])
+    assert str(exc.value) == v["load"]["message"]
+
+
+def test_vector_06_mcp_openapi_conflict_replays():
+    v = json.loads(
+        (_VECTORS / "schema_enforcement_v1_06_mcp_openapi_conflict_load_error.json").read_text()
+    )
+    reg = ToolSchemaRegistry()
+    reg.register_from_mcp_tools(v["primary_source"]["payload"])
+    with pytest.raises(SchemaPolicyLoadError) as exc:
+        reg.register_from_openapi_fragment(v["secondary_source"]["openapi_fragment"])
+    assert str(exc.value) == v["load"]["message"]
 
 
 def test_vector_03_replays_bool_coercion_deny():

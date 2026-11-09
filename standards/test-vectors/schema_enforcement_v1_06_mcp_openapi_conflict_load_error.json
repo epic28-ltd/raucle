@@ -1,0 +1,50 @@
+{
+  "load": {
+    "error_kind": "SchemaPolicyLoadError",
+    "message": "tool 'send_money': conflicting inputSchema registered (already registered with a different schema)",
+    "outcome": "error"
+  },
+  "name": "MCP + OpenAPI conflict for one tool fails at load",
+  "primary_source": {
+    "payload": [
+      {
+        "inputSchema": {
+          "properties": {
+            "amount": {
+              "type": "number"
+            }
+          },
+          "type": "object"
+        },
+        "name": "send_money"
+      }
+    ]
+  },
+  "secondary_source": {
+    "openapi_fragment": {
+      "paths": {
+        "/payments": {
+          "post": {
+            "operationId": "send_money",
+            "requestBody": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "properties": {
+                      "amount": {
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "tool": "send_money"
+  },
+  "spec": "raucle-schema-enforcement/v1"
+}
