@@ -3582,6 +3582,8 @@ function tourShow(){
   },220);
 }
 function positionTourCard(el){
+  const s=TOUR_STEPS[tourStep];
+  if(!s){return;}
   const r=el.getBoundingClientRect();
   let bx=Math.min(Math.max(r.left+r.width/2-160,12),window.innerWidth-332);
   let by=Math.max(r.bottom+12,12);
