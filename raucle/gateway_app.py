@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from raucle.admin_session import SESSION_TOKEN_PREFIX, AdminSessionManager, SessionAuthError
@@ -2333,6 +2333,11 @@ def _register_ui_routes(app: FastAPI) -> None:
     def topology_view() -> str:
         return TOPOLOGY_HTML
 
+    @app.get("/assets/login-bg.jpg", response_class=None)
+    def login_background() -> FileResponse:
+        """The engraved artwork behind the demo sign-in card."""
+        return FileResponse(Path(__file__).with_name("demo_login_bg.jpg"), media_type="image/jpeg")
+
     return app
 
 
@@ -2500,6 +2505,8 @@ body.demo .btn-primary{display:none}
   .header, .tabs, #login, #main, #tourHost { position: relative; z-index: 10; }
   body { overflow-x: hidden; }
   .login .card { border-color: #e5e5e5; box-shadow: 0 22px 60px rgba(10,10,10,.10); }
+  #loginBackdrop { position: fixed; inset: 0; z-index: 1; pointer-events: none; background: url('assets/login-bg.jpg') 28% center / cover no-repeat; }
+  body:has(#login:not(.hidden)) #field { display: none; }
   @media (prefers-reduced-motion: reduce) { #field { display: none; } }
 </style>
 </head>
@@ -2513,6 +2520,7 @@ body.demo .btn-primary{display:none}
 </div>
 
 <div id="login" class="content login">
+  <div id="loginBackdrop" aria-hidden="true"></div>
   <div class="card">
     <div class="card-title">Sign In</div>
     <input class="input" id="apiKey" type="password" placeholder="API Key">
