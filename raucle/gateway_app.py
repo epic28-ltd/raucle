@@ -2504,7 +2504,7 @@ body.demo .btn-primary{display:none}
   #field { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
   .header, .tabs, #login, #main, #tourHost { position: relative; z-index: 10; }
   body { overflow-x: hidden; }
-  .login .card { border-color: #e5e5e5; box-shadow: 0 22px 60px rgba(10,10,10,.10); }
+  .login .card { position: relative; z-index: 2; border-color: #e5e5e5; box-shadow: 0 22px 60px rgba(10,10,10,.10); }
   #loginBackdrop { position: fixed; inset: 0; z-index: 1; pointer-events: none; background: url('assets/login-bg.jpg') 28% center / cover no-repeat; }
   body:has(#login:not(.hidden)) #field { display: none; }
   @media (prefers-reduced-motion: reduce) { #field { display: none; } }
