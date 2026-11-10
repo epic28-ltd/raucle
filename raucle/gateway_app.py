@@ -2506,7 +2506,8 @@ body.demo .btn-primary{display:none}
 
 
   #field { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
-  .header, .tabs, #login, #main, #tourHost { position: relative; z-index: 10; }
+  .header, .tabs, #login, #main { position: relative; z-index: 10; }
+  #tourHost { position: fixed; z-index: 9000; }
   body { overflow-x: hidden; }
   .login .card { position: relative; z-index: 2; border-color: #e5e5e5; box-shadow: 0 22px 60px rgba(10,10,10,.10); }
   #loginBackdrop { position: fixed; inset: 0; z-index: 1; pointer-events: none; background: url('assets/login-bg.jpg') 28% center / cover no-repeat; }
