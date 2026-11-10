@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/raucle-banner.svg" alt="Raucle" width="600">
+  <img src="assets/raucle-header.png" alt="Raucle — Agent Trust" width="300">
 </p>
 
 <p align="center">
