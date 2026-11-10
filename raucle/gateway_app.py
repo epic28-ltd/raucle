@@ -33,6 +33,14 @@ logger = logging.getLogger(__name__)
 
 _BEARER_PREFIX = "Bearer "
 
+# D11: honest labelling for the offline-verification cameo. The verifier is
+# the gateway's real offline chain verifier; the receipt material it checks
+# is what the demo's simulated traffic produced.
+OFFLINE_VERIFY_NOTE = (
+    "Simulated demo receipts, verified by the gateway's real offline "
+    "verifier. The demo runs on simulated traffic with the same "
+    "enforcement code paths as a live deployment."
+)
 # RED-032: operator-supplied admin keys carry a floor; prefer the server
 # minting one (``POST /api/users`` with no api_key).
 _MIN_ADMIN_KEY_CHARS = 24
@@ -1818,6 +1826,125 @@ def _register_receipt_routes(
         )
 
 
+    @app.post(
+        "/api/receipts/{receipt_hash}/offline-verify",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+            "404": {"description": "Unknown receipt hash"},
+            "501": {"description": "Receipt store not configured"},
+        },
+    )
+    def offline_verify_receipt(
+        receipt_hash: str,
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        """Verify one receipt with the gateway's REAL offline verifier.
+
+        No network, no operator contact: the receipt's JWS signature is
+        checked against the gate identity's public key and the stored
+        receipt hash is recomputed from the JWS bytes by
+        :class:`raucle.provenance.ProvenanceVerifier` (the same verifier
+        an auditor runs on an exported chain). The demo receipts are
+        signed with the demo deployment's real key, so the result is the
+        real verification result for receipt material the demo itself
+        produced (simulated demo traffic).
+        """
+        user = check_auth(authorization, x_totp)
+        check_access(user, "receipts")
+        envelope = _find_receipt_envelope(gateway, receipt_hash)
+        if envelope is None:
+            raise HTTPException(status_code=404, detail="unknown receipt hash")
+
+        from raucle.provenance import ProvenanceVerifier, _sha256_hex
+
+        gate = gateway.gate_identity
+        verifier = ProvenanceVerifier(
+            public_keys={gate.key_id: gate.public_key_pem()}
+        )
+        # Scope the real verifier to the selected receipt's own envelope
+        # line (single-record chain: signature check, hash recomputation
+        # and parent resolution on exactly what an auditor carries away).
+        import json as _json
+        import tempfile as _tempfile
+        from pathlib import Path as _Path
+
+        report = None
+        with _tempfile.TemporaryDirectory() as td:
+            chain_file = _Path(td) / "receipt.jsonl"
+            chain_file.write_text(
+                _json.dumps(envelope, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
+            report = verifier.verify_chain(chain_file)
+
+        receipt_hash_recomputed = "sha256:" + _sha256_hex(
+            envelope.get("jws", "").encode("ascii")
+        )
+        verified = bool(report.valid) and receipt_hash_recomputed == receipt_hash
+        errors = list(report.errors or [])
+        if not verified and not errors:
+            errors.append("stored receipt hash does not match a recomputation from the JWS bytes")
+        # A failing verdict must fail the response, not just the panel.
+        if not verified:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "receipt_hash": receipt_hash,
+                    "verdict": "failed",
+                    "signature_check": "failed"
+                    if report.signature_failures
+                    else "not checked to completion",
+                    "hash_linkage": {"recomputed_matches": False},
+                    "errors": errors[:10],
+                    "offline": (
+                        "This verification ran entirely offline. No operator "
+                        "network call was made."
+                    ),
+                    "note": OFFLINE_VERIFY_NOTE,
+                },
+            )
+        return {
+            "receipt_hash": receipt_hash,
+            "verdict": "verified",
+            "signature_check": "ok",
+            "hash_linkage": {
+                "recomputed_matches": True,
+                "recomputed_sha256_prefix": receipt_hash_recomputed[:24],
+                "parent_links": 0,
+            },
+            "receipt_count": report.receipt_count,
+            "offline": (
+                "Verified without contacting the operator. The signature "
+                "and hash checks run locally on the receipt itself."
+            ),
+            "note": OFFLINE_VERIFY_NOTE,
+        }
+
+
+def _find_receipt_envelope(gateway: RaucleGateway, receipt_hash: str) -> dict[str, Any] | None:
+    """Locate one receipt envelope by hash (segmented store or flat file)."""
+    if gateway._receipt_store is not None:
+        return gateway._receipt_store.find_by_hash(receipt_hash)
+    from raucle._paths import validate_path
+
+    path = validate_path(gateway.config.receipt_store, must_exist=False)
+    if not path.exists():
+        return None
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("receipt_hash") == receipt_hash:
+                return rec
+    return None
+
+
 def _export_paths(gateway: RaucleGateway) -> list[Path]:
     """The chain files an export reads: segments, or the legacy flat file."""
     if gateway._receipt_store is not None:
@@ -2625,6 +2752,21 @@ body.demo #policyEditorCard{display:none}
       <div class="card"><div class="card-title">Gate Decisions</div>
         <div class="stats-grid" id="statsGrid"></div>
       </div>
+      <div class="card" id="enterpriseStrip"><div class="card-title">Enterprise capabilities in this demo</div>
+        <p class="screen-note">This demo runs on simulated traffic with the same enforcement code paths as a live deployment. The screens below cover the suite's capability areas; each one opens its tab. The receipts capability includes offline verification of the demo's receipts, without contacting the operator.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('connections',this)">AI gateway</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('policies',this)">Policy editor</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('learn',this)">Learn mode</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('dlp',this)">Data loss prevention</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('injection',this)">Prompt injection detection</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('shadow',this)">Shadow AI discovery</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('mcp',this)">MCP tool scanning</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('receipts',this)">Receipts with offline verification</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('siem',this)">SIEM forwarding</button>
+          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('users',this)">Users and MFA</button>
+        </div>
+      </div>
       <div class="card"><div class="card-title">By Tool</div>
         <table><thead><tr><th>Tool</th><th>Allowed</th><th>Denied</th><th>Escalated</th></tr></thead>
         <tbody id="toolTableBody"></tbody></table>
@@ -2843,6 +2985,12 @@ body.demo #policyEditorCard{display:none}
       <div id="rcpt-ancestry" class="card" style="display:none;margin-top:14px">
         <div class="card-title">Ancestry</div>
         <pre id="ancestryView" style="font-size:11px;max-height:260px;overflow:auto"></pre>
+      </div>
+      <div id="rcpt-offline" class="card" style="display:none;margin-top:14px">
+        <div class="card-title">Offline verification</div>
+        <span class="findings-label">Simulated demo receipts</span>
+        <p class="screen-note">What an auditor sees without contacting the operator: the JWS signature check against the gate's public key, and the receipt hash linkage, recomputed from the receipt bytes. The verification runs on this machine with the gateway's real offline verifier; the receipt material is what the demo's simulated traffic produced.</p>
+        <pre id="offlineView" style="font-size:11px;max-height:260px;overflow:auto"></pre>
       </div>
     </div>
     <div id="tab-mcp" class="hidden">
@@ -3333,7 +3481,7 @@ function loadReceipts(){
         +'<td style="padding:6px 10px">'+esc(r.agent_id||'')+'</td>'
         +'<td style="padding:6px 10px;color:'+color+';font-weight:600">'+esc(r.decision||'')+'</td>'
         +'<td style="padding:6px 10px;font-family:monospace;font-size:11px">'+esc(r.trace_id?r.trace_id.slice(0,12)+'…':'')+'</td>'
-        +'<td style="padding:6px 10px"><a href="#" style="color:#3a3f4b" data-hash="'+esc(r.receipt_hash||'')+'" data-hi="rcptRowClick(event)">trace</a></td>';
+        +'<td style="padding:6px 10px"><a href="#" style="color:#3a3f4b" data-hash="'+esc(r.receipt_hash||'')+'" data-hi="rcptRowClick(event)">trace</a> <a href="#" style="color:#3a3f4b" data-hash="'+esc(r.receipt_hash||'')+'" data-hi="offlineVerify(event)">verify</a></td>';
       rows.appendChild(tr);
     });
     rcptCursor=d.next_cursor||null;
@@ -3354,6 +3502,25 @@ function showAncestry(hash){
     const lines=d.nodes.map(n=>(n.decision==='deny'?'✗ ':'✓ ')+new Date((n.iat||0)*1000).toISOString().slice(11,19)+'  '+(n.tool||'')+'  '+(n.agent_id||'')+'  ['+(n.receipt_hash||'').slice(7,19)+']');
     document.getElementById('ancestryView').textContent=lines.join('\\n')+((d.edges&&d.edges.length)?'\\n\\nedges: '+d.edges.length:'');
   });
+}
+function offlineVerify(e){
+  const a=e.target.closest('a[data-hash]'); if(!a) return;
+  const panel=document.getElementById('rcpt-offline'); panel.style.display='block';
+  const view=document.getElementById('offlineView');
+  view.textContent='Verifying offline (no operator contact)…';
+  api('/api/receipts/'+encodeURIComponent(a.getAttribute('data-hash'))+'/offline-verify',{method:'POST'}).then(r=>r.ok?r.json():r.json().then(d=>{throw new Error((d.detail&&(d.detail.errors&&d.detail.errors.join?d.detail.errors.join('; '):d.detail))||'verification failed');})).then(d=>{
+    const lines=[
+      'verdict: '+d.verdict,
+      'signature check: '+d.signature_check+' (Ed25519 JWS under the gate public key)',
+      'hash linkage: '+(d.hash_linkage&&d.hash_linkage.recomputed_matches?'ok - stored hash matches a recomputation from the receipt bytes':'FAILED')+(d.hash_linkage&&d.hash_linkage.recomputed_sha256_prefix?(' (' + d.hash_linkage.recomputed_sha256_prefix + '…)'):''),
+      'receipts checked: '+d.receipt_count,
+      '',
+      d.offline,
+      '',
+      d.note
+    ];
+    view.textContent=lines.join('\\n');
+  }).catch(err=>{ view.textContent='Verification failed: '+err.message; });
 }
 function exportReceipts(){
   const key=getApiKey(); if(!key){alert('Sign in first');return;}
@@ -4274,8 +4441,7 @@ function mcpScan(){
   }).then(d=>{ if(d) renderMcpFindings(d.findings||[]); }).catch(()=>{ sum.textContent='Scan request failed.'; });
 }
 
-if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
-(function(){[['srcFilter','input',renderFlow],['midFilter','input',renderFlow],['dstFilter','input',renderFlow],['topoDecisionFilter','change',topoRender],['topoMotion','change',topoRender],['filterDecision','change',function(){loadConnections(lastLimit||200);}],['liveMode','change',function(){loadConnections(lastLimit);}]].forEach(function(x){const el=document.getElementById(x[0]);if(el&&el.addEventListener)el.addEventListener(x[1],x[2]);});[['apiKey',login],['totpInput',loginWithTotp],['mfaCodeInput',confirmMfa]].forEach(function(x){const el=document.getElementById(x[0]);if(el)el.addEventListener('keydown',function(ev){if(ev.key==='Enter')x[1]();});});const cb=document.getElementById('connBody');if(cb)cb.addEventListener('click',function(ev){const tr=ev.target.closest('tr.conn-row');if(!tr)return;const i=+tr.dataset.idx;selectConn(i);showPath(i);});const pb=document.getElementById('connPath');if(pb)pb.addEventListener('click',function(ev){const r=ev.target.closest('.path-row');if(!r||r.dataset.gi===undefined)return;pathRowClick(+r.dataset.gi);});})();
+if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
 </script>
 </body>
 </html>"""
