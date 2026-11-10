@@ -176,9 +176,11 @@ jobs:
         run: |
           set -e
           # The pinned value lives OUTSIDE the bundle — in this file — so a
-          # doctoring PR can never update it silently. Re-pinning is a
-          # separate reviewable change and must name the cause.
-          raucle demo verify docs/demo-bundle --pinned sha256:232061a6b6f81e8298322a69e06cb88df20ab07ed9c91a199a97212069f3bfa0
+          # doctoring PR can never update it silently. Re-pinning travels in
+          # the SAME commit as the regenerated bundle it names (D12
+          # discipline: any engine change that would shift the bundle must
+          # ship both together), so the pairing is always reviewable.
+          raucle demo verify docs/demo-bundle --pinned sha256:2c15d55b233e426ba753eaf83f4a8633b5367f8341c10607daa6aef9f273f974
 
   conformance-data:
     name: "Standards conformance data (S4): generated == committed"
