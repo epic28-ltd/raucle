@@ -590,9 +590,11 @@ def test_starts_with_attenuation_narrows_not_broadens():
 
 def test_package_version_matches_metadata():
     """__version__ must match the installed package metadata (regression: was 0.7.0)."""
+    import importlib.metadata
+
     import raucle
 
-    assert raucle.__version__ == "0.22.0"
+    assert raucle.__version__ == importlib.metadata.version("raucle")
 
 
 def test_revocation_denylist_refuses_token_and_children():

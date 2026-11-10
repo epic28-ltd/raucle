@@ -3,7 +3,7 @@
 **Toolchain:** Lean 4.10.0 + Mathlib 4.10.0.
 **Build status:** `lake build` completes with **zero errors, zero warnings, zero sorrys**.
 
-## All three theorems are mechanised
+## All four theorems are mechanised
 
 | Definition / Theorem | File | Status |
 |---|---|---|
@@ -20,6 +20,9 @@
 | `tighter_implies_satisfies_field` | `VCD/Composition.lean` | **✓ proved** |
 | `tighter_implies_satisfies` | `VCD/Composition.lean` | **✓ proved** |
 | **`policy_proof_composition` (Theorem 3)** | `VCD/Composition.lean` | **✓ PROVED** |
+| `satisfies_field_meet` | `VCD/ConfusedDeputy.lean` | **✓ proved** |
+| `satisfiesArgs_meet` | `VCD/ConfusedDeputy.lean` | **✓ proved** |
+| **`confused_deputy_conjunction` (Theorem 4)** | `VCD/ConfusedDeputy.lean` | **✓ PROVED** |
 
 **Theorem 3 — exact claim.** Given (a) a proof PROVEN for a tool's
 `(schema, P)`, (b) a call in that tool's modelled call language
@@ -31,6 +34,18 @@ pertains to this tool's `(schema, P)`: operationally the gate's strict proof
 mode binds `policy_proof_hash` to the proof's grammar/policy hashes
 (`capability.py::_check_proof_binding`); the Lean model takes "the proof is for
 this `(schema, P)`" as a hypothesis rather than re-deriving it from hashes.
+
+**Theorem 4 - exact claim.** Given two tokens `t1`, `t2` with constraint
+policies `P1`, `P2` and ONE call that the gate ALLOWS under each token
+(`gate_soundness` discharged twice), the call satisfies the meet
+`P1 ⊓ P2` (`Policy.meet`, `Basic.lean`). Chaining two valid tokens against a
+single call therefore enforces the AND of both constraint sets, never the OR:
+the deputy cannot reach an action outside the intersection of the two scopes
+by splitting authority across tokens. NOT covered (honest gaps): splitting one
+intended effect across two different calls (the runtime review and receipt
+layer is trusted for that); `forbidden_combos` (absent from
+`satisfies_field`, inherited from the gate model); and both gate checks are
+taken at one clock instant. Uses no new axioms or sorrys.
 
 ## Trust assumptions
 
@@ -63,14 +78,18 @@ First-time disk usage: ~4.5 GB (Mathlib is large).
 
 ```
 $ wc -l VCD/*.lean
-   86 VCD/Attenuation.lean
-   75 VCD/Composition.lean
-   97 VCD/Gate.lean
-   95 VCD/Basic.lean
-  353 total
+  100 VCD/Basic.lean
+  105 VCD/Attenuation.lean
+  131 VCD/Composition.lean
+  143 VCD/ConfusedDeputy.lean
+   95 VCD/Gate.lean
+  574 total
 ```
 
-353 lines of Lean for the full data model + three soundness theorems. Compact because Mathlib's lattice and decidability infrastructure does the heavy lifting.
+574 lines of Lean for the data model plus four soundness theorems. Compact because Mathlib's lattice and decidability infrastructure does the heavy lifting.
+
+
+
 
 ## Notes from the iteration
 
