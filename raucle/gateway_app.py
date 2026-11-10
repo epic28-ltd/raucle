@@ -1004,9 +1004,7 @@ def _register_stats_routes(
         return {"connections": connections[:limit], "count": len(connections)}
 
 
-def _register_demo_findings_routes(
-    app: FastAPI, check_auth: Any, check_access: Any
-) -> None:
+def _register_demo_findings_routes(app: FastAPI, check_auth: Any, check_access: Any) -> None:
     """Read-only demo findings plane backing the EPIC D demo screens.
 
     The demo key (auditor role) may read findings; the resource gate is the
