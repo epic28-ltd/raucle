@@ -334,6 +334,33 @@ _DLP_ACTION_MAP: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
+def _shadow_ai_responses(
+    event: dict[str, Any],
+    approved_models: set[str],
+    approved_hosts: tuple[str, ...],
+    byok_allowed: bool,
+) -> list[str]:
+    """Classify one simulated provider request against the supplier policy."""
+    responses: list[str] = []
+
+    model = event.get("model", "")
+    if model and model not in approved_models:
+        responses.append("unknown_model:" + model)
+    else:
+        responses.append("approved_model:" + model)
+
+    endpoint = event.get("endpoint", "")
+    host = _endpoint_host(endpoint)
+    if host and not host.endswith(approved_hosts):
+        responses.append("unapproved_endpoint:" + host)
+    else:
+        responses.append("approved_endpoint:" + (host or "none"))
+
+    if event.get("api_key_supplied") and not byok_allowed:
+        responses.append("byok_attempt")
+    return responses
+
+
 def detect_shadow_ai(
     events: list[dict[str, Any]],
     policy: dict[str, Any],
@@ -361,23 +388,7 @@ def detect_shadow_ai(
         if event.get("kind") != "provider_request":
             continue
         agent = event.get("agent", "unknown")
-        responses: list[str] = []
-
-        model = event.get("model", "")
-        if model and model not in approved_models:
-            responses.append("unknown_model:" + model)
-        else:
-            responses.append("approved_model:" + model)
-
-        endpoint = event.get("endpoint", "")
-        host = _endpoint_host(endpoint)
-        if host and not host.endswith(approved_hosts):
-            responses.append("unapproved_endpoint:" + host)
-        else:
-            responses.append("approved_endpoint:" + (host or "none"))
-
-        if event.get("api_key_supplied") and not byok_allowed:
-            responses.append("byok_attempt")
+        responses = _shadow_ai_responses(event, approved_models, approved_hosts, byok_allowed)
 
         for detail in responses:
             if detail.startswith("approved_"):
@@ -394,8 +405,8 @@ def detect_shadow_ai(
                     "first_seen": index,
                     "kind": detail.split(":", 1)[0],
                     "detail": detail.split(":", 1)[1] if ":" in detail else detail,
-                    "model": model,
-                    "endpoint": endpoint,
+                    "model": event.get("model", ""),
+                    "endpoint": event.get("endpoint", ""),
                     "policy_response": _shadow_policy_response(detail),
                 }
             )
@@ -440,7 +451,19 @@ def redaction_action_for_rule(rule_id: str) -> str:
     return _DLP_ACTION_MAP.get(rule_id, "mask")
 
 
-def _dlp_findings(events: list[dict[str, Any]], scenario: str) -> list[dict[str, Any]]:
+def _rule_by_id(rule_id: str) -> dict[str, Any] | None:
+    """Look a rule up in the pattern layer's set plus the output rules."""
+    return next(
+        (
+            r
+            for r in list(_PATTERN_LAYER._rules) + list(_OUTPUT_RULES)
+            if r["id"] == rule_id
+        ),
+        None,
+    )
+
+
+def _dlp_findings(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Run the real pattern layer's output+DLP rule set over simulated text."""
     findings: list[dict[str, Any]] = []
     for index, event in enumerate(events):
@@ -452,14 +475,7 @@ def _dlp_findings(events: list[dict[str, Any]], scenario: str) -> list[dict[str,
         if not matched_rules:
             continue
         for rule_id in matched_rules:
-            rule = next(
-                (
-                    r
-                    for r in list(_PATTERN_LAYER._rules) + list(_OUTPUT_RULES)
-                    if r["id"] == rule_id
-                ),
-                None,
-            )
+            rule = _rule_by_id(rule_id)
             findings.append(
                 {
                     "engine": "pattern_layer",
@@ -479,7 +495,7 @@ def _dlp_findings(events: list[dict[str, Any]], scenario: str) -> list[dict[str,
 
 
 def _injection_findings(
-    events: list[dict[str, Any]], scenario: str, block_threshold: float, alert_threshold: float
+    events: list[dict[str, Any]], block_threshold: float, alert_threshold: float
 ) -> list[dict[str, Any]]:
     """Run the real HeuristicClassifier over simulated text with injected payloads.
 
@@ -552,9 +568,9 @@ def build_demo_findings(scenario: str = "all") -> dict[str, Any]:
 
     thresholds = _MODE_THRESHOLDS["standard"]
 
-    dlp = _dlp_findings(events, "+".join(scenarios))
+    dlp = _dlp_findings(events)
     injection = _injection_findings(
-        events, "+".join(scenarios), thresholds["block"], thresholds["alert"]
+        events, thresholds["block"], thresholds["alert"]
     )
 
     category_counts: dict[str, int] = {}

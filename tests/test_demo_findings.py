@@ -157,12 +157,15 @@ class TestShadowAi:
         assert findings
         for f in findings:
             assert f["policy_response"]
-            assert f["agent"] and f["first_seen"] >= 0
+            assert f["agent"]
+            assert f["first_seen"] >= 0
 
 
 class TestBuilder:
     def test_deterministic(self):
-        assert build_demo_findings("all") == build_demo_findings("all")
+        first = build_demo_findings("all")
+        second = build_demo_findings("all")
+        assert first == second
 
     def test_unknown_scenario_is_refused(self):
         with pytest.raises(ValueError):

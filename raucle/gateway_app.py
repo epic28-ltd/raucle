@@ -860,7 +860,7 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     _install_security_headers(app)
     _register_health_routes(app, gateway)
     _register_stats_routes(app, gateway, check_auth, check_access)
-    _register_demo_findings_routes(app, gateway, check_auth, check_access)
+    _register_demo_findings_routes(app, check_auth, check_access)
     _register_learn_routes(app, gateway, check_auth, check_access)
     _register_policy_routes(app, gateway, check_auth, check_access)
     _register_simulate_routes(app, gateway, users, check_access)
@@ -1005,7 +1005,7 @@ def _register_stats_routes(
 
 
 def _register_demo_findings_routes(
-    app: FastAPI, gateway: RaucleGateway, check_auth: Any, check_access: Any
+    app: FastAPI, check_auth: Any, check_access: Any
 ) -> None:
     """Read-only demo findings plane backing the EPIC D demo screens.
 
