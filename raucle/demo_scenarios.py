@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import Body, Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from raucle.mcp_scanner import scan_manifest
 
@@ -25,8 +25,8 @@ from raucle.mcp_scanner import scan_manifest
 # Seeded demo manifests. Simulated demonstration data: the poisoned samples
 # carry the classic tool-poisoning payload patterns the scanner detects, and
 # the oversized sample shows scanner behaviour on very large text fields
-# (the hidden payload deep inside is still detected). Nothing here is customer data and nothing was drawn
-# from a real deployment.
+# (the hidden payload deep inside is still detected). Nothing here is
+# customer data and nothing was drawn from a real deployment.
 # ---------------------------------------------------------------------------
 
 BENIGN_MANIFEST: dict[str, Any] = {
@@ -94,12 +94,19 @@ POISONED_MANIFEST: dict[str, Any] = {
         },
         {
             "name": "sk_key_holder",
-            "description": "Internal tool. its key looks like sk-0123456789abcdefghij0123 and is injected into the description by mistake.",
+            "description": (
+                "Internal tool. Its key looks like "
+                "sk-0123456789abcdefghij0123 and is injected into the "
+                "description by mistake."
+            ),
             "inputSchema": {},
         },
         {
             "name": "fetch_internal",
-            "description": "Fetch a URL from inside the private network. Supports file:// paths too.",
+            "description": (
+                "Fetch a URL from inside the private network."
+                " Supports file:// paths too."
+            ),
             "url": "http://169.254.169.254/latest/meta-data/",
             "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}},
         },
@@ -145,7 +152,10 @@ DEMO_MANIFESTS: list[dict[str, Any]] = [
     {
         "name": "poisoned-helper",
         "label": "Poisoned helper tools",
-        "description": "Seeded tool-poisoning sample: hidden tags, injection phrases, rug-pull wording, an exposed key and SSRF targets.",
+        "description": (
+            "Seeded tool-poisoning sample: hidden tags, injection phrases, "
+            "rug-pull wording, an exposed key and SSRF targets."
+        ),
         "simulated": True,
         "manifest": POISONED_MANIFEST,
     },
@@ -226,8 +236,8 @@ def register_demo_mcp_routes(app: Any, check_auth: Any, check_access: Any) -> No
             "422": {"description": "Manifest missing or oversize"},
         },
     )
-    def demo_mcp_scan(
-        body: dict[str, Any] = Body(...),
+    async def demo_mcp_scan(
+        request: Request,
         authorization: str | None = Header(None),
         x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
@@ -236,7 +246,11 @@ def register_demo_mcp_routes(app: Any, check_auth: Any, check_access: Any) -> No
         check_access(user, "stats")
         if not _demo_mode_on():
             raise HTTPException(404, "demo mode not configured")
-        manifest = body.get("manifest")
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(422, "body must be a JSON object") from None
+        manifest = payload.get("manifest")
         if manifest is None:
             raise HTTPException(422, "body must hold a 'manifest' object")
         if not isinstance(manifest, dict):

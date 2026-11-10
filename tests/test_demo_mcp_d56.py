@@ -8,16 +8,14 @@ stay closed without demo mode, and stay open for the read-only demo key
 
 from __future__ import annotations
 
-import os
-
 import pytest
 from fastapi.testclient import TestClient
 
 from raucle.demo_scenarios import (
     BENIGN_MANIFEST,
     DEMO_MANIFESTS,
-    POISONED_MANIFEST,
     OVERSIZED_MANIFEST,
+    POISONED_MANIFEST,
 )
 from raucle.gateway import GatewayConfig, RaucleGateway, UserManager
 from raucle.gateway_app import create_admin_app
@@ -148,7 +146,9 @@ def test_demo_key_can_scan_pasted_manifest_and_gets_real_findings(stack):
     assert body["count"] == len(body["findings"]) > 0
     # The findings shape is the Finding.to_dict contract of the real engine.
     f = body["findings"][0]
-    for field in ("rule_id", "category", "severity", "tool", "field", "message", "evidence", "location"):
+    for field in (
+        "rule_id", "category", "severity", "tool", "field", "message", "evidence", "location",
+    ):
         assert field in f
 
 
@@ -168,7 +168,11 @@ def test_scan_route_rejects_missing_and_oversized_manifests(stack):
     r = client.post("/api/demo/mcp/scan", headers={"Authorization": demo_key}, json={})
     assert r.status_code == 422
     big = {"tools": [{"name": "t", "description": "x" * (300 * 1024)}]}
-    r = client.post("/api/demo/mcp/scan", headers={"Authorization": demo_key}, json={"manifest": big})
+    r = client.post(
+        "/api/demo/mcp/scan",
+        headers={"Authorization": demo_key},
+        json={"manifest": big},
+    )
     assert r.status_code == 422
 
 
