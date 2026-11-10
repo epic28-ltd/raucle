@@ -227,3 +227,32 @@ jobs:
           set -e
           python scripts/threat_model_check.py
           echo "✓ every documented control is mapped to tests or explicitly out-of-scope"
+
+  lean-proof:
+    name: Lean proof verification (VCD theorems)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: paper/lean
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Install elan and generate lake-manifest
+        run: |
+          curl -sSf https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Generate lake-manifest (downloads the pinned toolchain)
+        run: lake update
+      # Pinned lean-action v1.7.1: fetches the Mathlib cache, runs lake build.
+      - uses: leanprover/lean-action@498ce7030982ff0e0cecd98a8f5a7c90615b4e41
+        with:
+          lake-package-directory: paper/lean
+          check-stdlib: false
+          test: false
+          lint: false
+      - name: Verify builds with zero `sorry`s
+        run: |
+          ! grep -rn "sorry" VCD/ || {
+            echo "FAIL: `sorry` found in mechanisation"
+            exit 1
+          }
+          echo "✓ VCD theorems verify (attenuation, gate soundness, composition)"
