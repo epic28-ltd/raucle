@@ -2526,7 +2526,8 @@ body:not(.demo) [data-tab-id="dlp"], body:not(.demo) [data-tab-id="injection"], 
 
 /* Guided tour */
 #tourHost{position:fixed;inset:0;pointer-events:none;z-index:9000}
-.tour-card{position:fixed;width:320px;background:#ffffff;background-color:#ffffff;opacity:1;mix-blend-mode:normal;border:1px solid #171717;border-radius:12px;padding:16px 18px 12px;box-shadow:0 12px 40px rgba(0,0,0,0.18);pointer-events:auto;animation:tourIn .25s ease}
+.tour-spot{position:absolute;border:2px solid #171717;border-radius:12px;box-shadow:0 0 0 4000px rgba(255,255,255,0.35);pointer-events:none;}
+  .tour-card{position:fixed;width:320px;background:#ffffff;background-color:#ffffff;opacity:1;mix-blend-mode:normal;border:1px solid #171717;border-radius:12px;padding:16px 18px 12px;box-shadow:0 12px 40px rgba(0,0,0,0.18);pointer-events:auto;animation:tourIn .25s ease}
 @keyframes tourIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .tour-step{font-size:0.68rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#8b919e;margin-bottom:8px}
 .tour-body{font-size:0.85rem;line-height:1.5;color:#171717;margin-bottom:14px}
@@ -3569,12 +3570,27 @@ function tourShow(){
   setTimeout(()=>{
     const el=document.querySelector(s.target)||document.getElementById('tab-'+s.tab);
     if(!el){tourStep++;tourShow();return;}
-    const r=el.getBoundingClientRect();
-    let bx=Math.min(Math.max(r.left+r.width/2-160,12),window.innerWidth-332);
-    let by=Math.max(r.bottom+12,12);
-    if(by+170>window.innerHeight-12) by=Math.max(12,r.top-186);
+    el.scrollIntoView({behavior:'smooth',block:'center'});
     const host=document.getElementById('tourHost');
-    host.innerHTML=`<div class="tour-card" style="left:${bx}px;top:${by}px">
+    host.innerHTML=`<div class="tour-card" id="tourCard"></div>`;
+    const spot=document.createElement('div');
+    spot.className='tour-spot';
+    const sb=el.getBoundingClientRect();
+    spot.style.left=sb.left+'px';spot.style.top=sb.top+'px';spot.style.width=sb.width+'px';spot.style.height=sb.height+'px';
+    host.insertBefore(spot,host.firstChild);
+    positionTourCard(el);
+  },220);
+}
+function positionTourCard(el){
+  const r=el.getBoundingClientRect();
+  let bx=Math.min(Math.max(r.left+r.width/2-160,12),window.innerWidth-332);
+  let by=Math.max(r.bottom+12,12);
+  if(by+170>window.innerHeight-12) by=Math.max(12,r.top-186);
+  const host=document.getElementById('tourHost');
+  const card=document.getElementById('tourCard');
+  if(!card)return;
+  card.style.left=bx+'px';card.style.top=by+'px';
+  card.innerHTML=`
       <div class="tour-step">Step ${tourStep+1} of ${TOUR_STEPS.length} · ${esc(s.title)}</div>
       <div class="tour-body">${esc(s.body)}</div>
       <div class="tour-actions">
@@ -3583,7 +3599,9 @@ function tourShow(){
       </div>
       <div class="tour-dots">${TOUR_STEPS.map((_,i)=>`<span class="${i===tourStep?'on':''}"></span>`).join('')}</div>
     </div>`;
-  },220);
+  // keep the card anchored if the panel scrolls or resizes mid-step
+  if(!window.__tourReposition){window.__tourReposition=true;window.addEventListener('resize',()=>{const c=document.getElementById('tourCard');if(!c)return;const s=TOUR_STEPS[tourStep];const el2=s&&(document.querySelector(s.target)||document.getElementById('tab-'+s.tab));if(el2)positionTourCard(el2);});}
+  window.addEventListener('scroll',()=>{const c=document.getElementById('tourCard');if(!c)return;const s=TOUR_STEPS[tourStep];const el2=s&&(document.querySelector(s.target)||document.getElementById('tab-'+s.tab));if(el2)positionTourCard(el2);},{passive:true});
 }
 function tourNext(){tourStep++;tourShow();}
 function tourEnd(seen){
