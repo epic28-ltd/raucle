@@ -95,9 +95,7 @@ class TestOfflineVerifyEndpoint:
     def test_verifies_a_real_gate_receipt_offline(self, env):
         client, gateway, _, auditor = env
         receipt_hash = _emit_receipt(gateway)
-        r = client.post(
-            f"/api/receipts/{receipt_hash}/offline-verify", headers=auditor
-        )
+        r = client.post(f"/api/receipts/{receipt_hash}/offline-verify", headers=auditor)
         assert r.status_code == 200
         d = r.json()
         assert d["verdict"] == "verified"
@@ -133,7 +131,8 @@ class TestOfflineVerifyEndpoint:
             + segs[2],
         }
         store_file = gateway.config.receipt_store
-        lines = [line for line in open(store_file, encoding="utf-8") if line.strip()]
+        with open(store_file, encoding="utf-8") as fh:
+            lines = [line for line in fh if line.strip()]
         with open(store_file, "w", encoding="utf-8") as fh:
             for line in lines:
                 rec = _json.loads(line)
@@ -149,27 +148,20 @@ class TestOfflineVerifyEndpoint:
 
     def test_unknown_receipt_hash_is_404(self, env):
         client, _, _, auditor = env
-        r = client.post(
-            "/api/receipts/sha256:%s/offline-verify" % ("0" * 64), headers=auditor
-        )
+        r = client.post("/api/receipts/sha256:%s/offline-verify" % ("0" * 64), headers=auditor)
         assert r.status_code == 404
 
     def test_requires_authorization(self, env):
         client, gateway, _, _ = env
         receipt_hash = _emit_receipt(gateway)
-        assert (
-            client.post(f"/api/receipts/{receipt_hash}/offline-verify").status_code
-            == 401
-        )
+        assert client.post(f"/api/receipts/{receipt_hash}/offline-verify").status_code == 401
 
     def test_auditor_role_may_verify(self, env):
         """The demo key is an auditor (read-only); verification reads only."""
         client, gateway, _, auditor = env
         receipt_hash = _emit_receipt(gateway)
         assert (
-            client.post(
-                f"/api/receipts/{receipt_hash}/offline-verify", headers=auditor
-            ).status_code
+            client.post(f"/api/receipts/{receipt_hash}/offline-verify", headers=auditor).status_code
             == 200
         )
 
@@ -186,7 +178,7 @@ class TestPanelD7Strip:
 
     def test_every_capability_links_to_its_tab(self):
         for label, tab in D7_STRIP_ENTRIES:
-            attr = f'data-hi="showTab(\'{tab}\',this)"'
+            attr = f"data-hi=\"showTab('{tab}',this)\""
             assert attr in ADMIN_PANEL_HTML, label
             # the strip carries the label next to that delegation
             idx = ADMIN_PANEL_HTML.index("enterpriseStrip")
@@ -206,7 +198,7 @@ class TestPanelD7Strip:
 
     def test_strip_does_not_add_new_delegation_keys(self):
         for _label, tab in D7_STRIP_ENTRIES:
-            assert ADMIN_PANEL_HTML.count(f'"showTab(\'{tab}\',this)":') == 1
+            assert ADMIN_PANEL_HTML.count(f"\"showTab('{tab}',this)\":") == 1
 
 
 class TestPanelOfflineVerifyCameo:
@@ -236,4 +228,6 @@ class TestPanelOfflineVerifyCameo:
         assert "real offline verifier" in region
         assert "simulated" in region.lower()
         # the endpoint labels every verified response with the same note constant
-        assert OFFLINE_VERIFY_NOTE.endswith("with the same enforcement code paths as a live deployment.")
+        assert OFFLINE_VERIFY_NOTE.endswith(
+            "with the same enforcement code paths as a live deployment."
+        )

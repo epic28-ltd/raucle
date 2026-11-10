@@ -1825,7 +1825,6 @@ def _register_receipt_routes(
             headers={"Content-Disposition": 'attachment; filename="receipts.jsonl"'},
         )
 
-
     @app.post(
         "/api/receipts/{receipt_hash}/offline-verify",
         responses={
@@ -1860,9 +1859,7 @@ def _register_receipt_routes(
         from raucle.provenance import ProvenanceVerifier, _sha256_hex
 
         gate = gateway.gate_identity
-        verifier = ProvenanceVerifier(
-            public_keys={gate.key_id: gate.public_key_pem()}
-        )
+        verifier = ProvenanceVerifier(public_keys={gate.key_id: gate.public_key_pem()})
         # Scope the real verifier to the selected receipt's own envelope
         # line (single-record chain: signature check, hash recomputation
         # and parent resolution on exactly what an auditor carries away).
@@ -1878,9 +1875,7 @@ def _register_receipt_routes(
             )
             report = verifier.verify_chain(chain_file)
 
-        receipt_hash_recomputed = "sha256:" + _sha256_hex(
-            envelope.get("jws", "").encode("ascii")
-        )
+        receipt_hash_recomputed = "sha256:" + _sha256_hex(envelope.get("jws", "").encode("ascii"))
         verified = bool(report.valid) and receipt_hash_recomputed == receipt_hash
         errors = list(report.errors or [])
         if not verified and not errors:
@@ -1898,8 +1893,7 @@ def _register_receipt_routes(
                     "hash_linkage": {"recomputed_matches": False},
                     "errors": errors[:10],
                     "offline": (
-                        "This verification ran entirely offline. No operator "
-                        "network call was made."
+                        "This verification ran entirely offline. No operator network call was made."
                     ),
                     "note": OFFLINE_VERIFY_NOTE,
                 },
