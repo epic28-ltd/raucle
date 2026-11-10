@@ -1,6 +1,6 @@
 {
   "all_passed": true,
-  "data_digest": "sha256:06e306bcc7155b2e8669137aff97e4776d52b0aad6a31b71253a42455b230d47",
+  "data_digest": "sha256:d197bad01d729e83d8a59b0eaa0297b36d2de3c451ce8c22e13245c40e9cf88d",
   "schema_version": "raucle-conformance/v1",
   "suites": [
     {
@@ -39,5 +39,5 @@
       "vectors": null
     }
   ],
-  "tool_version": "0.22.0"
+  "tool_version": "0.23.5"
 }
