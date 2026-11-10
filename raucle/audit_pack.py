@@ -382,6 +382,7 @@ def _verify_pack_reproducibility(
             generated_at=index["generated_at"],
             capabilities=capabilities,
             capability_statements=statements or None,
+            tool_version=manifest["body"]["tool_version"],
         )
         body_ok = _canonical_json(rebuilt.body()) == _canonical_json(manifest["body"])
         if not body_ok:
