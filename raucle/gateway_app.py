@@ -3392,6 +3392,9 @@ function tourEnd(seen){
   try{localStorage.setItem(TOUR_SEEN_KEY,seen?'1':'1');}catch(e){}
 }
 function tourMaybeStart(){
+  let force = false;
+  try { force = new URLSearchParams(window.location.search).get('tour') === '1'; } catch(e) {}
+  if (force) { try{localStorage.removeItem(TOUR_SEEN_KEY);}catch(e){} }
   let done=false;
   try{done=localStorage.getItem(TOUR_SEEN_KEY)==='1';}catch(e){}
   if(done)return;
