@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from raucle.admin_session import SESSION_TOKEN_PREFIX, AdminSessionManager, SessionAuthError
+from raucle.demo_findings import build_demo_findings
 from raucle.gateway import (
     GatewayUser,
     RaucleGateway,
@@ -859,6 +860,7 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     _install_security_headers(app)
     _register_health_routes(app, gateway)
     _register_stats_routes(app, gateway, check_auth, check_access)
+    _register_demo_findings_routes(app, gateway, check_auth, check_access)
     _register_learn_routes(app, gateway, check_auth, check_access)
     _register_policy_routes(app, gateway, check_auth, check_access)
     _register_simulate_routes(app, gateway, users, check_access)
@@ -1000,6 +1002,39 @@ def _register_stats_routes(
                 c for c in connections if destination.lower() in c.get("destination", "").lower()
             ]
         return {"connections": connections[:limit], "count": len(connections)}
+
+
+def _register_demo_findings_routes(
+    app: FastAPI, gateway: RaucleGateway, check_auth: Any, check_access: Any
+) -> None:
+    """Read-only demo findings plane backing the EPIC D demo screens.
+
+    The demo key (auditor role) may read findings; the resource gate is the
+    same read-only stats plane the connections log uses. Everything the
+    endpoint returns is computed at request time by the real pattern and
+    classifier engines over the simulated demo traffic packs in
+    :mod:`raucle.demo_findings`. Nothing from real traffic is included.
+    """
+
+    @app.get(
+        "/api/demo-findings",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+            "400": {"description": "Unknown demo scenario"},
+        },
+    )
+    def get_demo_findings(
+        scenario: str = "all",
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        user = check_auth(authorization, x_totp)
+        check_access(user, "stats")
+        try:
+            return build_demo_findings(scenario=scenario or "all")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
 
 def _register_learn_routes(
@@ -2486,6 +2521,10 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
 /* Demo mode: hide privileged tabs + disable every edit affordance */
 body.demo [data-tab-id="policies"], body.demo [data-tab-id="siem"], body.demo [data-tab-id="users"], body.demo [data-tab-id="config"], body.demo [data-tab-id="topo-link"]{display:none}
 body.demo .btn-primary{display:none}
+/* Demo-only screens: hidden outside demo mode */
+body:not(.demo) [data-tab-id="dlp"], body:not(.demo) [data-tab-id="injection"], body:not(.demo) [data-tab-id="shadow"]{display:none}
+.screen-note{margin:0 0 12px;font-size:0.78rem;line-height:1.5;color:#8b919e}
+.findings-label{display:inline-block;font-size:0.72rem;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;color:#8b919e;background:#f4f5f7;border:1px solid #e5e7ec;border-radius:6px;padding:2px 8px;margin-bottom:10px}
 
 /* Guided tour */
 #tourHost{position:fixed;inset:0;pointer-events:none;z-index:9000}
@@ -2562,6 +2601,9 @@ body.demo .btn-primary{display:none}
     <div class="tab" data-hi="showTab('learn',this)" data-tab-id="learn">Learn</div>
     <div class="tab" data-hi="showTab('receipts',this)">Receipts</div>
     <div class="tab" data-hi="showTab('mcp',this)" data-tab-id="mcp">MCP Scanner</div>
+    <div class="tab" data-hi="showTab('dlp',this)" data-tab-id="dlp">Data Protection</div>
+    <div class="tab" data-hi="showTab('injection',this)" data-tab-id="injection">Prompt Injection</div>
+    <div class="tab" data-hi="showTab('shadow',this)" data-tab-id="shadow">Shadow AI</div>
     <div class="tab" data-hi="showTab('siem',this)" data-tab-id="siem">SIEM</div>
     <div class="tab" data-hi="showTab('users',this)" data-tab-id="users">Users</div>
     <div class="tab" data-hi="showTab('config',this)" data-tab-id="config">Config</div>
@@ -2576,6 +2618,36 @@ body.demo .btn-primary{display:none}
       <div class="card"><div class="card-title">By Tool</div>
         <table><thead><tr><th>Tool</th><th>Allowed</th><th>Denied</th><th>Escalated</th></tr></thead>
         <tbody id="toolTableBody"></tbody></table>
+      </div>
+    </div>
+
+    <div id="tab-dlp" class="hidden">
+      <div class="card"><div class="card-title"><span class="live-dot"></span>Data Loss Prevention</div>
+        <span class="findings-label">Simulated demo traffic</span>
+        <p class="screen-note">Every finding below was produced by the same pattern engine that screens live traffic, run over the simulated demo calls. Counts are grouped by data category, and each call shows the redaction action the policy applied and the rule responsible. No real personal data is shown anywhere on this screen.</p>
+        <div class="stats-grid" id="dlpSummary"></div>
+        <table><thead><tr><th>Agent</th><th>Tool</th><th>Where</th><th>Rule</th><th>Category</th><th>Action</th></tr></thead>
+        <tbody id="dlpTableBody"></tbody></table>
+      </div>
+    </div>
+
+    <div id="tab-injection" class="hidden">
+      <div class="card"><div class="card-title"><span class="live-dot"></span>Prompt Injection</div>
+        <span class="findings-label">Simulated demo traffic</span>
+        <p class="screen-note">Injected payloads inside the simulated tool outputs and agent text, scored live by the heuristic classifier (with the machine learning classifier when it is active) in the same decision bands the gate uses. Each event shows its score, category, and the receipted decision with its reason.</p>
+        <div class="stats-grid" id="injSummary"></div>
+        <table><thead><tr><th>Agent</th><th>Tool</th><th>Where</th><th>Score</th><th>Category</th><th>Decision</th><th>Reason</th></tr></thead>
+        <tbody id="injTableBody"></tbody></table>
+      </div>
+    </div>
+
+    <div id="tab-shadow" class="hidden">
+      <div class="card"><div class="card-title"><span class="live-dot"></span>Shadow AI</div>
+        <span class="findings-label">Simulated demo traffic</span>
+        <p class="screen-note">Attempts by simulated agents to reach unapproved model suppliers: unknown model headers, endpoints outside the approved egress list, and bring-your-own-key attempts. Each finding is checked against the scenario's approved supplier policy by the gateway's shadow-AI detection path, with the policy response recorded.</p>
+        <div class="stats-grid" id="shadowSummary"></div>
+        <table><thead><tr><th>Agent</th><th>Tool</th><th>Finding</th><th>Detail</th><th>Policy response</th></tr></thead>
+        <tbody id="shadowTableBody"></tbody></table>
       </div>
     </div>
 
@@ -2872,6 +2944,8 @@ function showTab(t,el) {
   el.classList.add('active'); document.getElementById('tab-'+t).classList.remove('hidden');
   if(t==='dashboard')loadStats(); if(t==='connections'){demoExample();updatePathTail();if(!pathPollId)pathPollId=setInterval(updatePathTail,3000);startConnPolling();}else if(pathPollId){clearInterval(pathPollId);pathPollId=null;} else stopConnPolling();
   if(t==='policies')loadPolicy(); if(t==='learn')loadLearn(); if(t==='receipts')loadReceipts(); if(t==='mcp')loadMcpPanel(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
+  if(t==='policies')loadPolicy(); if(t==='learn')loadLearn(); if(t==='receipts')loadReceipts(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
+  if(t==='dlp'||t==='injection'||t==='shadow')loadDemoFindings();
 }
 function api(p,o){const h={'Authorization':key,...((o||{}).headers||{})};if(totpCode)h['X-TOTP']=totpCode;return fetch(p,{...(o||{}),headers:h});}
 function loadAll(){loadStats();}
@@ -3325,6 +3399,70 @@ function saveConfig(){
 setInterval(()=>{if(!document.getElementById('main').classList.contains('hidden')&&!document.getElementById('tab-dashboard').classList.contains('hidden'))loadStats();},5000);
 window.addEventListener('resize',()=>{if(!document.getElementById('tab-connections').classList.contains('hidden'))drawFlowLines(getFiltered());});
 
+// ================= DEMO FINDINGS (EPIC D screens) =================
+// textContent-only rendering: every DOM write for these screens goes through
+// createElement/textContent, so no injected demo text can become markup.
+let demoFindings = null;
+function loadDemoFindings() {
+  const p = demoScenarioFilter && demoScenarioFilter !== 'all' ? demoScenarioFilter : 'all';
+  api('/api/demo-findings?scenario=' + encodeURIComponent(p)).then(r => r.json()).then(d => {
+    demoFindings = d;
+    renderDlpScreen(d);renderInjectionScreen(d);renderShadowScreen(d);
+  }).catch(() => {});
+}
+function findingsRows(tbodyId, headers, rowsGetter) {
+  // shared textContent table builder for the findings screens
+  const tb = document.getElementById(tbodyId);
+  if (!tb) return;
+  tb.textContent = '';
+  const rows = rowsGetter();
+  if (!rows.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = headers.length;
+    td.textContent = 'No findings for this scenario';
+    td.style.color = '#8b919e';
+    tr.appendChild(td);tb.appendChild(tr);return;
+  }
+  rows.forEach(cells => {
+    const tr = document.createElement('tr');
+    cells.forEach(v => {
+      const td = document.createElement('td');
+      td.textContent = String(v === undefined || v === null ? '' : v);
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+}
+function findingsStats(gridId, entries) {
+  const g = document.getElementById(gridId);
+  if (!g) return;
+  g.textContent = '';
+  entries.forEach(([label, val]) => {
+    const s = document.createElement('div');s.className = 'stat';
+    const sv = document.createElement('div');sv.className = 'stat-value';sv.textContent = String(val === undefined || val === null ? 0 : val);
+    const sl = document.createElement('div');sl.className = 'stat-label';sl.textContent = String(label || '');
+    s.appendChild(sv);s.appendChild(sl);g.appendChild(s);
+  });
+}
+function whereLabel(f) { return f.kind === 'agent_text' ? 'Agent text' : 'Tool output'; }
+function renderDlpScreen(d) {
+  findingsStats('dlpSummary', [['Findings', (d.dlp || {}).total], ['Blocked', ((d.dlp || {}).by_action || {}).block || 0], ['Redacted', ((d.dlp || {}).by_action || {}).redact || 0], ['Masked', ((d.dlp || {}).by_action || {}).mask || 0]]);
+  findingsRows('dlpTableBody', 6, () => ((d.dlp || {}).findings || []).map(f => [f.agent, f.tool, whereLabel(f), f.rule_id + (f.rule_name ? ' · ' + f.rule_name : ''), f.category, f.action]));
+}
+function renderInjectionScreen(d) {
+  const fs = (d.injection || {}).findings || [];
+  findingsStats('injSummary', [['Findings', fs.length], ['Denied', fs.filter(f => f.decision === 'deny').length], ['Escalated', fs.filter(f => f.decision === 'escalate').length]]);
+  findingsRows('injTableBody', 7, () => fs.map(f => [f.agent, f.tool, whereLabel(f), f.score, f.category, f.decision, f.reason]));
+}
+function renderShadowScreen(d) {
+  const fs = (d.shadow || {}).findings || [];
+  const kinds = {unknown_model: 0, unapproved_endpoint: 0, byok_attempt: 0};
+  fs.forEach(f => { if (kinds[f.kind] !== undefined) kinds[f.kind]++; });
+  findingsStats('shadowSummary', [['Findings', fs.length], ['Unknown models', kinds.unknown_model], ['Unapproved endpoints', kinds.unapproved_endpoint], ['Key attempts', kinds.byok_attempt]]);
+  findingsRows('shadowTableBody', 5, () => fs.map(f => [f.agent, f.tool, f.kind.replace(/_/g, ' '), f.detail, f.policy_response]));
+}
+
 // ================= DEMO MODE =================
 const DEMO_SCENARIOS = ['banking', 'government', 'health', 'capability'];
 // Tool-name signature per demo scenario (D6). capability: PII/DLP, prompt
@@ -3388,7 +3526,7 @@ function buildScenarioPicker() {
 }
 
 let demoScenarioFilter = 'all';
-function setDemoScenario(v) { demoScenarioFilter = v; buildScenarioPicker(); loadConnections(); topoRefresh(); }
+function setDemoScenario(v) { demoScenarioFilter = v; buildScenarioPicker(); loadConnections(); topoRefresh(); loadDemoFindings(); }
 function scenarioClick(ev){
   const el=ev.currentTarget||ev.target.closest('[data-scenario]');
   if(el&&el.dataset.scenario)setDemoScenario(el.dataset.scenario);
@@ -3417,6 +3555,12 @@ const TOUR_STEPS = [
    body:'Each receipt is signed and content-addressed. Take them offline: an auditor can verify the chain without contacting us, or any vendor.'},
   {tab:'mcp', target:'#mcpManifestList', title:'Scan an MCP manifest',
    body:"Pick a simulated demo manifest, or paste one of your own, and the panel runs the gateway's real MCP scanner over it. The findings you see are the scan's actual output, not a hand-drawn example."},
+  {tab:'dlp', target:'#tab-dlp', title:'Sensitive data, handled',
+   body:'Findings from the simulated demo calls, scored by the same pattern engine used on live traffic: by data category, with the redaction action and the rule responsible per call.'},
+  {tab:'injection', target:'#tab-injection', title:'Injected instructions, caught',
+   body:'The classifier scoring simulated tool outputs and agent text in real time. Each event shows its score, category and the receipted decision.'},
+  {tab:'shadow', target:'#tab-shadow', title:'Unapproved AI, surfaced',
+   body:'Attempts by agents to reach model suppliers the policy does not approve: unknown models, off-list endpoints and caller-supplied keys.'},
   {tab:'learn', target:'#tab-learn', title:'Want the depth?',
    body:'A short guided walkthrough of capability tokens, policies and what the proofs guarantee. When you are done, close the bubbles and explore freely.'},
 ];
@@ -3877,8 +4021,7 @@ function clearLearn(){
   api('/api/learn/clear',{method:'POST'}).then(()=>loadLearn());
 }
 
-// ================= MCP SCANNER (D5) =================
-let mcpManifests = [], mcpSelected = '';
+// ================= MCP SCANNER (D5) ==========let mcpManifests = [], mcpSelected = '';
 function loadMcpPanel(){
   api('/api/demo/mcp/manifests').then(r=>{ if(r.ok) return r.json(); throw 0; }).then(d=>{
     mcpManifests = d.manifests||[];
@@ -3949,6 +4092,8 @@ function mcpScan(){
 }
 
 if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
+=======
+if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy()};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
 (function(){[['srcFilter','input',renderFlow],['midFilter','input',renderFlow],['dstFilter','input',renderFlow],['topoDecisionFilter','change',topoRender],['topoMotion','change',topoRender],['filterDecision','change',function(){loadConnections(lastLimit||200);}],['liveMode','change',function(){loadConnections(lastLimit);}]].forEach(function(x){const el=document.getElementById(x[0]);if(el&&el.addEventListener)el.addEventListener(x[1],x[2]);});[['apiKey',login],['totpInput',loginWithTotp],['mfaCodeInput',confirmMfa]].forEach(function(x){const el=document.getElementById(x[0]);if(el)el.addEventListener('keydown',function(ev){if(ev.key==='Enter')x[1]();});});const cb=document.getElementById('connBody');if(cb)cb.addEventListener('click',function(ev){const tr=ev.target.closest('tr.conn-row');if(!tr)return;const i=+tr.dataset.idx;selectConn(i);showPath(i);});const pb=document.getElementById('connPath');if(pb)pb.addEventListener('click',function(ev){const r=ev.target.closest('.path-row');if(!r||r.dataset.gi===undefined)return;pathRowClick(+r.dataset.gi);});})();
 </script>
 </body>
