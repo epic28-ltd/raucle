@@ -2334,7 +2334,7 @@ def _register_ui_routes(app: FastAPI) -> None:
         return TOPOLOGY_HTML
 
     @app.get("/assets/login-bg.jpg", response_class=None)
-    def login_background() -> "FileResponse":
+    def login_background() -> FileResponse:
         """The engraved artwork behind the demo sign-in card."""
         return FileResponse(Path(__file__).with_name("demo_login_bg.jpg"), media_type="image/jpeg")
 
