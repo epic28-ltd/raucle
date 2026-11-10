@@ -868,6 +868,10 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     _register_user_routes(app, users, check_auth, check_access)
     _register_session_routes(app, users, sessions, check_auth, check_access, oidc_federation)
     _register_config_routes(app, gateway, check_auth, check_access)
+    # D5: demo-mode MCP manifest scanning, backed by the real scanner
+    from raucle.demo_scenarios import register_demo_mcp_routes
+
+    register_demo_mcp_routes(app, check_auth, check_access)
     _register_ui_routes(app)
 
     return app
@@ -2533,7 +2537,7 @@ body.demo .btn-primary{display:none}
     <div style="text-align:center;margin:16px 0 8px;color:#737373;font-size:0.8rem">or</div>
     <button class="btn" style="width:100%;background:#171717;color:#fff" id="enterDemoBtn" data-hi="enterDemo()">View Demo</button>
     <div style="margin-top:10px;font-size:0.75rem;color:#737373;text-align:center">
-      Read-only demonstration across banking, government and health scenarios.
+      Read-only demonstration across banking, government, health and capability scenarios.
     </div>
   </div>
 </div>
@@ -2545,7 +2549,7 @@ body.demo .btn-primary{display:none}
       <span style="width:6px;height:6px;border-radius:50%;background:#fff;display:inline-block"></span>
       DEMO MODE
     </span>
-    <span style="font-size:0.82rem;color:#3a3f4b">Read-only view of a live deployment with simulated agent traffic.</span>
+    <span style="font-size:0.82rem;color:#3a3f4b">Read-only view of a live deployment with simulated agent traffic. The scenarios cover banking, government, health and capability screens; the Threats lens focuses the panel on denied and escalated calls.</span>
     <button class="tour-replay" data-hi="tourRestart()">Replay tour</button>
     <span style="flex:1"></span>
     <div id="scenarioPicker" style="display:flex;gap:8px"></div>
@@ -2557,6 +2561,7 @@ body.demo .btn-primary{display:none}
     <div class="tab" data-hi="showTab('policies',this)" data-tab-id="policies">Policies</div>
     <div class="tab" data-hi="showTab('learn',this)" data-tab-id="learn">Learn</div>
     <div class="tab" data-hi="showTab('receipts',this)">Receipts</div>
+    <div class="tab" data-hi="showTab('mcp',this)" data-tab-id="mcp">MCP Scanner</div>
     <div class="tab" data-hi="showTab('siem',this)" data-tab-id="siem">SIEM</div>
     <div class="tab" data-hi="showTab('users',this)" data-tab-id="users">Users</div>
     <div class="tab" data-hi="showTab('config',this)" data-tab-id="config">Config</div>
@@ -2730,6 +2735,33 @@ body.demo .btn-primary{display:none}
         <pre id="ancestryView" style="font-size:11px;max-height:260px;overflow:auto"></pre>
       </div>
     </div>
+    <div id="tab-mcp" class="hidden">
+      <div class="card">
+        <div class="card-title">MCP Tool Scanner</div>
+        <p style="font-size:0.85rem;color:#8b919e;margin-bottom:14px">
+          Static analysis of MCP tool manifests for prompt injection, hidden
+          instructions, exposed credentials, rug-pull wording and SSRF targets.
+          Findings are produced by the gateway's real scanner engine; the demo
+          manifests are simulated samples, labelled as such.
+        </p>
+        <div style="font-size:0.75rem;color:#a3a3a3;margin-bottom:8px">Choose a simulated demo manifest, or paste your own manifest JSON below.</div>
+        <div class="file-list" id="mcpManifestList"></div>
+        <textarea class="editor" id="mcpManifestText" style="height:220px" spellcheck="false"></textarea>
+        <div class="actions">
+          <button class="btn" data-hi="mcpScan()">Scan manifest</button>
+          <button class="btn btn-secondary" data-hi="mcpClear()">Clear</button>
+          <span style="font-size:0.75rem;color:#a3a3a3;align-self:center">Read-only: scanning has no side effects on the gate.</span>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;font-size:0.78rem;color:#737373" id="mcpSummary"></div>
+      </div>
+      <div class="card hidden" id="mcpFindingsCard">
+        <div class="card-title">Findings</div>
+        <div style="overflow-x:auto">
+          <table><thead><tr><th>Severity</th><th>Rule</th><th>Tool</th><th>Field</th><th>Message</th><th>Evidence class</th></tr></thead>
+          <tbody id="mcpFindingsBody"></tbody></table>
+        </div>
+      </div>
+    </div>
     <div id="tab-siem" class="hidden"><div class="card"><div class="card-title">SIEM Forwarding</div>
       <label class="toggle" style="margin-bottom:16px"><input type="checkbox" id="siemEnabled"> Enabled</label>
       <div style="display:flex;flex-direction:column;gap:8px;max-width:400px">
@@ -2839,7 +2871,7 @@ function showTab(t,el) {
   document.querySelectorAll('[id^=tab-]').forEach(x=>x.classList.add('hidden'));
   el.classList.add('active'); document.getElementById('tab-'+t).classList.remove('hidden');
   if(t==='dashboard')loadStats(); if(t==='connections'){demoExample();updatePathTail();if(!pathPollId)pathPollId=setInterval(updatePathTail,3000);startConnPolling();}else if(pathPollId){clearInterval(pathPollId);pathPollId=null;} else stopConnPolling();
-  if(t==='policies')loadPolicy(); if(t==='learn')loadLearn(); if(t==='receipts')loadReceipts(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
+  if(t==='policies')loadPolicy(); if(t==='learn')loadLearn(); if(t==='receipts')loadReceipts(); if(t==='mcp')loadMcpPanel(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
 }
 function api(p,o){const h={'Authorization':key,...((o||{}).headers||{})};if(totpCode)h['X-TOTP']=totpCode;return fetch(p,{...(o||{}),headers:h});}
 function loadAll(){loadStats();}
@@ -2861,11 +2893,12 @@ function loadConnections(limit) {
   if(fd)p.set('decision',fd);
   api('/api/connections?'+p.toString()).then(r=>r.json()).then(d=>{
     allConns=d.connections||[];
-    if(demoMode&&demoScenarioFilter!=='all'){
+    if(demoMode&&demoScenarioFilter!=='all'&&demoScenarioFilter!=='threats'){
       const sc=demoScenarioFilter;
-      const tools={banking:['lookup_balance','transfer_internal','transfer_external','block_card','increase_card_limit','check_loan_status','create_loan_application','file_sar','check_sanctions','unblock_card','lookup_transaction_history'],government:['check_benefit_entitlement','lookup_payment_history','schedule_benefit_payment','flag_fraud_suspected','lookup_tax_account','calculate_tax_estimate','submit_self_assessment','retrieve_planning_application','update_case_notes','recommend_decision','check_immigration_status','request_dbs_check','search_foi_register','draft_foi_response'],health:['read_patient_record','write_patient_note','prescribe_medication','prescribe_controlled','order_imaging','view_imaging_result','order_lab_test','review_lab_results','triage_assessment','export_patient_summary','book_appointment','cancel_appointment']};
+      const tools=demoToolMap();
       allConns=allConns.filter(c=>(tools[sc]||[]).includes(c.tool)||(c.policy||'').toLowerCase().includes({banking:'banking',government:'government',health:'healthcare'}[sc]));
     }
+    if(demoMode&&demoScenarioFilter==='threats') allConns=threatsLens(allConns);
     renderFlow();renderConnTable();
     if(lastLimit===1&&allConns.length){selectConn(0);showPath(0);}
   }).catch(()=>{});
@@ -3293,7 +3326,20 @@ setInterval(()=>{if(!document.getElementById('main').classList.contains('hidden'
 window.addEventListener('resize',()=>{if(!document.getElementById('tab-connections').classList.contains('hidden'))drawFlowLines(getFiltered());});
 
 // ================= DEMO MODE =================
-const DEMO_SCENARIOS = ['banking', 'government', 'health'];
+const DEMO_SCENARIOS = ['banking', 'government', 'health', 'capability'];
+// Tool-name signature per demo scenario (D6). capability: PII/DLP, prompt
+// injection, shadow AI and MCP registry traffic fed by the demo generator.
+function demoToolMap(){
+  return {
+    banking:['lookup_balance','transfer_internal','transfer_external','block_card','increase_card_limit','check_loan_status','create_loan_application','file_sar','check_sanctions','unblock_card','lookup_transaction_history'],
+    government:['check_benefit_entitlement','lookup_payment_history','schedule_benefit_payment','flag_fraud_suspected','lookup_tax_account','calculate_tax_estimate','submit_self_assessment','retrieve_planning_application','update_case_notes','recommend_decision','check_immigration_status','request_dbs_check','search_foi_register','draft_foi_response'],
+    health:['read_patient_record','write_patient_note','prescribe_medication','prescribe_controlled','order_imaging','view_imaging_result','order_lab_test','review_lab_results','triage_assessment','export_patient_summary','book_appointment','cancel_appointment'],
+    capability:['redact_document','classify_text','check_dlp_policy','export_analytics','bulk_export_records','screen_user_message','flag_injection_attempt','execute_shell','send_email','audit_ai_usage','list_approved_models','invoke_unapproved_model','forward_external_llm','list_mcp_tools','invoke_mcp_tool','fetch_mcp_manifest']
+  };
+}
+// The threats lens (D6, cross-cutting): keep only the attack-relevant
+// decisions - denied and escalated calls - across every scenario.
+function threatsLens(conns){ return conns.filter(c=>c.decision==='deny'||c.decision==='escalate'); }
 let demoMode = false;
 let topoNodes = [], topoEdges = [], topoSelected = null, topoConns = [];
 let topoHoverLoop = null, topoDenyLoops = [];
@@ -3337,6 +3383,7 @@ function buildScenarioPicker() {
   const mk = (label, val) => `<button class="scenario-btn${(demoScenarioFilter===val)?' active':''}" data-scenario="${esc(val)}" data-hi="scenarioClick(event)">${esc(label)}</button>`;
   let html = mk('All', 'all');
   DEMO_SCENARIOS.forEach(s => html += mk(s[0].toUpperCase()+s.slice(1), s));
+  html += mk('Threats', 'threats');
   bar.innerHTML = html;
 }
 
@@ -3368,6 +3415,8 @@ const TOUR_STEPS = [
    body:'Counts of every gate decision by tool, with latency. Denied calls are as important as allowed ones: they are the policy working.'},
   {tab:'receipts', target:'#receiptsView', title:'Every decision leaves a receipt',
    body:'Each receipt is signed and content-addressed. Take them offline: an auditor can verify the chain without contacting us, or any vendor.'},
+  {tab:'mcp', target:'#mcpManifestList', title:'Scan an MCP manifest',
+   body:"Pick a simulated demo manifest, or paste one of your own, and the panel runs the gateway's real MCP scanner over it. The findings you see are the scan's actual output, not a hand-drawn example."},
   {tab:'learn', target:'#tab-learn', title:'Want the depth?',
    body:'A short guided walkthrough of capability tokens, policies and what the proofs guarantee. When you are done, close the bubbles and explore freely.'},
 ];
@@ -3430,14 +3479,12 @@ function topoFilterConns(conns) {
   const df = document.getElementById('topoDecisionFilter')?.value || '';
   if (df) out = out.filter(c => c.decision === df);
   if (demoScenarioFilter !== 'all') {
-    const sc = demoScenarioFilter;
     out = out.filter(c => {
       // Scenario inference: policy file name or tool name carries the scenario signature
       const pol = (c.policy || '').toLowerCase();
-      const tools = { banking: ['lookup_balance','transfer_internal','transfer_external','block_card','increase_card_limit','check_loan_status','create_loan_application','file_sar','check_sanctions','unblock_card','lookup_transaction_history'],
-                      government: ['check_benefit_entitlement','lookup_payment_history','schedule_benefit_payment','flag_fraud_suspected','lookup_tax_account','calculate_tax_estimate','submit_self_assessment','retrieve_planning_application','update_case_notes','recommend_decision','check_immigration_status','request_dbs_check','search_foi_register','draft_foi_response'],
-                      health: ['read_patient_record','write_patient_note','prescribe_medication','prescribe_controlled','order_imaging','view_imaging_result','order_lab_test','review_lab_results','triage_assessment','export_patient_summary','book_appointment','cancel_appointment'] };
-      return (tools[sc] || []).includes(c.tool) || pol.includes(sc) || pol.includes({banking:'banking',government:'government',health:'healthcare'}[sc]);
+      const tools = demoToolMap();
+      if (demoScenarioFilter === 'threats') return c.decision === 'deny' || c.decision === 'escalate';
+      return (tools[demoScenarioFilter] || []).includes(c.tool) || pol.includes(demoScenarioFilter) || pol.includes({banking:'banking',government:'government',health:'healthcare'}[demoScenarioFilter]);
     });
   }
   return out;
@@ -3830,7 +3877,78 @@ function clearLearn(){
   api('/api/learn/clear',{method:'POST'}).then(()=>loadLearn());
 }
 
-if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy()};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
+// ================= MCP SCANNER (D5) =================
+let mcpManifests = [], mcpSelected = '';
+function loadMcpPanel(){
+  api('/api/demo/mcp/manifests').then(r=>{ if(r.ok) return r.json(); throw 0; }).then(d=>{
+    mcpManifests = d.manifests||[];
+    const bar=document.getElementById('mcpManifestList');
+    bar.innerHTML='';
+    mcpManifests.forEach(m=>{
+      const chip=document.createElement('div');
+      chip.className='file-chip'+(mcpSelected===m.name?' active':'');
+      chip.setAttribute('data-mcp-name',m.name);
+      chip.setAttribute('data-hi','mcpPick(event)');
+      chip.title=m.description||'';
+      chip.textContent=m.label+' (simulated)';
+      bar.appendChild(chip);
+    });
+  }).catch(()=>{ document.getElementById('mcpManifestList').textContent='Demo mode is not configured on this deployment.'; });
+}
+function mcpPick(ev){
+  const el=ev.currentTarget||ev.target.closest('[data-mcp-name]');
+  const name=el?el.dataset.mcpName:null; if(!name)return;
+  mcpSelected=name;
+  document.querySelectorAll('#mcpManifestList .file-chip').forEach(c=>c.classList.toggle('active',c.dataset.mcpName===name));
+  api('/api/demo/mcp/manifests/'+encodeURIComponent(name)).then(r=>r.json()).then(d=>{
+    document.getElementById('mcpManifestText').value=JSON.stringify(d.manifest,null,2);
+  }).catch(()=>{});
+}
+function mcpClear(){ mcpSelected=''; document.getElementById('mcpManifestText').value=''; document.querySelectorAll('#mcpManifestList .file-chip').forEach(c=>c.classList.remove('active')); renderMcpFindings([]); }
+const MCP_SEV_COLOUR={'CRITICAL':'#ef4444','HIGH':'#dd6b78','MEDIUM':'#e5b85c','LOW':'#8b919e','INFO':'#a3a3a3'};
+function renderMcpFindings(list){
+  const card=document.getElementById('mcpFindingsCard'), body=document.getElementById('mcpFindingsBody'), sum=document.getElementById('mcpSummary');
+  body.textContent='';
+  if(!list.length){ card.classList.add('hidden'); sum.textContent='No findings reported.'; return; }
+  card.classList.remove('hidden');
+  list.forEach(f=>{
+    const tr=document.createElement('tr');
+    const sev=document.createElement('td');
+    const badge=document.createElement('span');
+    badge.style.cssText='font-size:11px;font-weight:600;padding:2px 10px;border-radius:999px;color:#fff;background:'+(MCP_SEV_COLOUR[f.severity]||'#a3a3a3');
+    badge.textContent=f.severity;
+    sev.appendChild(badge);
+    const evidence=f.evidence?(f.evidence.length>60?f.evidence.slice(0,60)+'\u2026':f.evidence):'';
+    tr.appendChild(sev);
+    tr.appendChild(td(f.rule_id));
+    tr.appendChild(td(f.tool));
+    tr.appendChild(td(f.field));
+    tr.appendChild(td(f.message));
+    const ev=document.createElement('td');
+    ev.style.cssText='font-family:ui-monospace,monospace;font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis';
+    ev.textContent=evidence;
+    tr.appendChild(ev);
+    body.appendChild(tr);
+  });
+  const bySev={};
+  list.forEach(f=>{bySev[f.severity]=(bySev[f.severity]||0)+1;});
+  sum.textContent=Object.keys(bySev).sort().map(s=>s+': '+bySev[s]).join('  ·  ');
+}
+function td(html){const el=document.createElement('td');el.textContent=html==null?'':String(html);return el;}
+function mcpScan(){
+  const raw=document.getElementById('mcpManifestText').value.trim();
+  if(!raw){alert('Choose a demo manifest or paste manifest JSON first.');return;}
+  let manifest;
+  try{ manifest=JSON.parse(raw); }catch(e){ alert('The manifest is not valid JSON: '+e.message); return; }
+  const sum=document.getElementById('mcpSummary');
+  sum.textContent='Scanning with the real gateway scanner\\u2026';
+  api('/api/demo/mcp/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({manifest:manifest})}).then(r=>{
+    if(r.status===404){alert('Demo mode is not configured on this deployment.');return;}
+    return r.json();
+  }).then(d=>{ if(d) renderMcpFindings(d.findings||[]); }).catch(()=>{ sum.textContent='Scan request failed.'; });
+}
+
+if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
 (function(){[['srcFilter','input',renderFlow],['midFilter','input',renderFlow],['dstFilter','input',renderFlow],['topoDecisionFilter','change',topoRender],['topoMotion','change',topoRender],['filterDecision','change',function(){loadConnections(lastLimit||200);}],['liveMode','change',function(){loadConnections(lastLimit);}]].forEach(function(x){const el=document.getElementById(x[0]);if(el&&el.addEventListener)el.addEventListener(x[1],x[2]);});[['apiKey',login],['totpInput',loginWithTotp],['mfaCodeInput',confirmMfa]].forEach(function(x){const el=document.getElementById(x[0]);if(el)el.addEventListener('keydown',function(ev){if(ev.key==='Enter')x[1]();});});const cb=document.getElementById('connBody');if(cb)cb.addEventListener('click',function(ev){const tr=ev.target.closest('tr.conn-row');if(!tr)return;const i=+tr.dataset.idx;selectConn(i);showPath(i);});const pb=document.getElementById('connPath');if(pb)pb.addEventListener('click',function(ev){const r=ev.target.closest('.path-row');if(!r||r.dataset.gi===undefined)return;pathRowClick(+r.dataset.gi);});})();
 </script>
 </body>
