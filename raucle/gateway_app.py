@@ -895,6 +895,11 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     from raucle.demo_capabilities import register_demo_capability_routes
 
     register_demo_capability_routes(app, check_auth, check_access, lambda: gateway)
+    # G4/G6: cross-organisation receipt verification and
+    # conformance-without-disclosure screens (demo plane, read-only)
+    from raucle.demo_cross_org import register_demo_cross_org_routes
+
+    register_demo_cross_org_routes(app, check_auth, check_access)
     _register_ui_routes(app)
 
     return app
@@ -2766,6 +2771,7 @@ body.demo .btn-primary{display:none}
 /* Demo-only screens: hidden outside demo mode */
 body:not(.demo) [data-tab-id="dlp"], body:not(.demo) [data-tab-id="injection"], body:not(.demo) [data-tab-id="shadow"]{display:none}
 body:not(.demo) [data-tab-id="capdemo"]{display:none}
+body:not(.demo) [data-tab-id="assure"]{display:none}
 body:not(.demo) [data-tab-id="stop"], body:not(.demo) #simDemoCard{display:none}
 body.demo #policyEditorCard{display:none}
 .screen-note{margin:0 0 12px;font-size:0.78rem;line-height:1.5;color:#8b919e}
@@ -2847,6 +2853,7 @@ body.demo #policyEditorCard{display:none}
     <div class="tab" data-hi="showTab('stop',this)" data-tab-id="stop">Emergency Stop</div>
     <div class="tab" data-hi="showTab('learn',this)" data-tab-id="learn">Learn</div>
     <div class="tab" data-hi="showTab('receipts',this)">Receipts</div>
+    <div class="tab" data-hi="showTab('assure',this)" data-tab-id="assure">Cross-org proof</div>
     <div class="tab" data-hi="showTab('mcp',this)" data-tab-id="mcp">MCP Scanner</div>
     <div class="tab" data-hi="showTab('dlp',this)" data-tab-id="dlp">Data Protection</div>
     <div class="tab" data-hi="showTab('injection',this)" data-tab-id="injection">Prompt Injection</div>
@@ -3055,6 +3062,20 @@ body.demo #policyEditorCard{display:none}
         <tbody id="stopReceiptsBody"></tbody></table>
       </div>
     </div>
+    <div id="tab-assure" class="hidden">
+      <div class="card">
+        <div class="card-title">Cross-organisation receipt verification</div>
+        <span class="findings-label">Simulated two-organisation story</span>
+        <p class="screen-note">Organisation B verifies receipts that Organisation A issued, using only the public key Organisation A publishes. No contact is made with the issuing operator at any point: the verifier checks the Ed25519 signature against the pinned external key with the real offline verifier, and recomputes the receipt hash from the receipt bytes. A receipt offered under any other key is refused. Everything here was produced fresh by the real verification machinery in a disposable sandbox.</p>
+        <pre id="crossOrgView" style="font-size:11px;max-height:340px;overflow:auto;background:#f8f9fb;border:1px solid #e5e7ec;border-radius:10px;padding:14px"></pre>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <div class="card-title">Conformance without disclosure</div>
+        <span class="findings-label">Simulated demo traffic</span>
+        <p class="screen-note">One simulated tool call is committed with the real conformance machinery (a Merkle tree over the canonical arguments). The verifier checks the policy constraint against the commitment while only the fields the constraint touches are disclosed; every other value stays hidden, and a constraint over a hidden field reads UNKNOWN rather than conformance. The Merkle root is the proof artefact identifier.</p>
+        <pre id="confView" style="font-size:11px;max-height:340px;overflow:auto;background:#f8f9fb;border:1px solid #e5e7ec;border-radius:10px;padding:14px"></pre>
+      </div>
+    </div>
     <div id="tab-learn" class="hidden">
       <div class="card">
         <div class="card-title">Learn Mode — draft policies from observed traffic</div>
@@ -3260,8 +3281,8 @@ function showTab(t,el) {
   document.querySelectorAll('[id^=tab-]').forEach(x=>x.classList.add('hidden'));
   el.classList.add('active'); document.getElementById('tab-'+t).classList.remove('hidden');
   if(t==='dashboard')loadStats(); if(t==='connections'){demoExample();updatePathTail();if(!pathPollId)pathPollId=setInterval(updatePathTail,3000);startConnPolling();}else if(pathPollId){clearInterval(pathPollId);pathPollId=null;} else stopConnPolling();
-  if(t==='policies'){loadPolicy();loadSimPanel();} if(t==='stop')loadStopPanel(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();} if(t==='capdemo')capDemoLoad(); if(t==='mcp')loadMcpPanel(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
-  if(t==='policies')loadPolicy(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();} if(t==='capdemo')capDemoLoad(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
+  if(t==='policies'){loadPolicy();loadSimPanel();} if(t==='stop')loadStopPanel(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();} if(t==='capdemo')capDemoLoad(); if(t==='mcp')loadMcpPanel(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
+  if(t==='policies')loadPolicy(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();} if(t==='capdemo')capDemoLoad(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
   if(t==='dlp'||t==='injection'||t==='shadow')loadDemoFindings();
 }
 function api(p,o){const h={'Authorization':key,...((o||{}).headers||{})};if(totpCode)h['X-TOTP']=totpCode;return fetch(p,{...(o||{}),headers:h});}
@@ -3634,6 +3655,55 @@ function showAncestry(hash){
     document.getElementById('ancestryView').textContent=lines.join('\\n')+((d.edges&&d.edges.length)?'\\n\\nedges: '+d.edges.length:'');
   });
 }
+function loadAssure(){
+  const crossView=document.getElementById('crossOrgView'), confView=document.getElementById('confView');
+  crossView.textContent='Verifying as Organisation B (no contact with the issuing operator)…';
+  confView.textContent='Committing simulated arguments…';
+  api('/api/demo/cross-org').then(r=>r.ok?r.json():r.json().then(d=>{throw new Error(d.detail||'not loaded');})).then(d=>{
+    const lines=[
+      d.description,
+      '',
+      'Organisation A (issuer): key id '+d.org_a.key_id+', '+d.org_a.receipt_count+' receipt(s) signed under its own key',
+      'Organisation B (verifier): pin = '+d.org_b.pinned_key_source,
+      'Contact with Organisation A: '+d.contact.statement,
+      '',
+      'What the Organisation B verifier sees:',
+    ];
+    (d.verifications||[]).forEach(v=>{
+      lines.push('  receipt '+v.receipt_hash_prefix+'…  verdict: '+v.verdict);
+      lines.push('    signature check: '+v.signature_check+' (Ed25519 JWS against the pinned key)');
+      lines.push('    hash linkage: '+(v.hash_linkage&&v.hash_linkage.recomputed_matches?'ok - recomputed from the receipt bytes':'FAILED'));
+      lines.push('    '+v.offline);
+    });
+    lines.push('');
+    lines.push('Fail-closed contrast: '+(d.wrong_key_check&&d.wrong_key_check.verdict==='failed'?'a receipt offered under any key other than the pinned Organisation A key is REFUSED.':'UNEXPECTED: see endpoint response.'));
+    lines.push('');
+    lines.push(d.offline);
+    lines.push('');
+    lines.push(d.note);
+    crossView.textContent=lines.join('\\n');
+  }).catch(err=>{ crossView.textContent='Cross-organisation view unavailable: '+err.message; });
+  api('/api/demo/conformance').then(r=>r.ok?r.json():r.json().then(d=>{throw new Error(d.detail||'not loaded');})).then(d=>{
+    const lines=[
+      d.description,
+      '',
+      'Simulated tool call: '+d.simulated_traffic.tool+' (committed with the real conformance machinery)',
+      'Proof artefact: '+d.proof_artifact.kind+' = '+d.proof_artifact.identifier,
+      'Scheme: '+d.proof_artifact.scheme,
+      '',
+      'Policy claims proven over the commitment:',
+      ...d.claims.map(c=>'  ['+c.result+'] '+c.claim+' ('+c.constraint_kind+' on '+(c.disclosed_value===null?'hidden field '+c.field:c.field+' = '+JSON.stringify(c.disclosed_value))+')'),
+      '',
+      'Disclosed to the verifier: '+d.disclosed.fields.join(', '),
+      'Stays hidden: '+d.hidden.fields.join(', ')+' - '+d.hidden.note,
+      '',
+      d.fail_closed_note,
+      '',
+      d.note
+    ];
+    confView.textContent=lines.join('\\n');
+  }).catch(err=>{ confView.textContent='Conformance view unavailable: '+err.message; });
+}
 function offlineVerify(e){
   const a=e.target.closest('a[data-hash]'); if(!a) return;
   const panel=document.getElementById('rcpt-offline'); panel.style.display='block';
@@ -3972,6 +4042,8 @@ const TOUR_STEPS = [
    body:'Counts of every gate decision by tool, with latency. Denied calls are as important as allowed ones: they are the policy working.'},
   {tab:'receipts', target:'#receiptsView', title:'Every decision leaves a receipt',
    body:'Each receipt is signed and content-addressed. Take them offline: an auditor can verify the chain without contacting us, or any vendor.'},
+  {tab:'assure', target:'#tab-assure', title:'Proof across organisations',
+   body:'Two assurance stories, both real machinery. Organisation B verifies Organisation A receipts against the pinned published key with no contact with the issuing operator; and a policy constraint is re-checked over a commitment to the call arguments while every other value stays hidden.'},
   {tab:'mcp', target:'#mcpManifestList', title:'Scan an MCP manifest',
    body:"Pick a simulated demo manifest, or paste one of your own, and the panel runs the gateway's real MCP scanner over it. The findings you see are the scan's actual output, not a hand-drawn example."},
   {tab:'dlp', target:'#tab-dlp', title:'Sensitive data, handled',
@@ -4657,7 +4729,7 @@ function mcpScan(){
   }).then(d=>{ if(d) renderMcpFindings(d.findings||[]); }).catch(()=>{ sum.textContent='Scan request failed.'; });
 }
 
-if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('capdemo',this)":(ev,el)=>showTab('capdemo',el),"capDemoPick(event)":(ev,el)=>capDemoPick(ev),"capDemoVerify()":(ev,el)=>capDemoVerify(),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
+if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadAssure()":(ev,el)=>loadAssure(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('assure',this)":(ev,el)=>showTab('assure',el),"showTab('capdemo',this)":(ev,el)=>showTab('capdemo',el),"capDemoPick(event)":(ev,el)=>capDemoPick(ev),"capDemoVerify()":(ev,el)=>capDemoVerify(),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
 </script>
 </body>
 </html>"""
