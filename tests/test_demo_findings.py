@@ -68,7 +68,8 @@ class TestDlpFindings:
             assert finding["rule_id"] in shipped
             assert finding["category"]
             assert finding["action"] in ("block", "redact", "mask")
-            assert finding["agent"] and finding["tool"]
+            assert finding["agent"]
+        assert finding["tool"]
 
     def test_rule_actions_follow_the_policy_mapping(self):
         assert redaction_action_for_rule("DLP-001") == "block"

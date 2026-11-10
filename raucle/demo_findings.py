@@ -454,13 +454,31 @@ def redaction_action_for_rule(rule_id: str) -> str:
 def _rule_by_id(rule_id: str) -> dict[str, Any] | None:
     """Look a rule up in the pattern layer's set plus the output rules."""
     return next(
-        (
-            r
-            for r in list(_PATTERN_LAYER._rules) + list(_OUTPUT_RULES)
-            if r["id"] == rule_id
-        ),
+        (r for r in list(_PATTERN_LAYER._rules) + list(_OUTPUT_RULES) if r["id"] == rule_id),
         None,
     )
+
+
+def _dlp_event_rule_findings(
+    event: dict[str, Any], index: int, matched_rules: list[str]
+) -> list[dict[str, Any]]:
+    """Build one finding per matched rule for a single simulated event."""
+    return [
+        {
+            "engine": "pattern_layer",
+            "rule_id": rule_id,
+            "rule_name": _rule_by_id(rule_id).get("name", rule_id),
+            "category": _rule_by_id(rule_id).get("category", ""),
+            "severity": _rule_by_id(rule_id).get("severity", "") if _rule_by_id(rule_id) else "",
+            "action": redaction_action_for_rule(rule_id),
+            "agent": event.get("agent", "unknown"),
+            "tool": event.get("tool", ""),
+            "event_id": event.get("id", ""),
+            "kind": event.get("kind", ""),
+            "first_seen": index,
+        }
+        for rule_id in matched_rules
+    ]
 
 
 def _dlp_findings(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -474,23 +492,7 @@ def _dlp_findings(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         matched_rules = result.get("matched_rules", [])
         if not matched_rules:
             continue
-        for rule_id in matched_rules:
-            rule = _rule_by_id(rule_id)
-            findings.append(
-                {
-                    "engine": "pattern_layer",
-                    "rule_id": rule_id,
-                    "rule_name": rule.get("name", rule_id) if rule else rule_id,
-                    "category": rule.get("category", "") if rule else "",
-                    "severity": rule.get("severity", "") if rule else "",
-                    "action": redaction_action_for_rule(rule_id),
-                    "agent": event.get("agent", "unknown"),
-                    "tool": event.get("tool", ""),
-                    "event_id": event.get("id", ""),
-                    "kind": event.get("kind", ""),
-                    "first_seen": index,
-                }
-            )
+        findings.extend(_dlp_event_rule_findings(event, index, matched_rules))
     return findings
 
 
@@ -569,9 +571,7 @@ def build_demo_findings(scenario: str = "all") -> dict[str, Any]:
     thresholds = _MODE_THRESHOLDS["standard"]
 
     dlp = _dlp_findings(events)
-    injection = _injection_findings(
-        events, thresholds["block"], thresholds["alert"]
-    )
+    injection = _injection_findings(events, thresholds["block"], thresholds["alert"])
 
     category_counts: dict[str, int] = {}
     for f in dlp:
