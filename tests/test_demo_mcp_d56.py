@@ -125,9 +125,7 @@ def test_demo_key_can_list_and_fetch_manifests(stack):
     assert r.status_code == 200
     names = [m["name"] for m in r.json()["manifests"]]
     assert "benign-weather" in names
-    r = client.get(
-        "/api/demo/mcp/manifests/poisoned-helper", headers={"Authorization": demo_key}
-    )
+    r = client.get("/api/demo/mcp/manifests/poisoned-helper", headers={"Authorization": demo_key})
     assert r.status_code == 200
     assert r.json()["simulated"] is True
     assert r.json()["manifest"] == POISONED_MANIFEST
@@ -147,7 +145,14 @@ def test_demo_key_can_scan_pasted_manifest_and_gets_real_findings(stack):
     # The findings shape is the Finding.to_dict contract of the real engine.
     f = body["findings"][0]
     for field in (
-        "rule_id", "category", "severity", "tool", "field", "message", "evidence", "location",
+        "rule_id",
+        "category",
+        "severity",
+        "tool",
+        "field",
+        "message",
+        "evidence",
+        "location",
     ):
         assert field in f
 
