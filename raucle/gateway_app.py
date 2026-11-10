@@ -2485,7 +2485,7 @@ body.demo .btn-primary{display:none}
 
 /* Guided tour */
 #tourHost{position:fixed;inset:0;pointer-events:none;z-index:9000}
-.tour-card{position:fixed;width:320px;background:#fff;border:1px solid #171717;border-radius:12px;padding:16px 18px 12px;box-shadow:0 12px 40px rgba(0,0,0,0.18);pointer-events:auto;animation:tourIn .25s ease}
+.tour-card{position:fixed;width:320px;background:#ffffff;background-color:#ffffff;opacity:1;mix-blend-mode:normal;border:1px solid #171717;border-radius:12px;padding:16px 18px 12px;box-shadow:0 12px 40px rgba(0,0,0,0.18);pointer-events:auto;animation:tourIn .25s ease}
 @keyframes tourIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .tour-step{font-size:0.68rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#8b919e;margin-bottom:8px}
 .tour-body{font-size:0.85rem;line-height:1.5;color:#171717;margin-bottom:14px}
@@ -3324,7 +3324,7 @@ async function enterDemo() {
 window.addEventListener('load', () => {
   const q = new URLSearchParams(window.location.search);
   const h = window.location.hash || '';
-  if (q.get('demo') === '1' || h.startsWith('#demo')) {
+  if (q.get('demo') === '1' || q.get('tour') === '1' || h.startsWith('#demo')) {
     const btn = document.getElementById('enterDemoBtn');
     if (btn) btn.click();
   }
