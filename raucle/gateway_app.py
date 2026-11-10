@@ -3324,7 +3324,7 @@ async function enterDemo() {
 window.addEventListener('load', () => {
   const q = new URLSearchParams(window.location.search);
   const h = window.location.hash || '';
-  if (q.get('demo') === '1' || h.startsWith('#demo')) {
+  if (q.get('demo') === '1' || q.get('tour') === '1' || h.startsWith('#demo')) {
     const btn = document.getElementById('enterDemoBtn');
     if (btn) btn.click();
   }
