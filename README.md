@@ -107,6 +107,7 @@ raucle composes with the agent frameworks regulated organisations already deploy
 - **Microsoft Agent Governance Toolkit** — drop-in `RauclePolicyBackend` ([`raucle.integrations.agt_backend`](raucle/integrations/agt_backend.py)) implementing AGT's `ExternalPolicyBackend` Protocol. raucle's contribution at [microsoft/agent-governance-toolkit#2610](https://github.com/microsoft/agent-governance-toolkit/pull/2610) **merged upstream** on 2026-05-27 — `proof_artefact` and `verification_pointers` now carry through AGT's `BackendDecision` into the audit chain.
 - **LangChain** — callback-handler gate wrapping every tool call with receipts and fail-closed denial ([`raucle.integrations.langchain`](raucle/integrations/langchain.py)); quick start in the module docstring, exercised by `tests/test_langchain_integration.py`.
 - **CrewAI** — `guard_tools(...)` wraps every tool on the crew; gated and receipted with no interface change ([`raucle.integrations.crewai`](raucle/integrations/crewai.py)). Walkthrough: [`docs/getting-started/05-crewai.md`](docs/getting-started/05-crewai.md).
+- **AutoGen (agentchat ≥ 0.4)** — `gated_tools(...)` wraps every AutoGen `FunctionTool`; each call is gated, receipted either way, and denials surface as `CapabilityDenied` tool failures ([`raucle.integrations.autogen`](raucle/integrations/autogen.py)), exercised by `tests/test_autogen_integration.py`.
 - **Azure AI Foundry MCP Gateway** — deployable sidecar pattern under [`deploy/foundry-mcp-sidecar/`](deploy/foundry-mcp-sidecar/) (Bicep + APIM policy).
 
 ## Platform trust layer
