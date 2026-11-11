@@ -2614,6 +2614,84 @@ def _register_session_routes(
         return _oidc_callback_response(req, oidc_federation, _pending_oidc, users, sessions)
 
 
+def _apply_config_update(
+    gateway: RaucleGateway,
+    req: ConfigUpdateRequest,
+    updates: dict[str, Any],
+    user: Any,
+) -> dict[str, Any]:
+    """Validate and apply a config update to the running gateway.
+
+    Body of PUT /api/config (after the auth checks and the no-change
+    short-circuit): raises HTTPException on validation failures, rolls the
+    in-memory config back when an evidence path fails validation, then
+    persists to YAML and reports change/restart status.
+    """
+    touched = [f for f in EVIDENCE_PATH_FIELDS if f in updates]
+    if "gate_auth" in updates and updates["gate_auth"] not in ("off", "apikey", "token"):
+        raise HTTPException(400, "gate_auth must be one of: off, apikey, token")
+
+    if updates.get("siem_url"):
+        from raucle.gateway import siem_target_allowed
+
+        if not siem_target_allowed(updates["siem_url"]):
+            raise HTTPException(
+                400,
+                "siem_url must be an http(s) destination outside loopback, "
+                "link-local and private address space (set "
+                "RAUCLE_SIEM_ALLOW_PRIVATE=1 for an internal collector)",
+            )
+
+    if touched and user.role != "admin":
+        raise HTTPException(
+            403,
+            "moving evidence paths (policy, receipts, audit chain, registries, keys) "
+            "requires the admin role",
+        )
+
+    snapshot = {f: getattr(gateway.config, f, "") for f in EVIDENCE_PATH_FIELDS}
+    changed = gateway.config.update_from_dict(updates)
+    errors = _validate_evidence_paths(gateway.config, touched)
+    if errors:
+        _restore_config_snapshot(gateway, snapshot)
+        raise HTTPException(status_code=400, detail={"code": "bad_evidence_path", "errors": errors})
+    changed += _apply_secret_updates(gateway, req)
+
+    try:
+        gateway.config.save_to_yaml()
+    except Exception as exc:
+        return {
+            "status": "partial",
+            "changed": changed,
+            "restart_needed": False,
+            "warning": f"Config updated in memory but failed to persist: {exc}",
+        }
+
+    _apply_runtime_siem(gateway, changed)
+
+    restart_needed = any(
+        f in changed for f in ("host", "port", "admin_port", "signer_backend", "kms_key_id")
+    )
+    return {
+        "status": "ok",
+        "changed": changed,
+        "restart_needed": restart_needed,
+        "message": f"Config saved to {gateway.config.config_file}"
+        if changed
+        else "No changes detected",
+    }
+
+
+def _restore_config_snapshot(gateway: RaucleGateway, snapshot: dict[str, Any]) -> None:
+    """Roll back in-memory config fields to their pre-update values.
+
+    Used when a change introduces an invalid evidence path: the mutated
+    in-memory config must be left exactly as it was before the request.
+    """
+    for field, value in snapshot.items():
+        setattr(gateway.config, field, value)
+
+
 def _register_config_routes(
     app: FastAPI, gateway: RaucleGateway, check_auth: Any, check_access: Any
 ) -> None:
@@ -2676,62 +2754,7 @@ def _register_config_routes(
         if not updates:
             return _no_change_response()
 
-        touched = [f for f in EVIDENCE_PATH_FIELDS if f in updates]
-        if "gate_auth" in updates and updates["gate_auth"] not in ("off", "apikey", "token"):
-            raise HTTPException(400, "gate_auth must be one of: off, apikey, token")
-
-        if updates.get("siem_url"):
-            from raucle.gateway import siem_target_allowed
-
-            if not siem_target_allowed(updates["siem_url"]):
-                raise HTTPException(
-                    400,
-                    "siem_url must be an http(s) destination outside loopback, "
-                    "link-local and private address space (set "
-                    "RAUCLE_SIEM_ALLOW_PRIVATE=1 for an internal collector)",
-                )
-
-        if touched and user.role != "admin":
-            raise HTTPException(
-                403,
-                "moving evidence paths (policy, receipts, audit chain, registries, keys) "
-                "requires the admin role",
-            )
-
-        snapshot = {f: getattr(gateway.config, f, "") for f in EVIDENCE_PATH_FIELDS}
-        changed = gateway.config.update_from_dict(updates)
-        errors = _validate_evidence_paths(gateway.config, touched)
-        if errors:
-            for field, value in snapshot.items():
-                setattr(gateway.config, field, value)
-            raise HTTPException(
-                status_code=400, detail={"code": "bad_evidence_path", "errors": errors}
-            )
-        changed += _apply_secret_updates(gateway, req)
-
-        try:
-            gateway.config.save_to_yaml()
-        except Exception as exc:
-            return {
-                "status": "partial",
-                "changed": changed,
-                "restart_needed": False,
-                "warning": f"Config updated in memory but failed to persist: {exc}",
-            }
-
-        _apply_runtime_siem(gateway, changed)
-
-        restart_needed = any(
-            f in changed for f in ("host", "port", "admin_port", "signer_backend", "kms_key_id")
-        )
-        return {
-            "status": "ok",
-            "changed": changed,
-            "restart_needed": restart_needed,
-            "message": f"Config saved to {gateway.config.config_file}"
-            if changed
-            else "No changes detected",
-        }
+        return _apply_config_update(gateway, req, updates, user)
 
 
 def _register_ui_routes(app: FastAPI) -> None:

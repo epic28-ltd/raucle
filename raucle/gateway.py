@@ -773,37 +773,49 @@ class UserManager:
                 raise ValueError(
                     f"user store {path} is corrupt (line {lineno}: {exc}); refusing to reset"
                 ) from exc
-            if not isinstance(rec, dict):
-                raise ValueError(f"user store {path} is corrupt (line {lineno})")
-            key_hash = rec.get("api_key_hash") or ""
-            if not key_hash:
-                legacy_key = rec.get("api_key") or ""
-                if not legacy_key:
-                    raise ValueError(
-                        f"user store {path} is corrupt (line {lineno}: no key material)"
-                    )
-                key_hash = _hash_api_key(legacy_key)
-                migrated = True
-            user = GatewayUser(
-                role=rec["role"],
-                name=rec.get("name", ""),
-                expires_at=rec.get("expires_at"),
-                api_key_hash=key_hash,
-                user_id=rec.get("user_id") or _derive_user_id(key_hash),
-            )
-            user.oidc_sub = rec.get("oidc_sub") or ""
-            if rec.get("totp_secret"):
-                user.totp_secret = rec["totp_secret"]
-                # Files written before RED-032 carry no mfa_enabled flag: a
-                # verified secret means the user had enabled MFA, so restore
-                # it rather than silently downgrading them to key-only auth.
-                user.mfa_enabled = bool(rec.get("mfa_enabled", True))
-            else:
-                user.mfa_enabled = bool(rec.get("mfa_enabled", False))
+            user, was_migrated = self._decode_user_record(rec, lineno)
+            migrated = migrated or was_migrated
             self._users[user.api_key_hash] = user
         if migrated:
             logger.info("user store %s migrated to hashed API keys", path)
             self._persist_users()
+
+    def _decode_user_record(self, rec: object, lineno: int) -> tuple[GatewayUser, bool]:
+        """Decode one user-store record into a :class:`GatewayUser`.
+
+        Returns ``(user, migrated)`` where *migrated* is True when the record
+        carried legacy plaintext key material that was re-hashed in memory.
+        Raises ``ValueError`` on a corrupt record: the loader refuses to reset.
+        """
+        assert self._persist_path is not None
+        path = self._persist_path
+        if not isinstance(rec, dict):
+            raise ValueError(f"user store {path} is corrupt (line {lineno})")
+        key_hash = rec.get("api_key_hash") or ""
+        migrated = False
+        if not key_hash:
+            legacy_key = rec.get("api_key") or ""
+            if not legacy_key:
+                raise ValueError(f"user store {path} is corrupt (line {lineno}: no key material)")
+            key_hash = _hash_api_key(legacy_key)
+            migrated = True
+        user = GatewayUser(
+            role=rec["role"],
+            name=rec.get("name", ""),
+            expires_at=rec.get("expires_at"),
+            api_key_hash=key_hash,
+            user_id=rec.get("user_id") or _derive_user_id(key_hash),
+        )
+        user.oidc_sub = rec.get("oidc_sub") or ""
+        if rec.get("totp_secret"):
+            user.totp_secret = rec["totp_secret"]
+            # Files written before RED-032 carry no mfa_enabled flag: a
+            # verified secret means the user had enabled MFA, so restore
+            # it rather than silently downgrading them to key-only auth.
+            user.mfa_enabled = bool(rec.get("mfa_enabled", True))
+        else:
+            user.mfa_enabled = bool(rec.get("mfa_enabled", False))
+        return user, migrated
 
     def _persist_users(self) -> None:
         import contextlib as _contextlib
