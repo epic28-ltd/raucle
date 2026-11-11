@@ -156,6 +156,9 @@ DEMO_MANIFESTS: list[dict[str, Any]] = [
             "rug-pull wording, an exposed key and SSRF targets."
         ),
         "simulated": True,
+        # Auto-selected on demo entry: a real scan of this sample produces
+        # findings immediately, so the scanner tab never lands empty.
+        "featured": True,
         "manifest": POISONED_MANIFEST,
     },
     {
