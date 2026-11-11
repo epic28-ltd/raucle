@@ -1652,7 +1652,7 @@ class RaucleGateway:
         }
         return self._sign_and_store_receipt(payload)
 
-    def _emit_admin_session_receipt(self, extension: dict[str, Any]) -> str | None:
+    def _emit_admin_session_receipt(self, _action: str, extension: dict[str, Any]) -> str | None:
         """Emit a signed admin-session lifecycle receipt (X3 slice 1, T-S3).
 
         Opening and closing an admin-panel session are receipted lifecycle

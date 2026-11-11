@@ -1957,6 +1957,7 @@ def _register_receipt_routes(
             "401": {"description": "MFA required or missing Authorization header"},
             "403": {"description": "Invalid API key or insufficient role"},
             "404": {"description": "Unknown receipt hash"},
+            "422": {"description": "Offline verification failed (verdict returned in detail)"},
             "501": {"description": "Receipt store not configured"},
         },
     )
@@ -2133,6 +2134,7 @@ def _register_siem_routes(
     @app.put(
         "/api/siem",
         responses={
+            "400": {"description": "SIEM URL outside the allowed address space"},
             "401": {"description": "MFA required or missing Authorization header"},
             "403": {"description": "Invalid API key or insufficient role"},
         },
@@ -2431,7 +2433,13 @@ def _register_session_routes(
             "mfa": user.mfa_enabled,
         }
 
-    @app.post("/api/session/logout", responses={"403": {"description": "Invalid session"}})
+    @app.post(
+        "/api/session/logout",
+        responses={
+            "401": {"description": "Missing Authorization header"},
+            "403": {"description": "Invalid session"},
+        },
+    )
     def session_logout(authorization: str | None = Header(None)) -> dict[str, Any]:
         if not isinstance(authorization, str):
             raise HTTPException(401, "Missing Authorization header")
@@ -2472,7 +2480,13 @@ def _register_session_routes(
         )
         return {"authorization_url": url, "state": state}
 
-    @app.post("/api/oidc/callback", responses={"503": {"description": "OIDC not enabled"}})
+    @app.post(
+        "/api/oidc/callback",
+        responses={
+            "401": {"description": "Provider refused the login or replayed state"},
+            "503": {"description": "OIDC not enabled"},
+        },
+    )
     def oidc_callback(req: _OIDCCallbackRequest) -> dict[str, Any]:
         if oidc_federation is None:
             raise HTTPException(503, "OIDC federation is not enabled on this gateway")
@@ -2537,7 +2551,13 @@ def _register_config_routes(
             "config_file": c.config_file,
         }
 
-    @app.put("/api/config")
+    @app.put(
+        "/api/config",
+        responses={
+            "400": {"description": "Invalid gate_auth value or bad evidence path"},
+            "403": {"description": "Evidence path move requires the admin role"},
+        },
+    )
     def update_config(
         req: ConfigUpdateRequest,
         authorization: str | None = Header(None),
