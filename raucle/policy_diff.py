@@ -169,6 +169,95 @@ def sign_policy_diff_document(
     }
 
 
+def _jws_segments(envelope: dict[str, Any]) -> list[str] | None:
+    """The three compact-JWS segments, or ``None`` when the shape is wrong."""
+    jws = envelope.get("jws", "") if isinstance(envelope, dict) else ""
+    if not isinstance(jws, str) or jws.count(".") != 2:
+        return None
+    return jws.split(".")
+
+
+def _header_payload_errors(header: dict[str, Any], payload: dict[str, Any]) -> list[str]:
+    """Type-tag and kind checks over the decoded header/payload."""
+    errors: list[str] = []
+    if header.get("alg") != "EdDSA":
+        errors.append(f"expected alg=EdDSA, found {str(header.get('alg'))!r}")
+    if header.get("typ") != POLICY_DIFF_TYP:
+        errors.append(f"expected typ {POLICY_DIFF_TYP!r}, found {str(header.get('typ'))!r}")
+    if payload.get("typ") != POLICY_DIFF_TYP or payload.get("kind") != "policy-diff":
+        errors.append("payload is not a policy-diff document")
+    return errors
+
+
+def _signature_error(
+    header_b64: str, payload_b64: str, sig_b64: str, public_key_pem: bytes
+) -> str | None:
+    """Verify the JWS signature; a None return means it verified."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+    try:
+        key = load_pem_public_key(public_key_pem)
+        if not isinstance(key, Ed25519PublicKey):
+            return f"public key is not Ed25519 (got {type(key).__name__})"
+        key.verify(
+            base64.urlsafe_b64decode(sig_b64 + "==" * (-len(sig_b64) % 4)),
+            f"{header_b64}.{payload_b64}".encode("ascii"),
+        )
+    except Exception:  # noqa: BLE001 - fail-closed: non-verifying signature is an error
+        return "signature does not verify under the supplied public key"
+    return None
+
+
+def _binding_errors(
+    document: dict[str, Any],
+    chain_path: str,
+    original_policy_path: str,
+    alternative_policy_path: str,
+) -> list[str]:
+    """Chain-head and policy-digest external bindings."""
+    errors: list[str] = []
+    head = chain_head_from_file(chain_path)
+    if str(document.get("chain_head")) != head:
+        errors.append(
+            f"chain_head binding does not match the chain file "
+            f"({document.get('chain_head')!r} vs {head!r})"
+        )
+    for name, path in (
+        ("original_policy_sha256", original_policy_path),
+        ("alternative_policy_sha256", alternative_policy_path),
+    ):
+        digest = _file_sha256(path)
+        if str(document.get(name)) != digest:
+            errors.append(f"{name} binding does not match {path}")
+    return errors
+
+
+def _replay_errors(
+    document: dict[str, Any],
+    chain_path: str,
+    input_store_path: str,
+    alternative_policy_path: str,
+) -> list[str]:
+    """Re-run the counterfactual replay; require exact match on bounded fields."""
+    from raucle.counterfactual import replay_counterfactual
+
+    try:
+        fresh = replay_counterfactual(
+            chain_path,
+            input_store_path=input_store_path,
+            alternative_policy_path=alternative_policy_path,
+        )
+    except Exception as exc:  # noqa: BLE001 - re-run failure is a named error
+        return [f"replay re-run failed: {exc}"]
+    bound = document.get("summary", {})
+    return [
+        f"replayed {k} does not match the document"
+        for k in _BOUND_REPLAY_KEYS
+        if bound.get(k) != fresh.get(k)
+    ]
+
+
 def verify_policy_diff_document(
     envelope: dict[str, Any],
     *,
@@ -186,29 +275,19 @@ def verify_policy_diff_document(
     Returns ``(True, [])`` or ``(False, [named errors])`` — never a
     partial pass.
     """
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-    from cryptography.hazmat.primitives.serialization import load_pem_public_key
-
-    from raucle.counterfactual import replay_counterfactual
-
     errors: list[str] = []
-    jws = envelope.get("jws", "") if isinstance(envelope, dict) else ""
-    if not isinstance(jws, str) or jws.count(".") != 2:
+    segments = _jws_segments(envelope)
+    if segments is None:
         return False, ["envelope carries no compact JWS"]
-    header_b64, payload_b64, sig_b64 = jws.split(".")
+    header_b64, payload_b64, sig_b64 = segments
 
     try:
         header = json.loads(base64.urlsafe_b64decode(header_b64 + "==" * (-len(header_b64) % 4)))
         payload = json.loads(base64.urlsafe_b64decode(payload_b64 + "==" * (-len(payload_b64) % 4)))
-    except (ValueError, json.JSONDecodeError) as exc:  # JSONDecodeError is a ValueError
+    except ValueError as exc:  # JSONDecodeError is a ValueError
         return False, [f"undecodable JWS segment: {exc}"]
 
-    if header.get("alg") != "EdDSA":
-        errors.append(f"expected alg=EdDSA, found {str(header.get('alg'))!r}")
-    if header.get("typ") != POLICY_DIFF_TYP:
-        errors.append(f"expected typ {POLICY_DIFF_TYP!r}, found {str(header.get('typ'))!r}")
-    if payload.get("typ") != POLICY_DIFF_TYP or payload.get("kind") != "policy-diff":
-        errors.append("payload is not a policy-diff document")
+    errors.extend(_header_payload_errors(header, payload))
 
     document = payload.get("document")
     if not isinstance(document, dict):
@@ -216,17 +295,9 @@ def verify_policy_diff_document(
         return False, errors
 
     # signature check (fail-closed: a non-verifying key is a named error)
-    try:
-        key = load_pem_public_key(public_key_pem)
-        if not isinstance(key, Ed25519PublicKey):
-            errors.append(f"public key is not Ed25519 (got {type(key).__name__})")
-        else:
-            key.verify(
-                base64.urlsafe_b64decode(sig_b64 + "==" * (-len(sig_b64) % 4)),
-                f"{header_b64}.{payload_b64}".encode("ascii"),
-            )
-    except Exception:  # noqa: BLE001 - fail-closed: non-verifying signature is an error
-        errors.append("signature does not verify under the supplied public key")
+    sig_error = _signature_error(header_b64, payload_b64, sig_b64, public_key_pem)
+    if sig_error is not None:
+        errors.append(sig_error)
 
     # document hash binding: the digest lives at the payload root, over the
     # document body (a record never hashes itself WITH its recorded field)
@@ -235,35 +306,13 @@ def verify_policy_diff_document(
     if recorded != doc_hash:
         errors.append("doc_hash does not match the document payload")
 
-    # external bindings
-    head = chain_head_from_file(chain_path)
-    if str(document.get("chain_head")) != head:
-        errors.append(
-            f"chain_head binding does not match the chain file "
-            f"({document.get('chain_head')!r} vs {head!r})"
-        )
-    for name, path in (
-        ("original_policy_sha256", original_policy_path),
-        ("alternative_policy_sha256", alternative_policy_path),
-    ):
-        digest = _file_sha256(path)
-        if str(document.get(name)) != digest:
-            errors.append(f"{name} binding does not match {path}")
+    errors.extend(
+        _binding_errors(document, chain_path, original_policy_path, alternative_policy_path)
+    )
 
-    # re-run the replay and require an exact match on bounded fields
     if not errors:
-        try:
-            fresh = replay_counterfactual(
-                chain_path,
-                input_store_path=input_store_path,
-                alternative_policy_path=alternative_policy_path,
-            )
-        except Exception as exc:  # noqa: BLE001 - re-run failure is a named error
-            errors.append(f"replay re-run failed: {exc}")
-        else:
-            bound = document.get("summary", {})
-            for k in _BOUND_REPLAY_KEYS:
-                if bound.get(k) != fresh.get(k):
-                    errors.append(f"replayed {k} does not match the document")
+        errors.extend(
+            _replay_errors(document, chain_path, input_store_path, alternative_policy_path)
+        )
 
     return (not errors), errors
