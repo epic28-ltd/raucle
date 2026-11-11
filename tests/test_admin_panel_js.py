@@ -496,7 +496,9 @@ def test_tour_follows_the_narrative_arc() -> None:
         "policies",  # the policy that did it (with simulate)
         "receipts",  # evidence: signed receipts
         "capdemo",  # evidence: capability tokens
-        "receipts",  # auditor takeaway: offline verify + key model
+        "receipts",  # auditor takeaway: key model (G5)
+        "receipts",  # auditor takeaway: offline verify
+        "assure",  # auditor takeaway: assurance packet (G3)
         "assure",  # auditor takeaway: cross-org proof
     ]
 
@@ -505,7 +507,7 @@ def test_tour_has_one_step_per_screen_family_and_is_bounded() -> None:
     steps = _tour_steps()
     # "one step per screen family", not one per tab: the caught family
     # carries three screens, evidence two, auditor takeaway two.
-    assert len(steps) <= 10
+    assert len(steps) <= 12
     targets = [t for _, t, _ in steps]
     assert len(targets) == len(set(targets)), "no duplicate spotlight targets"
     titles = [t for _, _, t in steps]

@@ -900,6 +900,16 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     from raucle.demo_cross_org import register_demo_cross_org_routes
 
     register_demo_cross_org_routes(app, check_auth, check_access)
+    # G3: the demo assurance packet - the real audit-pack builder and
+    # offline verifier over this deployment's own receipt chain (read-only)
+    from raucle.demo_assurance_packet import register_demo_assurance_packet_routes
+
+    register_demo_assurance_packet_routes(app, check_auth, check_access, lambda: gateway)
+    # G5: the demo key model - the live signer configuration, enrolment
+    # checks and rotation story (read-only)
+    from raucle.demo_key_model import register_demo_key_model_routes
+
+    register_demo_key_model_routes(app, check_auth, check_access, lambda: gateway)
     _register_ui_routes(app)
 
     return app
@@ -3075,6 +3085,13 @@ body.demo #policyEditorCard{display:none}
         <p class="screen-note">One simulated tool call is committed with the real conformance machinery (a Merkle tree over the canonical arguments). The verifier checks the policy constraint against the commitment while only the fields the constraint touches are disclosed; every other value stays hidden, and a constraint over a hidden field reads UNKNOWN rather than conformance. The Merkle root is the proof artefact identifier.</p>
         <pre id="confView" style="font-size:11px;max-height:340px;overflow:auto;background:#f8f9fb;border:1px solid #e5e7ec;border-radius:10px;padding:14px"></pre>
       </div>
+      <div class="card" style="margin-top:14px">
+        <div class="card-title">Assurance packet</div>
+        <span class="findings-label">Real packet machinery, simulated traffic</span>
+        <p class="screen-note">The packet below is assembled just before you see it, in a disposable sandbox, from this deployment's own signed receipt chain: the same build the audit-pack command runs. Every member digest, every sha-pinned manifest input and the offline verification verdict are read from the built files. The packet's index and manifest are signed with an ephemeral key generated in memory for the build and discarded; nothing is exported or persisted. Crosswalk exports over a packet are the raucle agent-assurance product's surface, not this screen's.</p>
+        <button class="btn btn-secondary" data-hi="loadAssurancePacket()">Build and verify offline</button>
+        <pre id="assurancePacketView" style="margin-top:10px;font-size:11px;max-height:340px;overflow:auto;background:#f8f9fb;border:1px solid #e5e7ec;border-radius:10px;padding:14px"></pre>
+      </div>
     </div>
     <div id="tab-learn" class="hidden">
       <div class="card">
@@ -3143,6 +3160,12 @@ body.demo #policyEditorCard{display:none}
         <span class="findings-label">Real signing configuration</span>
         <p class="screen-note">Which key family actually signs this deployment's receipts: the configured signer backend, the key id in force, the type of the key material, and the signature families observed on the stored receipts. The badge on a receipt row comes from that receipt's own signed header, never a fixed label.</p>
         <pre id="keyFamilyView" style="font-size:11px;max-height:200px;overflow:auto"></pre>
+      </div>
+      <div id="rcpt-keymodel" class="card" style="display:none;margin-top:14px">
+        <div class="card-title">Key model: enrolled, never exported</div>
+        <span class="findings-label">Read-only, driven by the live signer configuration</span>
+        <p class="screen-note">The same real signer configuration as the key-family card above, plus what this deployment's code can prove about the key: the enrolment properties the gate re-checks on every identity, and the rotation paths actually implemented in the registry, credential store, agent registry and boot machinery. No private key material appears on this screen or in any panel response.</p>
+        <pre id="keyModelView" style="font-size:11px;max-height:260px;overflow:auto"></pre>
       </div>
     </div>
     <div id="tab-mcp" class="hidden">
@@ -3281,8 +3304,8 @@ function showTab(t,el) {
   document.querySelectorAll('[id^=tab-]').forEach(x=>x.classList.add('hidden'));
   el.classList.add('active'); document.getElementById('tab-'+t).classList.remove('hidden');
   if(t==='dashboard')loadStats(); if(t==='connections'){demoExample();updatePathTail();if(!pathPollId)pathPollId=setInterval(updatePathTail,3000);startConnPolling();}else if(pathPollId){clearInterval(pathPollId);pathPollId=null;} else stopConnPolling();
-  if(t==='policies'){loadPolicy();loadSimPanel();} if(t==='stop')loadStopPanel(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();} if(t==='capdemo')capDemoLoad(); if(t==='mcp')loadMcpPanel(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
-  if(t==='policies')loadPolicy(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();} if(t==='capdemo')capDemoLoad(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
+  if(t==='policies'){loadPolicy();loadSimPanel();} if(t==='stop')loadStopPanel(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();} if(t==='capdemo')capDemoLoad(); if(t==='mcp')loadMcpPanel(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
+  if(t==='policies')loadPolicy(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();} if(t==='capdemo')capDemoLoad(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
   if(t==='dlp'||t==='injection'||t==='shadow')loadDemoFindings();
 }
 function api(p,o){const h={'Authorization':key,...((o||{}).headers||{})};if(totpCode)h['X-TOTP']=totpCode;return fetch(p,{...(o||{}),headers:h});}
@@ -3810,6 +3833,77 @@ function loadKeyFamily(){
     ].join('\\n');
   });
 }
+function loadKeyModel(){
+  const c=document.getElementById('rcpt-keymodel'); if(!c) return;
+  c.style.display='block';
+  const v=document.getElementById('keyModelView');
+  if(!v.textContent)v.textContent='Reading the live signer configuration…';
+  api('/api/demo/key-model').then(r=>r.ok?r.json():r.json().then(d=>{throw new Error(d.detail||'not loaded');})).then(d=>{
+    const fam=d.observed_signature_families_on_receipts||{};
+    const lines=[
+      d.note,
+      '',
+      'signer backend: '+d.signer_backend,
+      'receipt-signing key id: '+d.receipt_signing_key_id,
+      'key material type: '+d.key_material_type,
+      'gate identity: '+d.agent_id,
+      'enrolment checks (re-run from the statement bytes):',
+      '  key id binds to the key material: '+(d.gate_enrolment.key_id_binds_to_key_material?'yes':'NO - see endpoint response'),
+      '  statement signature verifies: '+(d.gate_enrolment.identity_statement_signature_verified?'yes':'NO - see endpoint response'),
+      'ML-DSA-65 (quantum-ready) available: '+(d.ml_dsa_available?'yes':'no'),
+      'observed signature families on receipts: classical '+(fam['classical-ed25519']??0)+', pq1 hybrid '+(fam['pq1-hybrid']??0),
+      '',
+      'Key export posture: '+d.key_export_posture.key_material_location,
+      '',
+      'Rotation story, from the deployed code:'
+    ];
+    (d.rotation_story||[]).forEach(r=>{
+      lines.push('  '+r.layer);
+      lines.push('    functions: '+r.functions);
+      lines.push('    '+r.story);
+    });
+    lines.push('','The rotation procedures are documented in the key-operations runbook and pinned by the key-rotation end-to-end test.');
+    v.textContent=lines.join('\\n');
+  }).catch(err=>{ v.textContent='Key model unavailable: '+err.message; });
+}
+// ================= ASSURANCE PACKET (G3, demo-only, read-only) =================
+function loadAssurancePacket(){
+  const v=document.getElementById('assurancePacketView'); if(!v) return;
+  v.textContent='Assembling the packet in a disposable sandbox…';
+  api('/api/demo/assurance-packet').then(r=>r.ok?r.json():r.json().then(d=>{throw new Error(d.detail||'not loaded');})).then(d=>{
+    const lines=[
+      d.note,
+      '',
+      d.boundary,
+      '',
+      'receipts in the packed chain: '+d.receipts+(d.truncated?' (bounded: showing the most recent records only)':'')
+    ];
+    if(!d.receipts){ v.textContent=lines.join('\\n'); return; }
+    lines.push('');
+    lines.push('PACK members (content-addressed, from the built index):');
+    (d.index.members||[]).forEach(m=>lines.push('  '+m.role+'  '+m.path+'  sha256 '+m.sha256));
+    lines.push('','packed kind: '+d.pack_kind+' · members: '+d.index.member_count+(d.index.audit_key_id?(' · pack signer key id: '+d.index.audit_key_id):''));
+    const ih=d.manifest.input_hashes||{};
+    lines.push('');
+    lines.push('Manifest sha-pinned inputs:');
+    if(ih.chain_sha256)lines.push('  chain: '+ih.chain_sha256);
+    Object.keys(ih.public_keys||{}).forEach(k=>lines.push('  public key '+k+': '+ih.public_keys[k]));
+    Object.keys(ih.capability_statements||{}).forEach(k=>lines.push('  statement '+k+': '+ih.capability_statements[k]));
+    lines.push('  tool version: '+(d.manifest.tool_version||'')+' · generated_at: '+d.generated_at);
+    const cv=d.manifest.chain_verdict||{};
+    lines.push('');
+    lines.push('Manifest chain verdict: valid='+(cv.valid===true?'true':'false')+', receipts='+cv.receipt_count);
+    const av=d.offline_verdict||{};
+    lines.push('');
+    lines.push('Offline verification (the pack verifies alone, no network):');
+    lines.push('  ok: '+(av.ok===true?'true':(av.ok===false?'false':''))+' · integrity: '+av.integrity_ok+' · manifest signature: '+av.manifest_signature_ok);
+    lines.push('  chain valid: '+av.chain_valid+' · reproducible: '+av.reproducible+' · index signature: '+av.index_signature_ok);
+    ((av.reasons)||[]).forEach(x=>lines.push('  - '+x));
+    const fam=d.signing_families||{};
+    lines.push('','signature families this deployment produces: classical '+(fam['classical-ed25519']??0)+', pq1 hybrid '+(fam['pq1-hybrid']??0)+', other '+(fam.other??0));
+    v.textContent=lines.join('\\n');
+  }).catch(err=>{ v.textContent='Assurance packet unavailable: '+err.message; });
+}
 function loadSIEM(){api('/api/siem').then(r=>r.json()).then(d=>{document.getElementById('siemEnabled').checked=d.enabled;document.getElementById('siemBackend').value=d.backend||'';document.getElementById('siemUrl').value=d.url||'';});}
 function saveSIEM(){api('/api/siem',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:document.getElementById('siemEnabled').checked,backend:document.getElementById('siemBackend').value,url:document.getElementById('siemUrl').value,token:document.getElementById('siemToken').value})}).then(r=>r.json()).then(d=>alert('Saved'));}
 function loadUsers(){api('/api/users').then(r=>r.json()).then(d=>{let tb=document.getElementById('userTableBody');tb.innerHTML='';d.users.forEach(u=>{const uid=esc(u.user_id||'');tb.innerHTML+=`<tr><td>${esc(u.user_id||'')}</td><td>${esc(u.api_key_label||'')}</td><td>${esc(u.role)}</td><td>${esc(u.name||'')}</td><td>${u.mfa_enabled?'<span style="color:#22c55e;font-size:12px">Enabled</span>':'<span style="color:#a3a3a3;font-size:12px">Off</span>'}</td><td><button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-user-id="${uid}" data-hi="userMfaAction(event,'setup')">Setup MFA</button>${u.mfa_enabled?` <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-user-id="${uid}" data-hi="userMfaAction(event,'disable')">Disable</button>`:''}</td></tr>`;});});}
@@ -4052,8 +4146,12 @@ const TOUR_STEPS = [
    body:'Each receipt is signed and content-addressed at the moment of the decision, so the record cannot quietly change afterwards.'},
   {tab:'capdemo', target:'#capDemoList', title:'Evidence: capability tokens',
    body:'Pick a simulated capability call and the gateway real issuer mints and attenuates the token envelope for you: issuer, agent binding, tool scope, constraints, parent-to-child narrowing and the expiry. Verify runs the real capability gate, so the allows and denies are its actual decisions.'},
+  {tab:'receipts', target:'#rcpt-keymodel', title:'The key model: enrolled, never exported',
+   body:'Read from the live signer configuration, like the key-family card above: the backend in force, the key id, the key-material type, and the enrolment checks re-run from the statement bytes. The rotation story names the rotation functions the code actually runs; no private key material is shown on this screen or returned by any panel route.'},
   {tab:'receipts', target:'#tab-receipts', title:'What an auditor takes away',
    body:'The receipts cards also carry the key model: which key family signed this deployment\u2019s receipts, and the offline verifier that re-checks signatures and hash linkage on this machine with no contact with the operator or any vendor.'},
+  {tab:'assure', target:'#assurancePacketView', title:'The assurance packet, built live',
+   body:"One click builds a real audit pack from this deployment signed receipt chain in a disposable sandbox: every member content-addressed by its sha256, the manifest sha-pinning its inputs, and the pack verified offline in the panel. This is what the gateway itself produces; framework crosswalks over a packet are the agent-assurance product export."},
   {tab:'assure', target:'#tab-assure', title:'Proof across organisations',
    body:'Two assurance stories, both real machinery. Organisation B verifies Organisation A receipts against the pinned published key with no contact with the issuing operator; and a policy constraint is re-checked over a commitment to the call arguments while every other value stays hidden.'},
 ];
@@ -4725,7 +4823,7 @@ function mcpScan(){
   }).then(d=>{ if(d) renderMcpFindings(d.findings||[]); }).catch(()=>{ sum.textContent='Scan request failed.'; });
 }
 
-if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadAssure()":(ev,el)=>loadAssure(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('assure',this)":(ev,el)=>showTab('assure',el),"showTab('capdemo',this)":(ev,el)=>showTab('capdemo',el),"capDemoPick(event)":(ev,el)=>capDemoPick(ev),"capDemoVerify()":(ev,el)=>capDemoVerify(),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
+if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadAssure()":(ev,el)=>loadAssure(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('assure',this)":(ev,el)=>showTab('assure',el),"showTab('capdemo',this)":(ev,el)=>showTab('capdemo',el),"capDemoPick(event)":(ev,el)=>capDemoPick(ev),"capDemoVerify()":(ev,el)=>capDemoVerify(),"loadAssurancePacket()":(ev,el)=>loadAssurancePacket(),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
 </script>
 </body>
 </html>"""
