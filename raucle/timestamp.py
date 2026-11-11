@@ -139,7 +139,8 @@ def submit_timestamp_request(url: str, request_der: bytes, timeout: float = 10.0
     from raucle.url_guard import validate_url
 
     validate_url(url, purpose="timestamp request")
-    req = urllib.request.Request(  # noqa: S310 - TSAs are caller-chosen, SSRF-guarded
+    # TSAs are caller-chosen, SSRF-guarded; ruff's S310 bandit rule is the suppressed check.
+    req = urllib.request.Request(  # noqa: S310
         url,
         data=request_der,
         headers={"Content-Type": _TS_QUERY_CONTENT_TYPE},

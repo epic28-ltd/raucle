@@ -57,7 +57,7 @@ def _decode_receipts(receipts_path: Path) -> list[dict[str, Any]]:
                     record["jws"].split(".")[1] + "=" * (-len(record["jws"].split(".")[1]) % 4)
                 )
             )
-        except (KeyError, ValueError, json.JSONDecodeError):
+        except (KeyError, ValueError):  # JSONDecodeError is a ValueError
             continue  # never render a partially parsed stream as a receipt
         extra = payload.get("extra", {})
         out.append(
@@ -136,9 +136,7 @@ def build_demo_stop() -> dict[str, Any]:
                     "A global stop is quorum-gated: with M=2 it enters a receipted "
                     "PENDING state and the enforcement bytes stay untouched."
                 ),
-                "outcome": {
-                    k: v for k, v in manager.hold(scope="global", reason="incident").items()
-                },
+                "outcome": dict(manager.hold(scope="global", reason="incident")),
             }
         )
         story.append(

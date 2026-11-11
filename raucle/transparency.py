@@ -135,13 +135,12 @@ class TransparencyCheck:
 def _parse_http_date(value: str, header: str) -> None:
     """Strictly parse an RFC 9110 HTTP-date header; raises on garbage."""
     try:
-        parsed = email.utils.parsedate_to_datetime(value)
+        email.utils.parsedate_to_datetime(value)
     except (TypeError, ValueError, IndexError) as exc:
         raise ValueError(
             f"Transparency Service returned an unparseable {header} header {value!r}: {exc}"
         ) from exc
-    if parsed is None:
-        raise ValueError(f"Transparency Service returned an unparseable {header} header {value!r}")
+    # no None case: parsedate_to_datetime raises rather than returning None (3.10+)
 
 
 def _retry_after(value: str) -> float:
@@ -155,8 +154,7 @@ def _retry_after(value: str) -> float:
         parsed = email.utils.parsedate_to_datetime(stripped)
     except (TypeError, ValueError, IndexError):
         return 0.0
-    if parsed is None:
-        return 0.0
+    # no None case: parsedate_to_datetime raises rather than returning None (3.10+)
     delay = parsed.timestamp() - time.time()
     return max(0.0, min(delay, 30.0))
 

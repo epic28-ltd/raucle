@@ -243,7 +243,7 @@ def _mutate_constraints(token_dict: dict[str, Any]) -> dict[str, Any]:
     constraints = dict(token_dict.get("constraints") or {})
     bounds = dict(constraints.get("max_value") or {})
     if bounds:
-        first_field = sorted(bounds)[0]
+        first_field = min(bounds)
         bounds[first_field] = int(bounds[first_field]) + 10
         constraints["max_value"] = bounds
     else:
