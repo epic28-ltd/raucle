@@ -54,7 +54,8 @@ def test_violations_reason_names_schema_violation():
     reg = ToolSchemaRegistry()
     reg.register("send_money", dict(_ACCEPT_SCHEMA))
     reasons = reg.violations("send_money", {"amount": "99999"})
-    assert reasons and "schema_violation" in reasons[0]
+    assert reasons
+    assert "schema_violation" in reasons[0]
 
 
 def test_undeclared_argument_denies_when_additional_properties_false():
@@ -155,7 +156,8 @@ def test_undeclared_policy_field_is_load_time_error():
             {"forbidden_values": {"recipient2": ["evil@attacker"]}},
         )
     msg = str(exc2.value)
-    assert "send_money" in msg and "recipient2" in msg
+    assert "send_money" in msg
+    assert "recipient2" in msg
 
 
 def test_declared_policy_field_binds():
@@ -574,7 +576,7 @@ def test_vector_01_replays_as_deny():
     reg.register(v["tool"], v["inputSchema"])
     reasons = reg.violations(v["tool"], v["args"])
     assert reasons
-    assert f"schema_violation: {reasons[0]}" == v["decision"]["reason"]
+    assert v["decision"]["reason"] == f"schema_violation: {reasons[0]}"
 
 
 def test_vector_02_load_error_message_matches():
@@ -609,7 +611,7 @@ def test_vector_04_openapi_type_confusion_replays():
     reg.register_from_openapi_fragment(v["openapi_fragment"])
     reasons = reg.violations(v["tool"], v["args"])
     assert reasons
-    assert f"schema_violation: {reasons[0]}" == v["decision"]["reason"]
+    assert v["decision"]["reason"] == f"schema_violation: {reasons[0]}"
 
 
 def test_vector_05_openapi_load_error_message_matches():
@@ -640,4 +642,4 @@ def test_vector_03_replays_bool_coercion_deny():
     reg.register(v["tool"], v["inputSchema"])
     reasons = reg.violations(v["tool"], v["args"])
     assert reasons
-    assert f"schema_violation: {reasons[0]}" == v["decision"]["reason"]
+    assert v["decision"]["reason"] == f"schema_violation: {reasons[0]}"

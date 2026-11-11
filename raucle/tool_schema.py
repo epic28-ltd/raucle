@@ -136,24 +136,32 @@ def extract_rule_fields(constraints: dict[str, Any]) -> list[str]:
     for kind, payload in constraints.items():
         if kind not in CONSTRAINT_REGISTRY:
             raise ToolSchemaError(f"unmodelled constraint kind {kind!r} in policy rule")
-        if kind in _FIELD_TO_VALUES_KINDS or kind in _FIELD_TO_SCALAR_KINDS:
-            if not isinstance(payload, dict):
-                raise ToolSchemaError(f"constraint {kind!r} must be a field mapping")
-            fields.extend(str(fld) for fld in payload)
-        elif kind in _FIELD_LIST_KINDS:
-            if not isinstance(payload, list):
-                raise ToolSchemaError(f"constraint {kind!r} must be a field list")
-            fields.extend(str(fld) for fld in payload)
-        elif kind in _COMBO_LIST_KINDS:
-            if not isinstance(payload, list):
-                raise ToolSchemaError(f"constraint {kind!r} must be a combination list")
-            for combo in payload:
-                if not isinstance(combo, (list, tuple)):
-                    raise ToolSchemaError(f"constraint {kind!r} entries must be field lists")
-                fields.extend(str(fld) for fld in combo)
-        else:  # pragma: no cover - registry is exhaustive above
-            raise ToolSchemaError(f"unmodelled constraint kind {kind!r} in policy rule")
+        fields.extend(_rule_fields_for_kind(kind, payload))
     return fields
+
+
+def _rule_fields_for_kind(kind: str, payload: Any) -> list[str]:
+    """The argument fields one constraint payload binds, with shape checks."""
+    if kind in _FIELD_TO_VALUES_KINDS or kind in _FIELD_TO_SCALAR_KINDS:
+        if not isinstance(payload, dict):
+            raise ToolSchemaError(f"constraint {kind!r} must be a field mapping")
+        return [str(fld) for fld in payload]
+    if kind in _FIELD_LIST_KINDS:
+        if not isinstance(payload, list):
+            raise ToolSchemaError(f"constraint {kind!r} must be a field list")
+        return [str(fld) for fld in payload]
+    if kind in _COMBO_LIST_KINDS:
+        if not isinstance(payload, list):
+            raise ToolSchemaError(f"constraint {kind!r} must be a combination list")
+        fields: list[str] = []
+        for combo in payload:
+            if not isinstance(combo, (list, tuple)):
+                raise ToolSchemaError(f"constraint {kind!r} entries must be field lists")
+            fields.extend(str(fld) for fld in combo)
+        return fields
+    raise ToolSchemaError(  # pragma: no cover - registry is exhaustive above
+        f"unmodelled constraint kind {kind!r} in policy rule"
+    )
 
 
 class ToolSchemaRegistry:
@@ -218,34 +226,43 @@ class ToolSchemaRegistry:
             for method, op in sorted(item.items()):
                 if method.startswith("x-") or method == "parameters":
                     continue
-                if not isinstance(op, dict):
-                    raise SchemaPolicyLoadError(
-                        f"OpenAPI path {path!r} {method!r}: operation must be an object"
-                    )
-                op_id = op.get("operationId")
-                if not isinstance(op_id, str) or not op_id:
-                    raise SchemaPolicyLoadError(
-                        f"OpenAPI path {path!r} {method!r}: missing operationId"
-                    )
-                schema = self._openapi_operation_schema(path, method, op)
-                self.register(op_id, schema)
+                self._register_openapi_operation(path, method, op)
+
+    def _register_openapi_operation(self, path: str, method: str, op: Any) -> None:
+        """Validate one OpenAPI operation and register its derived schema."""
+        if not isinstance(op, dict):
+            raise SchemaPolicyLoadError(
+                f"OpenAPI path {path!r} {method!r}: operation must be an object"
+            )
+        op_id = op.get("operationId")
+        if not isinstance(op_id, str) or not op_id:
+            raise SchemaPolicyLoadError(f"OpenAPI path {path!r} {method!r}: missing operationId")
+        schema = self._openapi_operation_schema(path, method, op)
+        self.register(op_id, schema)
 
     @staticmethod
-    def _openapi_operation_schema(path: str, method: str, op: dict[str, Any]) -> dict[str, Any]:
-        # Prefer a JSON requestBody schema; otherwise merge query parameters
-        # into one object schema. A schema-less operation fails closed.
+    def _openapi_body_schema(path: str, method: str, op: dict[str, Any]) -> dict[str, Any] | None:
+        """The requestBody's JSON schema when present and well-formed."""
         body = op.get("requestBody")
-        body_schema: dict[str, Any] | None = None
-        if isinstance(body, dict):
-            content = body.get("content") or {}
-            app = content.get("application/json") or {}
-            candidate = app.get("schema")
-            if isinstance(candidate, dict):
-                body_schema = candidate
-            elif not (isinstance(params := op.get("parameters"), list) and params):
-                raise SchemaPolicyLoadError(
-                    f"OpenAPI path {path!r} {method!r}: requestBody has no JSON schema"
-                )
+        if not isinstance(body, dict):
+            return None
+        content = body.get("content") or {}
+        app = content.get("application/json") or {}
+        candidate = app.get("schema")
+        if isinstance(candidate, dict):
+            return candidate
+        params = op.get("parameters")
+        if not (isinstance(params, list) and params):
+            raise SchemaPolicyLoadError(
+                f"OpenAPI path {path!r} {method!r}: requestBody has no JSON schema"
+            )
+        return None
+
+    @staticmethod
+    def _openapi_param_rows(
+        path: str, method: str, op: dict[str, Any]
+    ) -> tuple[dict[str, Any], list[str], bool]:
+        """Validated query-parameter rows: (props, required, has_params)."""
         params = op.get("parameters")
         props: dict[str, Any] = {}
         required: list[str] = []
@@ -264,6 +281,15 @@ class ToolSchemaRegistry:
                 props[p["name"]] = p_schema
                 if p.get("required"):
                     required.append(p["name"])
+        return props, required, has_params
+
+    @staticmethod
+    def _openapi_operation_schema(path: str, method: str, op: dict[str, Any]) -> dict[str, Any]:
+        # Prefer a JSON requestBody schema; otherwise merge query parameters
+        # into one object schema. A schema-less operation fails closed.
+        body = op.get("requestBody")
+        body_schema = ToolSchemaRegistry._openapi_body_schema(path, method, op)
+        props, required, has_params = ToolSchemaRegistry._openapi_param_rows(path, method, op)
         if not body and not has_params:
             raise SchemaPolicyLoadError(
                 f"OpenAPI path {path!r} {method!r}: operation carries no usable JSON schema"
