@@ -365,8 +365,8 @@ def create_signer(
 
     Args:
         backend: The signer backend. One of ``"local"``, ``"aws"``,
-            ``"azure"``, ``"vault"``, or ``"kms"``. If ``None``, reads
-            ``RAUCLE_SIGNER`` env var, defaulting to ``"local"``.
+            ``"azure"``, ``"vault"``, ``"kms"``, or ``"tee"``. If ``None``,
+            reads ``RAUCLE_SIGNER`` env var, defaulting to ``"local"``.
         **kwargs: Passed through to the signer constructor.
 
     Returns:
@@ -375,7 +375,14 @@ def create_signer(
     Environment variables:
 
         ``RAUCLE_SIGNER``
-            The backend: ``local``, ``aws``, ``azure``, ``vault``, ``kms``.
+            The backend: ``local``, ``aws``, ``azure``, ``vault``, ``kms``,
+            ``tee``.
+
+        ``RAUCLE_TEE_SIMULATED``
+            (tee) Explicit acknowledgement of the clearly-labelled mock
+            boundary for the confidential-computing signer path. Without
+            it (or explicit ``sign_fn=`` wiring), ``backend="tee"`` fails
+            closed: a simulated attestation is never applied silently.
 
         ``RAUCLE_KMS_KEY_ID``
             (AWS) The KMS key ID or alias.
@@ -396,6 +403,10 @@ def create_signer(
         os.environ["RAUCLE_SIGNER"] = "aws"
         os.environ["RAUCLE_KMS_KEY_ID"] = "alias/raucle-issuing-key"
         signer = create_signer()  # AWSSigner
+
+        # Mock-boundary TEE path (explicitly acknowledged, CI/development):
+        os.environ["RAUCLE_TEE_SIMULATED"] = "1"
+        signer = create_signer(backend="tee")  # raucle.tee.SimulatedNitroEnclave signer
     """
     backend = backend or os.environ.get("RAUCLE_SIGNER", "local")
 
@@ -417,9 +428,28 @@ def create_signer(
         # Generic KMS signer — requires sign_fn and public_key_pem
         return KMSSigner(**kwargs)
 
+    if backend == "tee":
+        # EPIC H3 (slice 1): the confidential-computing boundary. Either an
+        # explicitly wired enclave signing service (sign_fn + public key +
+        # attestation provider), or an EXPLICITLY acknowledged mock
+        # boundary via RAUCLE_TEE_SIMULATED=1. A simulated attestation is
+        # never applied silently.
+        from raucle.tee import SimulatedNitroEnclave, TEESigner
+
+        if kwargs:
+            return TEESigner(**kwargs)
+        if os.environ.get("RAUCLE_TEE_SIMULATED", "").lower() in ("1", "true", "yes"):
+            return SimulatedNitroEnclave().signer()
+        raise ValueError(
+            "create_signer: backend 'tee' requires an explicitly wired enclave "
+            "signing service (sign_fn=, public_key_pem=, attestation_provider=), "
+            "or RAUCLE_TEE_SIMULATED=1 to acknowledge the clearly-labelled mock "
+            "boundary. Refusing to fall back to a simulated attestation silently."
+        )
+
     raise ValueError(
         f"create_signer: unknown backend {backend!r}. "
-        f"Use 'local', 'aws', 'azure', 'vault', or 'kms'."
+        f"Use 'local', 'aws', 'azure', 'vault', 'kms', or 'tee'."
     )
 
 

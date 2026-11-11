@@ -400,6 +400,7 @@ _CAP_STMT_KNOWN_FIELDS = frozenset(
         "allowed_tools",
         "data_classifications",
         "sanitisation_authority",
+        "attestation",
         "issuer",
         "issued_at",
         "expires_at",
@@ -463,6 +464,42 @@ def _cap_stmt_opt_str_list(d: dict[str, Any], name: str) -> list[str]:
     return v
 
 
+#: The OPTIONAL ``attestation`` binding (EPIC H3): the key set a statement's
+#: hardware-attestation reference may carry. Intra-package duplication with
+#: ``raucle.tee`` is deliberate; tee imports provenance, never the reverse.
+_STATEMENT_ATTESTATION_KEYS = frozenset({"platform", "measurement", "attestation_ref", "simulated"})
+
+
+def _parse_statement_attestation(d: dict[str, Any]) -> dict[str, Any] | None:
+    """Parse the OPTIONAL capability-statement ``attestation`` binding.
+
+    Fail closed on any shape drift: the binding rides the signed statement,
+    so a malformed block must refuse to parse, never default through.
+    """
+    raw = d.get("attestation")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"capability statement: attestation must be an object, got {type(raw).__name__}"
+        )
+    unknown = set(raw) - _STATEMENT_ATTESTATION_KEYS
+    if unknown:
+        raise ValueError(f"capability statement: attestation unknown field(s) {sorted(unknown)}")
+    for name in ("platform", "measurement", "attestation_ref"):
+        value = raw.get(name)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"capability statement: attestation {name} must be a non-empty string")
+    if not isinstance(raw.get("simulated"), bool):
+        raise ValueError("capability statement: attestation simulated must be a boolean")
+    return {
+        "platform": raw["platform"],
+        "measurement": raw["measurement"],
+        "attestation_ref": raw["attestation_ref"],
+        "simulated": raw["simulated"],
+    }
+
+
 @dataclass
 class CapabilityStatement:
     """Signed declaration of what an agent is permitted to do.
@@ -493,14 +530,19 @@ class CapabilityStatement:
     issuer: str = "raucle"
     issued_at: int = 0
     expires_at: int | None = None
+    # EPIC H3 slice 1: the OPTIONAL hardware-attestation binding (TEE):
+    # exactly {"platform", "measurement", "attestation_ref", "simulated"}.
+    # None keeps the signed body byte-identical to pre-H3 statements.
+    attestation: dict[str, Any] | None = None
     signature: str = ""  # base64 over the body
 
     def body(self) -> dict[str, Any]:
         """Return the canonical body that gets signed (excludes ``signature``).
 
-        ``sanitisation_authority`` is included only when non-empty so that
-        statements signed before this field existed continue to verify
-        byte-for-byte (backward-compatible serialisation).
+        ``sanitisation_authority`` and ``attestation`` are included only when
+        non-empty / not None so that statements signed before those fields
+        existed continue to verify byte-for-byte (backward-compatible
+        serialisation).
         """
         body: dict[str, Any] = {
             "agent_id": self.agent_id,
@@ -515,6 +557,8 @@ class CapabilityStatement:
         }
         if self.sanitisation_authority:
             body["sanitisation_authority"] = sorted(self.sanitisation_authority, key=_utf16_key)
+        if self.attestation is not None:
+            body["attestation"] = self.attestation
         return body
 
     def to_dict(self) -> dict[str, Any]:
@@ -539,6 +583,7 @@ class CapabilityStatement:
             allowed_tools=_cap_stmt_opt_str_list(d, "allowed_tools"),
             data_classifications=_cap_stmt_opt_str_list(d, "data_classifications"),
             sanitisation_authority=_cap_stmt_opt_str_list(d, "sanitisation_authority"),
+            attestation=_parse_statement_attestation(d),
             issuer=_cap_stmt_req_str(d, "issuer"),
             issued_at=_cap_stmt_opt_int(d, "issued_at"),
             expires_at=_cap_stmt_opt_int_or_none(d, "expires_at"),

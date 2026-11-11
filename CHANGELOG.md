@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Added - H3 slice 1: TEE / hardware-attested signer path
+
+- `raucle/tee.py`: a TEE signer adapter (`TEESigner`) behind the existing
+  `raucle.kms.Signer` protocol. Signing is delegated across a named enclave
+  boundary callable (`sign_fn`, the same shape as `KMSSigner`), and an
+  attestation provider supplies the attestation document binding the
+  receipt-signing key to a measured enclave image. A clearly labelled mock
+  boundary (`SimulatedNitroEnclave`) stands in for real hardware in CI and
+  development; `create_signer(backend="tee")` fails closed unless the mock
+  boundary is explicitly acknowledged (`RAUCLE_TEE_SIMULATED=1`) or an
+  enclave signer is explicitly wired, so a simulated attestation is never
+  applied silently. No new dependencies; real attestation providers
+  (AWS Nitro NSM/KMRA, Azure attestation, vTPM/SEV contracts) are named
+  follow-up slices.
+- Receipt signer identity carries the attestation statement reference:
+  the optional `CapabilityStatement.attestation` field (platform,
+  measurement, attestation_ref, simulated), covered by the statement's
+  Ed25519 signature and omitted from the canonical body when unset so
+  existing statements verify byte-for-byte (spec §5.1 amendment, Draft 3).
+- Gateway boot honours `RAUCLE_SIGNER=tee` (fail-closed without the
+  explicit mock-boundary flag), and the demo key-model view
+  (`build_demo_key_model`) serialises the receipt-signing identity's
+  attestation binding and an honest export-posture sentence for the
+  backend. Docs: `docs/security/hardware-attested-signing.md`.
+
 ### Added - X1: OpenAPI as the named secondary schema source
 
 - `ToolSchemaRegistry.register_from_openapi_fragment` (shipped with the
