@@ -295,7 +295,9 @@ class TestPanelPqBadgeAndKeyFamily:
         fn = ADMIN_PANEL_HTML[idx : ADMIN_PANEL_HTML.index("function loadSIEM()")]
         assert "innerHTML" not in fn
         assert fn.count("textContent") >= 2
-        assert "if(t==='receipts'){loadReceipts();loadKeyFamily();}" in ADMIN_PANEL_HTML
+        assert (
+            "if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();}" in ADMIN_PANEL_HTML
+        )
 
     def test_no_compliance_claims_on_the_receipts_additions(self):
         idx = ADMIN_PANEL_HTML.index('id="rcpt-keyfamily"')
