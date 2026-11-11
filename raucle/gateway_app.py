@@ -910,6 +910,12 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     from raucle.demo_key_model import register_demo_key_model_routes
 
     register_demo_key_model_routes(app, check_auth, check_access, lambda: gateway)
+    # Demo operational surfaces: the Users / SIEM / Config tabs render
+    # read-only demo views (simulated roster, real+simulated SIEM view,
+    # read-only config profile) instead of the operator edit forms.
+    from raucle.demo_ops import register_demo_ops_routes
+
+    register_demo_ops_routes(app, gateway, check_auth, check_access)
     _register_ui_routes(app)
 
     return app
@@ -2804,8 +2810,13 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
 /* Scenario picker buttons */
 .scenario-btn{padding:6px 14px;border-radius:999px;border:1px solid #e5e7ec;background:#fff;font-size:0.78rem;font-weight:600;color:#3a3f4b;cursor:pointer}
 .scenario-btn.active{background:#171717;color:#fff;border-color:#171717}
-/* Demo mode: hide privileged tabs + disable every edit affordance */
-body.demo [data-tab-id="siem"], body.demo [data-tab-id="users"], body.demo [data-tab-id="config"], body.demo [data-tab-id="topo-link"]{display:none}
+/* Demo mode: the topology jump stays privileged and every edit affordance
+   is disabled; the operator-only tabs keep rendering, but as read-only
+   demo views served by the /api/demo/* plane. */
+body.demo [data-tab-id="topo-link"]{display:none}
+body.demo #usersAddCard, body.demo #usersTableCard, body.demo #siemConfigCard, body.demo #configEditCard{display:none}
+/* The read-only replacements only ever appear inside demo mode. */
+body:not(.demo) #demoUsersCard, body:not(.demo) #demoSiemCard, body:not(.demo) #demoConfigCard{display:none}
 body.demo .btn-primary{display:none}
 /* Demo-only screens: hidden outside demo mode */
 body:not(.demo) [data-tab-id="dlp"], body:not(.demo) [data-tab-id="injection"], body:not(.demo) [data-tab-id="shadow"]{display:none}
@@ -3255,20 +3266,39 @@ body.demo #policyEditorCard{display:none}
         </div>
       </div>
     </div>
-    <div id="tab-siem" class="hidden"><div class="card"><div class="card-title">SIEM Forwarding</div>
+    <div id="tab-siem" class="hidden"><div class="card" id="siemConfigCard"><div class="card-title">SIEM Forwarding</div>
       <label class="toggle" style="margin-bottom:16px"><input type="checkbox" id="siemEnabled"> Enabled</label>
       <div style="display:flex;flex-direction:column;gap:8px;max-width:400px">
         <input class="input" id="siemBackend" placeholder="splunk / elastic / sentinel"><input class="input" id="siemUrl" placeholder="SIEM endpoint URL"><input class="input" id="siemToken" type="password" placeholder="SIEM token">
       </div><div class="actions"><button class="btn" data-hi="saveSIEM()">Save</button></div></div>
+      <div class="card hidden" id="demoSiemCard"><div class="card-title">SIEM Forwarding</div>
+        <p class="screen-note" id="demoSiemConfigured"></p>
+        <span class="findings-label">Simulated demo data</span>
+        <p class="screen-note">The forwarding example below illustrates what this deployment would send and how often: a simulated collector endpoint, the event shape the real forwarder emits, and per-hour event counts over the demo window. No events leave the gateway in demo mode.</p>
+        <div style="font-size:12px;color:#525252;margin-bottom:6px" id="demoSiemTarget"></div>
+        <div style="overflow-x:auto">
+          <table><thead><tr><th>Hour</th><th>Events</th><th>Batches</th><th>Status</th></tr></thead>
+          <tbody id="demoSiemEvents"></tbody></table>
+        </div>
+        <p class="screen-note" style="margin-top:10px" id="demoSiemWindow"></p>
+        <p class="screen-note" style="margin-top:6px">One example event, in the field shape the real forwarder POSTs:</p>
+        <pre id="demoSiemSample" style="font-size:11px;max-height:220px;overflow:auto"></pre>
+      </div>
     </div>
     <div id="tab-users" class="hidden">
-      <div class="card"><div class="card-title">Add User</div>
+      <div class="card" id="usersAddCard"><div class="card-title">Add User</div>
         <div style="display:flex;flex-direction:column;gap:8px;max-width:400px">
           <input class="input" id="newKey" placeholder="API Key"><input class="input" id="newRole" placeholder="admin / operator / auditor"><input class="input" id="newName" placeholder="Name">
         </div><div class="actions"><button class="btn" data-hi="addUser()">Add</button></div></div>
-      <div class="card"><div class="card-title">Users</div>
+      <div class="card" id="usersTableCard"><div class="card-title">Users</div>
         <table><thead><tr><th>Key</th><th>Role</th><th>Name</th><th>MFA</th><th>Actions</th></tr></thead>
         <tbody id="userTableBody"></tbody></table>
+      </div>
+      <div class="card hidden" id="demoUsersCard"><div class="card-title">Operators</div>
+        <span class="findings-label">Simulated demo data</span>
+        <p class="screen-note">A read-only view of this deployment's operator roster. The demo credential cannot list real operators, so the table illustrates the panel's operator and MFA view with simulated records: names, roles and MFA enrolment state. Management controls stay with the authenticated operator view.</p>
+        <table><thead><tr><th>Operator</th><th>Role</th><th>MFA</th></tr></thead>
+        <tbody id="demoUserTableBody"></tbody></table>
       </div>
       <div class="card hidden" id="mfaSetupCard">
         <div class="card-title">MFA Setup</div>
@@ -3283,7 +3313,7 @@ body.demo #policyEditorCard{display:none}
       </div>
     </div>
     <div id="tab-config" class="hidden">
-      <div class="card"><div class="card-title">Gateway Configuration</div>
+      <div class="card" id="configEditCard"><div class="card-title">Gateway Configuration</div>
         <div id="configForm" style="display:grid;grid-template-columns:1fr 1fr;gap:12px 24px;max-width:700px">
           <div><label style="font-size:12px;color:#737373;display:block;margin-bottom:4px">Host</label><input class="input" id="cfg-host" style="width:100%"></div>
           <div><label style="font-size:12px;color:#737373;display:block;margin-bottom:4px">Gateway Port</label><input class="input" id="cfg-port" type="number" style="width:100%"></div>
@@ -3321,6 +3351,11 @@ body.demo #policyEditorCard{display:none}
         </div>
         <div id="configStatus" style="margin-top:12px;font-size:13px"></div>
         <div style="margin-top:16px"><pre id="configView" style="display:none"></pre></div>
+      </div>
+      <div class="card hidden" id="demoConfigCard"><div class="card-title">Gateway Configuration</div>
+        <span class="findings-label">Live deployment configuration</span>
+        <p class="screen-note">The real configuration this gateway is running, rendered read-only for the demo: binding addresses, ports, signer backend, policy source and evidence store paths. Secret fields are never shown, and every edit control stays with the authenticated operator view.</p>
+        <pre id="demoConfigView" style="font-size:12px"></pre>
       </div>
     </div>
 
@@ -3965,9 +4000,9 @@ function loadAssurancePacket(){
     v.textContent=lines.join('\\n');
   }).catch(err=>{ v.textContent='Assurance packet unavailable: '+err.message; });
 }
-function loadSIEM(){api('/api/siem').then(r=>r.json()).then(d=>{document.getElementById('siemEnabled').checked=d.enabled;document.getElementById('siemBackend').value=d.backend||'';document.getElementById('siemUrl').value=d.url||'';});}
+function loadSIEM(){if(typeof demoMode!=='undefined'&&demoMode){loadDemoSIEM();return;}api('/api/siem').then(r=>r.json()).then(d=>{document.getElementById('siemEnabled').checked=d.enabled;document.getElementById('siemBackend').value=d.backend||'';document.getElementById('siemUrl').value=d.url||'';});}
 function saveSIEM(){api('/api/siem',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:document.getElementById('siemEnabled').checked,backend:document.getElementById('siemBackend').value,url:document.getElementById('siemUrl').value,token:document.getElementById('siemToken').value})}).then(r=>r.json()).then(d=>alert('Saved'));}
-function loadUsers(){api('/api/users').then(r=>r.json()).then(d=>{let tb=document.getElementById('userTableBody');tb.innerHTML='';d.users.forEach(u=>{const uid=esc(u.user_id||'');tb.innerHTML+=`<tr><td>${esc(u.user_id||'')}</td><td>${esc(u.api_key_label||'')}</td><td>${esc(u.role)}</td><td>${esc(u.name||'')}</td><td>${u.mfa_enabled?'<span style="color:#22c55e;font-size:12px">Enabled</span>':'<span style="color:#a3a3a3;font-size:12px">Off</span>'}</td><td><button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-user-id="${uid}" data-hi="userMfaAction(event,'setup')">Setup MFA</button>${u.mfa_enabled?` <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-user-id="${uid}" data-hi="userMfaAction(event,'disable')">Disable</button>`:''}</td></tr>`;});});}
+function loadUsers(){if(typeof demoMode!=='undefined'&&demoMode){loadDemoUsers();return;}api('/api/users').then(r=>r.json()).then(d=>{let tb=document.getElementById('userTableBody');tb.innerHTML='';d.users.forEach(u=>{const uid=esc(u.user_id||'');tb.innerHTML+=`<tr><td>${esc(u.user_id||'')}</td><td>${esc(u.api_key_label||'')}</td><td>${esc(u.role)}</td><td>${esc(u.name||'')}</td><td>${u.mfa_enabled?'<span style="color:#22c55e;font-size:12px">Enabled</span>':'<span style="color:#a3a3a3;font-size:12px">Off</span>'}</td><td><button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-user-id="${uid}" data-hi="userMfaAction(event,'setup')">Setup MFA</button>${u.mfa_enabled?` <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-user-id="${uid}" data-hi="userMfaAction(event,'disable')">Disable</button>`:''}</td></tr>`;});});}
 function addUser(){api('/api/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:document.getElementById('newKey').value,role:document.getElementById('newRole').value,name:document.getElementById('newName').value})}).then(r=>r.json()).then(d=>{alert('Added');loadUsers();});}
 let mfaSetupKey='';
 function setupMfa(key){
@@ -3998,7 +4033,7 @@ function disableMfa(key){
   if(!confirm('Disable MFA for this user?'))return;
   api(`/api/users/${encodeURIComponent(key)}/mfa/disable`,{method:'POST'}).then(r=>r.json()).then(d=>{alert('MFA disabled');loadUsers();});
 }
-function loadConfig(){api('/api/config').then(r=>r.json()).then(d=>{
+function loadConfig(){if(typeof demoMode!=='undefined'&&demoMode){loadDemoConfig();return;}api('/api/config').then(r=>r.json()).then(d=>{
   // Populate form fields
   const fields=['host','port','admin_port','signer_backend','kms_key_id','kms_region','policy_file','policy_dir','receipt_store','audit_chain','audit_log_file','siem_backend','siem_url','compliance_framework','registry_path'];
   fields.forEach(f=>{const el=document.getElementById('cfg-'+f);if(el&&d[f]!==undefined)el.value=d[f];});
@@ -4038,6 +4073,82 @@ function saveConfig(){
       status.textContent='Error: '+JSON.stringify(d);
     }
   });
+}
+
+// ================= DEMO OPERATIONS (Users / SIEM / Config demo views) =================
+// textContent-only rendering over the read-only /api/demo/* endpoints: the
+// demo tabs never touch the operator mutation routes and never build markup
+// from response data.
+function loadDemoUsers(){
+  const tb=document.getElementById('demoUserTableBody');
+  const card=document.getElementById('demoUsersCard');
+  card.classList.remove('hidden');
+  api('/api/demo/users').then(r=>{
+    if(r.status===404){tb.textContent='';const tr=document.createElement('tr');const tdEl=document.createElement('td');tdEl.colSpan=3;tdEl.style.color='#a3a3a3';tdEl.textContent='Demo mode is not configured on this deployment.';tr.appendChild(tdEl);tb.appendChild(tr);return null;}
+    return r.json();
+  }).then(d=>{
+    if(!d)return;
+    // Reset at render time: showTab dispatches each loader twice, so an
+    // async render must stay idempotent.
+    tb.textContent='';
+    (d.users||[]).forEach(u=>{
+      const tr=document.createElement('tr');
+      const name=document.createElement('td');name.textContent=u.name||u.user_id||'';
+      const role=document.createElement('td');role.textContent=u.role||'';
+      const mfa=document.createElement('td');
+      const span=document.createElement('span');span.style.fontSize='12px';
+      if(u.mfa_enabled){span.style.color='#22c55e';span.textContent='Enabled (TOTP)';}
+      else{span.style.color='#e5b85c';span.textContent='API key only';}
+      mfa.appendChild(span);
+      tr.appendChild(name);tr.appendChild(role);tr.appendChild(mfa);
+      tb.appendChild(tr);
+    });
+    if(!(d.users||[]).length){const tr=document.createElement('tr');const tdEl=document.createElement('td');tdEl.colSpan=3;tdEl.textContent='No operators in the simulated roster.';tr.appendChild(tdEl);tb.appendChild(tr);}
+  }).catch(()=>{});
+}
+function loadDemoSIEM(){
+  api('/api/demo/siem').then(r=>{
+    if(r.status===404){document.getElementById('demoSiemConfigured').textContent='Demo mode is not configured on this deployment.';return null;}
+    return r.json();
+  }).then(d=>{
+    if(!d)return;
+    document.getElementById('demoSiemCard').classList.remove('hidden');
+    const conf=d.configured||{};
+    const state=conf.enabled?'SIEM forwarding is enabled on this deployment.':'SIEM forwarding is not currently enabled; the signed evidence chain stays local and nothing is forwarded.';
+    const parts=['Backend: '+(conf.backend||'(none configured)'),'Endpoint: '+(conf.url||'(none configured)'),'Credential on file: '+(conf.token_configured?'yes':'no')+' (never displayed)','Undelivered events buffered: '+String(conf.buffered_events!=null?conf.buffered_events:0)];
+    document.getElementById('demoSiemConfigured').textContent=state;
+    document.getElementById('demoSiemTarget').textContent=parts.join('   ·   ');
+    const sim=d.simulated||{};
+    document.getElementById('demoSiemWindow').textContent=(sim.window_note||'')+' Total events in the window: '+escn(sim.events_forwarded_total||0)+'.';
+    const sample=sim.event_sample||{};
+    document.getElementById('demoSiemSample').textContent=JSON.stringify(sample,null,2);
+    const body=document.getElementById('demoSiemEvents');body.textContent='';
+    (sim.activity||[]).forEach(b=>{
+      const tr=document.createElement('tr');
+      const hour=document.createElement('td');hour.textContent=b.label||'';
+      const events=document.createElement('td');events.textContent=escn(b.events||0);
+      const batches=document.createElement('td');batches.textContent=String(b.batches!=null?b.batches:'-');
+      const status=document.createElement('td');status.textContent=b.status||'';
+      tr.appendChild(hour);tr.appendChild(events);tr.appendChild(batches);tr.appendChild(status);
+      body.appendChild(tr);
+    });
+  }).catch(()=>{});
+}
+function loadDemoConfig(){
+  api('/api/demo/config').then(r=>{
+    if(r.status===404){document.getElementById('demoConfigView').textContent='Demo mode is not configured on this deployment.';return null;}
+    return r.json();
+  }).then(d=>{
+    if(!d)return;
+    document.getElementById('demoConfigCard').classList.remove('hidden');
+    const view=document.getElementById('demoConfigView');view.textContent='';
+    (d.profile||[]).forEach(row=>{
+      const line=document.createElement('div');
+      const v=row.value;
+      line.textContent=(row.label||'')+': '+(v===''||v===null||v===undefined?'(not set)':String(v));
+      view.appendChild(line);
+    });
+  }).catch(()=>{});
 }
 
 setInterval(()=>{if(!document.getElementById('main').classList.contains('hidden')&&!document.getElementById('tab-dashboard').classList.contains('hidden'))loadStats();},5000);
@@ -4814,7 +4925,12 @@ function renderStopScreen(d){
   });
 }
 
-// ================= MCP SCANNER (D5) ==========let mcpManifests = [], mcpSelected = '';
+// ================= MCP SCANNER (D5) =================
+// The declarations below were once glued onto this header comment line and
+// were therefore commented out: every loadMcpPanel() run then threw on the
+// undeclared variables and the tab landed on its 'demo not configured'
+// fallback with nothing selected. Keep the declarations on their own line.
+let mcpManifests = [], mcpSelected = '';
 function loadMcpPanel(){
   api('/api/demo/mcp/manifests').then(r=>{ if(r.ok) return r.json(); throw 0; }).then(d=>{
     mcpManifests = d.manifests||[];
@@ -4825,11 +4941,30 @@ function loadMcpPanel(){
       chip.className='file-chip'+(mcpSelected===m.name?' active':'');
       chip.setAttribute('data-mcp-name',m.name);
       chip.setAttribute('data-hi','mcpPick(event)');
-      chip.title=m.description||'';
+      chip.title=(m.description||'')+(m.featured?' (first shown in the demo)':'');
       chip.textContent=m.label+' (simulated)';
       bar.appendChild(chip);
     });
+    autoMcpSelect();
   }).catch(()=>{ document.getElementById('mcpManifestList').textContent='Demo mode is not configured on this deployment.'; });
+}
+// On demo entry the scanner lands pre-selected: the featured manifest is
+// fetched and scanned through the real scanner route, so the findings table
+// renders before the visitor touches anything. Never overrides a chosen
+// manifest.
+function autoMcpSelect(){
+  if(mcpSelected)return;
+  const first=(mcpManifests.find(m=>m.featured)||mcpManifests[0]||{}).name;
+  if(!first)return;
+  mcpSelected=first;
+  document.querySelectorAll('#mcpManifestList .file-chip').forEach(c=>c.classList.toggle('active',c.dataset.mcpName===first));
+  api('/api/demo/mcp/manifests/'+encodeURIComponent(first)).then(r=>{
+    if(!r.ok)throw 0;
+    return r.json();
+  }).then(d=>{
+    document.getElementById('mcpManifestText').value=JSON.stringify(d.manifest,null,2);
+    mcpScan();
+  }).catch(()=>{});
 }
 function mcpPick(ev){
   const el=ev.currentTarget||ev.target.closest('[data-mcp-name]');
