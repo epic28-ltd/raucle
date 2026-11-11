@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added - demo panels: read-only operator surfaces for the demo visitor
+
+- The Users, SIEM and Config tabs now render in demo mode as read-only
+  views backed by three new gated endpoints (`/api/demo/users`,
+  `/api/demo/siem`, `/api/demo/config`) with the same 404-off-demo
+  contract as the rest of the demo plane. The simulated operator roster
+  carries names, roles and MFA state only; the SIEM view shows the
+  deployment's real forwarding configuration beside a simulated
+  forwarder example (endpoint shape, the gate-decision payload shape the
+  real forwarder emits, per-hour event counts; nothing is sent
+  anywhere); the config view renders the live gateway profile as
+  read-only text with secret fields excluded. The authenticated edit
+  forms are untouched outside demo mode.
+- The MCP Scanner tab is fixed and pre-armed: the `mcpManifests` /
+  `mcpSelected` declarations shipped commented out (glued onto a section
+  comment), so every panel load threw on the undeclared names and the
+  tab landed on its "demo not configured" fallback with nothing
+  selected. The declarations now live on their own line, and demo entry
+  auto-selects the featured simulated manifest and runs the real scanner
+  so findings render on arrival.
+
 ### Added - H3 slice 1: TEE / hardware-attested signer path
 
 - `raucle/tee.py`: a TEE signer adapter (`TEESigner`) behind the existing
