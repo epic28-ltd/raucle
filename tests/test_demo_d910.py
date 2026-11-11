@@ -86,7 +86,8 @@ class TestDemoStopBuilder:
         assert len(body["story"]) == 7
         assert all(r["receipt_id"] for r in body["receipts"])
         steps = [s["step"] for s in body["story"]]
-        assert "Arm" in steps and "Resume" in steps
+        assert "Arm" in steps
+        assert "Resume" in steps
 
     def test_no_write_targets_leak_outside_the_sandbox(self):
         body = build_demo_stop()

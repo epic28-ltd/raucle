@@ -34,7 +34,8 @@ class TestUserManagerRoundTrip:
         second = UserManager(persist_path=path)
         one = second.get_user("key-one-for-tests")
         two = second.get_user("key-two-for-tests")
-        assert one is not None and two is not None
+        assert one is not None
+        assert two is not None
         assert (one.role, one.name, one.expires_at) == ("operator", "Op One", None)
         assert (two.role, two.name, two.expires_at) == ("auditor", "Aud Two", 4_000_000_000)
 

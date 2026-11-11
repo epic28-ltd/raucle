@@ -165,7 +165,7 @@ class MockIdPHandler(BaseHTTPRequestHandler):
         self._send(200, _token_response(record))
 
 
-@pytest.fixture()
+@pytest.fixture
 def idp():
     """A live mock provider on a random loopback port."""
     state = MockIdPState()
@@ -176,7 +176,7 @@ def idp():
     server.shutdown()
 
 
-@pytest.fixture()
+@pytest.fixture
 def users(tmp_path):
     mgr = UserManager(persist_path=tmp_path / "users.jsonl")
     mgr.add_user("a" * 40, "admin", "ops.user")
@@ -594,7 +594,8 @@ class TestReceiptedSessions:
             for p in payloads
             if "x_admin_session" in p and p["x_admin_session"]["action"] == "close"
         ]
-        assert len(opens) == 1 and len(closes) == 1
+        assert len(opens) == 1
+        assert len(closes) == 1
         assert opens[0]["x_admin_session"]["auth_method"] == "key"
         assert opens[0]["x_admin_session"]["session_id"] != opened["token"]
         blob = json.dumps(payloads)  # the bearer token never enters evidence
@@ -687,7 +688,7 @@ class TestReceiptedSessions:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture()
+@pytest.fixture
 def admin_client(users, tmp_path):
     cfg = GatewayConfig(receipt_store=str(tmp_path / "r.jsonl"))
     gw = RaucleGateway(cfg)
