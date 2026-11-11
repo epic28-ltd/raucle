@@ -291,8 +291,9 @@ def test_unknowable_functiontool_fails_closed(issuer, gate, sink):
             self.name = "opaque"
             self.description = ""
 
+    tool = OpaqueTool()
     with pytest.raises(ValueError, match="inner callable"):
-        gated_tools([OpaqueTool()], gate=gate, sink=sink, agent_id="agent:test-1")
+        gated_tools([tool], gate=gate, sink=sink, agent_id="agent:test-1")
 
 
 def test_unknowable_functiontool_passthrough_requires_opt_in(issuer, gate, sink):
@@ -377,5 +378,6 @@ def test_contextvar_roundtrip_and_reset():
 def test_gated_tools_requires_autogen(monkeypatch, issuer, gate, sink):
     """Without autogen-core the adapter must refuse loudly, not no-op."""
     monkeypatch.setattr(autogen, "_HAS_AUTOGEN", False)
+    tool = StubFunctionTool(lookup_customer)
     with pytest.raises(RuntimeError, match="autogen-core"):
-        gated_tools([StubFunctionTool(lookup_customer)], gate=gate, sink=sink, agent_id="a")
+        gated_tools([tool], gate=gate, sink=sink, agent_id="a")

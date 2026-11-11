@@ -247,35 +247,7 @@ class OIDCFederation:
         keys = jwks.get("keys") if isinstance(jwks, dict) else None
         if not isinstance(keys, list) or not keys:
             raise _discovery_error("JWKS document carries no keys")
-        try:
-            from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
-        except ImportError as exc:  # pragma: no cover - compliance extra absent
-            raise _discovery_error(
-                "cryptography is required to verify provider signatures "
-                "(install raucle[compliance]); refusing to start"
-            ) from exc
-        loaded: dict[str, tuple[Any, str]] = {}
-        for jwk in keys:
-            if (
-                not isinstance(jwk, dict)
-                or jwk.get("kty") != "RSA"
-                or jwk.get("use")
-                not in (
-                    None,
-                    "sig",
-                )
-            ):
-                continue
-            kid = jwk.get("kid") or ""
-            try:
-                numbers = RSAPublicNumbers(
-                    e=int.from_bytes(_b64url_decode(jwk["e"]), "big"),
-                    n=int.from_bytes(_b64url_decode(jwk["n"]), "big"),
-                )
-                key = numbers.public_key()
-            except (KeyError, ValueError, TypeError):
-                continue
-            loaded[kid] = (key, jwk.get("alg") or "RS256")
+        loaded = _jwks_rsa_keys(keys)
         if not loaded:
             raise _discovery_error("JWKS carries no usable RSA signing keys")
         self._jwks_keys = loaded
@@ -362,6 +334,15 @@ class OIDCFederation:
             raise OIDCError(EXCHANGE_ERROR, f"id_token segments are undecodable: {exc}") from exc
         if not isinstance(header, dict) or not isinstance(claims, dict):
             raise OIDCError(EXCHANGE_ERROR, "id_token header or claims are not objects")
+        key = self._id_token_signing_key(header)
+        _verify_id_token_signature(key, parts)
+        _check_id_token_claims(claims, self._clock, self.config, expected_nonce)
+        return claims
+
+    # -- identity mapping ---------------------------------------------------
+
+    def _id_token_signing_key(self, header: dict[str, Any]) -> Any:
+        """The JWKS RSA key that signed this id_token (fail-closed on any gap)."""
         if header.get("alg") != "RS256":
             raise OIDCError(
                 EXCHANGE_ERROR,
@@ -371,49 +352,7 @@ class OIDCFederation:
         entry = self._jwks_keys.get(kid)
         if entry is None:
             raise OIDCError(EXCHANGE_ERROR, f"id_token kid {kid!r} is not in the current JWKS")
-        key, _alg = entry
-        try:
-            from cryptography.exceptions import InvalidSignature
-            from cryptography.hazmat.primitives import hashes
-            from cryptography.hazmat.primitives.asymmetric import padding
-        except ImportError:  # pragma: no cover
-            raise OIDCError(
-                EXCHANGE_ERROR, "cryptography unavailable; cannot verify id_token"
-            ) from None
-        signing_input = (parts[0] + "." + parts[1]).encode("ascii")
-        try:
-            key.verify(
-                _b64url_decode(parts[2]),
-                signing_input,
-                padding.PKCS1v15(),
-                hashes.SHA256(),
-            )
-        except InvalidSignature as exc:
-            raise OIDCError(EXCHANGE_ERROR, "id_token signature verification failed") from exc
-        now = self._clock()
-        issuer = self.config.issuer_url
-        if claims.get("iss") != issuer:
-            raise OIDCError(
-                EXCHANGE_ERROR,
-                f"id_token issuer {claims.get('iss')!r} does not match {issuer!r}",
-            )
-        aud = claims.get("aud")
-        aud_list = aud if isinstance(aud, list) else [aud]
-        if self.config.client_id not in [a for a in aud_list if isinstance(a, str)]:
-            raise OIDCError(EXCHANGE_ERROR, "id_token audience does not include this client_id")
-        exp = claims.get("exp")
-        if not isinstance(exp, (int, float)) or now >= exp:
-            raise OIDCError(EXCHANGE_ERROR, "id_token is expired or carries no usable exp")
-        nbf = claims.get("nbf")
-        if isinstance(nbf, (int, float)) and now < nbf:
-            raise OIDCError(EXCHANGE_ERROR, "id_token is not yet valid (nbf in the future)")
-        if expected_nonce and claims.get("nonce") != expected_nonce:
-            raise OIDCError(EXCHANGE_ERROR, "id_token nonce does not match the login request")
-        if not claims.get("sub"):
-            raise OIDCError(EXCHANGE_ERROR, "id_token carries no sub claim")
-        return claims
-
-    # -- identity mapping ---------------------------------------------------
+        return entry[0]
 
     def map_user(self, users: Any, claims: dict[str, Any]) -> GatewayUser | None:
         """Map verified subject+claims onto an EXISTING admin user record.
@@ -424,21 +363,13 @@ class OIDCFederation:
         persisted. An unknown subject is a NAMED MAPPING_ERROR: no user is
         auto-provisioned in this slice.
         """
-        from raucle.gateway import OIDC_MAP_USERNAME_CLAIMS
-
         sub = claims.get("sub") or ""
-        for user in users.list_users():
-            if getattr(user, "oidc_sub", "") and user.oidc_sub == sub:
-                return user
-        for claim_name in OIDC_MAP_USERNAME_CLAIMS:
-            candidate = claims.get(claim_name)
-            if isinstance(candidate, str) and candidate:
-                for user in users.list_users():
-                    if not getattr(user, "oidc_sub", "") and user.name == candidate:
-                        user.oidc_sub = sub
-                        users.persist()
-                        logger.info("bound OIDC subject %s to admin user %s", sub, user.user_id)
-                        return user
+        bound = _match_bound_subject(users, sub)
+        if bound is not None:
+            return bound
+        claimed = _match_username_claim(users, claims, sub)
+        if claimed is not None:
+            return claimed
         raise OIDCError(
             MAPPING_ERROR,
             f"no admin user maps to OIDC subject {sub!r}; bind the subject or "
@@ -450,6 +381,114 @@ class OIDCFederation:
             raise _discovery_error("federation has not started; discovery must succeed first")
         if not self.authorization_endpoint or not self.token_endpoint:
             raise _discovery_error("discovery left required endpoints unset")
+
+
+def _match_bound_subject(users: Any, sub: str) -> GatewayUser | None:
+    """The admin user whose persisted ``oidc_sub`` already equals ``sub``, if any."""
+    for user in users.list_users():
+        if getattr(user, "oidc_sub", "") and user.oidc_sub == sub:
+            return user
+    return None
+
+
+def _match_username_claim(users: Any, claims: dict[str, Any], sub: str) -> GatewayUser | None:
+    """Bind ``sub`` onto a user matching a username claim, persisting the binding."""
+    from raucle.gateway import OIDC_MAP_USERNAME_CLAIMS
+
+    for claim_name in OIDC_MAP_USERNAME_CLAIMS:
+        candidate = claims.get(claim_name)
+        if isinstance(candidate, str) and candidate:
+            for user in users.list_users():
+                if not getattr(user, "oidc_sub", "") and user.name == candidate:
+                    user.oidc_sub = sub
+                    users.persist()
+                    logger.info("bound OIDC subject %s to admin user %s", sub, user.user_id)
+                    return user
+    return None
+
+
+def _verify_id_token_signature(key: Any, parts: list[str]) -> None:
+    """RS256-verify the id_token over its signing input (fail-closed)."""
+    try:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+    except ImportError:  # pragma: no cover
+        raise OIDCError(
+            EXCHANGE_ERROR, "cryptography unavailable; cannot verify id_token"
+        ) from None
+    signing_input = (parts[0] + "." + parts[1]).encode("ascii")
+    try:
+        key.verify(
+            _b64url_decode(parts[2]),
+            signing_input,
+            padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+    except InvalidSignature as exc:
+        raise OIDCError(EXCHANGE_ERROR, "id_token signature verification failed") from exc
+
+
+def _check_id_token_claims(
+    claims: dict[str, Any], clock: Any, config: Any, expected_nonce: str
+) -> None:
+    """Issuer, audience and validity checks over the verified claims."""
+    issuer = config.issuer_url
+    if claims.get("iss") != issuer:
+        raise OIDCError(
+            EXCHANGE_ERROR,
+            f"id_token issuer {claims.get('iss')!r} does not match {issuer!r}",
+        )
+    aud = claims.get("aud")
+    aud_list = aud if isinstance(aud, list) else [aud]
+    if config.client_id not in [a for a in aud_list if isinstance(a, str)]:
+        raise OIDCError(EXCHANGE_ERROR, "id_token audience does not include this client_id")
+    now = clock()
+    exp = claims.get("exp")
+    if not isinstance(exp, (int, float)) or now >= exp:
+        raise OIDCError(EXCHANGE_ERROR, "id_token is expired or carries no usable exp")
+    nbf = claims.get("nbf")
+    if isinstance(nbf, (int, float)) and now < nbf:
+        raise OIDCError(EXCHANGE_ERROR, "id_token is not yet valid (nbf in the future)")
+    if expected_nonce and claims.get("nonce") != expected_nonce:
+        raise OIDCError(EXCHANGE_ERROR, "id_token nonce does not match the login request")
+    if not claims.get("sub"):
+        raise OIDCError(EXCHANGE_ERROR, "id_token carries no sub claim")
+
+
+def _jwks_rsa_keys(keys: list[Any]) -> dict[str, tuple[Any, str]]:
+    """Load the usable RSA signing keys from a JWKS ``keys`` list."""
+    try:
+        from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
+    except ImportError as exc:  # pragma: no cover - compliance extra absent
+        raise _discovery_error(
+            "cryptography is required to verify provider signatures "
+            "(install raucle[compliance]); refusing to start"
+        ) from exc
+
+    loaded: dict[str, tuple[Any, str]] = {}
+    for jwk in keys:
+        if (
+            not isinstance(jwk, dict)
+            or jwk.get("kty") != "RSA"
+            or jwk.get("use")
+            not in (
+                None,
+                "sig",
+            )
+        ):
+            continue
+        kid = jwk.get("kid") or ""
+        try:
+            numbers = RSAPublicNumbers(
+                e=int.from_bytes(_b64url_decode(jwk["e"]), "big"),
+                n=int.from_bytes(_b64url_decode(jwk["n"]), "big"),
+            )
+            key = numbers.public_key()
+        except (KeyError, ValueError, TypeError):
+            continue
+        loaded[kid] = (key, jwk.get("alg") or "RS256")
+    return loaded
 
 
 def _default_http_get(url: str, timeout: float) -> bytes:

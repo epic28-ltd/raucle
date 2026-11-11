@@ -151,7 +151,8 @@ class TestGlobalDefaultQuorum:
         assert outcome["min_approvers"] == 2
         # second-approver requirement is named on the receipt stream too
         approvals = [r["x"] for r in _receipts(tmp_path) if r["verdict"] == VERDICT_HOLD_APPROVAL]
-        assert approvals and approvals[0]["min_approvers"] == 2
+        assert approvals
+        assert approvals[0]["min_approvers"] == 2
         assert approvals[0]["approvers_before"] == []
         # and the enforcement surface is still untouched: the named pending
         # state is the refusal to stop on a single approver
@@ -278,7 +279,8 @@ class TestEmergencyStopButton:
         receipts = _receipts(tmp_path)
         arm = [r for r in receipts if r["verdict"] == VERDICT_BUTTON_ARM]
         dis = [r for r in receipts if r["verdict"] == VERDICT_BUTTON_DISARM]
-        assert len(arm) == 1 and len(dis) == 1
+        assert len(arm) == 1
+        assert len(dis) == 1
         assert dis[0]["x"]["arm_receipt_id"] == arm_out["receipt_id"]
         assert dis[0]["x"]["arm_state"] == "disarmed"
         # re-locked: the button refuses again under its own named error

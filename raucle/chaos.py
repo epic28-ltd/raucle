@@ -50,6 +50,9 @@ CHAOS_RECEIPT_TYP = "raucle/chaos-fault/v1"
 
 _CRIT = "raucle"
 
+#: Hash-algorithm prefix used across receipt-hash spellings.
+_SHA256_PREFIX = "sha256:"
+
 
 class ChaosFaultController:
     """Decides per-write whether a named fault fires, and records it.
@@ -172,7 +175,7 @@ def emit_fault_receipt(
     return {
         "typ": CHAOS_RECEIPT_TYP,
         "jws": jws,
-        "receipt_hash": "sha256:" + _sha256_hex(jws.encode("ascii")),
+        "receipt_hash": _SHA256_PREFIX + _sha256_hex(jws.encode("ascii")),
     }
 
 
@@ -217,6 +220,57 @@ def _b64decode_raw(segment: str) -> bytes:
     return base64.urlsafe_b64decode(segment + "==" * (-len(segment) % 4))
 
 
+def _store_hashes(store_path: str | Any) -> dict[str, str]:
+    """Map both spellings of every stored receipt hash to its raw store line."""
+    import json
+    from pathlib import Path
+
+    stored: dict[str, str] = {}
+    text = Path(store_path).read_text(encoding="utf-8")
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        rec = json.loads(line)
+        rh = rec.get("receipt_hash", "")
+        # hash spellings differ by producer: record both spellings
+        for spelling in (rh, rh.removeprefix(_SHA256_PREFIX)):
+            if spelling:
+                stored[spelling] = line
+    return stored
+
+
+def _drop_receipt_flags(stored: dict[str, str], claimed_hashes: list[str] | None) -> list[str]:
+    """Name every receipt the caller CLAIMS but the store never recorded."""
+    return [
+        f"drop_receipt: receipt {claimed} claimed by the caller but absent from the store"
+        for claimed in claimed_hashes or []
+        if claimed not in stored and claimed.removeprefix(_SHA256_PREFIX) not in stored
+    ]
+
+
+def _delay_index_flags(stored: dict[str, str], index: Any) -> list[str]:
+    """Name receipts the store holds but the index projection lacks.
+
+    Any read failure of the index is honest (no flag invented): an empty
+    list means ``the index could not be reconciled``, not ``the index is
+    clean``.
+    """
+    has_rows: set[str] = set()
+    try:
+        conn = index._conn  # noqa: SLF001 - offline reconciliation is in-package
+        for (rh,) in conn.execute("SELECT receipt_hash FROM receipts"):
+            has_rows.add(rh)
+            has_rows.add(rh.removeprefix(_SHA256_PREFIX))
+    except Exception:  # noqa: BLE001 - any read failure is honest (no flag invented)
+        return []
+    return [
+        f"delay_index_write: receipt {rh} is in the store but absent from the index"
+        for rh in sorted(stored)
+        if rh.removeprefix(_SHA256_PREFIX) not in has_rows and rh not in has_rows
+    ]
+
+
 def offline_flags(
     store_path: str | Any,
     *,
@@ -231,43 +285,10 @@ def offline_flags(
     - ``delay_index_write``: a receipt the store recorded but the index
       projection lacks.
     """
-    import json
-    from pathlib import Path
-
-    stored: dict[str, str] = {}
-    text = Path(store_path).read_text(encoding="utf-8")
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        rec = json.loads(line)
-        rh = rec.get("receipt_hash", "")
-        # hash spellings differ by producer: try both spellings
-        for spelling in (rh, rh.removeprefix("sha256:")):
-            if spelling:
-                stored[spelling] = line
-
-    flags: list[str] = []
-    for claimed in claimed_hashes or []:
-        if claimed not in stored and claimed.removeprefix("sha256:") not in stored:
-            flags.append(
-                f"drop_receipt: receipt {claimed} claimed by the caller but absent from the store"
-            )
+    stored = _store_hashes(store_path)
+    flags = _drop_receipt_flags(stored, claimed_hashes)
     if index is not None:
-        has_rows: set[str] = set()
-        try:
-            conn = index._conn  # noqa: SLF001 - offline reconciliation is in-package
-            for (rh,) in conn.execute("SELECT receipt_hash FROM receipts"):
-                has_rows.add(rh)
-                has_rows.add(rh.removeprefix("sha256:"))
-        except Exception:  # noqa: BLE001 - any read failure is honest (no flag invented)
-            return flags
-        for rh in sorted(stored):
-            bare = rh.removeprefix("sha256:")
-            if bare not in has_rows and rh not in has_rows:
-                flags.append(
-                    f"delay_index_write: receipt {rh} is in the store but absent from the index"
-                )
+        flags.extend(_delay_index_flags(stored, index))
     return flags
 
 

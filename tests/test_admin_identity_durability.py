@@ -38,7 +38,8 @@ class TestMfaDurability:
         assert provisioning is not None
         assert um1.verify_mfa("admin-key-1", pyotp.TOTP(provisioning["secret"]).now())
         before = um1.get_user("admin-key-1")
-        assert before is not None and before.requires_mfa()
+        assert before is not None
+        assert before.requires_mfa()
 
         um2 = UserManager(persist_path=path)
         user = um2.get_user("admin-key-1")

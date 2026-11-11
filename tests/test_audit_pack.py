@@ -14,6 +14,9 @@ import pytest
 
 cryptography = pytest.importorskip("cryptography")
 
+BACKSLASH = chr(92)  # member-name escape shape below
+NULLBYTE = chr(0)
+
 from raucle.audit_pack import build_pack, verify_pack
 from raucle.broker import AWSEgressGate, CapabilityDenied
 from raucle.capability import CapabilityGate, CapabilityIssuer
@@ -306,3 +309,67 @@ def test_index_signature_binds_the_member_set(tmp_path):
     assert verdict.integrity_ok  # the re-indexed member hash matches...
     assert not verdict.index_signature_ok  # ...but the index signature is broken
     assert any("index" in r.lower() for r in verdict.reasons)
+
+
+def test_resolve_member_refuses_escape_shapes(tmp_path):
+    """Traversal-payload table: every member escape shape resolves to None.
+
+    Mirrors the assurance-pack verifier recipe (absolute, dotted, backslash,
+    drive-colon, null-byte, symlink escape, non-string index types)."""
+    from raucle.audit_pack import _resolve_member
+
+    pack = tmp_path / "pack"
+    pack.mkdir()
+    (pack / "chain.jsonl").write_text("receipt", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("SECRET", encoding="utf-8")
+    (pack / "esc.txt").symlink_to(outside)
+    payloads = [
+        "/etc/passwd",
+        "../../etc/passwd",
+        "a/../../../etc/passwd",
+        ".." + BACKSLASH + BACKSLASH + "windows" + BACKSLASH + BACKSLASH + "win.ini",
+        "C:/etc/passwd",
+        NULLBYTE + "chain.jsonl",
+        "",
+        123,
+        None,
+        "esc.txt",
+    ]
+    for payload in payloads:
+        assert _resolve_member(pack, payload) is None, repr(payload)
+    inside = _resolve_member(pack, "chain.jsonl")
+    assert inside is not None
+    assert inside.is_relative_to(pack.resolve())
+
+
+def test_pack_traversal_payloads_fail_integrity(tmp_path):
+    """A tampered index carrying traversal-shaped members fails integrity,
+    each with a named escape reason, and nothing outside the pack is read."""
+    chain, broker = _gate_chain(tmp_path)
+    out = tmp_path / "pack"
+    build_pack(
+        chain_path=chain,
+        public_keys={broker.key_id: broker.public_key_pem()},
+        audit_key_pem=_audit_key(),
+        out_dir=out,
+        generated_at=1_700_000_000,
+    )
+    index = json.loads((out / "PACK.json").read_text())
+    shapes = [
+        "/etc/passwd",
+        "../../etc/passwd",
+        ".." + BACKSLASH + BACKSLASH + "etc" + BACKSLASH + BACKSLASH + "shadow",
+        "C:/etc/passwd",
+        "a/../../secrets.json",
+    ]
+    for shape in shapes:
+        index["members"].append({"path": shape, "role": "proof", "sha256": "sha256:00"})
+    (out / "PACK.json").write_text(json.dumps(index, indent=2))
+
+    verdict = verify_pack(out)
+    assert not verdict.ok
+    assert not verdict.integrity_ok
+    escaped = {r for r in verdict.reasons if "escapes the pack" in r}
+    assert len(escaped) == len(shapes)
+    assert not (tmp_path / "secrets.json").exists()

@@ -18,7 +18,7 @@ from raucle.containment import (
 )
 
 
-@pytest.fixture()
+@pytest.fixture
 def containment_env(tmp_path, monkeypatch):
     """Point every containment surface at tmp_path."""
     (tmp_path / "policies.yaml").write_text("version: 1\npolicies: []\n")

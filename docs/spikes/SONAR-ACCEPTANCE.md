@@ -42,3 +42,37 @@ the proxy at a different destination) are rejected with 400, and the taint
 finding is suppressed with inline `# NOSONAR` markers on the forwarding
 call. Accepted pattern: "a transparent proxy MUST forward client payload
 to the configured upstream". Decision owner: Craig.
+
+## pythonsecurity:S6549 (filesystem oracle via file content) - raucle/audit_pack.py, hardened and accepted 2026-11-11
+
+The taint trace runs from the bytes of the attacker-controllable
+`PACK.json` index into the read of every member in
+`_resolve_member()`. Genuinely hardened, in order, before any member
+read: non-string, empty and null-byte member names are refused
+(`ValueError` on canonicalisation is caught, so a tampered index cannot
+crash verification); absolute paths refused (`os.path.isabs`); `..`
+traversal refused at any depth (`Path.parts`); backslash and
+drive-colon member names refused (the assurance-pack verifier's
+zip-slip shapes); symlinks cannot launder an escape (both sides
+`resolve()`d, member must stay `is_relative_to` the pack root); and
+every member's sha256 is bound into the Ed25519-signed index, so
+forging the member set requires the audit private key. The taint
+engine does not credit project-internal validators as sanitising, so
+the residual resolve-line sink is suppressed with inline `# NOSONAR`
+and this entry is the rationale. Regression tests pin every shape:
+`tests/test_audit_pack.py::test_resolve_member_refuses_escape_shapes`
+(payload table) and `...::test_pack_traversal_payloads_fail_integrity`
+(integration through `verify_pack`, named per-shape reasons).
+Decision owner: Craig.
+
+## python:S1313 (hardcoded IP 169.254.169.254) - raucle/demo_scenarios.py, accepted 2026-11-11
+
+The link-local instance-metadata address appears exactly once, in the
+seeded *poisoned-helper* demo manifest (`fetch_internal`): the demo
+exists to show the scanner catching an SSRF lure aimed at the cloud
+metadata endpoint, and `169.254.169.254` is the canonical target for
+that demonstration. Rewriting or indirection would weaken the demo's
+fidelity to the attack it documents. The demo route is read-only,
+static-analysis only, and gated behind the explicit demo-mode flag
+plus admin authentication. Suppressed with inline `# NOSONAR` plus
+this entry. Decision owner: Craig.

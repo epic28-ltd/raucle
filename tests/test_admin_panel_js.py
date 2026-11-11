@@ -617,7 +617,8 @@ def test_brand_logo_asset_is_shipped_and_served() -> None:
     from raucle.gateway_app import create_admin_app
 
     png = Path(ga.__file__).with_name("assets") / "logo-mark.png"
-    assert png.exists() and png.read_bytes().startswith(b"\x89PNG"), png
+    assert png.exists(), png
+    assert png.read_bytes().startswith(b"\x89PNG"), png
     assert 'src="/assets/logo-mark.png"' in ADMIN_PANEL_HTML
     cfg = GatewayConfig(
         policy_file="",

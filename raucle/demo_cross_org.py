@@ -168,13 +168,15 @@ def _verify_one_as_org_b(
     recomputed = "sha256:" + _sha256_hex(envelope.get("jws", "").encode("ascii"))
     valid = bool(report.valid) and recomputed == envelope.get("receipt_hash")
     errors = list(report.errors or [])
+    if valid:
+        signature_check = "ok"
+    elif report.signature_failures:
+        signature_check = "failed"
+    else:
+        signature_check = "not checked to completion"
     return {
         "verdict": "verified" if valid else "failed",
-        "signature_check": (
-            "ok"
-            if valid
-            else ("failed" if report.signature_failures else "not checked to completion")
-        ),
+        "signature_check": signature_check,
         "hash_linkage": {
             "recomputed_matches": valid,
             "recomputed_sha256_prefix": recomputed[:24] if valid else "",

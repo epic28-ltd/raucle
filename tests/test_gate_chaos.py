@@ -50,7 +50,6 @@ def _clean_chaos_env(monkeypatch):
     for var in ("RAUCLE_CHAOS", "RAUCLE_ENV", "RAUCLE_CHAOS_FAULTS"):
         monkeypatch.delenv(var, raising=False)
     # chaos module state is env-only; nothing to leak between tests
-    yield
 
 
 def _gateway(tmp_path, monkeypatch, *, faults=None, with_index=True):
@@ -185,7 +184,9 @@ def test_drop_receipt_fires_once_and_is_flagged_named(tmp_path, monkeypatch):
     dropped = gateway._chaos.injections[0]["target"]
     assert dropped in hashes  # the caller still holds the hash
     flags = offline_flags(str(store), claimed_hashes=hashes)
-    assert len(flags) == 1 and flags[0].startswith("drop_receipt:") and dropped in flags[0]
+    assert len(flags) == 1
+    assert flags[0].startswith("drop_receipt:")
+    assert dropped in flags[0]
 
 
 def test_delay_index_write_defers_and_drain_catches_up(tmp_path, monkeypatch):
@@ -245,11 +246,13 @@ def test_named_fault_receipts_verify_offline_and_fail_closed(tmp_path, monkeypat
     # fail-closed: a wrong key and a tampered payload both refuse
     outsider = Ed25519Signer.generate()
     ok, why = verify_fault_receipt(receipts[0], public_key_pem=outsider.public_key_pem())
-    assert not ok and "signature does not verify" in why
+    assert not ok
+    assert "signature does not verify" in why
     tampered = dict(receipts[0])
     tampered["jws"] = receipts[0]["jws"][:-6] + "AAAAAA"
     ok, why = verify_fault_receipt(tampered, public_key_pem=signer.public_key_pem())
-    assert not ok and "signature does not verify" in why
+    assert not ok
+    assert "signature does not verify" in why
     # an unknown fault name is refused at emission
     with pytest.raises(ValueError, match="unknown chaos fault"):
         emit_fault_receipt(signer, key_id="k", fault="poltergeist")
@@ -270,7 +273,8 @@ def test_each_fault_receipts_run_flags_offline_verifier(tmp_path, monkeypatch):
     chaos_sink.append({"tool": "b"})  # the successor lands before the withheld record
     chaos_sink.close()
     faults_injected = [i["fault"] for i in gateway._chaos.injections]
-    assert set(faults_injected) == set(CHAOS_FAULTS) and len(faults_injected) == 3
+    assert set(faults_injected) == set(CHAOS_FAULTS)
+    assert len(faults_injected) == 3
 
     # offline flags name the store fault; the delayed index write was
     # already drained by the next real write (the catch-up contract),
