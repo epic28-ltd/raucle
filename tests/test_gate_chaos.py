@@ -16,9 +16,11 @@ Contract:
 """
 
 import json
+import time
 
 import pytest
 
+from raucle import gateway as _gateway_module
 from raucle.audit import AuditVerifier, Ed25519Signer, HashChainSink
 from raucle.chaos import (
     CHAOS_FAULTS,
@@ -55,6 +57,31 @@ def _gateway(tmp_path, monkeypatch, *, faults=None, with_index=True):
     """A gateway with chaos enabled (dev, gate_auth off)."""
     monkeypatch.setenv("RAUCLE_ENV", "dev")
     monkeypatch.setenv("RAUCLE_CHAOS", "1")
+    # Determinism: the flat receipt is content-addressed over (iat as whole
+    # seconds, latency_us). On a fast runner two calls whose payloads are
+    # otherwise identical (the same tool + args recur in _make_calls) can
+    # tie on BOTH, so a later receipt is byte-identical to the receipt
+    # drop_receipt withheld — its store write then "heals" the drop and
+    # the offline reconciliation legitimately finds nothing (a
+    # receipt-hash collision, not a reconciliation failure). A strictly
+    # advancing wall clock makes every receipt's iat distinct, so the
+    # withheld receipt can never be healed by a later identical write:
+    # the exactly-once drop is observable deterministically. Harness-only:
+    # production semantics untouched.
+    # production semantics untouched.
+
+    class _FakeClock:
+        def __init__(self):
+            self._t = 1_000_000.0
+
+        def time(self):
+            self._t += 1.0
+            return self._t
+
+        def perf_counter(self):
+            return time.perf_counter()
+
+    monkeypatch.setattr(_gateway_module, "time", _FakeClock(), raising=True)
     if faults:
         monkeypatch.setenv("RAUCLE_CHAOS_FAULTS", faults)
     config = GatewayConfig(
