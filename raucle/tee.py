@@ -276,7 +276,7 @@ class SimulatedNitroEnclave:
     #: so a binding is stable across processes for the same document.
     IMAGE_TAG = b"raucle/gate:simulated-image@v1"
     MODULE_ID = "raucle-mock-tee"
-    PLATFORM = "aws-nitro"
+    ATTESTATION_PLATFORM = "aws-nitro"
 
     def __init__(self) -> None:
         from cryptography.hazmat.primitives import serialization
@@ -287,7 +287,7 @@ class SimulatedNitroEnclave:
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
         )
-        self.platform = self.PLATFORM
+        self.platform = self.ATTESTATION_PLATFORM
         self.measurement = "sha384:" + hashlib.sha384(self.IMAGE_TAG).hexdigest()
         self.simulated = True
         self.sign_requests = 0
@@ -310,7 +310,7 @@ class SimulatedNitroEnclave:
         attested CBOR document.
         """
         body: dict[str, Any] = {
-            "platform": self.PLATFORM,
+            "platform": self.ATTESTATION_PLATFORM,
             "module_id": self.MODULE_ID,
             "digest": "SHA384",
             "pcrs": {"PCR0": self.measurement.split(":", 1)[1]},

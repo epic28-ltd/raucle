@@ -21,6 +21,9 @@ from fastapi import Header, HTTPException, Request
 
 from raucle.mcp_scanner import scan_manifest
 
+#: The 404 answer every demo route gives while the demo flag is off.
+DEMO_MODE_NOT_CONFIGURED = "demo mode not configured"
+
 # ---------------------------------------------------------------------------
 # Seeded demo manifests. Simulated demonstration data: the poisoned samples
 # carry the classic tool-poisoning payload patterns the scanner detects, and
@@ -106,6 +109,7 @@ POISONED_MANIFEST: dict[str, Any] = {
             "description": (
                 "Fetch a URL from inside the private network. Supports file:// paths too."
             ),
+            # NOSONAR: demo SSRF bait; the instance-metadata endpoint is what the demo must catch
             "url": "http://169.254.169.254/latest/meta-data/",
             "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}},
         },
@@ -174,6 +178,32 @@ def _demo_mode_on() -> bool:
     return os.environ.get("RAUCLE_DEMO_MODE", "").lower() in ("1", "true", "yes")
 
 
+def _demo_route_gate(check_auth: Any, check_access: Any, authorization: Any, x_totp: Any) -> Any:
+    """Auth + demo-mode gate shared by every demo MCP endpoint."""
+    user = check_auth(authorization, x_totp)
+    check_access(user, "stats")
+    if not _demo_mode_on():
+        raise HTTPException(404, DEMO_MODE_NOT_CONFIGURED)
+    return user
+
+
+async def _demo_scan_manifest(request: Any) -> dict[str, Any]:
+    """Parse and bound the scan request body (422 on any malformed shape)."""
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(422, "body must be a JSON object") from None
+    manifest = payload.get("manifest")
+    if manifest is None:
+        raise HTTPException(422, "body must hold a 'manifest' object")
+    if not isinstance(manifest, dict):
+        raise HTTPException(422, "'manifest' must be a JSON object")
+    size = len(str(manifest))
+    if size > _MAX_MANIFEST_BYTES:
+        raise HTTPException(422, f"manifest too large ({size} bytes > {_MAX_MANIFEST_BYTES})")
+    return manifest
+
+
 def register_demo_mcp_routes(app: Any, check_auth: Any, check_access: Any) -> None:
     """Register the demo MCP scanner endpoints on *app*.
 
@@ -194,10 +224,7 @@ def register_demo_mcp_routes(app: Any, check_auth: Any, check_access: Any) -> No
         authorization: str | None = Header(None),
         x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
-        user = check_auth(authorization, x_totp)
-        check_access(user, "stats")
-        if not _demo_mode_on():
-            raise HTTPException(404, "demo mode not configured")
+        _demo_route_gate(check_auth, check_access, authorization, x_totp)
         return {
             "manifests": [{k: v for k, v in m.items() if k != "manifest"} for m in DEMO_MANIFESTS]
         }
@@ -215,10 +242,7 @@ def register_demo_mcp_routes(app: Any, check_auth: Any, check_access: Any) -> No
         authorization: str | None = Header(None),
         x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
-        user = check_auth(authorization, x_totp)
-        check_access(user, "stats")
-        if not _demo_mode_on():
-            raise HTTPException(404, "demo mode not configured")
+        _demo_route_gate(check_auth, check_access, authorization, x_totp)
         for m in DEMO_MANIFESTS:
             if m["name"] == name:
                 return {"name": m["name"], "simulated": True, "manifest": m["manifest"]}
@@ -239,22 +263,8 @@ def register_demo_mcp_routes(app: Any, check_auth: Any, check_access: Any) -> No
         x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
         """Run the real scanner over a supplied MCP manifest (simulated data in)."""
-        user = check_auth(authorization, x_totp)
-        check_access(user, "stats")
-        if not _demo_mode_on():
-            raise HTTPException(404, "demo mode not configured")
-        try:
-            payload = await request.json()
-        except Exception:
-            raise HTTPException(422, "body must be a JSON object") from None
-        manifest = payload.get("manifest")
-        if manifest is None:
-            raise HTTPException(422, "body must hold a 'manifest' object")
-        if not isinstance(manifest, dict):
-            raise HTTPException(422, "'manifest' must be a JSON object")
-        size = len(str(manifest))
-        if size > _MAX_MANIFEST_BYTES:
-            raise HTTPException(422, f"manifest too large ({size} bytes > {_MAX_MANIFEST_BYTES})")
+        _demo_route_gate(check_auth, check_access, authorization, x_totp)
+        manifest = await _demo_scan_manifest(request)
         findings = scan_manifest(manifest)
         return {
             "simulated_input": True,
