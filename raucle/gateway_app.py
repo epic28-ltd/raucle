@@ -2677,12 +2677,12 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
   /* === G9: LEFT SIDE NAVIGATION ============================================= */
   /* Corporate blue from the raucle.com home palette (engraved hero blue and
      deep navy) carries the nav chrome only: never a decision colour. */
-  .layout { display: flex; align-items: stretch; }
+  .layout { display: flex; align-items: stretch; background: linear-gradient(90deg, var(--rc-navy) 0, var(--rc-navy) 220px, transparent 220px); background-repeat: no-repeat; }
   .layout > .content { flex: 1; min-width: 0; }
   .sidenav { flex: 0 0 220px; width: 220px; position: sticky; top: var(--rc-header-h);
     max-height: calc(100vh - var(--rc-header-h)); overflow-y: auto; overflow-x: hidden;
     scrollbar-width: thin; scrollbar-color: var(--rc-blue-deep) transparent;
-    background: var(--rc-navy);
+    background: transparent;
     border-right: 1px solid var(--rc-blue-deep); padding: 12px 8px 24px; box-sizing: border-box; }
   .nav-heading { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
     color: var(--rc-blue); padding: 10px 12px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2832,7 +2832,8 @@ body.demo #policyEditorCard{display:none}
 /* G9 responsive fallback: under ~900px the left nav collapses to a top
    horizontal scroll strip under the sticky header. */
 @media (max-width: 900px) {
-  .layout { display: block; }
+  .layout { display: block; background: none; }
+  .sidenav { background: var(--rc-navy); }
   .sidenav { width: auto; flex: none; top: var(--rc-header-h); height: auto; max-height: none;
     display: flex; flex-direction: row; align-items: stretch; gap: 4px; overflow-x: auto; overflow-y: hidden;
     padding: 8px 12px; border-right: none; border-bottom: 1px solid var(--rc-blue-deep); }
