@@ -823,11 +823,7 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
         users,
         ttl_seconds=getattr(gateway.config, "admin_session_ttl", 3600),
         max_sessions=getattr(gateway.config, "admin_sessions_max", 64),
-        receipt_emitter=(
-            gateway._emit_admin_session_receipt
-            if gateway is not None and hasattr(gateway, "_emit_admin_session_receipt")
-            else None
-        ),
+        receipt_emitter=gateway._emit_admin_session_receipt,
     )
 
     # OIDC federation is OFF by default: an enabled config fetches the

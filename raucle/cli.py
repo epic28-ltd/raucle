@@ -2457,15 +2457,52 @@ def _cmd_containment(args: argparse.Namespace) -> int:
     return 0
 
 
+def _verify_line_for(config: Any) -> str:
+    """The shared offline-verification hint line."""
+    return (
+        "  verify offline: raucle verify-receipt <jws> --pubkey "
+        f"{config.state_dir}/containment-operator-pubkey.pem"
+    )
+
+
+def _containment_button_render(result: dict, sub: str, verify_line: str) -> None:
+    """Rendering of a receipted arm/disarm button transition."""
+    state = "ARMED" if sub == "arm-button" else "DISARMED"
+    print(f"emergency authority stop button: {state} (receipted operator transition)")
+    who = result.get("operator", "")
+    if sub == "arm-button":
+        print(f"  armed by: {who}")
+    else:
+        print(f"  disarmed by: {who}")
+    print(f"  receipt: {result['receipt_id']}")
+    print(verify_line)
+
+
+def _containment_pending_hold_render(result: dict, verify_line: str) -> None:
+    """Rendering of a hold awaiting its approval quorum."""
+    approvers = result.get("approvers", [])
+    required = int(result.get("min_approvers") or 0)
+    outstanding = result.get("outstanding")
+    if outstanding is None:
+        outstanding = required - len(approvers)
+    print(
+        f"containment hold PENDING approval: scope={result['scope']}"
+        f" ({len(approvers)}/{required} distinct approvers receipted)"
+    )
+    if result.get("scope_id"):
+        print(f"  id: {result['scope_id']}")
+    print(f"  outstanding approvals required: {outstanding}")
+    print(f"  receipt: {result['receipt_id']}")
+    print("  approve with: raucle containment approve-hold --approver <identity>")
+    print(verify_line)
+
+
 def _containment_render(result: dict, config: Any, sub: str) -> None:
     """Human-readable rendering of a containment result."""
     if sub == "status":
         _containment_status_render(result)
         return
-    verify_line = (
-        "  verify offline: raucle verify-receipt <jws> --pubkey "
-        f"{config.state_dir}/containment-operator-pubkey.pem"
-    )
+    verify_line = _verify_line_for(config)
     if sub in ("quarantine", "release"):
         print(f"containment trace {result['status']}: {result['trace_id']}")
         print(f"  registry: {result['target_file']}")
@@ -2481,34 +2518,11 @@ def _containment_render(result: dict, config: Any, sub: str) -> None:
         print(verify_line)
         return
     # hold / resume / approve-hold / arm-button / disarm-button
-    if sub == "arm-button":
-        print("emergency authority stop button: ARMED (receipted operator transition)")
-        print(f"  armed by: {result['operator']}")
-        print(f"  receipt: {result['receipt_id']}")
-        print(verify_line)
-        return
-    if sub == "disarm-button":
-        print("emergency authority stop button: DISARMED (receipted operator transition)")
-        print(f"  disarmed by: {result['operator']}")
-        print(f"  receipt: {result['receipt_id']}")
-        print(verify_line)
+    if sub in ("arm-button", "disarm-button"):
+        _containment_button_render(result, sub, verify_line)
         return
     if result.get("status") == "pending" and sub in ("hold", "approve-hold"):
-        approvers = result.get("approvers", [])
-        required = int(result.get("min_approvers") or 0)
-        outstanding = result.get("outstanding")
-        if outstanding is None:
-            outstanding = required - len(approvers)
-        print(
-            f"containment hold PENDING approval: scope={result['scope']}"
-            f" ({len(approvers)}/{required} distinct approvers receipted)"
-        )
-        if result.get("scope_id"):
-            print(f"  id: {result['scope_id']}")
-        print(f"  outstanding approvals required: {outstanding}")
-        print(f"  receipt: {result['receipt_id']}")
-        print("  approve with: raucle containment approve-hold --approver <identity>")
-        print(verify_line)
+        _containment_pending_hold_render(result, verify_line)
         return
     final_line = f"containment {result['status']}: scope={result['scope']}"
     if result.get("scope_id"):

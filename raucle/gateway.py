@@ -676,6 +676,40 @@ def _hash_api_key(api_key: str) -> str:
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
 
+def _user_from_record(rec: dict[str, Any], path: Any, lineno: int) -> tuple[GatewayUser, bool]:
+    """Build a :class:`GatewayUser` from one persisted record.
+
+    Returns ``(user, was_legacy)``; ``was_legacy`` marks a record that only
+    carried a raw ``api_key`` and was migrated to its hash. Raises
+    ``ValueError`` (named corrupt-line error) on unusable key material.
+    """
+    key_hash = rec.get("api_key_hash") or ""
+    migrated = False
+    if not key_hash:
+        legacy_key = rec.get("api_key") or ""
+        if not legacy_key:
+            raise ValueError(f"user store {path} is corrupt (line {lineno}: no key material)")
+        key_hash = _hash_api_key(legacy_key)
+        migrated = True
+    user = GatewayUser(
+        role=rec["role"],
+        name=rec.get("name", ""),
+        expires_at=rec.get("expires_at"),
+        api_key_hash=key_hash,
+        user_id=rec.get("user_id") or _derive_user_id(key_hash),
+    )
+    user.oidc_sub = rec.get("oidc_sub") or ""
+    if rec.get("totp_secret"):
+        user.totp_secret = rec["totp_secret"]
+        # Files written before RED-032 carry no mfa_enabled flag: a
+        # verified secret means the user had enabled MFA, so restore
+        # it rather than silently downgrading them to key-only auth.
+        user.mfa_enabled = bool(rec.get("mfa_enabled", True))
+    else:
+        user.mfa_enabled = bool(rec.get("mfa_enabled", False))
+    return user, migrated
+
+
 def _derive_user_id(key_hash: str) -> str:
     """A stable public handle for a user, derived from the key digest."""
     return "usr-" + key_hash[:12]
@@ -1131,40 +1165,8 @@ class RaucleGateway:
         self._chaos = ChaosFaultController.from_env(gate_auth=self._gate_auth_mode)
         self._agent_creds = None
         self._caller_gate = None
-        # Segmented receipt store (B2). Legacy flat file remains the default
-        # for backwards compatibility; setting receipt_store_dir switches the
-        # emitter to segmented storage.
-        self._receipt_store = None
-        if config.receipt_store_dir:
-            from raucle.receipt_store import SegmentedReceiptStore
-
-            self._receipt_store = SegmentedReceiptStore(
-                base_dir=config.receipt_store_dir,
-                max_segment_bytes=config.receipt_segment_max_bytes,
-            )
-        # Receipt index (PR-C): query projection. Beside the data when the
-        # segmented store is on; explicit path overrides. When the flat
-        # legacy store is in use (no store dir), the index stays off unless
-        # an explicit path is given (the flat file has no segments to
-        # rebuild from, so the index must be fed live only).
-        self._receipt_index = None
         self._file_cache = _FileCache()
-        idx_path = config.receipt_index_path or (
-            str(Path(config.receipt_store_dir) / "index.sqlite") if config.receipt_store_dir else ""
-        )
-        if idx_path:
-            from raucle.receipt_index import ReceiptIndex
-
-            self._receipt_index = ReceiptIndex(sqlite_path=idx_path)
-            # Feed any pre-existing chain into a fresh index
-            try:
-                if self._receipt_index.count() == 0:
-                    if self._receipt_store is not None:
-                        self._receipt_index.rebuild_from_store(self._receipt_store)
-                    elif Path(config.receipt_store).exists():
-                        self._receipt_index.rebuild_from_flat_file(config.receipt_store)
-            except Exception:
-                logger.exception("receipt index rebuild failed; queries degraded, chain unaffected")
+        self._init_receipt_projection(config)
         if self._gate_auth_mode == "off":
             logger.warning(
                 "\n"
@@ -1181,11 +1183,6 @@ class RaucleGateway:
             from raucle.agent_credentials import AgentCredentialStore
 
             self._agent_creds = AgentCredentialStore(path=config.agent_credentials_file)
-        elif self._gate_auth_mode == "token":
-            # Caller tokens are verified against the trust registry's
-            # active issuer keys. Built lazily on first use; see
-            # _init_caller_gate().
-            self._caller_gate = None
         else:  # unreachable: validated above
             raise ValueError(self._gate_auth_mode)
 
@@ -1220,6 +1217,51 @@ class RaucleGateway:
 
         self.fault_counter = FaultCounter(config.fault_counter_path or None)
         self.boot_selftest_result: dict[str, Any] | None = None
+
+    def _init_receipt_projection(self, config: GatewayConfig) -> None:
+        """Segmented receipt store (B2) and the receipt_index projection (PR-C).
+
+        Legacy flat file remains the default for backwards compatibility;
+        setting receipt_store_dir switches the emitter to segmented storage.
+        The index sits beside the data when the segmented store is on;
+        an explicit path overrides. When the flat legacy store is in use
+        (no store dir), the index stays off unless an explicit path is
+        given (the flat file has no segments to rebuild from, so the index
+        must be fed live only).
+        """
+        self._receipt_store = None
+        if config.receipt_store_dir:
+            from raucle.receipt_store import SegmentedReceiptStore
+
+            self._receipt_store = SegmentedReceiptStore(
+                base_dir=config.receipt_store_dir,
+                max_segment_bytes=config.receipt_segment_max_bytes,
+            )
+        self._receipt_index = None
+        idx_path = config.receipt_index_path or (
+            str(Path(config.receipt_store_dir) / "index.sqlite") if config.receipt_store_dir else ""
+        )
+        if idx_path:
+            from raucle.receipt_index import ReceiptIndex
+
+            self._receipt_index = ReceiptIndex(sqlite_path=idx_path)
+            # Feed any pre-existing chain into a fresh index
+            try:
+                if self._receipt_index.count() == 0:
+                    if self._receipt_store is not None:
+                        self._receipt_index.rebuild_from_store(self._receipt_store)
+                    elif Path(config.receipt_store).exists():
+                        self._receipt_index.rebuild_from_flat_file(config.receipt_store)
+            except Exception:
+                logger.exception("receipt index rebuild failed; queries degraded, chain unaffected")
+
+    def _init_gate_access(self, config: GatewayConfig) -> None:
+        """Wire the auth-mode access plane: the off banner or the credential store.
+
+        Caller tokens are verified against the trust registry's active
+        issuer keys, built lazily on first use (see _init_caller_gate()).
+        """
+        self._init_gate_access(config)
 
     def run_boot_selftest_at_startup(self) -> dict[str, Any]:
         """Boot self-test (X4): drive the approval path, the constraint
@@ -1610,7 +1652,7 @@ class RaucleGateway:
         }
         return self._sign_and_store_receipt(payload)
 
-    def _emit_admin_session_receipt(self, action: str, extension: dict[str, Any]) -> str | None:
+    def _emit_admin_session_receipt(self, extension: dict[str, Any]) -> str | None:
         """Emit a signed admin-session lifecycle receipt (X3 slice 1, T-S3).
 
         Opening and closing an admin-panel session are receipted lifecycle
