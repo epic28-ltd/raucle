@@ -20,7 +20,7 @@ and the evidence.
 | Adapter | Host framework | Status | Evidence / caveat |
 | --- | --- | --- | --- |
 | `agent_framework.py` | Microsoft Agent Framework ≥ 1.0 | WIRED | `tests/test_agent_framework_integration.py` (`tests/test_agent_framework_real.py` additionally runs the real SDK and must be requested explicitly). Design: `docs/proposals/agent-framework-middleware.md`. |
-| `autogen.py` | AutoGen (`autogen-agentchat`) ≥ 0.4 | DOC-ONLY | `gated_tools` is implemented against AutoGen 0.4's tool contract but has no dedicated test file in `tests/` yet — treat as unverified until one lands. |
+| `autogen.py` | AutoGen (`autogen-agentchat`) ≥ 0.4 | WIRED | Wrapping-tool gate, fail-closed on missing token / empty `agent_id` / non-`FunctionTool`. `tests/test_autogen_integration.py` (real-SDK contract mocked along AutoGen 0.4's documented `FunctionTool` shape; a real-SDK tripwire test can follow the `agent_framework` pattern). |
 | `crewai.py` | CrewAI ≥ 1.0 | WIRED | Wrapping-tool gate, fail-closed denial. `tests/test_crewai_integration.py`; quick start: `docs/getting-started/05-crewai.md`. |
 | `langchain.py` | LangChain (`langchain-core`) ≥ 0.3 | WIRED | Callback-handler gate. `tests/test_langchain_integration.py`. |
 | `openai_agents.py` | OpenAI Agents SDK (`openai-agents`) ≥ 0.1 | WIRED | Input/output guardrails backed by `Scanner`, receipts in a hash-chain sink, fail-closed on scan failure. `tests/test_openai_agents_integration.py` includes a real `Runner.run` tripwire test. |

@@ -46,9 +46,12 @@ def test_every_wired_row_names_a_real_test_file():
                 )
 
 
-def test_autogen_is_not_overstated():
-    """AutoGen has no dedicated test file; it must stay DOC-ONLY until one
-    lands. Guard against a well-meaning status upgrade."""
+def test_autogen_is_wired_with_dedicated_evidence():
+    """AutoGen's status upgrade is honest only while the dedicated test
+    file exists and the row names it. Guard against regressions in both
+    directions."""
     text = _matrix_text()
     row = next(line for line in text.splitlines() if "`autogen.py`" in line)
-    assert "DOC-ONLY" in row, "autogen.py upgraded without a test file"
+    assert "WIRED" in row, "autogen.py regressed to an untested status"
+    assert "tests/test_autogen_integration.py" in row
+    assert (REPO_ROOT / "tests" / "test_autogen_integration.py").exists()
