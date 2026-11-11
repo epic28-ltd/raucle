@@ -4034,32 +4034,28 @@ function showMainDemo() {
 const TOUR_SEEN_KEY = 'raucle_demo_tour_done_v1';
 let tourStep = 0, tourBox = null, tourTimer = null;
 const TOUR_STEPS = [
+  // Narrative arc (G7): live traffic, what the gate caught, the policy
+  // behind it, the evidence it leaves, then what an auditor takes away.
   {tab:'connections', target:'#liveMode', title:'This is live traffic',
    body:'Real agent tool calls, gated in real time. Green lines are allowed calls; red ones were denied by policy. Use the scenario buttons to focus on banking, government or health.'},
   {tab:'connections', target:'#topoDecisionFilter', title:'Filter what you watch',
    body:'Narrow the flow to allows, denies or escalations. Click any node in the topology to filter the whole view to that agent or tool.'},
-  {tab:'dashboard', target:'#statsGrid', title:'Decisions at a glance',
-   body:'Counts of every gate decision by tool, with latency. Denied calls are as important as allowed ones: they are the policy working.'},
-  {tab:'receipts', target:'#receiptsView', title:'Every decision leaves a receipt',
-   body:'Each receipt is signed and content-addressed. Take them offline: an auditor can verify the chain without contacting us, or any vendor.'},
+  {tab:'dlp', target:'#tab-dlp', title:'What the gate caught: sensitive data',
+   body:'Findings from the simulated demo calls, scored by the same pattern engine used on live traffic: grouped by data category, with the redaction action and the rule responsible on every call.'},
+  {tab:'injection', target:'#tab-injection', title:'What the gate caught: injected instructions',
+   body:'The classifier scoring simulated tool outputs and agent text in real time. Each event shows its score, category and the receipted decision, so nothing here is an afterthought.'},
+  {tab:'shadow', target:'#tab-shadow', title:'What the gate caught: unapproved AI',
+   body:'Attempts by agents to reach model suppliers the policy does not approve: unknown models, off-list endpoints and caller-supplied keys.'},
+  {tab:'policies', target:'#simDemoCard', title:'The policy that did it',
+   body:'Denies and escalations come from rules you can inspect and change here. Pick a demo policy tweak and the panel runs the real simulation engine over a simulated window: a deterministic outcome plus a signed receipt, before anything is deployed. In a live deployment the operator deploys through Save & Deploy, which re-verifies the signed receipt.'},
+  {tab:'receipts', target:'#receiptsView', title:'Evidence: every decision leaves a receipt',
+   body:'Each receipt is signed and content-addressed at the moment of the decision, so the record cannot quietly change afterwards.'},
+  {tab:'capdemo', target:'#capDemoList', title:'Evidence: capability tokens',
+   body:'Pick a simulated capability call and the gateway real issuer mints and attenuates the token envelope for you: issuer, agent binding, tool scope, constraints, parent-to-child narrowing and the expiry. Verify runs the real capability gate, so the allows and denies are its actual decisions.'},
+  {tab:'receipts', target:'#tab-receipts', title:'What an auditor takes away',
+   body:'The receipts cards also carry the key model: which key family signed this deployment\u2019s receipts, and the offline verifier that re-checks signatures and hash linkage on this machine with no contact with the operator or any vendor.'},
   {tab:'assure', target:'#tab-assure', title:'Proof across organisations',
    body:'Two assurance stories, both real machinery. Organisation B verifies Organisation A receipts against the pinned published key with no contact with the issuing operator; and a policy constraint is re-checked over a commitment to the call arguments while every other value stays hidden.'},
-  {tab:'mcp', target:'#mcpManifestList', title:'Scan an MCP manifest',
-   body:"Pick a simulated demo manifest, or paste one of your own, and the panel runs the gateway's real MCP scanner over it. The findings you see are the scan's actual output, not a hand-drawn example."},
-  {tab:'dlp', target:'#tab-dlp', title:'Sensitive data, handled',
-   body:'Findings from the simulated demo calls, scored by the same pattern engine used on live traffic: by data category, with the redaction action and the rule responsible per call.'},
-  {tab:'injection', target:'#tab-injection', title:'Injected instructions, caught',
-   body:'The classifier scoring simulated tool outputs and agent text in real time. Each event shows its score, category and the receipted decision.'},
-  {tab:'shadow', target:'#tab-shadow', title:'Unapproved AI, surfaced',
-   body:'Attempts by agents to reach model suppliers the policy does not approve: unknown models, off-list endpoints and caller-supplied keys.'},
-  {tab:'capdemo', target:'#capDemoList', title:'Capability tokens, shown in full',
-   body:'Pick a simulated capability call and the gateway real issuer mints and attenuates the token envelope for you: issuer, agent binding, tool scope, constraints, the parent-to-child narrowing and the expiry. Verify runs the real capability gate, so allows and denies are its actual decisions.'},
-  {tab:'policies', target:'#simDemoCard', title:'Test a change before you deploy',
-   body:'Pick a demo policy tweak and the panel runs the real simulation engine over a simulated window: a deterministic outcome plus a signed receipt you could hand to an auditor. In a live deployment the operator deploys through Save & Deploy, which re-verifies the signed receipt.'},
-  {tab:'stop', target:'#tab-stop', title:'The control operators hold',
-   body:'Read-only: the emergency authority stop ships OFF, arming it is a receipted transition, and a global stop needs two distinct approval receipts before anything halts. Every receipt here comes from the real machinery in a disposable sandbox.'},
-  {tab:'learn', target:'#tab-learn', title:'Want the depth?',
-   body:'A short guided walkthrough of capability tokens, policies and what the proofs guarantee. When you are done, close the bubbles and explore freely.'},
 ];
 function tourShow(){
   const s=TOUR_STEPS[tourStep];
