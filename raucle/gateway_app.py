@@ -769,26 +769,37 @@ def _check_auth(
     if key.startswith(_BEARER_PREFIX):
         key = key[len(_BEARER_PREFIX) :]
     if key.startswith(SESSION_TOKEN_PREFIX):
-        if sessions is None:
-            # Session tokens exist but no manager is wired: refuse, never
-            # fall through to key comparison.
-            raise HTTPException(status_code=401, detail="Session tokens not enabled")
-        user = sessions.resolve(key)
-        if user is None:
-            raise HTTPException(status_code=403, detail="Invalid or expired session")
-        return user
+        return _session_token_user(sessions, key)
     user = users.get_user(key)
     if user is None:
         raise HTTPException(status_code=403, detail="Invalid API key")
-    if user.requires_mfa():
-        if not x_totp:
-            raise HTTPException(
-                status_code=401,
-                detail="MFA required: provide X-TOTP header with 6-digit code",
-            )
-        if not users.verify_totp(user, x_totp):
-            raise HTTPException(status_code=403, detail="Invalid TOTP code")
+    _require_totp_gate(users, user, x_totp)
     return user
+
+
+def _session_token_user(sessions: AdminSessionManager | None, key: str) -> GatewayUser:
+    """Resolve an ``rst_`` session token to its user, failing closed."""
+    if sessions is None:
+        # Session tokens exist but no manager is wired: refuse, never
+        # fall through to key comparison.
+        raise HTTPException(status_code=401, detail="Session tokens not enabled")
+    user = sessions.resolve(key)
+    if user is None:
+        raise HTTPException(status_code=403, detail="Invalid or expired session")
+    return user
+
+
+def _require_totp_gate(users: UserManager, user: GatewayUser, x_totp: str | None) -> None:
+    """401/403 unless the user's TOTP requirement is satisfied."""
+    if not user.requires_mfa():
+        return
+    if not x_totp:
+        raise HTTPException(
+            status_code=401,
+            detail="MFA required: provide X-TOTP header with 6-digit code",
+        )
+    if not users.verify_totp(user, x_totp):
+        raise HTTPException(status_code=403, detail="Invalid TOTP code")
 
 
 def _check_access(users: UserManager, user: GatewayUser, resource: str) -> None:
@@ -872,7 +883,7 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     _register_receipt_routes(app, gateway, check_auth, check_access)
     _register_siem_routes(app, gateway, check_auth, check_access)
     _register_user_routes(app, users, check_auth, check_access)
-    _register_session_routes(app, users, sessions, check_auth, check_access, oidc_federation)
+    _register_session_routes(app, users, sessions, oidc_federation)
     _register_config_routes(app, gateway, check_auth, check_access)
     # D5: demo-mode MCP manifest scanning, backed by the real scanner
     from raucle.demo_scenarios import register_demo_mcp_routes
@@ -1789,24 +1800,19 @@ def _register_receipt_routes(
         the segmented store's bounded-memory recent() when not. No params =
         newest-first, same shape as before.
         """
-        user = check_auth(authorization, x_totp)
-        check_access(user, "receipts")
-        if gateway._receipt_index is not None:
-            page = _receipt_page_via_index(
-                gateway,
-                agent_id=agent_id,
-                tool=tool,
-                decision=decision,
-                trace_id=trace_id,
-                since=since,
-                until=until,
-                limit=limit,
-                cursor=cursor,
-            )
-            return _attach_signing_families(gateway, page)
-        if gateway._receipt_store is not None:
-            return _attach_signing_families(gateway, _receipt_page_via_store(gateway, limit=limit))
-        return _attach_signing_families(gateway, _receipt_page_via_flat_file(gateway, limit=limit))
+        return _receipt_page_response(
+            gateway,
+            check_auth(authorization, x_totp),
+            check_access,
+            agent_id=agent_id,
+            tool=tool,
+            decision=decision,
+            trace_id=trace_id,
+            since=since,
+            until=until,
+            limit=limit,
+            cursor=cursor,
+        )
 
     @app.get(
         "/api/receipts/{receipt_hash}/ancestors",
@@ -1859,24 +1865,14 @@ def _register_receipt_routes(
         links; unverifiable material is an explicit node state, never
         silently resolved.
         """
-        from raucle.chain_graph import (
-            _MAX_BREADTH,
-            _MAX_DEPTH,
-            resolve_chain_graph_for_gateway,
-        )
-
-        user = check_auth(authorization, x_totp)
-        check_access(user, "receipts")
-        graph = resolve_chain_graph_for_gateway(
+        return _chain_graph_response(
             gateway,
-            receipt_hash,
-            depth=min(max(int(depth), 0), _MAX_DEPTH),
-            breadth=min(max(int(breadth), 1), _MAX_BREADTH),
+            check_auth(authorization, x_totp),
+            check_access,
+            receipt_hash=receipt_hash,
+            depth=depth,
+            breadth=breadth,
         )
-        root_node = graph.get("root")
-        if isinstance(root_node, dict) and root_node.get("state") == "unknown":
-            raise HTTPException(status_code=404, detail="unknown receipt hash")
-        return graph
 
     @app.get(
         "/api/receipts/export",
@@ -1977,70 +1973,138 @@ def _register_receipt_routes(
         real verification result for receipt material the demo itself
         produced (simulated demo traffic).
         """
-        user = check_auth(authorization, x_totp)
-        check_access(user, "receipts")
-        envelope = _find_receipt_envelope(gateway, receipt_hash)
-        if envelope is None:
-            raise HTTPException(status_code=404, detail="unknown receipt hash")
+        return _offline_verify_response(
+            gateway, check_auth(authorization, x_totp), check_access, receipt_hash
+        )
 
-        from raucle.provenance import ProvenanceVerifier, _sha256_hex
 
-        gate = gateway.gate_identity
-        verifier = ProvenanceVerifier(public_keys={gate.key_id: gate.public_key_pem()})
-        # Scope the real verifier to the selected receipt's own envelope
-        # line (single-record chain: signature check, hash recomputation
-        # and parent resolution on exactly what an auditor carries away).
-        import json as _json
-        import tempfile as _tempfile
-        from pathlib import Path as _Path
+def _offline_verify_response(
+    gateway: RaucleGateway,
+    user: GatewayUser,
+    check_access: Any,
+    receipt_hash: str,
+) -> dict[str, Any]:
+    """The REAL offline verification of one receipt (single-record chain)."""
+    check_access(user, "receipts")
+    envelope = _find_receipt_envelope(gateway, receipt_hash)
+    if envelope is None:
+        raise HTTPException(status_code=404, detail="unknown receipt hash")
 
-        report = None
-        with _tempfile.TemporaryDirectory() as td:
-            chain_file = _Path(td) / "receipt.jsonl"
-            chain_file.write_text(
-                _json.dumps(envelope, ensure_ascii=False) + "\n", encoding="utf-8"
-            )
-            report = verifier.verify_chain(chain_file)
+    from raucle.provenance import ProvenanceVerifier, _sha256_hex
 
-        receipt_hash_recomputed = "sha256:" + _sha256_hex(envelope.get("jws", "").encode("ascii"))
-        verified = bool(report.valid) and receipt_hash_recomputed == receipt_hash
-        errors = list(report.errors or [])
-        if not verified and not errors:
-            errors.append("stored receipt hash does not match a recomputation from the JWS bytes")
-        # A failing verdict must fail the response, not just the panel.
-        if not verified:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "receipt_hash": receipt_hash,
-                    "verdict": "failed",
-                    "signature_check": "failed"
-                    if report.signature_failures
-                    else "not checked to completion",
-                    "hash_linkage": {"recomputed_matches": False},
-                    "errors": errors[:10],
-                    "offline": (
-                        "This verification ran entirely offline. No operator network call was made."
-                    ),
-                    "note": OFFLINE_VERIFY_NOTE,
-                },
-            )
-        return {
-            "receipt_hash": receipt_hash,
-            "verdict": "verified",
-            "signature_check": "ok",
-            "hash_linkage": {
-                "recomputed_matches": True,
-                "recomputed_sha256_prefix": receipt_hash_recomputed[:24],
-                "parent_links": 0,
+    gate = gateway.gate_identity
+    verifier = ProvenanceVerifier(public_keys={gate.key_id: gate.public_key_pem()})
+    # Scope the real verifier to the selected receipt's own envelope
+    # line (single-record chain: signature check, hash recomputation
+    # and parent resolution on exactly what an auditor carries away).
+    import json as _json
+    import tempfile as _tempfile
+    from pathlib import Path as _Path
+
+    report = None
+    with _tempfile.TemporaryDirectory() as td:
+        chain_file = _Path(td) / "receipt.jsonl"
+        chain_file.write_text(_json.dumps(envelope, ensure_ascii=False) + "\n", encoding="utf-8")
+        report = verifier.verify_chain(chain_file)
+
+    receipt_hash_recomputed = "sha256:" + _sha256_hex(envelope.get("jws", "").encode("ascii"))
+    verified = bool(report.valid) and receipt_hash_recomputed == receipt_hash
+    errors = list(report.errors or [])
+    if not verified and not errors:
+        errors.append("stored receipt hash does not match a recomputation from the JWS bytes")
+    # A failing verdict must fail the response, not just the panel.
+    if not verified:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "receipt_hash": receipt_hash,
+                "verdict": "failed",
+                "signature_check": "failed"
+                if report.signature_failures
+                else "not checked to completion",
+                "hash_linkage": {"recomputed_matches": False},
+                "errors": errors[:10],
+                "offline": (
+                    "This verification ran entirely offline. No operator network call was made."
+                ),
+                "note": OFFLINE_VERIFY_NOTE,
             },
-            "receipt_count": report.receipt_count,
-            "offline": (
-                "Verified without contacting the operator. The signature "
-                "and hash checks run locally on the receipt itself."
-            ),
-            "note": OFFLINE_VERIFY_NOTE,
-        }
+        )
+    return {
+        "receipt_hash": receipt_hash,
+        "verdict": "verified",
+        "signature_check": "ok",
+        "hash_linkage": {
+            "recomputed_matches": True,
+            "recomputed_sha256_prefix": receipt_hash_recomputed[:24],
+            "parent_links": 0,
+        },
+        "receipt_count": report.receipt_count,
+        "offline": (
+            "Verified without contacting the operator. The signature "
+            "and hash checks run locally on the receipt itself."
+        ),
+        "note": OFFLINE_VERIFY_NOTE,
+    }
+
+
+def _chain_graph_response(
+    gateway: RaucleGateway,
+    user: GatewayUser,
+    check_access: Any,
+    *,
+    receipt_hash: str,
+    depth: int,
+    breadth: int,
+) -> dict[str, Any]:
+    """The full authority graph for one decision receipt."""
+    check_access(user, "receipts")
+    from raucle.chain_graph import _MAX_BREADTH, _MAX_DEPTH, resolve_chain_graph_for_gateway
+
+    graph = resolve_chain_graph_for_gateway(
+        gateway,
+        receipt_hash,
+        depth=min(max(int(depth), 0), _MAX_DEPTH),
+        breadth=min(max(int(breadth), 1), _MAX_BREADTH),
+    )
+    root_node = graph.get("root")
+    if isinstance(root_node, dict) and root_node.get("state") == "unknown":
+        raise HTTPException(status_code=404, detail="unknown receipt hash")
+    return graph
+
+
+def _receipt_page_response(
+    gateway: RaucleGateway,
+    user: GatewayUser,
+    check_access: Any,
+    *,
+    agent_id: str | None,
+    tool: str | None,
+    decision: str | None,
+    trace_id: str | None,
+    since: int | None,
+    until: int | None,
+    limit: int,
+    cursor: str | None,
+) -> dict[str, Any]:
+    """Receipts page: the index projection, or the store/flat-file fallbacks."""
+    check_access(user, "receipts")
+    if gateway._receipt_index is not None:
+        page = _receipt_page_via_index(
+            gateway,
+            agent_id=agent_id,
+            tool=tool,
+            decision=decision,
+            trace_id=trace_id,
+            since=since,
+            until=until,
+            limit=limit,
+            cursor=cursor,
+        )
+        return _attach_signing_families(gateway, page)
+    if gateway._receipt_store is not None:
+        return _attach_signing_families(gateway, _receipt_page_via_store(gateway, limit=limit))
+    return _attach_signing_families(gateway, _receipt_page_via_flat_file(gateway, limit=limit))
 
 
 def _find_receipt_envelope(gateway: RaucleGateway, receipt_hash: str) -> dict[str, Any] | None:
@@ -2211,26 +2275,7 @@ def _register_user_routes(
         authorization: str | None = Header(None),
         x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
-        user = check_auth(authorization, x_totp)
-        check_access(user, "users")
-        if req.role not in ("admin", "operator", "auditor"):
-            raise HTTPException(400, "role must be admin, operator, or auditor")
-        supplied = (req.api_key or "").strip()
-        if supplied and len(supplied) < _MIN_ADMIN_KEY_CHARS:
-            raise HTTPException(
-                400,
-                f"api_key must be at least {_MIN_ADMIN_KEY_CHARS} characters, "
-                "or omit it to have one generated",
-            )
-        api_key = supplied or ("adm_" + secrets.token_hex(32))
-        new_user = users.add_user(api_key, req.role, req.name)
-        # The plaintext key is returned exactly once; only its digest is stored.
-        return {
-            "status": "ok",
-            "user_id": new_user.user_id,
-            "api_key": api_key,
-            "role": new_user.role,
-        }
+        return _create_user_response(users, check_auth(authorization, x_totp), check_access, req)
 
     @app.delete(
         "/api/users/{api_key}",
@@ -2298,13 +2343,9 @@ def _register_user_routes(
         x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
         """Verify the first TOTP code and enable MFA for the user."""
-        user = check_auth(authorization, x_totp)
-        check_access(user, "users")
-        if not code:
-            raise HTTPException(400, "code parameter is required")
-        if users.verify_mfa(api_key, code):
-            return {"status": "ok", "mfa_enabled": True}
-        raise HTTPException(400, "Invalid TOTP code")
+        return _verify_mfa_response(
+            users, check_auth(authorization, x_totp), check_access, api_key, code
+        )
 
     @app.post(
         "/api/users/{api_key}/mfa/disable",
@@ -2325,6 +2366,43 @@ def _register_user_routes(
         if users.disable_mfa(api_key):
             return {"status": "ok", "mfa_enabled": False}
         raise HTTPException(404, "user not found")
+
+
+def _create_user_response(
+    users: UserManager, user: GatewayUser, check_access: Any, req: UserCreateRequest
+) -> dict[str, Any]:
+    """Validate and create an admin user; the plaintext key returns once."""
+    check_access(user, "users")
+    if req.role not in ("admin", "operator", "auditor"):
+        raise HTTPException(400, "role must be admin, operator, or auditor")
+    supplied = (req.api_key or "").strip()
+    if supplied and len(supplied) < _MIN_ADMIN_KEY_CHARS:
+        raise HTTPException(
+            400,
+            f"api_key must be at least {_MIN_ADMIN_KEY_CHARS} characters, "
+            "or omit it to have one generated",
+        )
+    api_key = supplied or ("adm_" + secrets.token_hex(32))
+    new_user = users.add_user(api_key, req.role, req.name)
+    # The plaintext key is returned exactly once; only its digest is stored.
+    return {
+        "status": "ok",
+        "user_id": new_user.user_id,
+        "api_key": api_key,
+        "role": new_user.role,
+    }
+
+
+def _verify_mfa_response(
+    users: UserManager, user: GatewayUser, check_access: Any, api_key: str, code: str
+) -> dict[str, Any]:
+    """Verify the first TOTP code and enable MFA (400 on any bad code)."""
+    check_access(user, "users")
+    if not code:
+        raise HTTPException(400, "code parameter is required")
+    if users.verify_mfa(api_key, code):
+        return {"status": "ok", "mfa_enabled": True}
+    raise HTTPException(400, "Invalid TOTP code")
 
 
 def _no_change_response() -> dict[str, Any]:
@@ -2383,12 +2461,77 @@ class _OIDCCallbackRequest(BaseModel):
 _OIDC_PENDING_TTL_SECONDS = 300
 
 
+def _oidc_login_response(
+    oidc_federation: Any, pending_states: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    """Build the provider authorization URL and park the single-use PKCE state."""
+    if oidc_federation is None:
+        raise HTTPException(503, "OIDC federation is not enabled on this gateway")
+    from raucle import admin_oidc
+
+    state = "oidc_" + _hashlib.sha256(secrets.token_bytes(32)).hexdigest()[:32]
+    nonce = "n_" + secrets.token_hex(16)
+    verifier, challenge = admin_oidc.make_pkce_pair()
+    now = time.time()
+    stale = [
+        s
+        for s, rec in pending_states.items()
+        if rec["created_at"] + _OIDC_PENDING_TTL_SECONDS < now
+    ]
+    for s in stale:
+        pending_states.pop(s, None)
+    pending_states[state] = {
+        "nonce": nonce,
+        "code_verifier": verifier,
+        "created_at": now,
+    }
+    url = oidc_federation.authorization_url(
+        oidc_federation.config.redirect_uri,
+        state=state,
+        nonce=nonce,
+        code_challenge=challenge,
+    )
+    return {"authorization_url": url, "state": state}
+
+
+def _oidc_callback_response(
+    req: Any,
+    oidc_federation: Any,
+    pending_states: dict[str, dict[str, Any]],
+    users: UserManager,
+    sessions: AdminSessionManager,
+) -> dict[str, Any]:
+    """Code+verifier exchange, subject mapping, receipted session open."""
+    if oidc_federation is None:
+        raise HTTPException(503, "OIDC federation is not enabled on this gateway")
+    if req.error:
+        raise HTTPException(401, f"provider refused the login: {req.error}")
+    from raucle import admin_oidc
+
+    pending = pending_states.pop(req.state or "", None)
+    if pending is None or pending["created_at"] + _OIDC_PENDING_TTL_SECONDS < time.time():
+        raise HTTPException(401, f"{admin_oidc.EXCHANGE_ERROR}: unknown or replayed state")
+    claims = oidc_federation.exchange_code(
+        req.code,
+        pending["code_verifier"],
+        redirect_uri=oidc_federation.config.redirect_uri,
+        expected_nonce=pending["nonce"],
+    )
+    user = oidc_federation.map_user(users, claims)
+    opened = sessions.open_with_user(user)
+    return {
+        "session_token": opened["token"],
+        "expires_at": opened["expires_at"],
+        "user_id": user.user_id,
+        "subject": claims.get("sub", ""),
+        "auth_method": "oidc",
+    }
+
+
 def _register_session_routes(
     app: FastAPI,
     users: UserManager,
     sessions: AdminSessionManager,
-    check_auth: Any,
-    check_access: Any,
     oidc_federation: Any,
 ) -> None:
     """Admin session lifecycle (T-S3) + optional OIDC federation (X3).
@@ -2452,33 +2595,7 @@ def _register_session_routes(
 
     @app.get("/api/oidc/login", responses={"503": {"description": "OIDC not enabled"}})
     def oidc_login() -> dict[str, Any]:
-        if oidc_federation is None:
-            raise HTTPException(503, "OIDC federation is not enabled on this gateway")
-        from raucle import admin_oidc
-
-        state = "oidc_" + _hashlib.sha256(secrets.token_bytes(32)).hexdigest()[:32]
-        nonce = "n_" + secrets.token_hex(16)
-        verifier, challenge = admin_oidc.make_pkce_pair()
-        now = time.time()
-        stale = [
-            s
-            for s, rec in _pending_oidc.items()
-            if rec["created_at"] + _OIDC_PENDING_TTL_SECONDS < now
-        ]
-        for s in stale:
-            _pending_oidc.pop(s, None)
-        _pending_oidc[state] = {
-            "nonce": nonce,
-            "code_verifier": verifier,
-            "created_at": now,
-        }
-        url = oidc_federation.authorization_url(
-            oidc_federation.config.redirect_uri,
-            state=state,
-            nonce=nonce,
-            code_challenge=challenge,
-        )
-        return {"authorization_url": url, "state": state}
+        return _oidc_login_response(oidc_federation, _pending_oidc)
 
     @app.post(
         "/api/oidc/callback",
@@ -2488,30 +2605,7 @@ def _register_session_routes(
         },
     )
     def oidc_callback(req: _OIDCCallbackRequest) -> dict[str, Any]:
-        if oidc_federation is None:
-            raise HTTPException(503, "OIDC federation is not enabled on this gateway")
-        if req.error:
-            raise HTTPException(401, f"provider refused the login: {req.error}")
-        from raucle import admin_oidc
-
-        pending = _pending_oidc.pop(req.state or "", None)
-        if pending is None or pending["created_at"] + _OIDC_PENDING_TTL_SECONDS < time.time():
-            raise HTTPException(401, f"{admin_oidc.EXCHANGE_ERROR}: unknown or replayed state")
-        claims = oidc_federation.exchange_code(
-            req.code,
-            pending["code_verifier"],
-            redirect_uri=oidc_federation.config.redirect_uri,
-            expected_nonce=pending["nonce"],
-        )
-        user = oidc_federation.map_user(users, claims)
-        opened = sessions.open_with_user(user)
-        return {
-            "session_token": opened["token"],
-            "expires_at": opened["expires_at"],
-            "user_id": user.user_id,
-            "subject": claims.get("sub", ""),
-            "auth_method": "oidc",
-        }
+        return _oidc_callback_response(req, oidc_federation, _pending_oidc, users, sessions)
 
 
 def _register_config_routes(
