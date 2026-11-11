@@ -521,3 +521,127 @@ def test_tour_no_longer_drops_into_side_quests() -> None:
         assert gone not in tabs
     for kept in ("showTab('dashboard',this)", "showTab('mcp',this)"):
         assert kept in ADMIN_PANEL_HTML
+
+
+# ---------------------------------------------------------------------------
+# G9: left side navigation
+# ---------------------------------------------------------------------------
+
+
+def test_left_nav_replaces_the_top_tab_strip() -> None:
+    """13+ screens moved to a sticky left column; no top strip remains."""
+    assert '<div class="tabs">' not in ADMIN_PANEL_HTML
+    assert 'class="sidenav"' in ADMIN_PANEL_HTML
+    assert 'data-nav-group="trust"' in ADMIN_PANEL_HTML
+    assert 'data-nav-group="assurance"' in ADMIN_PANEL_HTML
+    assert 'data-nav-group="red"' in ADMIN_PANEL_HTML
+    # every screen stays reachable through the left nav dispatcher
+    for tab in (
+        "dashboard",
+        "connections",
+        "policies",
+        "stop",
+        "learn",
+        "receipts",
+        "assure",
+        "mcp",
+        "dlp",
+        "injection",
+        "shadow",
+        "capdemo",
+        "siem",
+        "users",
+        "config",
+    ):
+        assert f"showTab('{tab}',this)" in ADMIN_PANEL_HTML, tab
+
+
+def test_left_nav_group_order_matches_the_agent_stacks() -> None:
+    """Trust, then Assurance, then Red; Red carries the stop entry only."""
+    trust = ADMIN_PANEL_HTML.index('<div class="nav-group" data-nav-group="trust"')
+    assurance = ADMIN_PANEL_HTML.index('<div class="nav-group" data-nav-group="assurance"')
+    red = ADMIN_PANEL_HTML.index('<div class="nav-group" data-nav-group="red"')
+    assert trust < assurance < red
+    assert ">Raucle Agent Trust<" in ADMIN_PANEL_HTML
+    assert ">Raucle Agent Assurance<" in ADMIN_PANEL_HTML
+    assert ">Raucle Agent Red<" in ADMIN_PANEL_HTML
+    red_block = ADMIN_PANEL_HTML[red : ADMIN_PANEL_HTML.index("</nav>", red)]
+    assert "Emergency authority stop" in red_block
+    remainder = red_block.split("Emergency authority stop", 1)[1]
+    assert "showTab('" not in remainder, "the red group carries no further entries"
+
+
+def test_assurance_jump_items_are_dispatcher_backed() -> None:
+    """Evidence pack and Key model jump to in-tab sections via the shared map."""
+    assert 'data-hi="navEvidencePack()"' in ADMIN_PANEL_HTML
+    assert 'data-hi="navKeyModel()"' in ADMIN_PANEL_HTML
+    assert '"navEvidencePack()":(ev,el)=>navEvidencePack(el)' in ADMIN_PANEL_HTML
+    assert '"navKeyModel()":(ev,el)=>navKeyModel(el)' in ADMIN_PANEL_HTML
+
+
+def test_demo_group_gating_rules_ship() -> None:
+    """Assurance and red nav groups are demo surfaces; live view keeps trust."""
+    assert (
+        'body:not(.demo) .nav-group[data-nav-group="assurance"], '
+        'body:not(.demo) .nav-group[data-nav-group="red"]{display:none}' in ADMIN_PANEL_HTML
+    )
+
+
+def test_left_nav_collapses_to_a_top_strip_under_900px() -> None:
+    """The responsive fallback keeps the left nav reachable on small screens."""
+    assert "@media (max-width: 900px)" in ADMIN_PANEL_HTML
+    assert "flex-direction: row" in ADMIN_PANEL_HTML
+
+
+def test_tour_spotlights_left_nav_items_for_caught_screens() -> None:
+    """G9: the caught screens spotlight their left-nav entries; the rest
+    spotlight content sections (scroll-and-spotlight semantics unchanged)."""
+    targets = {tab: target for tab, target, _ in _tour_steps()}
+    for tab in ("dlp", "injection", "shadow"):
+        assert targets[tab] == f'[data-tab-id="{tab}"].tab'
+    for tab in ("connections", "policies", "receipts", "capdemo", "assure"):
+        assert targets[tab].startswith("#"), tab
+
+
+# ---------------------------------------------------------------------------
+# G10: brand logo and corporate blue chrome
+# ---------------------------------------------------------------------------
+
+
+def test_brand_logo_asset_is_shipped_and_served() -> None:
+    """G10: the engraved mark: package asset, served route, panel img src."""
+    from fastapi.testclient import TestClient
+
+    import raucle.gateway_app as ga
+    from raucle.gateway import GatewayConfig, RaucleGateway, UserManager
+    from raucle.gateway_app import create_admin_app
+
+    png = Path(ga.__file__).with_name("assets") / "logo-mark.png"
+    assert png.exists() and png.read_bytes().startswith(b"\x89PNG"), png
+    assert 'src="/assets/logo-mark.png"' in ADMIN_PANEL_HTML
+    cfg = GatewayConfig(
+        policy_file="",
+        receipt_store=str(tempfile.mkdtemp() + "/receipts.jsonl"),
+        audit_chain=str(tempfile.mkdtemp() + "/audit.jsonl"),
+        admin_api_key="admin-key-0123456789abcdef",
+        signer_backend="local",
+    )
+    gateway = RaucleGateway(cfg)
+    users = UserManager()
+    users.add_user(cfg.admin_api_key, "admin", "Admin")
+    client = TestClient(create_admin_app(gateway, users))
+    r = client.get("/assets/logo-mark.png")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("image/png")
+    assert r.content.startswith(b"\x89PNG")
+    # the mark is same-origin: the CSP keeps img-src pinned to 'self' data
+    assert "img-src 'self'" in ga._panel_csp()
+
+
+def test_corporate_blue_tokens_are_scoped_to_the_nav_chrome() -> None:
+    """G10: engraved blue + hero navy chrome tokens; semantic colours intact."""
+    assert "--rc-blue: #7C8FF0" in ADMIN_PANEL_HTML
+    assert "--rc-navy: #14143C" in ADMIN_PANEL_HTML
+    # green allow / red deny / amber escalate stay literal decision colours
+    for colour in ("#22c55e", "#dd6b78", "#e5b85c"):
+        assert colour in ADMIN_PANEL_HTML
