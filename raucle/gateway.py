@@ -180,9 +180,14 @@ class GatewayConfig:
     config_file: str = "/etc/raucle/gateway-config.yaml"
 
     # Signer
-    signer_backend: str = "local"  # local, aws, azure, vault
+    signer_backend: str = "local"  # local, aws, azure, vault, tee
     kms_key_id: str = ""
     kms_region: str = "eu-west-1"
+    # EPIC H3 slice 1: the TEE signer path. The mock boundary must be
+    # acknowledged explicitly; a real enclave signing service is wired by
+    # code (raucle.tee.TEESigner sign_fn) and is named follow-up work. A
+    # simulated attestation is never applied silently.
+    tee_simulated: bool = False
 
     # Policy
     policy_file: str = "/etc/raucle/policies.yaml"
@@ -325,6 +330,8 @@ class GatewayConfig:
             signer_backend=os.environ.get("RAUCLE_SIGNER", "local"),
             kms_key_id=os.environ.get("RAUCLE_KMS_KEY_ID", ""),
             kms_region=os.environ.get("AWS_REGION", "eu-west-1"),
+            tee_simulated=os.environ.get("RAUCLE_TEE_SIMULATED", "").lower()
+            in ("1", "true", "yes"),
             policy_file=os.environ.get("RAUCLE_POLICY_FILE", "/etc/raucle/policies.yaml"),
             policy_dir=os.environ.get("RAUCLE_POLICY_DIR", ""),
             policy_seal_file=os.environ.get("RAUCLE_POLICY_SEAL_FILE", ""),
@@ -1384,6 +1391,13 @@ class RaucleGateway:
                 issued_at=now,
                 expires_at=None,
             )
+            # EPIC H3: a TEE signer carries its attestation binding into the
+            # SIGNED statement (no-op for backends without attestation: the
+            # body stays byte-identical to pre-H3 statements).
+            _attestation_of = getattr(self._signer, "attestation_statement", None)
+            if callable(_attestation_of):
+                stmt.attestation = _attestation_of()
+
             # KMS-signed statement: sign the canonical body through the signer
             body_sig = self._signer.sign(_canonical_json(stmt.body()))
             stmt.signature = _base64.b64encode(body_sig).decode("ascii")
@@ -1414,6 +1428,23 @@ class RaucleGateway:
         if self.config.signer_backend == "local":
             key_path = self._signer_key_path()
             self._signer = self._load_or_create_local_signer(key_path)
+        elif self.config.signer_backend == "tee":
+            from raucle.tee import SimulatedNitroEnclave
+
+            if not self.config.tee_simulated:
+                raise ValueError(
+                    "signer backend 'tee' without tee_simulated: real enclave "
+                    "signing-service wiring is named follow-up work (EPIC H3). "
+                    "Set RAUCLE_TEE_SIMULATED=1 (or tee_simulated=True) to run "
+                    "the clearly-labelled mock boundary; a simulated "
+                    "attestation is never applied silently."
+                )
+            self._signer = SimulatedNitroEnclave().signer()
+            logger.warning(
+                "TEE signer: SIMULATED enclave boundary in use "
+                "(RAUCLE_TEE_SIMULATED=1); the attestation is not a "
+                "hardware guarantee"
+            )
         else:
             self._signer = create_signer(
                 backend=self.config.signer_backend,
