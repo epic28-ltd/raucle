@@ -114,7 +114,8 @@ def _gate_enrolment_checks(gateway: Any) -> dict[str, Any]:
     key_id = getattr(gate, "key_id", None) or stmt.key_id
     try:
         key = serialization.load_pem_public_key(pem.encode("ascii"))
-        assert isinstance(key, Ed25519PublicKey)
+        if not isinstance(key, Ed25519PublicKey):
+            raise TypeError(f"gate public key is {type(key).__name__}, not Ed25519")
         key.verify(_base64.b64decode(stmt.signature), _canonical_json(stmt.body()))
         signature_ok = True
     except Exception:
