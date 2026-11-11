@@ -1183,6 +1183,11 @@ class RaucleGateway:
             from raucle.agent_credentials import AgentCredentialStore
 
             self._agent_creds = AgentCredentialStore(path=config.agent_credentials_file)
+        elif self._gate_auth_mode == "token":
+            # Caller tokens are verified against the trust registry's
+            # active issuer keys. Built lazily on first use; see
+            # _init_caller_gate().
+            self._caller_gate = None
         else:  # unreachable: validated above
             raise ValueError(self._gate_auth_mode)
 
@@ -1254,14 +1259,6 @@ class RaucleGateway:
                         self._receipt_index.rebuild_from_flat_file(config.receipt_store)
             except Exception:
                 logger.exception("receipt index rebuild failed; queries degraded, chain unaffected")
-
-    def _init_gate_access(self, config: GatewayConfig) -> None:
-        """Wire the auth-mode access plane: the off banner or the credential store.
-
-        Caller tokens are verified against the trust registry's active
-        issuer keys, built lazily on first use (see _init_caller_gate()).
-        """
-        self._init_gate_access(config)
 
     def run_boot_selftest_at_startup(self) -> dict[str, Any]:
         """Boot self-test (X4): drive the approval path, the constraint
