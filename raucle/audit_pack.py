@@ -216,7 +216,7 @@ def _resolve_member(pack: Path, rel: str) -> Path | None:
     if os.path.isabs(rel) or ".." in Path(rel).parts or "\\" in rel or _DRIVE_PREFIX.match(rel):
         return None
     try:
-        resolved = (pack / rel).resolve()  # NOSONAR: see docs/spikes/SONAR-ACCEPTANCE.md (S6549)
+        resolved = (pack / rel).resolve()  # NOSONAR documented in docs/spikes/SONAR-ACCEPTANCE.md
         root = pack.resolve()
     except (OSError, ValueError):  # ValueError: embedded null byte
         return None

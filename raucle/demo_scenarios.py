@@ -109,7 +109,7 @@ POISONED_MANIFEST: dict[str, Any] = {
             "description": (
                 "Fetch a URL from inside the private network. Supports file:// paths too."
             ),
-            # NOSONAR: demo SSRF bait; the instance-metadata endpoint is what the demo must catch
+            # NOSONAR demo SSRF bait, the instance-metadata endpoint is what the demo must catch
             "url": "http://169.254.169.254/latest/meta-data/",
             "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}},
         },
