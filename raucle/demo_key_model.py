@@ -129,6 +129,33 @@ def _gate_enrolment_checks(gateway: Any) -> dict[str, Any]:
     }
 
 
+def _attestation_view(gateway: Any) -> dict[str, Any] | None:
+    """Serialise the receipt-signing identity's attestation binding (H3).
+
+    Reads the binding off the gate identity's SIGNED statement, so what
+    this reports is exactly what receipts bind to transitively through
+    the statement's key id. None = no attestation (local/KMS backends).
+    """
+    stmt = gateway.gate_identity.statement
+    attestation = getattr(stmt, "attestation", None)
+    if not attestation:
+        return None
+    out = {
+        "platform": attestation.get("platform"),
+        "measurement": attestation.get("measurement"),
+        "attestation_ref": attestation.get("attestation_ref"),
+        "simulated": bool(attestation.get("simulated")),
+    }
+    # Re-check what the reference itself can prove: it must be a digest
+    # over the referenced document bytes (spec: the verifier re-hashes).
+    ref = str(out["attestation_ref"])
+    hexdigest = ref.split(":", 1)[1] if ":" in ref else ""
+    out["attestation_ref_is_digest"] = len(hexdigest) == 64 and all(
+        c in "0123456789abcdef" for c in hexdigest
+    )
+    return out
+
+
 def _export_posture(gateway: Any) -> dict[str, Any]:
     """What this deployment's backend says about key material and export."""
     backend = str(gateway.config.signer_backend)
@@ -147,6 +174,31 @@ def _export_posture(gateway: Any) -> dict[str, Any]:
             ),
             "signing_key_persisted": exists,
             "signing_key_permission": f"{mode:04o}" if mode is not None else None,
+            "private_material_exported": False,
+        }
+    if backend == "tee":
+        # TEE backends (EPIC H3): the boundary sentence must say which
+        # boundary. A simulated attestation is named as a simulation.
+        attestation = _attestation_view(gateway) or {}
+        if attestation.get("simulated"):
+            location = (
+                "SIMULATED enclave boundary (raucle.tee.SimulatedNitroEnclave, "
+                "RAUCLE_TEE_SIMULATED=1): signatures come from an in-process "
+                "signing shim, not a real TEE, and the attestation is not a "
+                "hardware guarantee"
+            )
+        else:
+            location = (
+                "the configured enclave signing service boundary "
+                "(raucle.tee.TEESigner): the gateway sends signature requests "
+                "across the enclave boundary and the private key never leaves "
+                "the measured enclave"
+            )
+        return {
+            "backend": "tee",
+            "key_material_location": location,
+            "signing_key_local_file": False,
+            "signing_key_permission": None,
             "private_material_exported": False,
         }
     # KMS/HSM backends sign through the remote signer: key material is
@@ -181,6 +233,7 @@ def build_demo_key_model(gateway: Any, pq_available: bool) -> dict[str, Any]:
         "signer_backend": gateway.config.signer_backend,
         "receipt_signing_key_id": getattr(gateway.gate_identity, "key_id", None)
         or gateway.gate_identity.statement.key_id,
+        "receipt_signing_attestation": _attestation_view(gateway),
         "key_material_type": type(key).__name__,
         "agent_id": gateway.gate_identity.agent_id,
         "gate_enrolment": _gate_enrolment_checks(gateway),

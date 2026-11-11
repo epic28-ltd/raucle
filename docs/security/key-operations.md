@@ -44,7 +44,11 @@ procedure: archive the PEM, remove it, boot. The new boot generates a new
 identity; the archived public key verifies every old receipt offline,
 forever. Old and new receipts coexist in one chain - verification needs
 both public keys, which is what audit packs bundle (`--pubkeys` accepts
-several).
+several). The TEE (`RAUCLE_SIGNER=tee`) backend replaces this host PEM
+with an enclave-bound signing key whose identity statement carries the
+hardware attestation binding; see
+`docs/security/hardware-attested-signing.md` for what is production-ready
+and what is mock-boundary in that path.
 
 **Revocation is not erasure.** Revoking a key removes the *trust* (new
 authorisation fails closed) but the *math* stands: signatures made before
