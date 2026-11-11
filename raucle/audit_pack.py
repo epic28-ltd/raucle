@@ -33,6 +33,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,10 @@ from .provenance import (
 )
 
 PACK_KIND = "raucle-audit-pack/v1"
+
+# Windows drive-prefixed member names ("C:/...") are never produced here;
+# the assurance-pack verifier recipe refuses the same shapes.
+_DRIVE_PREFIX = re.compile(r"^[A-Za-z]:")
 _CHAIN_JSONL = "chain.jsonl"
 INDEX_NAME = "PACK.json"
 
@@ -196,17 +201,24 @@ def build_pack(
 def _resolve_member(pack: Path, rel: str) -> Path | None:
     """Resolve an index member path *inside* the pack, or ``None`` if it escapes.
 
-    The ``PACK.json`` index is attacker-controllable, so a member ``path`` like
-    ``../../etc/passwd`` or an absolute path must never make verification read
-    outside the pack — that would break the self-contained / no-external-input
-    guarantee. Returns the resolved path only when it stays under the pack root.
+    The ``PACK.json`` index is attacker-controllable, so a member ``path``
+    like ``../../etc/passwd`` or an absolute path must never make
+    verification read outside the pack — that would break the
+    self-contained / no-external-input guarantee. Refused shapes:
+    non-string or empty names, absolute paths, ``..`` traversal (at any
+    depth), backslash and drive-colon member names (Windows-shaped
+    escapes, never produced by :func:`build_pack`), and every name whose
+    canonical target leaves the pack root (symlinks included). Returns
+    the resolved path only when it stays under the pack root.
     """
-    if os.path.isabs(rel) or ".." in Path(rel).parts:
+    if not isinstance(rel, str) or not rel:
+        return None
+    if os.path.isabs(rel) or ".." in Path(rel).parts or "\\" in rel or _DRIVE_PREFIX.match(rel):
         return None
     try:
-        resolved = (pack / rel).resolve()
+        resolved = (pack / rel).resolve()  # NOSONAR: see docs/spikes/SONAR-ACCEPTANCE.md (S6549)
         root = pack.resolve()
-    except OSError:
+    except (OSError, ValueError):  # ValueError: embedded null byte
         return None
     if not resolved.is_relative_to(root):
         return None
