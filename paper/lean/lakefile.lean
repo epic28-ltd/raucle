@@ -8,4 +8,4 @@ require mathlib from git
 
 @[default_target]
 lean_lib VCD where
-  roots := #[`VCD.Basic, `VCD.Attenuation, `VCD.Gate, `VCD.Composition, `VCD.ConfusedDeputy]
+  roots := #[`VCD.Basic, `VCD.Attenuation, `VCD.Gate, `VCD.Composition, `VCD.ConfusedDeputy, `VCD.CrossCall]

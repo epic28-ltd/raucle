@@ -95,6 +95,6 @@ structure Call where
 inductive GateDecision where
   | allow
   | deny (reason : String)
-deriving Repr
+deriving Repr, DecidableEq
 
 end VCD
