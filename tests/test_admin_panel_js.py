@@ -472,3 +472,50 @@ def test_csp_header_on_panel_and_topology() -> None:
         assert "'unsafe-inline'" not in csp.split("style-src", 1)[0]
         # the served page is the same source the CSP hash pins
         assert "<!DOCTYPE html>" in r.text
+
+
+# ---------------------------------------------------------------------------
+# G7: the guided tour narrative arc
+# ---------------------------------------------------------------------------
+
+
+def _tour_steps() -> list[tuple[str, str, str]]:
+    return re.findall(r"\{tab:'([a-z]+)', target:'([^']+)', title:'([^']*)'", ADMIN_PANEL_HTML)
+
+
+def test_tour_follows_the_narrative_arc() -> None:
+    """The arc: live traffic, what the gate caught, the policy behind it,
+    the evidence it leaves, then what an auditor takes away."""
+    tabs = [t for t, _, _ in _tour_steps()]
+    assert tabs == [
+        "connections",  # live traffic
+        "connections",  # filter
+        "dlp",  # caught: sensitive data
+        "injection",  # caught: injected instructions
+        "shadow",  # caught: unapproved AI
+        "policies",  # the policy that did it (with simulate)
+        "receipts",  # evidence: signed receipts
+        "capdemo",  # evidence: capability tokens
+        "receipts",  # auditor takeaway: offline verify + key model
+        "assure",  # auditor takeaway: cross-org proof
+    ]
+
+
+def test_tour_has_one_step_per_screen_family_and_is_bounded() -> None:
+    steps = _tour_steps()
+    # "one step per screen family", not one per tab: the caught family
+    # carries three screens, evidence two, auditor takeaway two.
+    assert len(steps) <= 10
+    targets = [t for _, t, _ in steps]
+    assert len(targets) == len(set(targets)), "no duplicate spotlight targets"
+    titles = [t for _, _, t in steps]
+    assert len(titles) == len(set(titles)), "no duplicate step titles"
+
+
+def test_tour_no_longer_drops_into_side_quests() -> None:
+    """Retired screens stay off the tour; their tabs remain in the panel."""
+    tabs = [t for t, _, _ in _tour_steps()]
+    for gone in ("dashboard", "mcp", "stop", "learn"):
+        assert gone not in tabs
+    for kept in ("showTab('dashboard',this)", "showTab('mcp',this)"):
+        assert kept in ADMIN_PANEL_HTML
