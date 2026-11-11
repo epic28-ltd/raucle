@@ -2634,6 +2634,13 @@ def _register_ui_routes(app: FastAPI) -> None:
         """The engraved artwork behind the demo sign-in card."""
         return FileResponse(Path(__file__).with_name("demo_login_bg.jpg"), media_type="image/jpeg")
 
+    @app.get("/assets/logo-mark.png")
+    def logo_mark() -> FileResponse:
+        """The engraved brand mark in the panel identity bar."""
+        return FileResponse(
+            Path(__file__).with_name("assets") / "logo-mark.png", media_type="image/png"
+        )
+
     return app
 
 
@@ -2652,15 +2659,37 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     background: #fff; color: #171717; }
-  .header { display: flex; align-items: center; justify-content: space-between;
-    padding: 10px 24px; border-bottom: 1px solid #f0f0f0; position: sticky; top: 0; background: #fff; z-index: 40; }
-  .header-left { display: flex; align-items: center; gap: 16px; }
+  :root { --rc-navy: #14143C; --rc-blue: #7C8FF0; --rc-blue-deep: #5E6FE0; --rc-blue-line: #DDE2FF;
+    --rc-blue-soft: #C9CEF2; --rc-header-h: 52px; --active-green: #22c55e; --border: #e5e7ec; }
+  .header { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 8px 20px; border-bottom: 1px solid #f0f0f0; position: sticky; top: 0; background: #fff; z-index: 40; }
+  .header-left { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+  .logo-mark { width: 30px; height: 34px; object-fit: cover; border-radius: 50%; background: #fff;
+    border: 1px solid var(--rc-blue-line); display: block; }
   .logo { font-size: 18px; font-weight: 600; letter-spacing: -0.025em; }
   .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #f5f5f5; color: #737373; font-weight: 500; }
-  .tabs { display: flex; gap: 2px; padding: 0 24px; border-bottom: 1px solid #f0f0f0; }
-  .tab { padding: 10px 16px; cursor: pointer; color: #a3a3a3; font-size: 14px; border-bottom: 2px solid transparent; transition: all 0.15s; }
-  .tab:hover { color: #525252; }
-  .tab.active { color: #171717; border-bottom-color: #171717; }
+  /* === G9: LEFT SIDE NAVIGATION ============================================= */
+  /* Corporate blue from the raucle.com home palette (engraved hero blue and
+     deep navy) carries the nav chrome only: never a decision colour. */
+  .layout { display: flex; align-items: stretch; }
+  .layout > .content { flex: 1; min-width: 0; }
+  .sidenav { flex: 0 0 220px; width: 220px; position: sticky; top: var(--rc-header-h);
+    max-height: calc(100vh - var(--rc-header-h)); overflow-y: auto; overflow-x: hidden;
+    scrollbar-width: thin; scrollbar-color: var(--rc-blue-deep) transparent;
+    background: var(--rc-navy);
+    border-right: 1px solid var(--rc-blue-deep); padding: 12px 8px 24px; box-sizing: border-box; }
+  .nav-heading { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--rc-blue); padding: 10px 12px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nav-group + .nav-group { margin-top: 12px; border-top: 1px solid rgba(124,143,240,0.28); padding-top: 4px; }
+  .sidenav .tab { display: block; padding: 7px 12px; cursor: pointer; color: var(--rc-blue-soft);
+    font-size: 13.5px; border-radius: 8px; border-left: 3px solid transparent; transition: all 0.15s;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sidenav .tab:hover { color: #fff; background: rgba(124,143,240,0.10); }
+  .sidenav .tab.active { color: #fff; background: rgba(124,143,240,0.18); border-left-color: var(--rc-blue); }
+  .sidenav .tab:focus-visible { outline: 2px solid var(--rc-blue); outline-offset: -2px; color: #fff; }
+  #demoBanner { display: none; align-items: center; gap: 10px; flex-wrap: wrap; margin-left: auto;
+    padding: 6px 14px; background: #f8f9fb; border: 1px solid #e5e7ec; border-radius: 12px; }
+  body.demo #demoBanner { display: flex; }
   .content { max-width: 1400px; margin: 0 auto; padding: 24px; }
   .card { background: #fff; border: 1px solid #f0f0f0; border-radius: 12px; padding: 24px; margin-bottom: 16px; }
   .card-title { font-size: 13px; font-weight: 600; color: #737373; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; }
@@ -2783,9 +2812,27 @@ body:not(.demo) [data-tab-id="dlp"], body:not(.demo) [data-tab-id="injection"], 
 body:not(.demo) [data-tab-id="capdemo"]{display:none}
 body:not(.demo) [data-tab-id="assure"]{display:none}
 body:not(.demo) [data-tab-id="stop"], body:not(.demo) #simDemoCard{display:none}
+/* G9: the assurance and red nav groups are demo surfaces; live operators
+   still reach the receipts key-model card inside the Receipts tab. */
+body:not(.demo) .nav-group[data-nav-group="assurance"], body:not(.demo) .nav-group[data-nav-group="red"]{display:none}
 body.demo #policyEditorCard{display:none}
 .screen-note{margin:0 0 12px;font-size:0.78rem;line-height:1.5;color:#8b919e}
 .findings-label{display:inline-block;font-size:0.72rem;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;color:#8b919e;background:#f4f5f7;border:1px solid #e5e7ec;border-radius:6px;padding:2px 8px;margin-bottom:10px}
+/* G9 responsive fallback: under ~900px the left nav collapses to a top
+   horizontal scroll strip under the sticky header. */
+@media (max-width: 900px) {
+  .layout { display: block; }
+  .sidenav { width: auto; flex: none; top: var(--rc-header-h); height: auto; max-height: none;
+    display: flex; flex-direction: row; align-items: stretch; gap: 4px; overflow-x: auto; overflow-y: hidden;
+    padding: 8px 12px; border-right: none; border-bottom: 1px solid var(--rc-blue-deep); }
+  .nav-group { display: inline-flex; flex-direction: row; align-items: stretch; gap: 4px; }
+  .nav-group + .nav-group { margin-top: 0; border-top: none; border-left: 1px solid rgba(124,143,240,0.28); padding-left: 8px; }
+  .nav-heading { display: none; }
+  .sidenav .tab { display: inline-block; white-space: nowrap; border-radius: 999px; border-left: none; padding: 6px 14px; }
+  .sidenav .tab.active { border-left: none; }
+  #demoBanner .demo-line { display: none; }
+  .header { flex-wrap: wrap; }
+}
 
 /* Guided tour */
 #tourHost{position:fixed;inset:0;pointer-events:none;z-index:9000}
@@ -2807,7 +2854,7 @@ body.demo #policyEditorCard{display:none}
 
 
   #field { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
-  .header, .tabs, #login, #main { position: relative; z-index: 10; }
+  .header, #login, #main { position: relative; z-index: 10; }
   #tourHost { position: fixed; z-index: 9000; }
   body { overflow-x: hidden; }
   .login .card { position: relative; z-index: 2; border-color: #e5e5e5; box-shadow: 0 22px 60px rgba(10,10,10,.10); }
@@ -2820,8 +2867,19 @@ body.demo #policyEditorCard{display:none}
 <div id="pulseHud" class="hidden" style="position:fixed;top:18px;left:20px;z-index:5;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:10px;letter-spacing:.08em;color:#737373"><span id="pulseCount">--</span> GATED/MIN &middot; LIVE</div>
 <div class="header">
   <div class="header-left">
+    <img src="/assets/logo-mark.png" alt="Raucle" class="logo-mark" width="30" height="34">
     <div class="logo">Raucle</div>
     <span class="badge">Gateway</span>
+  </div>
+  <div id="demoBanner" class="hidden" style="margin:0">
+    <span style="display:inline-flex;align-items:center;gap:6px;font-size:0.78rem;font-weight:600;color:#fff;background:#22c55e;padding:3px 10px;border-radius:999px">
+      <span style="width:6px;height:6px;border-radius:50%;background:#fff;display:inline-block"></span>
+      DEMO MODE
+    </span>
+    <span class="demo-line" style="font-size:0.80rem;color:#3a3f4b">Read-only view of a live deployment with simulated agent traffic.</span>
+    <button class="tour-replay" style="margin-left:0" data-hi="tourRestart()">Replay tour</button>
+    <div id="scenarioPicker" style="display:flex;gap:8px"></div>
+    <button class="btn" style="padding:6px 14px;font-size:0.8rem" data-hi="reloadPage()">Exit Demo</button>
   </div>
 </div>
 
@@ -2845,35 +2903,36 @@ body.demo #policyEditorCard{display:none}
 
 <div id="main" class="hidden">
   <div id="tourHost"></div>
-  <div id="demoBanner" class="hidden" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;margin-bottom:14px;background:#f8f9fb;border:1px solid #e5e7ec;border-radius:12px">
-    <span style="display:inline-flex;align-items:center;gap:6px;font-size:0.78rem;font-weight:600;color:#fff;background:#22c55e;padding:3px 10px;border-radius:999px">
-      <span style="width:6px;height:6px;border-radius:50%;background:#fff;display:inline-block"></span>
-      DEMO MODE
-    </span>
-    <span style="font-size:0.82rem;color:#3a3f4b">Read-only view of a live deployment with simulated agent traffic. The scenarios cover banking, government, health and capability screens; the Threats lens focuses the panel on denied and escalated calls.</span>
-    <button class="tour-replay" data-hi="tourRestart()">Replay tour</button>
-    <span style="flex:1"></span>
-    <div id="scenarioPicker" style="display:flex;gap:8px"></div>
-    <button class="btn" style="padding:6px 14px;font-size:0.8rem" data-hi="reloadPage()">Exit Demo</button>
-  </div>
-  <div class="tabs">
-    <div class="tab active" data-hi="showTab('dashboard',this)">Dashboard</div>
-    <div class="tab" data-hi="showTab('connections',this)">Connections</div>
-    <div class="tab" data-hi="showTab('policies',this)" data-tab-id="policies">Policies</div>
-    <div class="tab" data-hi="showTab('stop',this)" data-tab-id="stop">Emergency Stop</div>
-    <div class="tab" data-hi="showTab('learn',this)" data-tab-id="learn">Learn</div>
-    <div class="tab" data-hi="showTab('receipts',this)">Receipts</div>
-    <div class="tab" data-hi="showTab('assure',this)" data-tab-id="assure">Cross-org proof</div>
-    <div class="tab" data-hi="showTab('mcp',this)" data-tab-id="mcp">MCP Scanner</div>
-    <div class="tab" data-hi="showTab('dlp',this)" data-tab-id="dlp">Data Protection</div>
-    <div class="tab" data-hi="showTab('injection',this)" data-tab-id="injection">Prompt Injection</div>
-    <div class="tab" data-hi="showTab('shadow',this)" data-tab-id="shadow">Shadow AI</div>
-    <div class="tab" data-hi="showTab('capdemo',this)" data-tab-id="capdemo">Capability tokens</div>
-    <div class="tab" data-hi="showTab('siem',this)" data-tab-id="siem">SIEM</div>
-    <div class="tab" data-hi="showTab('users',this)" data-tab-id="users">Users</div>
-    <div class="tab" data-hi="showTab('config',this)" data-tab-id="config">Config</div>
-    <div class="tab" data-hi="gotoTopology()" style="color:var(--active-green)" data-tab-id="topo-link">Topology</div>
-  </div>
+  <div class="layout">
+  <nav class="sidenav" id="sidenav" aria-label="Panel sections">
+    <div class="nav-group" data-nav-group="trust">
+      <div class="nav-heading">Raucle Agent Trust</div>
+      <div class="tab active" tabindex="0" data-hi="showTab('dashboard',this)">Dashboard</div>
+      <div class="tab" tabindex="0" data-hi="showTab('connections',this)">Connections</div>
+      <div class="tab" tabindex="0" data-hi="showTab('policies',this)" data-tab-id="policies">Policies</div>
+      <div class="tab" tabindex="0" data-hi="showTab('capdemo',this)" data-tab-id="capdemo">Capability tokens</div>
+      <div class="tab" tabindex="0" data-hi="showTab('receipts',this)">Receipts</div>
+      <div class="tab" tabindex="0" data-hi="showTab('learn',this)" data-tab-id="learn">Learn</div>
+      <div class="tab" tabindex="0" data-hi="showTab('siem',this)" data-tab-id="siem">SIEM</div>
+      <div class="tab" tabindex="0" data-hi="showTab('users',this)" data-tab-id="users">Users</div>
+      <div class="tab" tabindex="0" data-hi="showTab('config',this)" data-tab-id="config">Config</div>
+      <div class="tab" tabindex="0" data-hi="gotoTopology()" data-tab-id="topo-link" style="color:var(--active-green)">Topology</div>
+    </div>
+    <div class="nav-group" data-nav-group="assurance">
+      <div class="nav-heading">Raucle Agent Assurance</div>
+      <div class="tab" tabindex="0" data-hi="showTab('dlp',this)" data-tab-id="dlp">Data Protection</div>
+      <div class="tab" tabindex="0" data-hi="showTab('injection',this)" data-tab-id="injection">Prompt Injection</div>
+      <div class="tab" tabindex="0" data-hi="showTab('shadow',this)" data-tab-id="shadow">Shadow AI</div>
+      <div class="tab" tabindex="0" data-hi="showTab('mcp',this)" data-tab-id="mcp">MCP Scanner</div>
+      <div class="tab" tabindex="0" data-hi="showTab('assure',this)" data-tab-id="assure">Cross-org proof</div>
+      <div class="tab" tabindex="0" data-hi="navEvidencePack()" data-tab-id="evidence">Evidence pack</div>
+      <div class="tab" tabindex="0" data-hi="navKeyModel()" data-tab-id="keymodel">Key model</div>
+    </div>
+    <div class="nav-group" data-nav-group="red">
+      <div class="nav-heading">Raucle Agent Red</div>
+      <div class="tab" tabindex="0" data-hi="showTab('stop',this)" data-tab-id="stop">Emergency authority stop</div>
+    </div>
+  </nav>
   <div class="content">
 
     <div id="tab-dashboard">
@@ -3264,6 +3323,7 @@ body.demo #policyEditorCard{display:none}
       </div>
     </div>
 
+  </div>
   </div>
 </div>
 
@@ -4134,11 +4194,11 @@ const TOUR_STEPS = [
    body:'Real agent tool calls, gated in real time. Green lines are allowed calls; red ones were denied by policy. Use the scenario buttons to focus on banking, government or health.'},
   {tab:'connections', target:'#topoDecisionFilter', title:'Filter what you watch',
    body:'Narrow the flow to allows, denies or escalations. Click any node in the topology to filter the whole view to that agent or tool.'},
-  {tab:'dlp', target:'#tab-dlp', title:'What the gate caught: sensitive data',
+  {tab:'dlp', target:'[data-tab-id="dlp"].tab', title:'What the gate caught: sensitive data',
    body:'Findings from the simulated demo calls, scored by the same pattern engine used on live traffic: grouped by data category, with the redaction action and the rule responsible on every call.'},
-  {tab:'injection', target:'#tab-injection', title:'What the gate caught: injected instructions',
+  {tab:'injection', target:'[data-tab-id="injection"].tab', title:'What the gate caught: injected instructions',
    body:'The classifier scoring simulated tool outputs and agent text in real time. Each event shows its score, category and the receipted decision, so nothing here is an afterthought.'},
-  {tab:'shadow', target:'#tab-shadow', title:'What the gate caught: unapproved AI',
+  {tab:'shadow', target:'[data-tab-id="shadow"].tab', title:'What the gate caught: unapproved AI',
    body:'Attempts by agents to reach model suppliers the policy does not approve: unknown models, off-list endpoints and caller-supplied keys.'},
   {tab:'policies', target:'#simDemoCard', title:'The policy that did it',
    body:'Denies and escalations come from rules you can inspect and change here. Pick a demo policy tweak and the panel runs the real simulation engine over a simulated window: a deterministic outcome plus a signed receipt, before anything is deployed. In a live deployment the operator deploys through Save & Deploy, which re-verifies the signed receipt.'},
@@ -4823,7 +4883,7 @@ function mcpScan(){
   }).then(d=>{ if(d) renderMcpFindings(d.findings||[]); }).catch(()=>{ sum.textContent='Scan request failed.'; });
 }
 
-if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadAssure()":(ev,el)=>loadAssure(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('assure',this)":(ev,el)=>showTab('assure',el),"showTab('capdemo',this)":(ev,el)=>showTab('capdemo',el),"capDemoPick(event)":(ev,el)=>capDemoPick(ev),"capDemoVerify()":(ev,el)=>capDemoVerify(),"loadAssurancePacket()":(ev,el)=>loadAssurancePacket(),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
+if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();}function navEvidencePack(el){showTab('assure',el);setTimeout(function(){var t=document.getElementById('assurancePacketView');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navKeyModel(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcpt-keymodel');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadAssure()":(ev,el)=>loadAssure(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('assure',this)":(ev,el)=>showTab('assure',el),"showTab('capdemo',this)":(ev,el)=>showTab('capdemo',el),"navEvidencePack()":(ev,el)=>navEvidencePack(el),"navKeyModel()":(ev,el)=>navKeyModel(el),"capDemoPick(event)":(ev,el)=>capDemoPick(ev),"capDemoVerify()":(ev,el)=>capDemoVerify(),"loadAssurancePacket()":(ev,el)=>loadAssurancePacket(),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
 </script>
 </body>
 </html>"""
