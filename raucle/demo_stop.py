@@ -108,57 +108,47 @@ def build_demo_stop() -> dict[str, Any]:
                 actor="demo-operator",
             )
         )
-        story.append(
-            {
-                "step": "Button default",
-                "detail": "The control ships OFF. Arm and resume live only with operators.",
-                "outcome": manager.button_state(),
-            }
-        )
-        story.append(
-            {
-                "step": "Arm",
-                "detail": "A named operator arms the control: a signed receipted transition.",
-                "outcome": manager.arm_button(operator="demo-operator", reason="drill"),
-            }
-        )
-        story.append(
-            {
-                "step": "Disarm",
-                "detail": "Disarming is the symmetric receipted half; never a silent clear.",
-                "outcome": manager.disarm_button(operator="demo-operator", reason="drill over"),
-            }
-        )
-        story.append(
-            {
-                "step": "Hold raised (global scope)",
-                "detail": (
-                    "A global stop is quorum-gated: with M=2 it enters a receipted "
-                    "PENDING state and the enforcement bytes stay untouched."
-                ),
-                "outcome": dict(manager.hold(scope="global", reason="incident")),
-            }
-        )
-        story.append(
-            {
-                "step": "First approval",
-                "detail": "One distinct approver is not the quorum; the stop stays pending.",
-                "outcome": manager.approve_hold(approver="demo-approver-1"),
-            }
-        )
-        story.append(
-            {
-                "step": "Quorum met",
-                "detail": "Second distinct approver: the quorum is met and the hold applies.",
-                "outcome": manager.approve_hold(approver="demo-approver-2"),
-            }
-        )
-        story.append(
-            {
-                "step": "Resume",
-                "detail": "The paired resume restores the exact pre-hold policy bytes.",
-                "outcome": manager.resume(reason="incident closed"),
-            }
+        story.extend(
+            [
+                {
+                    "step": "Button default",
+                    "detail": "The control ships OFF. Arm and resume live only with operators.",
+                    "outcome": manager.button_state(),
+                },
+                {
+                    "step": "Arm",
+                    "detail": "A named operator arms the control: a signed receipted transition.",
+                    "outcome": manager.arm_button(operator="demo-operator", reason="drill"),
+                },
+                {
+                    "step": "Disarm",
+                    "detail": "Disarming is the symmetric receipted half; never a silent clear.",
+                    "outcome": manager.disarm_button(operator="demo-operator", reason="drill over"),
+                },
+                {
+                    "step": "Hold raised (global scope)",
+                    "detail": (
+                        "A global stop is quorum-gated: with M=2 it enters a receipted "
+                        "PENDING state and the enforcement bytes stay untouched."
+                    ),
+                    "outcome": dict(manager.hold(scope="global", reason="incident")),
+                },
+                {
+                    "step": "First approval",
+                    "detail": "One distinct approver is not the quorum; the stop stays pending.",
+                    "outcome": manager.approve_hold(approver="demo-approver-1"),
+                },
+                {
+                    "step": "Quorum met",
+                    "detail": "Second distinct approver: the quorum is met and the hold applies.",
+                    "outcome": manager.approve_hold(approver="demo-approver-2"),
+                },
+                {
+                    "step": "Resume",
+                    "detail": "The paired resume restores the exact pre-hold policy bytes.",
+                    "outcome": manager.resume(reason="incident closed"),
+                },
+            ],
         )
         receipts = _decode_receipts(receipts_path)
 
