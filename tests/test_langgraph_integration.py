@@ -277,22 +277,28 @@ def _chain_events(path: pathlib.Path) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-def test_gate_tool_without_langgraph_raises_runtime_error(monkeypatch, tmp_path, issued):
-    """Missing host framework: import survives (module-level), gate_tool
-    refuses with the install hint — the adapter degrades, never half-works."""
-    _issuer, gate, _token = issued
+@pytest.fixture
+def _no_langgraph(monkeypatch, tmp_path, issued):
+    """Missing host framework: import survives (module-level); fixture
+    applies the degraded state so the tests below contain exactly one
+    invocation that can raise."""
+    _, gate, _ = issued
     monkeypatch.setattr(lg, "_HAS_LANGGRAPH", False)
-    with pytest.raises(RuntimeError, match="langgraph"):
-        lg.gate_tool(transfer_funds, gate=gate, sink=_sink(tmp_path), agent_id="agent:pay")
+    return _sink(tmp_path), gate
 
 
-def test_raucle_tool_node_without_langgraph_raises_runtime_error(monkeypatch, tmp_path, issued):
-    """Missing host framework: RaucleToolNode instantiation refuses with
-    the same install hint."""
-    _issuer, gate, _token = issued
-    monkeypatch.setattr(lg, "_HAS_LANGGRAPH", False)
+def test_gate_tool_without_langgraph_raises_runtime_error(_no_langgraph):
+    """gate_tool refuses with the install hint — the adapter degrades, never half-works."""
+    sink, gate = _no_langgraph
     with pytest.raises(RuntimeError, match="langgraph"):
-        lg.RaucleToolNode([transfer_funds], gate=gate, sink=_sink(tmp_path), agent_id="agent:pay")
+        lg.gate_tool(transfer_funds, gate=gate, sink=sink, agent_id="agent:pay")
+
+
+def test_raucle_tool_node_without_langgraph_raises_runtime_error(_no_langgraph):
+    """RaucleToolNode instantiation refuses with the same install hint."""
+    sink, gate = _no_langgraph
+    with pytest.raises(RuntimeError, match="langgraph"):
+        lg.RaucleToolNode([transfer_funds], gate=gate, sink=sink, agent_id="agent:pay")
 
 
 def test_module_import_survives_without_langgraph_subprocess():
@@ -441,15 +447,23 @@ async def test_denial_presented_on_async_graph_path(lg_installed, tmp_path, issu
     assert receipts[0]["decision"] == "DENY"
 
 
-def test_error_presentation_disabled_propagates_no_weakening(lg_installed, tmp_path, issued):
-    """handle_tool_errors=False: the denial propagates to the graph author
-    instead of a tool message — the tool body still never ran."""
-    _issuer, gate, token = issued
+@pytest.fixture
+def _deny_node(lg_installed, tmp_path, issued):
+    """handle_tool_errors=False node bound to one in-force token, prepared
+    outside the exception test so it holds a single possibly-throwing
+    invocation."""
+    _, gate, token = issued
     lg_installed.set_in_force_token(token)
     node = _node(lg_installed, gate, _sink(tmp_path), handle_tool_errors=False)
     _body.calls.clear()
+    return node
+
+
+def test_error_presentation_disabled_propagates_no_weakening(_deny_node):
+    """handle_tool_errors=False: the denial propagates to the graph author
+    instead of a tool message — the tool body still never ran."""
     with pytest.raises(lg.CapabilityDenied):
-        node.node(_graph_state({"to": "ACC-999"}))
+        _deny_node.node(_graph_state({"to": "ACC-999"}))
     assert _body.calls == []
 
 
