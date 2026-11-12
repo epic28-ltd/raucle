@@ -462,8 +462,9 @@ def _deny_node(lg_installed, tmp_path, issued):
 def test_error_presentation_disabled_propagates_no_weakening(_deny_node):
     """handle_tool_errors=False: the denial propagates to the graph author
     instead of a tool message — the tool body still never ran."""
+    state = _graph_state({"to": "ACC-999"})  # state built before the raise scope
     with pytest.raises(lg.CapabilityDenied):
-        _deny_node.node(_graph_state({"to": "ACC-999"}))
+        _deny_node.node(state)
     assert _body.calls == []
 
 
