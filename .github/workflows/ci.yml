@@ -180,7 +180,7 @@ jobs:
           # the SAME commit as the regenerated bundle it names (D12
           # discipline: any engine change that would shift the bundle must
           # ship both together), so the pairing is always reviewable.
-          raucle demo verify docs/demo-bundle --pinned sha256:2c15d55b233e426ba753eaf83f4a8633b5367f8341c10607daa6aef9f273f974
+          raucle demo verify docs/demo-bundle --pinned sha256:892587363d470b51d83a4cc7aca8c2155d3fe69b9fb2b95f9f839f6f935809d9
 
   conformance-data:
     name: "Standards conformance data (S4): generated == committed"

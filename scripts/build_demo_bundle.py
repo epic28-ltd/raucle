@@ -106,10 +106,18 @@ def main() -> int:
             print("rebuilt bundle failed offline verification", file=sys.stderr)
             return 1
 
-        # Publish: replace the committed bundle atomically.
+        # Publish: replace the committed bundle atomically, preserving the
+        # human README (not a pack member) across regeneration.
+        keep = {}
         if OUT_DIR.exists():
+            for stale in ("README.md",):
+                stale_path = OUT_DIR / stale
+                if stale_path.exists():
+                    keep[stale] = stale_path.read_text(encoding="utf-8")
             shutil.rmtree(OUT_DIR)
         shutil.copytree(out, OUT_DIR)
+        for name, text in keep.items():
+            (OUT_DIR / name).write_text(text, encoding="utf-8")
 
         digest = bundle_digest(OUT_DIR)
         summary = pack_index_summary(OUT_DIR)

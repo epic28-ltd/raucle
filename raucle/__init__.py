@@ -14,7 +14,7 @@ Copyright (c) 2026 Raucle.
 See LICENSE and NOTICE in the repository root.
 """
 
-__version__ = "0.23.5"
+__version__ = "0.23.6"
 __author__ = "Raucle"
 __license__ = "Apache-2.0"
 
