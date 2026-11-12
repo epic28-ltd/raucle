@@ -278,12 +278,19 @@ def _chain_events(path: pathlib.Path) -> list[dict[str, Any]]:
 
 
 def test_gate_tool_without_langgraph_raises_runtime_error(monkeypatch, tmp_path, issued):
-    """Missing host framework: import survives (module-level), instantiation
+    """Missing host framework: import survives (module-level), gate_tool
     refuses with the install hint — the adapter degrades, never half-works."""
     _issuer, gate, _token = issued
     monkeypatch.setattr(lg, "_HAS_LANGGRAPH", False)
     with pytest.raises(RuntimeError, match="langgraph"):
         lg.gate_tool(transfer_funds, gate=gate, sink=_sink(tmp_path), agent_id="agent:pay")
+
+
+def test_raucle_tool_node_without_langgraph_raises_runtime_error(monkeypatch, tmp_path, issued):
+    """Missing host framework: RaucleToolNode instantiation refuses with
+    the same install hint."""
+    _issuer, gate, _token = issued
+    monkeypatch.setattr(lg, "_HAS_LANGGRAPH", False)
     with pytest.raises(RuntimeError, match="langgraph"):
         lg.RaucleToolNode([transfer_funds], gate=gate, sink=_sink(tmp_path), agent_id="agent:pay")
 
