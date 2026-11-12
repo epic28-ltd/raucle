@@ -2816,8 +2816,11 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
   /* === G9: LEFT SIDE NAVIGATION ============================================= */
   /* Corporate blue from the raucle.com home palette (engraved hero blue and
      deep navy) carries the nav chrome only: never a decision colour. */
-  .layout { display: flex; align-items: stretch; background: linear-gradient(90deg, var(--rc-navy) 0, var(--rc-navy) 220px, transparent 220px); background-repeat: no-repeat; }
-  .layout > .content { flex: 1; min-width: 0; }
+  .layout { display: flex; align-items: stretch; }
+  /* The navy column is viewport-anchored via a fixed layer: it always spans
+     top to screen bottom and never changes height with tab content. */
+  .layout::before { content: ""; position: fixed; top: 0; bottom: 0; left: 0; width: 220px; background: var(--rc-navy); }
+  .layout > .content { flex: 1; min-width: 0; position: relative; }
   .sidenav { flex: 0 0 220px; width: 220px; position: sticky; top: var(--rc-header-h);
     max-height: calc(100vh - var(--rc-header-h)); overflow-y: auto; overflow-x: hidden;
     scrollbar-width: thin; scrollbar-color: var(--rc-blue-deep) transparent;
@@ -2983,6 +2986,7 @@ body.demo #policyEditorCard{display:none}
   .sidenav .tab.active { border-left: none; }
   #demoBanner .demo-line { display: none; }
   .header { flex-wrap: wrap; }
+  .layout::before { display: none; }
 }
 
 /* Guided tour */
