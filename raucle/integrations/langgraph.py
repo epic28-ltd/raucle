@@ -145,6 +145,10 @@ def _default_resolver(_tool_name: str) -> Capability | None:
     return get_in_force_token()
 
 
+UNKNOWN_SIGNER = "<unknown>"
+DEFAULT_LEAN_THEOREM_ID = "vcd.gate_soundness"
+
+
 def _hash_args(args: Any) -> str:
     try:
         return "sha256:" + _sha256_hex(_canonical_json(args))
@@ -179,7 +183,7 @@ def _emit_receipt(
     receipt = {
         "kind": "capability_receipt",
         "issuer": token.issuer if token else "",
-        "issuer_pubkey": token.key_id if token else "<unknown>",
+        "issuer_pubkey": token.key_id if token else UNKNOWN_SIGNER,
         "schema_hash": None,
         "policy_proof_hash": token.policy_proof_hash if token else None,
         "lean_theorem_id": lean_theorem_id,
@@ -323,7 +327,7 @@ def gate_tool(
     agent_id: str,
     token_resolver: TokenResolver | None = None,
     raise_on_deny: bool = True,
-    lean_theorem_id: str = "vcd.gate_soundness",
+    lean_theorem_id: str = DEFAULT_LEAN_THEOREM_ID,
 ) -> Any:
     """Wrap a single LangGraph tool so every call is gated and receipted.
 
@@ -352,7 +356,7 @@ def gate_tool(
     if callable(tool) and not hasattr(tool, "invoke"):
         # Plain callable: wrap in place, preserving sync/async identity.
         return _make_gated_handler(
-            getattr(tool, "__name__", "<unknown>"),
+            getattr(tool, "__name__", UNKNOWN_SIGNER),
             tool,
             gate=gate,
             sink=sink,
@@ -373,7 +377,7 @@ def gate_tool(
             f"bypass the gate and its receipt."
         )
 
-    tool_name = getattr(tool, "name", None) or getattr(inner_func, "__name__", "<unknown>")
+    tool_name = getattr(tool, "name", None) or getattr(inner_func, "__name__", UNKNOWN_SIGNER)
     gated = model_copy(deep=True)
 
     def _bind(slot: Callable[..., Any], key: str) -> None:
@@ -407,7 +411,7 @@ def gate_tools(
     agent_id: str,
     token_resolver: TokenResolver | None = None,
     raise_on_deny: bool = True,
-    lean_theorem_id: str = "vcd.gate_soundness",
+    lean_theorem_id: str = DEFAULT_LEAN_THEOREM_ID,
 ) -> list[Any]:
     """Wrap a list of tools with :func:`gate_tool` (convenience)."""
     return [
@@ -448,7 +452,7 @@ class RaucleToolNode(ToolNode):
         agent_id: str,
         token_resolver: TokenResolver | None = None,
         raise_on_deny: bool = True,
-        lean_theorem_id: str = "vcd.gate_soundness",
+        lean_theorem_id: str = DEFAULT_LEAN_THEOREM_ID,
         **tool_node_kwargs: Any,
     ) -> None:
         if not _HAS_LANGGRAPH:
