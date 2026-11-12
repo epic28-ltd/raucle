@@ -5,6 +5,9 @@ rebuilt from the segments at any time, and verification always reads the
 chain. These tests pin that contract.
 """
 
+import asyncio
+import contextlib
+import gc
 import json
 import logging
 import re
@@ -411,15 +414,58 @@ policies:
         assert any(f"completed: {expected} records" in r.message for r in caplog.records)
 
     def test_early_client_close_is_recorded(self, indexed_gateway, caplog):
+        """A client that hangs up mid-stream is a recorded fault, end to end.
+
+        Hermetic driver: the recording happens when the export generator
+        is CLOSED, and under starlette's TestClient a client hang-up
+        cancels the response task, leaving that sync generator to be
+        closed by the GC at an arbitrary later time — a race that reads
+        as a missing record exactly under load (reproduced 2/18 under
+        six-way suite load). This test drives the REAL admin ASGI app
+        directly (no server, no threads, no sockets) and ends the stream
+        the way a transport reports a client hang-up: the send raises
+        OSError after the first record, starlette converts it, and the
+        app call unwinds to completion on the test thread before any
+        assertion runs. The disconnect record is then already in the log.
+        """
         gw, admin = indexed_gateway
-        with (
-            caplog.at_level(logging.WARNING, logger="raucle.export"),
-            admin.stream("GET", "/api/receipts/export", headers=self.AUTH) as resp,
-        ):
-            seen = []
-            for line in resp.iter_lines():
-                seen.append(line)
-                break  # the client hung up after the first record
+        app = admin.app
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.4"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/api/receipts/export",
+            "raw_path": b"/api/receipts/export",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [(b"authorization", b"admin-key")],
+            "client": ("127.0.0.1", 111),
+            "server": ("127.0.0.1", 80),
+        }
+        seen = []
+        gone = {"client": False}
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            if message["type"] == "http.response.body" and message.get("body"):
+                if gone["client"]:
+                    raise OSError("client hung up")  # the socket is gone
+                seen.append(message["body"])
+                gone["client"] = True  # the client read one record, then left
+
+        async def consume():
+            # the hang-up ends in ClientDisconnect (or a middleware-collapsed
+            # group around it); the stream body below is what the test reads
+            with contextlib.suppress(Exception):
+                await app(scope, receive, send)
+
+        with caplog.at_level(logging.WARNING, logger="raucle.export"):
+            asyncio.run(consume())
+            gc.collect()  # finalize any generator the unwind left behind
         assert len(seen) == 1
         disconnects = [r for r in caplog.records if "disconnected" in r.getMessage()]
         assert disconnects, "disconnect was not recorded"
@@ -429,7 +475,7 @@ policies:
         )
         assert m is not None, disconnects[0].getMessage()
         # the sink wrote a bounded amount then stopped; the disconnect
-        # is recorded with the actual write count (TestClient's line
-        # iterator may have buffered more records than the one returned)
+        # is recorded with the actual write count (the yield that raised
+        # had already been counted when the send refused it)
         assert int(m.group(1)) >= len(seen)
         assert int(m.group(1)) < gw._receipt_index.count()
