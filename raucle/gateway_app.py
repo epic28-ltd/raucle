@@ -923,6 +923,12 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     from raucle.demo_ops import register_demo_ops_routes
 
     register_demo_ops_routes(app, gateway, check_auth, check_access)
+    # G-coverage: the receipted-share metric view over this deployment's own
+    # receipt stream (Route A demo plane; the OSS coverage engine itself
+    # lives in the raucle-agent-assurance correlation service).
+    from raucle.demo_coverage import register_demo_coverage_routes
+
+    register_demo_coverage_routes(app, gateway, check_auth, check_access)
     _register_ui_routes(app)
 
     return app
@@ -2949,7 +2955,7 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
 body.demo [data-tab-id="topo-link"]{display:none}
 body.demo #usersAddCard, body.demo #usersTableCard, body.demo #siemConfigCard, body.demo #configEditCard{display:none}
 /* The read-only replacements only ever appear inside demo mode. */
-body:not(.demo) #demoUsersCard, body:not(.demo) #demoSiemCard, body:not(.demo) #demoConfigCard{display:none}
+body:not(.demo) #demoUsersCard, body:not(.demo) #demoSiemCard, body:not(.demo) #demoConfigCard, body:not(.demo) #rcptCoverageCard{display:none}
 body.demo .btn-primary{display:none}
 /* Demo-only screens: hidden outside demo mode */
 body:not(.demo) [data-tab-id="dlp"], body:not(.demo) [data-tab-id="injection"], body:not(.demo) [data-tab-id="shadow"]{display:none}
@@ -3072,6 +3078,7 @@ body.demo #policyEditorCard{display:none}
       <div class="tab" tabindex="0" data-hi="showTab('assure',this)" data-tab-id="assure">Cross-org proof</div>
       <div class="tab" tabindex="0" data-hi="navEvidencePack()" data-tab-id="evidence">Evidence pack</div>
       <div class="tab" tabindex="0" data-hi="navKeyModel()" data-tab-id="keymodel">Key model</div>
+      <div class="tab" tabindex="0" data-hi="navCoverage()" data-tab-id="coverage">Coverage</div>
     </div>
     <div class="nav-group" data-nav-group="red">
       <div class="nav-heading">Raucle Agent Red</div>
@@ -3371,6 +3378,27 @@ body.demo #policyEditorCard{display:none}
         <p class="screen-note">The same real signer configuration as the key-family card above, plus what this deployment's code can prove about the key: the enrolment properties the gate re-checks on every identity, and the rotation paths actually implemented in the registry, credential store, agent registry and boot machinery. No private key material appears on this screen or in any panel response.</p>
         <pre id="keyModelView" style="font-size:11px;max-height:260px;overflow:auto"></pre>
       </div>
+      <div class="card hidden" id="rcptCoverageCard">
+        <div class="card-title">Coverage: the receipted-share metric</div>
+        <span class="findings-label">Simulated demo data</span>
+        <p class="screen-note" id="demoCoverageUnavailable" style="color:#a3a3a3"></p>
+        <p class="screen-note" id="demoCoverageBasis"></p>
+        <p class="screen-note">The unit of account is this deployment's own attributable gate receipt, counted via its bound trace id: in a single-demo-org the gate's receipts are the correlated ground truth of the receipted-share metric. A demo surface for the metric contract the assurance service serves cross-vantage as GET /coverage/{org}.</p>
+        <pre id="demoCoverageSummary" style="font-size:11px;max-height:180px;overflow:auto"></pre>
+        <p class="screen-note" style="margin-top:10px">Per-tool rollup over the demo receipt stream:</p>
+        <div style="overflow-x:auto">
+          <table><thead><tr><th>Tool</th><th>Receipted</th><th>Out of gate</th><th>Pending</th><th>Total</th><th>Share</th></tr></thead>
+          <tbody id="demoCoverageTools"></tbody></table>
+        </div>
+        <p class="screen-note" style="margin-top:10px">Per-agent rollup over the same stream:</p>
+        <div style="overflow-x:auto">
+          <table><thead><tr><th>Agent</th><th>Receipted</th><th>Out of gate</th><th>Pending</th><th>Total</th><th>Share</th></tr></thead>
+          <tbody id="demoCoverageAgents"></tbody></table>
+        </div>
+        <p class="screen-note" style="margin-top:10px">Metric-contract legend (read-only):</p>
+        <pre id="demoCoverageLegend" style="font-size:11px;max-height:220px;overflow:auto"></pre>
+        <p class="screen-note" style="margin-top:6px;white-space:pre-line" id="demoCoverageFlagsNote"></p>
+      </div>
     </div>
     <div id="tab-mcp" class="hidden">
       <div class="card">
@@ -3533,8 +3561,8 @@ function showTab(t,el) {
   document.querySelectorAll('[id^=tab-]').forEach(x=>x.classList.add('hidden'));
   el.classList.add('active'); document.getElementById('tab-'+t).classList.remove('hidden');
   if(t==='dashboard')loadStats(); if(t==='connections'){demoExample();updatePathTail();if(!pathPollId)pathPollId=setInterval(updatePathTail,3000);startConnPolling();}else if(pathPollId){clearInterval(pathPollId);pathPollId=null;} else stopConnPolling();
-  if(t==='policies'){loadPolicy();loadSimPanel();} if(t==='stop')loadStopPanel(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();} if(t==='capdemo')capDemoLoad(); if(t==='mcp')loadMcpPanel(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
-  if(t==='policies')loadPolicy(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();} if(t==='capdemo')capDemoLoad(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
+  if(t==='policies'){loadPolicy();loadSimPanel();} if(t==='stop')loadStopPanel(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();if(typeof demoMode!=='undefined'&&demoMode)loadCoverage();} if(t==='capdemo')capDemoLoad(); if(t==='mcp')loadMcpPanel(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
+  if(t==='policies')loadPolicy(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();if(typeof demoMode!=='undefined'&&demoMode)loadCoverage();} if(t==='capdemo')capDemoLoad(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
   if(t==='dlp'||t==='injection'||t==='shadow')loadDemoFindings();
 }
 function api(p,o){const h={'Authorization':key,...((o||{}).headers||{})};if(totpCode)h['X-TOTP']=totpCode;return fetch(p,{...(o||{}),headers:h});}
@@ -4283,6 +4311,66 @@ function loadDemoConfig(){
     });
   }).catch(()=>{});
 }
+
+// ================= DEMO COVERAGE (assurance receipted-share view) =================
+// textContent-only rendering over the read-only /api/demo/coverage endpoint:
+// the contract legend, the computed buckets and the per-tool / per-agent
+// rollups render as text nodes, never as markup built from response data.
+function loadDemoCoverage(){
+  const unavailable=document.getElementById('demoCoverageUnavailable');
+  const card=document.getElementById('rcptCoverageCard');
+  card.classList.remove('hidden');
+  api('/api/demo/coverage').then(r=>{
+    if(r.status===404){unavailable.textContent='Demo mode is not configured on this deployment.';return null;}
+    return r.json();
+  }).then(d=>{
+    if(!d)return;
+    document.getElementById('demoCoverageBasis').textContent=d.basis||'';
+    unavailable.textContent=d.unavailable_note||'';
+    const b=d.breakdown||{};
+    const summary=document.getElementById('demoCoverageSummary');summary.textContent='';
+    [['receipted_share', d.receipted_share==null?'unavailable (no receipts yet)':String(d.receipted_share)],
+     ['receipted', b.receipted==null?0:b.receipted],
+     ['out_of_gate', (b.out_of_gate==null?0:b.out_of_gate)+' — disclosed, not computed at the gate vantage'],
+     ['pending', (b.pending==null?0:b.pending)+' — disclosed: every stored receipt is terminal'],
+     ['total', b.total==null?0:b.total]].forEach(function(pair){
+      const line=document.createElement('div');
+      line.textContent=pair[0]+': '+String(pair[1]);
+      summary.appendChild(line);
+    });
+    fillCoverageRollup('demoCoverageTools', d.by_tool||{});
+    fillCoverageRollup('demoCoverageAgents', d.by_agent||{});
+    const legend=document.getElementById('demoCoverageLegend');legend.textContent='';
+    ((d.contract||{}).buckets||[]).forEach(function(bk){
+      const line=document.createElement('div');
+      line.style.marginBottom='4px';
+      line.textContent=bk.bucket+' — '+bk.definition+' At this vantage: '+bk.at_this_vantage;
+      legend.appendChild(line);
+    });
+    ((d.contract||{}).flags||[]).forEach(function(f){
+      const line=document.createElement('div');
+      line.style.marginBottom='4px';
+      line.textContent=f.flag+' — '+f.semantics+' '+f.vantage_note;
+      legend.appendChild(line);
+    });
+    document.getElementById('demoCoverageFlagsNote').textContent='Flags are stated read-only above: none are computed at the gate-side vantage, and no zero is claimed where cross-vantage evidence is absent. Cross-vantage reconciliation is the assurance receipted-share view; the demo numbers stay within the receipt stream this panel already holds.';
+  }).catch(()=>{});
+}
+function fillCoverageRollup(tbodyId, rollups){
+  const tb=document.getElementById(tbodyId);if(!tb)return;
+  tb.textContent='';
+  const names=Object.keys(rollups).sort();
+  if(!names.length){const tr=document.createElement('tr');const td=document.createElement('td');td.colSpan=6;td.style.color='#a3a3a3';td.textContent='No gate receipts in the demo window yet.';tr.appendChild(td);tb.appendChild(tr);return;}
+  names.forEach(function(name){
+    const r=rollups[name]||{};
+    const tr=document.createElement('tr');
+    [name, r.receipted==null?0:r.receipted, r.out_of_gate==null?0:r.out_of_gate, r.pending==null?0:r.pending, r.total==null?0:r.total, r.receipted_share==null?'—':String(r.receipted_share)].forEach(function(cell){
+      const td=document.createElement('td');td.textContent=String(cell);tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+}
+function loadCoverage(){if(typeof demoMode!=='undefined'&&demoMode){loadDemoCoverage()}}
 
 setInterval(()=>{if(!document.getElementById('main').classList.contains('hidden')&&!document.getElementById('tab-dashboard').classList.contains('hidden'))loadStats();},5000);
 window.addEventListener('resize',()=>{if(!document.getElementById('tab-connections').classList.contains('hidden'))drawFlowLines(getFiltered());});
@@ -5152,7 +5240,7 @@ function mcpScan(){
   }).then(d=>{ if(d) renderMcpFindings(d.findings||[]); }).catch(()=>{ sum.textContent='Scan request failed.'; });
 }
 
-if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();}function navEvidencePack(el){showTab('assure',el);setTimeout(function(){var t=document.getElementById('assurancePacketView');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navKeyModel(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcpt-keymodel');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadAssure()":(ev,el)=>loadAssure(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('assure',this)":(ev,el)=>showTab('assure',el),"showTab('capdemo',this)":(ev,el)=>showTab('capdemo',el),"navEvidencePack()":(ev,el)=>navEvidencePack(el),"navKeyModel()":(ev,el)=>navKeyModel(el),"capDemoPick(event)":(ev,el)=>capDemoPick(ev),"capDemoVerify()":(ev,el)=>capDemoVerify(),"loadAssurancePacket()":(ev,el)=>loadAssurancePacket(),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
+if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();}function navEvidencePack(el){showTab('assure',el);setTimeout(function(){var t=document.getElementById('assurancePacketView');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navKeyModel(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcpt-keymodel');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navCoverage(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcptCoverageCard');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadAssure()":(ev,el)=>loadAssure(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('assure',this)":(ev,el)=>showTab('assure',el),"showTab('capdemo',this)":(ev,el)=>showTab('capdemo',el),"navEvidencePack()":(ev,el)=>navEvidencePack(el),"navKeyModel()":(ev,el)=>navKeyModel(el),"navCoverage()":(ev,el)=>navCoverage(el),"capDemoPick(event)":(ev,el)=>capDemoPick(ev),"capDemoVerify()":(ev,el)=>capDemoVerify(),"loadAssurancePacket()":(ev,el)=>loadAssurancePacket(),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
 </script>
 </body>
 </html>"""

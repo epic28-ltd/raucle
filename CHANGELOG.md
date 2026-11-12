@@ -22,6 +22,27 @@
   selected. The declarations now live on their own line, and demo entry
   auto-selects the featured simulated manifest and runs the real scanner
   so findings render on arrival.
+- The Raucle Agent Assurance stack gains a Coverage item (after Key
+  model): a single read-only demo card backed by `/api/demo/coverage`
+  computing the receipted-share metric contract over the deployment's
+  OWN gate receipt stream — real demo receipts, which are the correlated
+  ground truth of a single-demo-org. The response states the bucket
+  contract exactly (`receipted` counted via bound `x_gate.trace_id`;
+  `out_of_gate` and `pending` are disclosed zeros — not computed at a
+  gate-side vantage and never folded into the number), a receipt minted
+  without a trace id never inflates the action number and stays
+  disclosed under its explicit label, per-tool/per-agent rollups tie to
+  the headline with the partition invariant asserted, and the same plane
+  that is empty answers unavailable, never zero. Receipts are minted by
+  simulated demo traffic, so the card is labelled "Simulated demo data";
+  bounded disclosure applies (aggregate counts and identifiers only —
+  no denial reasons, no receipt detail). The companion flags (bypass
+  candidates, shadow agents, uninstrumented tools) ship as documented
+  semantics with their vantage requirement, not as fabricated counts:
+  cross-vantage reconciliation is the assurance service's
+  `GET /coverage/{org}` — the OSS coverage engine lives in the
+  raucle-agent-assurance correlation service, so this surface presents
+  the contract honestly instead of pretending the gateway can serve it.
 
 ### Added - H3 slice 1: TEE / hardware-attested signer path
 

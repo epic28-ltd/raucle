@@ -296,7 +296,8 @@ class TestPanelPqBadgeAndKeyFamily:
         assert "innerHTML" not in fn
         assert fn.count("textContent") >= 2
         assert (
-            "if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();}" in ADMIN_PANEL_HTML
+            "if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();"
+            "if(typeof demoMode!=='undefined'&&demoMode)loadCoverage();}" in ADMIN_PANEL_HTML
         )
 
     def test_no_compliance_claims_on_the_receipts_additions(self):
