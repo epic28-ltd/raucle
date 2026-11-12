@@ -16,7 +16,7 @@
 ## Add raucle to your agent in 10 minutes
 
 ```bash
-pip install 'raucle[agent-framework]'
+pip install 'raucle[agent-framework,compliance]'
 ```
 
 ```python
@@ -47,6 +47,39 @@ set_in_force_token(
 
 Every tool call your agent makes now appends a hash-chained receipt to `receipts.log` — each record links to the previous record's hash, and the chain is anchored by periodic Ed25519-signed checkpoints, so an auditor can verify it offline. Calls that violate the capability's constraints are short-circuited via Microsoft's documented `MiddlewareTermination` path — no special-case error handling required.
 
+What that looks like, from the five-minute [hello-receipt tutorial](docs/getting-started/01-hello-receipt.md) (real output, fresh venv, `pip install 'raucle[compliance]'`):
+
+```text
+call lookup_customer(customer_id='C-1042')
+  -> allowed: True   reason: ok
+call lookup_customer(customer_id='X-9999')
+  -> allowed: False  reason: constraint violated: customer_id='X-9999' does not start with 'C-'
+
+receipts.log, one JSON line per decision; the DENY chains to the ALLOW:
+
+  {"index": 0, "prev_hash": "000...000",
+   "event": {"decision": "ALLOW", "tool": "lookup_customer", "reason": "ok",
+             "args_hash": "sha256:72378aa1..."},
+   "hash": "a0335762616707800544637bd51d8b26e155c5c99db95b2a3bd0290b98e8d0f5"}
+  {"index": 1, "prev_hash": "a0335762616707800544637bd51d8b26e155c5c99db95b2a3bd0290b98e8d0f5",
+   "event": {"decision": "DENY", "reason": "constraint violated: customer_id='X-9999' does not start with 'C-'",
+             "args_hash": "sha256:fabd19f6..."},
+   "hash": "6c94d97117150c05d1611bad55f56ea04c6ef290dd2bcd1208f6ce9bcf79828a"}
+  {"checkpoint": true, "merkle_root": "d5d6544d10e6487a6cb7aecf44e752e04c28f032deefcd1b406d993c30e9a691",
+   "signature": "2bN+624iuiE... (Ed25519)"}
+
+and the offline verify — no network, no contact with the vendor, just the chain and a public key:
+
+  $ raucle audit verify receipts.log --pubkey audit_pub.pem
+  Audit chain: VALID
+    Events:               2
+    Checkpoints:          1
+    Valid signatures:     1
+    Invalid signatures:   0
+```
+
+Every hash above is real except the `...` width trims; the second record's `prev_hash` is the first record's `hash`, which is the chaining a tamper has to defeat.
+
 > Requires the `agent-framework` extra (the snippet above) for the Microsoft adapter. The capability, audit, and receipt primitives alone need only `pip install 'raucle[compliance]'`.
 
 **Full walkthrough:** [`docs/getting-started/`](docs/getting-started/README.md) — five-minute "hello receipt", Agent Framework / LangChain / AutoGen integrations, SMT-prove-a-policy, and the Microsoft AGT backend (contract merged upstream 2026-05-27).
@@ -75,7 +108,7 @@ The receipt is not a log — it is a *provable record*. Three formal-verificatio
 - **Cryptographic capability tokens.** Tokens carry the cited proof hash, an agent identity, a constraint set, an attenuation chain, and an expiry — signed under Ed25519. Three soundness theorems are mechanised in Lean 4 with zero `sorry`s: attenuation cannot broaden permissions; the gate's ALLOW implies satisfaction of the **modelled** constraint kinds (`allowed_values`, `forbidden_values`, `max_value`/`min_value`, `required_present`); and, assuming prover soundness (an explicit Lean axiom), a call in a tool's modelled call language under a PROVEN proof for that tool's policy `P` satisfies `P` (via the axiom) while the gate independently bounds it to the token's constraints — the binding that the *cited* proof pertains to that tool's `(schema, P)` is an operational strict-mode runtime check, not mechanised. The mechanisation scope is deliberately narrower than the runtime gate: `starts_with`, `forbidden_field_combinations`, dot-delimited `agent_id` scope, revocation, expiry, signature, issuer pinning, and strict-proof binding are enforced at runtime and covered by tests, but are **not** in the Lean model yet. See `paper/lean/README.md` for the exact proof boundary.
 - **A gate on the tool-execution path you wire it into.** Every call on a gated path passes the gate's eight verifications, fail-closed by default, and the gate's decision is the receipt's payload. The guarantee is only as complete as the path coverage: a receipt proves what happened *where raucle sits on the execution path*. The strongest coverage is credential custody — where raucle holds the tool's credential (or brokers a per-call scoped one), acting without a receipt is impossible because the agent never holds the key. raucle ships adapters for the Microsoft Agent Framework, the Agent Governance Toolkit, LangChain, and AutoGen, and a gateway pattern for MCP; it does **not** claim to mediate execution paths it is not on.
 
-The technique is under submission to **IEEE Security & Privacy 2027**. The paper, the Lean proofs, the benchmark harness, and the engine are all released as open source under the permissive **Apache-2.0** licence.
+The technique is written up as a paper draft. The paper draft, the Lean proofs, the benchmark harness, and the engine are all released as open source under the permissive **Apache-2.0** licence.
 
 ## Evidence the mechanism is sound
 
