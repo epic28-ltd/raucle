@@ -16,7 +16,8 @@ This guide is task-first. Pick a path. Run the code. You'll have a working signe
 | Microsoft Agent Framework (GA April 2026) | **[2. Agent Framework](02-agent-framework.md)** — drop-in `FunctionMiddleware`. One line. | 10 min |
 | Claude Desktop / Claude Code / Cursor / Cline | **[3. MCP clients](03-mcp-clients.md)** — add raucle's detection tools to your assistant with one config block. | 2 min |
 | CrewAI crew | **[5. CrewAI](05-crewai.md)** — `guard_tools(...)` wraps every tool; gated + receipted, no interface change. | 5 min |
-| You want to prove a policy is sound, not just configured | **[4. Prove a policy](06-prove-a-policy.md)** — SMT-backed `ProofResult`, content-addressed, citeable. | 10 min |
+| LangGraph graph | **[4. LangGraph](04-langgraph.md)** — `RaucleToolNode` / `gate_tools(...)` gate the tool-node layer (`ToolNode` / `tools=`); the model node is untouched. | 5 min |
+| You want to prove a policy is sound, not just configured | **[6. Prove a policy](06-prove-a-policy.md)** — SMT-backed `ProofResult`, content-addressed, citeable. | 10 min |
 | You run a SOC / need a SIEM feed + live view | **[8. SIEM export & live monitoring](08-siem-and-live-view.md)** — ECS JSON to Splunk/Sentinel, `raucle watch`, and a live `/dashboard`. | 5 min |
 | You deploy OpenClaw / NemoClaw | **[9. Securing OpenClaw / NemoClaw](09-openclaw-nemoclaw.md)** — the reference pattern: raucle gates tool calls + emits verifiable evidence under NemoClaw's sandbox. | 5 min |
 | You verify agents across org boundaries | **[10. Trust Registry](10-trust-registry.md)** — publish your issuer key once; any org resolves and verifies it. The cross-org trust layer. | 5 min |
