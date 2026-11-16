@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.23.6 (2026-11-12) - demo panels: read-only operator surfaces for the demo visitor
 
 ### Added - demo panels: read-only operator surfaces for the demo visitor
 
