@@ -165,6 +165,8 @@ Beyond per-call enforcement, raucle ships the cross-organisation trust primitive
 
 **Harness findings as verifiable evidence** ([x_finding](docs/spec/provenance/v1.2/harness-findings.md)) — a red-team or QM-class harness running its tests through the gate reports each finding as a signed receipt citing the gate receipt that covered the request. A finding citing a missing receipt, or misreporting what the gate did, fails offline verification.
 
+**Content DLP scan receipts** ([x_dlp](docs/spec/provenance/v1.2/content-dlp.md)) — an in-path content scanner (the enterprise LLM endpoint proxy, a gateway client) reports every prompt/response scan decision as a signed receipt: digests, bounded pattern classes and span counts only, never content. Unknown classes, content-like fields, malformed digests or a redaction without its post-redaction digest fail offline verification.
+
 **Records lifecycle** ([`records`](raucle/records.py)) — every receipt can carry a retention schedule; disposal is a signed destruction receipt binding the span, count and digest of what was destroyed, with the surviving chain re-anchored and an escrow copy whose per-record hashes are recomputed on verification. Deletion no longer ends the audit story.
 
 **Counterfactual replay** ([`counterfactual`](raucle/counterfactual.py)) — the incident-review question, answered from the evidence: `raucle counterfactual policy` re-runs a recorded incident under an alternative policy and reports per action whether the stricter policy would have denied it, with an optional z3 proof (PROVEN that the constraints exclude the whole argument class, or REFUTED with a field-names-only counterexample).
