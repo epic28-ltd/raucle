@@ -209,6 +209,17 @@ receipt's content hash: hand it to `raucle provenance verify` or the MCP
 - `X-Trace-Id` threads a caller-supplied trace through every receipt
   (`x_gate.trace_id`); absent header generates one and the response echoes
   it so callers can correlate.
+- `session_id` (optional on `/gate` requests) binds a call to a caller
+  declared agent run: present it and `x_gate.session_id` appears in the
+  signed receipt, allow and deny alike, and the projection indexes it
+  (schema v3, composite `(session_id, iat)` query). A bounded identifier
+  (1-128 chars, letters/digits/dot/underscore/hyphen); absent means **no
+  continuity recorded** - there is no trace-id fallback, the gateway never
+  fabricates a session.
+- `acting_for` (the B1 pair principal) rides `x_gate` inside the signed
+  receipt and is likewise captured by the projection from schema v3;
+  session-scoped queries ride the `(session_id, iat)` index, `acting_for`
+  is stored but not individually indexed.
 - Fail-closed accountability: if a receipt cannot be written, the decision
   is downgraded to deny. An action without its receipt is unauthorised.
 - Receipts are signed by the persistent gateway identity (`agent:gate`),
