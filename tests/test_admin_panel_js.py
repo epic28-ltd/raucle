@@ -881,7 +881,7 @@ def test_sessionFindingVerify_calls_the_real_endpoint() -> None:
         "await new Promise(r=>setTimeout(r,30));"
         "const all=Object.values(captured).map(x=>"
         "(x.innerHTML||'')+(x.textContent||'')).join('|');"
-        'const called=__p.indexOf('
+        "const called=__p.indexOf("
         '"/api/demo/session-findings/sha256%3Adeadbeef/offline-verify")>-1'
         ' && __m==="POST";'
         "const rawBad=/<script>/.test(all);"
