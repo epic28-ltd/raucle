@@ -385,6 +385,24 @@ class ReceiptIndex:
         rows.reverse()
         return rows
 
+    def active_session_ids(self, since: int, *, limit: int = 1000) -> list[str]:
+        """Distinct declared session keys with receipts at/after *since*,
+        most recently active first (EPIC Q lane Q-2 boot replay).
+
+        Only keys the callers themselves declared are ever indexed, so
+        only declared sessions are replayable: receipts without a
+        session_id are never part of any session. Ordered by latest
+        activity so a bounded replay keeps the sessions that were live
+        at the restart.
+        """
+        rows = self._conn.execute(
+            "SELECT session_id, MAX(iat) AS latest FROM receipts "
+            "WHERE session_id IS NOT NULL AND session_id != '' AND iat >= ? "
+            "GROUP BY session_id ORDER BY latest DESC LIMIT ?",
+            (int(since), max(1, min(int(limit), 10000))),
+        ).fetchall()
+        return [row[0] for row in rows]
+
     def cursor_for(self, row: dict[str, Any]) -> str:
         """The next-page cursor for the last row of a query result.
 

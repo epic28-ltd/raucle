@@ -31,6 +31,7 @@ import os
 import re
 import threading
 import time
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -317,6 +318,16 @@ class GatewayConfig:
     # negative would disable sessions, so the loader floors it at 60.
     admin_session_ttl: int = 3600
     admin_sessions_max: int = 64
+    # Session behavioural windows (EPIC Q lane Q-2): bounded by design,
+    # the opposite of ChainTaintState's unbounded per-chain dict. TTL
+    # bounds each key's history in time, max_keys bounds the number of
+    # live session keys, max_entries bounds one key's history against a
+    # hot session. Session rules declare their own window_seconds; a rule
+    # window wider than the retained TTL would silently undercount, so
+    # the policy loader refuses it as malformed.
+    session_window_ttl_seconds: int = 900
+    session_window_max_keys: int = 1024
+    session_window_max_entries: int = 10000
 
     @classmethod
     def from_env(cls) -> GatewayConfig:
@@ -380,6 +391,15 @@ class GatewayConfig:
             oidc_scope=os.environ.get("RAUCLE_OIDC_SCOPE", "openid profile email"),
             admin_session_ttl=max(60, int(os.environ.get("RAUCLE_ADMIN_SESSION_TTL", "3600"))),
             admin_sessions_max=max(1, int(os.environ.get("RAUCLE_ADMIN_SESSIONS_MAX", "64"))),
+            session_window_ttl_seconds=max(
+                1, int(os.environ.get("RAUCLE_SESSION_WINDOW_TTL_SECONDS", "900"))
+            ),
+            session_window_max_keys=max(
+                1, int(os.environ.get("RAUCLE_SESSION_WINDOW_MAX_KEYS", "1024"))
+            ),
+            session_window_max_entries=max(
+                1, int(os.environ.get("RAUCLE_SESSION_WINDOW_MAX_ENTRIES", "10000"))
+            ),
         )
 
     @classmethod
@@ -1097,6 +1117,14 @@ class GateReceiptContext:
     intent_block: dict[str, Any] | None = None
     acting_for: str = ""
     session_id: str = ""
+    # EPIC Q lane Q-2, internal only (never written into x_gate): the
+    # caller-declared destination class the window records for
+    # gradual_extraction, and the session-rule content digest a
+    # session-rule deny binds as its ruleset hash (a session deny is
+    # decided by the SESSION rule, so the receipt must bind that rule's
+    # bytes, not the tool policy's).
+    destination_class: str = ""
+    ruleset_override: str = ""
 
 
 class ChainTaintState:
@@ -1132,6 +1160,106 @@ class ChainTaintState:
             self._outputs.pop(trace_id, None)
 
 
+class SessionWindowState:
+    """Bounded, content-free per-session record of receipted decisions (EPIC
+    Q lane Q-2).
+
+    Keyed ``(session_id, agent_id)``: behavioural continuity is caller
+    declared, never fabricated, and one agent's window never denies another
+    agent's calls. Each key holds an ordered deque of decision summaries
+    (decision, tool, iat, trace_id, rule_id, destination_class) recorded at
+    receipt emission time for every decision that carries a session_id.
+    Nothing else ever enters the window: no args, no content.
+
+    Deliberately bounded where :class:`ChainTaintState` grows without
+    bound (a known wart, not replicated here): entries older than
+    *ttl_seconds* are pruned, the per-key deque is capped at
+    *max_entries* (TTL alone does not bound a hot session), and the
+    number of live keys is capped at *max_keys* with least-recently-used
+    eviction.
+
+    Honest residual: the window is process memory. A restart mid-session
+    resets the counters; the boot replay (:meth:`RaucleGateway` init)
+    rebuilds them from the receipt index within the TTL window, which
+    bounds the reset. Verification never consults the window or the
+    index: the receipts are the evidence, the window is only the
+    enforcement-time projection.
+    """
+
+    def __init__(self, *, ttl_seconds: int, max_keys: int, max_entries: int) -> None:
+        self._ttl_seconds = max(1, int(ttl_seconds))
+        self._max_keys = max(1, int(max_keys))
+        self._max_entries = max(1, int(max_entries))
+        # OrderedDict gives LRU ordering for bounded key eviction.
+        self._windows: dict[tuple[str, str], Any] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def record(
+        self,
+        session_id: str,
+        agent_id: str,
+        decision: str,
+        tool: str,
+        iat: int,
+        trace_id: str = "",
+        rule_id: str = "",
+        destination_class: str = "",
+    ) -> None:
+        """Record one receipted decision summary for the session key."""
+        now = int(time.time())
+        key = (session_id, agent_id)
+        with self._lock:
+            entries = self._windows.get(key)
+            if entries is None:
+                entries = deque(maxlen=self._max_entries)
+                self._windows[key] = entries
+                if len(self._windows) > self._max_keys:
+                    # LRU eviction: the first key is the least recently
+                    # touched (move_to_end on every record keeps order).
+                    self._windows.popitem(last=False)
+            else:
+                self._windows.move_to_end(key)
+            entries.append(
+                {
+                    "decision": decision,
+                    "tool": tool,
+                    "iat": int(iat),
+                    "trace_id": trace_id,
+                    "rule_id": rule_id,
+                    "destination_class": destination_class,
+                }
+            )
+            self._prune(entries, now)
+
+    def entries(self, session_id: str, agent_id: str) -> list[dict[str, Any]]:
+        """A copy of the key's in-TTL decision summaries, oldest first."""
+        now = int(time.time())
+        key = (session_id, agent_id)
+        with self._lock:
+            entries = self._windows.get(key)
+            if entries is None:
+                return []
+            self._windows.move_to_end(key)
+            self._prune(entries, now)
+            return [dict(entry) for entry in entries]
+
+    def key_count(self) -> int:
+        """The number of live session keys (bounded by *max_keys*)."""
+        with self._lock:
+            return len(self._windows)
+
+    @property
+    def ttl_seconds(self) -> int:
+        """The retention bound for decision summaries (seconds)."""
+        return self._ttl_seconds
+
+    def _prune(self, entries: Any, now: int) -> None:
+        """Drop summaries older than the TTL (oldest sit at the left)."""
+        cutoff = now - self._ttl_seconds
+        while entries and entries[0]["iat"] < cutoff:
+            entries.popleft()
+
+
 class RaucleGateway:
     """The gateway core: policy engine + gate + receipt store + stats.
 
@@ -1158,6 +1286,17 @@ class RaucleGateway:
         # taint tags, per task/delegation chain (trace_id). Evaluated
         # deterministically at each gate decision; see record_chain_output.
         self._chain_state = ChainTaintState()
+        # Session behavioural windows (EPIC Q lane Q-2): bounded decision
+        # summaries keyed (session_id, agent_id), maintained at receipt
+        # emission. The configured rules and the named malformed-config
+        # marker are populated by _load_policies below.
+        self._session_windows = SessionWindowState(
+            ttl_seconds=max(1, int(config.session_window_ttl_seconds)),
+            max_keys=max(1, int(config.session_window_max_keys)),
+            max_entries=max(1, int(config.session_window_max_entries)),
+        )
+        self._session_rules: list[Any] = []
+        self._session_rule_config_error: str = ""
         from raucle.eqr import EvidenceStore
 
         self._evidence_store = EvidenceStore()
@@ -1236,6 +1375,13 @@ class RaucleGateway:
         self.fault_counter = FaultCounter(config.fault_counter_path or None)
         self.boot_selftest_result: dict[str, Any] | None = None
 
+        # Session window replay (EPIC Q lane Q-2): the receipt index is the
+        # durable authority for window state, memory is the fast path.
+        # Rebuild the counters for declared sessions from the index within
+        # the TTL window so a restart mid-session does not silently reset
+        # enforcement.
+        self._replay_session_windows()
+
     def _init_receipt_projection(self, config: GatewayConfig) -> None:
         """Segmented receipt store (B2) and the receipt_index projection (PR-C).
 
@@ -1311,6 +1457,13 @@ class RaucleGateway:
             seal_path=config.policy_seal_file,
             revocations_path=config.revocations_file,
             emitter=self._emit_policy_bytes_receipt,
+            # EPIC Q lane Q-2: every enforcement file the gate consults
+            # rides the seal, including additional policy files that can
+            # carry session rules (policy_dir mode). The primary file is
+            # covered by policy_path itself.
+            extra_paths=tuple(
+                str(p) for p in self._policy_files() if str(p) != str(config.policy_file)
+            ),
         )
         self._policy_bytes_status = self._policy_bytes.verify()
         if self._policy_bytes_status["status"] == POLICY_STATUS_TAMPERED:
@@ -1706,7 +1859,8 @@ class RaucleGateway:
             "parents": [],
             "taint": ["gate:observed"],
             "input_hash": _sha256_hex(_canonical_json(ctx.args)),
-            "ruleset_hash": self._policy_ruleset_hash(ctx.tool, ctx.source, ctx.destination),
+            "ruleset_hash": ctx.ruleset_override
+            or self._policy_ruleset_hash(ctx.tool, ctx.source, ctx.destination),
             "guardrail_verdict": ctx.decision,
             "x_gate": {
                 "decision": ctx.decision,
@@ -1742,7 +1896,24 @@ class RaucleGateway:
             payload["x_gate"]["intent_check"] = ctx.intent_block["intent_check"]
         # Header + JWS signing + store append are shared with the other
         # authority receipt emitters (PR-E extraction).
-        return self._sign_and_store_receipt(payload)
+        receipt_hash = self._sign_and_store_receipt(payload)
+        # Session window recording (EPIC Q lane Q-2): maintained at receipt
+        # emission time for every decision that carries a session_id, allow
+        # and deny alike. The summary is content-free by construction. No
+        # receipt, no entry: the window is a projection of receipted
+        # decisions only.
+        if receipt_hash and ctx.session_id:
+            self._session_windows.record(
+                ctx.session_id,
+                ctx.agent_id,
+                ctx.decision,
+                ctx.tool,
+                payload["iat"],
+                trace_id=ctx.trace_id,
+                rule_id=ctx.rule_id,
+                destination_class=ctx.destination_class,
+            )
+        return receipt_hash
 
     def _policy_ruleset_hash(self, tool: str, source: str = "", destination: str = "") -> str:
         """Content digest of the policy rule in force for *tool* (binds
@@ -1868,17 +2039,66 @@ class RaucleGateway:
             self._policy_rules = {}
             self._tokens = {}
             self._all_rules = []
+            self._session_rules = []
+            self._session_rule_config_error = ""
             return
 
         rules = self._load_rules(files)
         self._index_rules(rules)
+        self._load_session_rules(files)
 
         logger.info(
-            "Total: %d rules across %d files, %d tools",
+            "Total: %d rules across %d files, %d tools, %d session rules",
             len(rules),
             len(files),
             len(self._tokens),
+            len(self._session_rules),
         )
+
+    def _load_session_rules(self, files: list[Path]) -> None:
+        """Load the deterministic session rules (EPIC Q lane Q-2).
+
+        Session rules ride the same policy files as tool rules (so they
+        ride the policy-bytes seal too) and are evaluated over the bounded
+        session window state. A malformed rule NEVER silently skips: the
+        named parse error is recorded and every call declaring a
+        session_id denies fail-closed until the policy is fixed. A rule
+        window wider than the retained window TTL is a config error for
+        the same reason (it would silently undercount).
+        """
+        from raucle.policy import PolicyFile
+
+        rules: list[Any] = []
+        errors: list[str] = []
+        for fpath in files:
+            try:
+                pf = PolicyFile.load(fpath)
+            except Exception:
+                # The file failed to load at all: its tool rules are
+                # already logged and skipped by _load_rules, but its
+                # session rules are now UNKNOWN, which is fail-closed
+                # territory, not skip territory.
+                errors.append(f"{fpath.name}: policy file failed to load (see gateway log)")
+                continue
+            rules.extend(pf.session_rules)
+            errors.extend(pf.session_rule_errors)
+        ttl = self._session_windows.ttl_seconds
+        for rule in rules:
+            if rule.window_seconds > ttl:
+                errors.append(
+                    f"session rule {rule.id}: window_seconds {rule.window_seconds} "
+                    f"exceeds the retained window TTL {ttl}s and would "
+                    "silently undercount; raise RAUCLE_SESSION_WINDOW_TTL_SECONDS "
+                    "or narrow the rule"
+                )
+        self._session_rules = rules
+        self._session_rule_config_error = "; ".join(errors) if errors else ""
+        if errors:
+            logger.error(
+                "SESSION RULE CONFIG ERROR (calls with a declared session_id "
+                "deny fail-closed): %s",
+                _sanitize_log_text(self._session_rule_config_error),
+            )
 
     def _deny_result(
         self,
@@ -1913,6 +2133,8 @@ class RaucleGateway:
                     intent_block=_intent_hint,
                     acting_for=_acting_for,
                     session_id=result.get("_session_id", ""),
+                    destination_class=result.get("_destination_class", ""),
+                    ruleset_override=result.get("_ruleset_hash", ""),
                 )
             )
         except Exception:
@@ -1933,6 +2155,8 @@ class RaucleGateway:
         self._log_connection(result)
         result.pop("_authorization_hint", None)
         result.pop("_session_id", None)
+        result.pop("_destination_class", None)
+        result.pop("_ruleset_hash", None)
         return result
 
     def record_chain_output(self, trace_id: str, tool: str, taint_tags: list[str]) -> None:
@@ -2390,6 +2614,7 @@ class RaucleGateway:
         # "none declared": nothing is fabricated downstream.
         if session_id:
             result["_session_id"] = session_id
+        result["_destination_class"] = destination_class or ""
 
         # P4.A v1 containment: trace quarantine + lease suspension are
         # consulted FIRST, before any delegated-authority shortcut or
@@ -2412,6 +2637,26 @@ class RaucleGateway:
         tampered_reason = self._policy_tampered_reason()
         if tampered_reason:
             return self._deny_result(result, tampered_reason, start)
+
+        # Session behavioural rules (EPIC Q lane Q-2): deterministic,
+        # deny-only rules evaluated over the bounded session window state
+        # BEFORE anything that can widen authority (same doctrine as the
+        # containment checks above: a session rule can only ever deny).
+        # A session rule cannot fire without continuity: no session_id
+        # means no evaluation at all, never a fabricated one. Fail-closed:
+        # a malformed rule config or a window-state error denies with a
+        # named reason instead of skipping.
+        if session_id:
+            session_refusal = self._session_rule_refusal(
+                session_id, agent_id, tool, destination_class
+            )
+            if session_refusal is not None:
+                session_reason, session_rule_id, session_ruleset = session_refusal
+                result["rule_id"] = session_rule_id
+                result["_ruleset_hash"] = session_ruleset
+                denied = self._deny_result(result, session_reason, start)
+                self._emit_session_rule_finding(denied, tool, args, session_rule_id)
+                return denied
 
         if _token_decision is not None and not _token_decision.allowed:
             # Attributable token denial (receipts v1.1): the caller is
@@ -2665,6 +2910,8 @@ class RaucleGateway:
                     intent_block=_intent_hint,
                     acting_for=_acting_for,
                     session_id=result.get("_session_id", ""),
+                    destination_class=result.get("_destination_class", ""),
+                    ruleset_override=result.get("_ruleset_hash", ""),
                 )
             )
         except Exception:
@@ -2676,6 +2923,8 @@ class RaucleGateway:
         # stays in the response: it is decision context, additive and useful.
         result.pop("_authorization_hint", None)
         result.pop("_session_id", None)
+        result.pop("_destination_class", None)
+        result.pop("_ruleset_hash", None)
         return result
 
     # ------------------------------------------------------------------
@@ -3323,6 +3572,256 @@ class RaucleGateway:
                 "suspended; calls are denied regardless of token validity"
             )
         return ""
+
+    # ------------------------------------------------------------------
+    # Session behavioural rules (EPIC Q lane Q-2)
+    # ------------------------------------------------------------------
+
+    def _session_rule_refusal(
+        self, session_id: str, agent_id: str, tool: str, destination_class: str
+    ) -> tuple[str, str, str] | None:
+        """Evaluate the configured session rules for one declared session.
+
+        Returns ``(reason, rule_id, ruleset_digest)`` when a rule fires,
+        else None. Deterministic: rules evaluate in declared order and the
+        first firing rule wins. v1 is deny-only; escalation to approval is
+        a named v1.1 follow-up and is refused at parse time. Fail-closed on
+        malformed config and on window-state errors: both deny with a
+        named reason, never skip.
+        """
+        if not session_id:
+            return None
+        if self._session_rule_config_error:
+            return (
+                "session rule config malformed: "
+                + _sanitize_log_text(self._session_rule_config_error)
+                + "; calls with a declared session are denied fail-closed",
+                "",
+                "",
+            )
+        try:
+            entries = self._session_windows.entries(session_id, agent_id)
+            now = int(time.time())
+            for rule in self._session_rules:
+                fired = self._evaluate_session_rule(
+                    rule, entries, now, tool, destination_class
+                )
+                if fired is not None:
+                    reason, digest = fired
+                    return (reason, rule.id, digest)
+        except Exception as exc:  # noqa: BLE001 - fail-closed; type only, never the message
+            logger.exception("session rule evaluation fault")
+            return (
+                f"session rule evaluation fault ({type(exc).__name__}); call denied",
+                "",
+                "",
+            )
+        return None
+
+    def _evaluate_session_rule(
+        self,
+        rule: Any,
+        entries: list[dict[str, Any]],
+        now: int,
+        tool: str,
+        destination_class: str,
+    ) -> tuple[str, str] | None:
+        """One deterministic rule over the window summaries.
+
+        The evidence is the session's receipted decisions only. Counting is
+        content-free: decisions, tool names, timestamps and the
+        caller-declared destination class. Rule semantics (v1):
+
+        - repeated_deny_storm: the window already holds >= threshold
+          RECEIPTED denies for this tool; this attempt is cut off (the
+          storm is evidenced, the intervention prevents the next one).
+        - runaway_tool_loop: counting the current call, >= threshold
+          calls of this tool since the last receipted allow for it.
+        - gradual_extraction: the window already holds >= threshold
+          receipted decisions (allow or deny) touching the rule's
+          destination class, and the current call touches that class.
+        - forbidden_tool_chain: the trailing tools in the window followed
+          by the current call match the declared sequence exactly.
+        - scope_drift: the current tool is outside the declared known set
+          and cumulative strikes in the window (including this call)
+          reach the threshold.
+        """
+        import fnmatch
+
+        if rule.tool_patterns and not any(
+            fnmatch.fnmatchcase(tool, pattern) for pattern in rule.tool_patterns
+        ):
+            return None
+        in_window = [e for e in entries if now - e["iat"] < rule.window_seconds]
+        digest = self._session_rule_digest(rule)
+        window_note = f"{rule.window_seconds}s window"
+
+        if rule.kind == "repeated_deny_storm":
+            denies = [e for e in in_window if e["decision"] == "deny" and e["tool"] == tool]
+            if len(denies) >= rule.threshold:
+                return (
+                    f"session rule '{rule.id}' (repeated_deny_storm): "
+                    f"{len(denies)} prior denied calls for tool '{tool}' in this "
+                    f"session within {window_note} (threshold {rule.threshold}); "
+                    "call denied",
+                    digest,
+                )
+            return None
+
+        if rule.kind == "runaway_tool_loop":
+            calls = [e for e in in_window if e["tool"] == tool]
+            loop = 0
+            for entry in reversed(calls):
+                if entry["decision"] == "allow":
+                    break
+                loop += 1
+            if loop + 1 >= rule.threshold:
+                return (
+                    f"session rule '{rule.id}' (runaway_tool_loop): {loop} prior "
+                    f"calls for tool '{tool}' with no receipted success in this "
+                    f"session within {window_note} (threshold "
+                    f"{rule.threshold} including this call); call denied",
+                    digest,
+                )
+            return None
+
+        if rule.kind == "gradual_extraction":
+            if destination_class != rule.destination_class:
+                return None
+            hits = [
+                e for e in in_window if e["destination_class"] == rule.destination_class
+            ]
+            if len(hits) >= rule.threshold:
+                return (
+                    f"session rule '{rule.id}' (gradual_extraction): "
+                    f"{len(hits)} prior decisions touching destination class "
+                    f"'{rule.destination_class}' in this session within "
+                    f"{window_note} (threshold {rule.threshold}); call denied",
+                    digest,
+                )
+            return None
+
+        if rule.kind == "forbidden_tool_chain":
+            sequence = list(rule.sequence)
+            trailing = (
+                [e["tool"] for e in in_window][-(len(sequence) - 1) :]
+                if len(sequence) > 1
+                else []
+            )
+            if trailing + [tool] == sequence:
+                return (
+                    f"session rule '{rule.id}' (forbidden_tool_chain): the "
+                    "trailing tool sequence "
+                    + " -> ".join(sequence)
+                    + f" is declared forbidden for this session within "
+                    f"{window_note}; call denied",
+                    digest,
+                )
+            return None
+
+        if rule.kind == "scope_drift":
+            known = set(rule.tools)
+            if tool in known:
+                return None
+            strikes = sum(1 for e in in_window if e["tool"] not in known)
+            if strikes + 1 >= rule.threshold:
+                return (
+                    f"session rule '{rule.id}' (scope_drift): tool '{tool}' is "
+                    "outside the declared known-tools set for this agent; "
+                    f"{strikes} prior strike(s) in this session within "
+                    f"{window_note} (threshold {rule.threshold}); call denied",
+                    digest,
+                )
+            return None
+
+        # An in-vocabulary kind with no handler is a config fault, not a
+        # skip: fail closed with a named reason.
+        return (
+            f"session rule '{rule.id}' (unknown evaluation kind "
+            f"'{rule.kind}'); call denied",
+            digest,
+        )
+
+    @staticmethod
+    def _session_rule_digest(rule: Any) -> str:
+        """Content digest of the session rule: binds a session-rule deny
+        receipt to the exact rule bytes in force (path-free, like the
+        tool-rule ruleset hash)."""
+        from raucle.provenance import _canonical_json, _sha256_hex
+
+        return _sha256_hex(_canonical_json(rule.to_dict()))
+
+    def _emit_session_rule_finding(
+        self, denied: dict[str, Any], tool: str, args: dict[str, Any], rule_id: str
+    ) -> None:
+        """Receipt the session-monitor finding for one session-rule deny.
+
+        The finding cites the deny receipt just emitted (the triggering
+        gate receipt) and states the session rule's expectation. Emission
+        is the monitor's claim; the offline verifier re-checks it against
+        the chain: the cited receipt must exist and the reported decision
+        must match its recorded verdict. A finding-emission failure never
+        reverts the deny (the deny is already receipted); it is logged.
+        """
+        receipt_id = denied.get("receipt_id")
+        if not receipt_id:
+            return
+        from raucle.provenance import _canonical_json, _sha256_hex
+
+        try:
+            self.emit_finding(
+                harness="session-monitor",
+                test_id=rule_id,
+                verdict="confirmed",
+                cited_receipt=receipt_id,
+                expected_decision="deny",
+                actual_decision="deny",
+                tool=tool,
+                args_digest=_sha256_hex(_canonical_json(args)),
+                note="session behavioural rule fired; see the cited gate receipt",
+            )
+        except Exception:
+            logger.exception(
+                "session-monitor finding emission failed for rule %s", rule_id
+            )
+
+    def _replay_session_windows(self) -> None:
+        """Boot replay: rebuild session window counters from the receipt
+        index (EPIC Q lane Q-2).
+
+        The index is the durable authority for window state, memory is
+        only the fast path. Only receipts that declared a session_id and
+        sit within the TTL window are replayed, bounded by the configured
+        key cap and the index query cap. Replay restores decision, tool,
+        agent, iat and trace; rule_id and destination_class are not
+        indexed (schema v3), so replayed summaries carry empty values:
+        gradual_extraction undercounts after a restart and can never
+        fabricate a deny from partial data (documented residual). A
+        replay fault never blocks the boot: the windows start empty and
+        the honest restart-reset residual applies.
+        """
+        index = getattr(self, "_receipt_index", None)
+        if index is None:
+            return
+        try:
+            ttl = self._session_windows.ttl_seconds
+            since = int(time.time()) - ttl
+            limit = max(1, int(self.config.session_window_max_keys))
+            for session_id in index.active_session_ids(since, limit=limit):
+                for row in index.session_receipts(session_id, since=since, limit=1000):
+                    self._session_windows.record(
+                        session_id,
+                        str(row.get("agent_id") or ""),
+                        str(row.get("decision") or ""),
+                        str(row.get("tool") or ""),
+                        int(row.get("iat") or 0),
+                        trace_id=str(row.get("trace_id") or ""),
+                    )
+        except Exception:
+            logger.exception(
+                "session window replay failed; starting windows empty "
+                "(restart-reset residual applies)"
+            )
 
     def emit_finding(
         self,

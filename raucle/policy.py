@@ -204,6 +204,182 @@ def _load_eqr_class() -> Any:
     return EQR
 
 
+# ---------------------------------------------------------------------------
+# Session behavioural rules (EPIC Q lane Q-2)
+# ---------------------------------------------------------------------------
+
+#: The closed v1 rule-kind vocabulary: deterministic rules evaluated over
+#: the gateway's session window state (bounded decision summaries). v1
+#: actions are deny-only; escalation is a named v1.1 follow-up.
+SESSION_RULE_KINDS = (
+    "repeated_deny_storm",
+    "runaway_tool_loop",
+    "gradual_extraction",
+    "forbidden_tool_chain",
+    "scope_drift",
+)
+
+_KINDS_NEEDING_THRESHOLD = frozenset(
+    {"repeated_deny_storm", "runaway_tool_loop", "gradual_extraction", "scope_drift"}
+)
+
+
+def _session_rule_int(data: dict[str, Any], key: str, *, minimum: int = 1) -> int:
+    value = data.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"session rule field '{key}' must be an integer >= {minimum}")
+    return value
+
+
+def _session_rule_str_list(data: dict[str, Any], key: str) -> list[str]:
+    value = data.get(key)
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"session rule field '{key}' must be a non-empty list")
+    if any(not isinstance(v, str) or not v for v in value):
+        raise ValueError(f"session rule field '{key}' must be non-empty strings")
+    return list(value)
+
+
+@dataclass
+class SessionRule:
+    """One deterministic session rule (EPIC Q lane Q-2).
+
+    Rules are evaluated over the session window state: bounded, content-free
+    summaries of the session's RECEIPTED decisions (see
+    :class:`raucle.gateway.SessionWindowState`). A rule never sees tool
+    arguments or any content, only decision, tool name, timestamps, trace
+    and the caller-declared destination_class.
+
+    v1 actions are deny-only: a session rule participates in the gate's
+    only-ever-DENY pre-check tier. Escalation to approval is a named v1.1
+    follow-up and is refused at parse time for now.
+    """
+
+    id: str
+    kind: str
+    window_seconds: int
+    threshold: int = 0
+    tools: list[str] = field(default_factory=list)
+    sequence: list[str] = field(default_factory=list)
+    destination_class: str = ""
+    tool_patterns: list[str] = field(default_factory=list)
+    action: str = "deny"
+    description: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SessionRule:
+        if not isinstance(data, dict):
+            raise ValueError("a session rule must be a mapping")
+        rule_id = data.get("id", "")
+        if not isinstance(rule_id, str) or not rule_id:
+            raise ValueError("session rule field 'id' is required")
+        kind = data.get("kind", "")
+        if kind not in SESSION_RULE_KINDS:
+            raise ValueError(
+                f"unknown session rule kind {kind!r}; use one of "
+                + ", ".join(SESSION_RULE_KINDS)
+            )
+        action = data.get("action", "deny") or "deny"
+        if action != "deny":
+            raise ValueError(
+                f"session rule action {action!r} is not supported in v1; "
+                "only 'deny' is allowed"
+            )
+        window_seconds = _session_rule_int(data, "window_seconds")
+        threshold = 0
+        if kind in _KINDS_NEEDING_THRESHOLD:
+            threshold = _session_rule_int(data, "threshold")
+        tools: list[str] = []
+        if kind == "scope_drift":
+            tools = _session_rule_str_list(data, "tools")
+        sequence: list[str] = []
+        if kind == "forbidden_tool_chain":
+            sequence = _session_rule_str_list(data, "sequence")
+        destination_class = ""
+        if kind == "gradual_extraction":
+            destination_class = data.get("destination_class", "")
+            if not isinstance(destination_class, str) or not destination_class:
+                raise ValueError(
+                    "session rule field 'destination_class' is required "
+                    "for gradual_extraction"
+                )
+        patterns_raw = data.get("tool_patterns", [])
+        if patterns_raw is None:
+            patterns_raw = []
+        if not isinstance(patterns_raw, list) or any(
+            not isinstance(p, str) or not p for p in patterns_raw
+        ):
+            raise ValueError(
+                "session rule field 'tool_patterns' must be a list of non-empty strings"
+            )
+        description = data.get("description", "")
+        if not isinstance(description, str):
+            raise ValueError("session rule field 'description' must be a string")
+        return cls(
+            id=rule_id,
+            kind=kind,
+            window_seconds=window_seconds,
+            threshold=threshold,
+            tools=tools,
+            sequence=sequence,
+            destination_class=destination_class,
+            tool_patterns=list(patterns_raw),
+            action=action,
+            description=description,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """The canonical dict form: round-trips through :meth:`from_dict`
+        and is the content the gateway binds into a session-rule deny
+        receipt's ruleset_hash."""
+        data: dict[str, Any] = {
+            "id": self.id,
+            "kind": self.kind,
+            "window_seconds": self.window_seconds,
+        }
+        if self.threshold:
+            data["threshold"] = self.threshold
+        if self.tools:
+            data["tools"] = list(self.tools)
+        if self.sequence:
+            data["sequence"] = list(self.sequence)
+        if self.destination_class:
+            data["destination_class"] = self.destination_class
+        if self.tool_patterns:
+            data["tool_patterns"] = list(self.tool_patterns)
+        if self.action != "deny":
+            data["action"] = self.action
+        if self.description:
+            data["description"] = self.description
+        return data
+
+
+def _parse_session_rules(raw: Any) -> tuple[list[SessionRule], list[str]]:
+    """Parse the optional ``session_rules:`` block, capturing named errors.
+
+    Never raises and never silently skips: a malformed rule is returned as
+    a NAMED error so the gateway can deny fail-closed. A session rule that
+    cannot be evaluated must not become an unenforced rule.
+    """
+    rules: list[SessionRule] = []
+    errors: list[str] = []
+    if raw is None:
+        return rules, errors
+    if not isinstance(raw, list):
+        return [], ["session_rules must be a list of rule mappings"]
+    for i, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            errors.append(f"session rule {i}: expected a mapping")
+            continue
+        named = entry.get("id")
+        label = named if isinstance(named, str) and named else "unnamed"
+        try:
+            rules.append(SessionRule.from_dict(entry))
+        except ValueError as exc:
+            errors.append(f"session rule {i} ({label}): {exc}")
+    return rules, errors
+
+
 def compile_constraint_dsl(constraints: dict[str, Any]) -> dict[str, Any]:
     """Compile DSL constraint syntax to the gate's native format.
 
@@ -251,6 +427,12 @@ class PolicyFile:
     version: int
     issuer: str
     policies: list[PolicyRule] = field(default_factory=list)
+    # Session behavioural rules (EPIC Q lane Q-2): deterministic, deny-only
+    # rules the gateway evaluates over its session window state. Parsing
+    # captures a malformed rule as a NAMED error instead of raising, so a
+    # bad session rule can never silently vanish from enforcement.
+    session_rules: list[SessionRule] = field(default_factory=list)
+    session_rule_errors: list[str] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: str | Path) -> PolicyFile:
@@ -303,13 +485,25 @@ class PolicyFile:
             rule.to_mint_kwargs()  # raises on invalid
             policies.append(rule)
 
-        return cls(version=version, issuer=issuer, policies=policies)
+        session_rules, session_rule_errors = _parse_session_rules(data.get("session_rules"))
+        return cls(
+            version=version,
+            issuer=issuer,
+            policies=policies,
+            session_rules=session_rules,
+            session_rule_errors=session_rule_errors,
+        )
 
     def to_yaml(self) -> str:
         """Serialise back to YAML (round-trip for editing)."""
         data = {
             "version": self.version,
             "issuer": self.issuer,
+            **(
+                {"session_rules": [r.to_dict() for r in self.session_rules]}
+                if self.session_rules
+                else {}
+            ),
             "policies": [
                 {
                     "tool": r.tool,
