@@ -295,6 +295,7 @@ class ReceiptIndex:
         decision: str | None = None,
         trace_id: str | None = None,
         session_id: str | None = None,
+        acting_for: str | None = None,
         since: int | None = None,
         until: int | None = None,
         limit: int = 50,
@@ -324,6 +325,12 @@ class ReceiptIndex:
         if session_id is not None:
             sql += " AND session_id = ?"
             params.append(session_id)
+        if acting_for is not None:
+            # acting_for is an indexed v3 column: receipts without a
+            # delegated principal are stored as '' and only match an
+            # explicit acting_for='' filter, never an unset one.
+            sql += " AND acting_for = ?"
+            params.append(acting_for)
         if since is not None:
             sql += " AND iat >= ?"
             params.append(since)

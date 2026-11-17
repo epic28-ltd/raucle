@@ -226,6 +226,17 @@ receipt's content hash: hand it to `raucle provenance verify` or the MCP
 With `session_id` declared, the gate evaluates deterministic session
 rules from the policy file in its deny-only pre-check tier - before any
 decision that could widen authority, after the policy tamper check.
+
+Every ordinary `PolicyRule` and every session rule accepts an optional
+`participant` matcher with two observable values: `tool_call` (the
+default; the gate's own decision surface) and `tool_response_taint`
+(the rule additionally evaluates only when the gateway holds recorded
+chain taint for that tool from `record_chain_output`). Unknown values
+fail the policy load closed with a named error. Only these two
+participants exist at the gate: user and assistant message content and
+tool definitions never pass through the enforcement path, so the DSL
+deliberately offers no matcher for them - assistant-side observation is
+the middleware advisory lane, not a gate rule.
 Five rule kinds ship in v1:
 
 - `repeated_deny_storm`: N or more denies for the same tool pattern
