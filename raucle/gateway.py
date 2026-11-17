@@ -2095,8 +2095,7 @@ class RaucleGateway:
         self._session_rule_config_error = "; ".join(errors) if errors else ""
         if errors:
             logger.error(
-                "SESSION RULE CONFIG ERROR (calls with a declared session_id "
-                "deny fail-closed): %s",
+                "SESSION RULE CONFIG ERROR (calls with a declared session_id deny fail-closed): %s",
                 _sanitize_log_text(self._session_rule_config_error),
             )
 
@@ -3603,9 +3602,7 @@ class RaucleGateway:
             entries = self._session_windows.entries(session_id, agent_id)
             now = int(time.time())
             for rule in self._session_rules:
-                fired = self._evaluate_session_rule(
-                    rule, entries, now, tool, destination_class
-                )
+                fired = self._evaluate_session_rule(rule, entries, now, tool, destination_class)
                 if fired is not None:
                     reason, digest = fired
                     return (reason, rule.id, digest)
@@ -3688,9 +3685,7 @@ class RaucleGateway:
         if rule.kind == "gradual_extraction":
             if destination_class != rule.destination_class:
                 return None
-            hits = [
-                e for e in in_window if e["destination_class"] == rule.destination_class
-            ]
+            hits = [e for e in in_window if e["destination_class"] == rule.destination_class]
             if len(hits) >= rule.threshold:
                 return (
                     f"session rule '{rule.id}' (gradual_extraction): "
@@ -3704,9 +3699,7 @@ class RaucleGateway:
         if rule.kind == "forbidden_tool_chain":
             sequence = list(rule.sequence)
             trailing = (
-                [e["tool"] for e in in_window][-(len(sequence) - 1) :]
-                if len(sequence) > 1
-                else []
+                [e["tool"] for e in in_window][-(len(sequence) - 1) :] if len(sequence) > 1 else []
             )
             if trailing + [tool] == sequence:
                 return (
@@ -3737,8 +3730,7 @@ class RaucleGateway:
         # An in-vocabulary kind with no handler is a config fault, not a
         # skip: fail closed with a named reason.
         return (
-            f"session rule '{rule.id}' (unknown evaluation kind "
-            f"'{rule.kind}'); call denied",
+            f"session rule '{rule.id}' (unknown evaluation kind '{rule.kind}'); call denied",
             digest,
         )
 
@@ -3781,9 +3773,7 @@ class RaucleGateway:
                 note="session behavioural rule fired; see the cited gate receipt",
             )
         except Exception:
-            logger.exception(
-                "session-monitor finding emission failed for rule %s", rule_id
-            )
+            logger.exception("session-monitor finding emission failed for rule %s", rule_id)
 
     def _replay_session_windows(self) -> None:
         """Boot replay: rebuild session window counters from the receipt

@@ -276,14 +276,12 @@ class SessionRule:
         kind = data.get("kind", "")
         if kind not in SESSION_RULE_KINDS:
             raise ValueError(
-                f"unknown session rule kind {kind!r}; use one of "
-                + ", ".join(SESSION_RULE_KINDS)
+                f"unknown session rule kind {kind!r}; use one of " + ", ".join(SESSION_RULE_KINDS)
             )
         action = data.get("action", "deny") or "deny"
         if action != "deny":
             raise ValueError(
-                f"session rule action {action!r} is not supported in v1; "
-                "only 'deny' is allowed"
+                f"session rule action {action!r} is not supported in v1; only 'deny' is allowed"
             )
         window_seconds = _session_rule_int(data, "window_seconds")
         threshold = 0
@@ -300,8 +298,7 @@ class SessionRule:
             destination_class = data.get("destination_class", "")
             if not isinstance(destination_class, str) or not destination_class:
                 raise ValueError(
-                    "session rule field 'destination_class' is required "
-                    "for gradual_extraction"
+                    "session rule field 'destination_class' is required for gradual_extraction"
                 )
         patterns_raw = data.get("tool_patterns", [])
         if patterns_raw is None:

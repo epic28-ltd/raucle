@@ -420,9 +420,7 @@ def test_extra_file_vanishing_is_a_divergence(tmp_path, policy_path, revocations
     assert any("vanished" in d for d in status["divergences"]), status["divergences"]
 
 
-def test_seal_without_extra_paths_keeps_the_record_shape(
-    tmp_path, policy_path, revocations_path
-):
+def test_seal_without_extra_paths_keeps_the_record_shape(tmp_path, policy_path, revocations_path):
     """No extra paths means the seal record is byte-shaped exactly like a
     pre-Q2 seal: deployments that never set extra paths are unaffected."""
     verifier = _verifier(policy_path, str(tmp_path / "seal.json"), revocations_path)
