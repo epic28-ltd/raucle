@@ -2211,9 +2211,75 @@ class RaucleGateway:
             destination_class,
         )
 
+    def _participant_overlay_refusal(
+        self, trace_id: str, destination_class: str
+    ) -> tuple[Any, str] | None:
+        """Evaluate the ``participant=tool_response_taint`` deny-only overlays.
+
+        EPIC Q lane Q-3: a taint-participant rule additionally considers the
+        recorded chain taint (``record_chain_output`` state) for its tool.
+        It is NOT an authority: rules with this participant are excluded
+        from :meth:`_find_rule` and only ever add a refusal, inside the
+        existing pre-check tier.
+
+        Semantics, deterministic over :class:`ChainTaintState` only:
+
+        - no recorded taint for the rule's tool in the chain (or no
+          trace_id, hence no chain state) means the rule does not fire:
+          its trigger is recorded taint PRESENCE, so absence is not a
+          fail-closed deny but plain non-application;
+        - the rule's taint evidence is scoped to its own tool: outputs
+          recorded for other tools in the chain never trigger it;
+        - with ``deny_from_chain_taint`` set, the recorded outputs are
+          evaluated through the existing ``evaluate_chain_taint_deny``
+          (tag matching and destination-class fail-closed behaviour
+          unchanged); without it, any recorded taint for the tool denies.
+
+        Returns ``(rule, reason)`` for the first firing rule in load
+        order, else ``None``. The reason names the participant and the
+        rule id.
+        """
+        from raucle.policy import evaluate_chain_taint_deny
+
+        overlay_rules = [
+            rule
+            for rules in self._policy_rules.values()
+            for rule in rules
+            if (getattr(rule, "participant", "") or "") == "tool_response_taint"
+        ]
+        if not overlay_rules or not trace_id:
+            return None
+        outputs = self._chain_state.snapshot(trace_id)
+        if not outputs:
+            return None
+        for rule in overlay_rules:
+            tool_outputs = [
+                dict(entry)
+                for entry in outputs
+                if entry.get("tool") == getattr(rule, "tool", "") and entry.get("taint_tags")
+            ]
+            if not tool_outputs:
+                continue
+            deny_kind = getattr(rule, "deny_from_chain_taint", None)
+            if deny_kind is not None:
+                reason = evaluate_chain_taint_deny(deny_kind, tool_outputs, destination_class)
+            else:
+                reason = f"recorded taint for tool '{rule.tool}' in chain state"
+            if reason:
+                return rule, f"participant=tool_response_taint (rule {rule.id}): {reason}"
+        return None
+
     def _find_rule(self, tool: str, source: str, destination: str) -> Any:
-        """Find the first policy rule for *tool* matching source/destination."""
+        """Find the first policy rule for *tool* matching source/destination.
+
+        ``participant=tool_response_taint`` rules are never authority for a
+        call (EPIC Q lane Q-3): they are deny-only overlays evaluated in
+        :meth:`_participant_overlay_refusal`. A taint-participant rule can
+        only ever refuse; it must never become the rule a call runs under.
+        """
         for rule in self._policy_rules.get(tool, []):
+            if (getattr(rule, "participant", "") or "") == "tool_response_taint":
+                continue
             if rule.matches(source, destination):
                 return rule
         return None
@@ -2702,6 +2768,15 @@ class RaucleGateway:
         # chain state for this trace_id - deterministic, no side-channel.
         # Fail-closed: an unusable chain state (missing trace) denies too.
         dataflow_reason = self._evaluate_dataflow_rule(matched_rule, trace_id, destination_class)
+        # Participant-scoped taint rules (EPIC Q lane Q-3): a deny-only
+        # overlay evaluated inside the existing pre-check tier, before
+        # anything that can widen authority. A rule with
+        # participant=tool_response_taint never grants; it only refuses.
+        overlay = self._participant_overlay_refusal(trace_id, destination_class)
+        if overlay is not None:
+            overlay_rule, overlay_reason = overlay
+            self._bind_rule_metadata(result, overlay_rule, tool)
+            return self._deny_result(result, overlay_reason, start)
         # Token TTL elapsed; re-mint under the matched rule (same issuer
         # key, same constraints) so short policy TTLs do not brick a
         # long-running gateway. Fail-closed if re-minting fails.
@@ -3605,6 +3680,12 @@ class RaucleGateway:
                 fired = self._evaluate_session_rule(rule, entries, now, tool, destination_class)
                 if fired is not None:
                     reason, digest = fired
+                    # Participant scoping (EPIC Q lane Q-3): a
+                    # tool_response_taint session rule counts only tainted
+                    # traces (see _evaluate_session_rule); its deny reason
+                    # names the participant alongside the rule id.
+                    if (getattr(rule, "participant", "") or "") == "tool_response_taint":
+                        reason = f"{reason} (participant=tool_response_taint)"
                     return (reason, rule.id, digest)
         except Exception as exc:  # noqa: BLE001 - fail-closed; type only, never the message
             logger.exception("session rule evaluation fault")
@@ -3614,6 +3695,14 @@ class RaucleGateway:
                 "",
             )
         return None
+
+    def _trace_has_recorded_taint(self, trace_id: str) -> bool:
+        """Whether any output recorded for this chain (``record_chain_output``
+        state) carries taint tags. Session-rule participant scoping only
+        (EPIC Q lane Q-3): presence check, never a content read."""
+        if not trace_id:
+            return False
+        return any(entry.get("taint_tags") for entry in self._chain_state.snapshot(trace_id))
 
     def _evaluate_session_rule(
         self,
@@ -3649,6 +3738,20 @@ class RaucleGateway:
             fnmatch.fnmatchcase(tool, pattern) for pattern in rule.tool_patterns
         ):
             return None
+        # Participant scoping (EPIC Q lane Q-3): a session rule scoped to
+        # tool_response_taint counts only window entries whose trace has
+        # recorded chain taint (record_chain_output state). Entries that
+        # carry no trace id, or whose trace recorded nothing tainted, never
+        # count toward such a rule. Content-free as before: the evidence is
+        # still decision summaries plus chain-taint presence only.
+        if (getattr(rule, "participant", "") or "") == "tool_response_taint":
+            entries = [
+                entry
+                for entry in entries
+                if self._trace_has_recorded_taint(entry.get("trace_id", ""))
+            ]
+            if not entries:
+                return None
         in_window = [e for e in entries if now - e["iat"] < rule.window_seconds]
         digest = self._session_rule_digest(rule)
         window_note = f"{rule.window_seconds}s window"
