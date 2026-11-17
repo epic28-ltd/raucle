@@ -782,3 +782,112 @@ def test_corporate_blue_tokens_are_scoped_to_the_nav_chrome() -> None:
     # green allow / red deny / amber escalate stay literal decision colours
     for colour in ("#22c55e", "#dd6b78", "#e5b85c"):
         assert colour in ADMIN_PANEL_HTML
+
+
+# ---------------------------------------------------------------------------
+# Checker-driven regression: the checker (17 Nov evening) found loadSession-
+# Windows reading a client-invented shape and sessionFindingVerify being a
+# stub. These probes pin the server shape and the real verify call.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_loadSessionWindows_renders_the_server_shape() -> None:
+    """The renderer reads d.sessions with agents/receipts/escalates and
+    honours available=false + unavailable_note (unavailable never
+    fabricated, client-side too)."""
+    block = _extract_script_blocks(ADMIN_PANEL_HTML)[0]
+    payload = {
+        "schema_version": "raucle.demo.session_windows/v1",
+        "available": True,
+        "sessions": [
+            {
+                "session_id": "sess-<script>",
+                "receipts": 3,
+                "allows": 1,
+                "denies": 2,
+                "escalates": 0,
+                "agents": ["agent:svc<img>"],
+                "first_iat": 1760000000,
+                "last_iat": 1760000300,
+                "recent": [],
+            }
+        ],
+    }
+    win_payload = {
+        "schema_version": "raucle.demo.session_windows/v1",
+        "available": False,
+        "sessions": [],
+        "unavailable_note": "receipt index unavailable",
+    }
+    program = (
+        "const captured={};"
+        "global.document={getElementById:(id)=>"
+        "{if(!captured[id])captured[id]={innerHTML:'',textContent:''};"
+        "return captured[id];}};"
+        "const payloads=["
+        + __import__("json").dumps(payload)
+        + ","
+        + __import__("json").dumps(win_payload)
+        + "];let call=0;"
+        "function api(){const p=payloads[Math.min(call,1)];call++;"
+        "return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve(p)});}"
+        + _extract_fn(block, "esc")
+        + _extract_fn(block, "escn")
+        + _extract_fn(block, "loadSessionWindows")
+        + "\n(async()=>{"
+        "loadSessionWindows();"
+        "await new Promise(r=>setTimeout(r,30));"
+        "const first=captured['sessionWindowsBody'].innerHTML;"
+        "loadSessionWindows();"
+        "await new Promise(r=>setTimeout(r,30));"
+        "const second=captured['sessionWindowsBody'].innerHTML;"
+        "const rawBad=/<script>|<img>/.test(first+second);"
+        "const ok=first.includes('sess-&lt;script&gt;')"
+        "&&first.includes('receipts 3')"
+        "&&first.includes('agent:svc&lt;img&gt;')"
+        "&&second.includes('receipt index unavailable')"
+        "&&!second.includes('no active windows');"
+        "if(rawBad||!ok){console.log('BAD:',first,'||',second);process.exit(1);}"
+        "console.log('ESCAPED');"
+        "})();"
+    )
+    _run_node(program)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_sessionFindingVerify_calls_the_real_endpoint() -> None:
+    """The card/row button drives the real POST offline-verify endpoint
+    with the finding's receipt hash and renders the verdict - not the
+    stub sentence the checker caught."""
+    block = _extract_script_blocks(ADMIN_PANEL_HTML)[0]
+    program = (
+        "const captured={};"
+        "let __p='';let __m='';"
+        "global.document={getElementById:(id)=>"
+        "{if(!captured[id])captured[id]={innerHTML:'',textContent:''};"
+        "return captured[id];}};"
+        "function api(p,o){__p=p;__m=(o||{}).method||'GET';"
+        "return Promise.resolve({status:200,json:()=>Promise.resolve({verdict:'valid',"
+        "schema_version:'raucle.demo.chain_verification/v1'})});}"
+        + _extract_fn(block, "esc")
+        + _extract_fn(block, "escn")
+        + _extract_fn(block, "sessionFindingVerify")
+        + "\n(async()=>{"
+        "const el="
+        "{getAttribute:(k)=>k==='data-receipt'?'sha256:deadbeef':"
+        "(k==='data-cited'?'sha256:gate':'')};"
+        "sessionFindingVerify({},el);"
+        "await new Promise(r=>setTimeout(r,30));"
+        "const all=Object.values(captured).map(x=>"
+        "(x.innerHTML||'')+(x.textContent||'')).join('|');"
+        'const called=__p.indexOf('
+        '"/api/demo/session-findings/sha256%3Adeadbeef/offline-verify")>-1'
+        ' && __m==="POST";'
+        "const rawBad=/<script>/.test(all);"
+        "const ok=called&&all.includes('VERIFIED OFFLINE');"
+        "if(rawBad||!ok){console.log('BAD:',__p,__m,all);process.exit(1);}"
+        "console.log('ESCAPED');"
+        "})();"
+    )
+    _run_node(program)

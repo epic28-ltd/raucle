@@ -24,7 +24,9 @@ state is process memory replayed from the index on boot; the replay
 undercounts gradual_extraction (rule_id and destination_class are not
 indexed). Gating follows the demo key/session model: 404 whenever
 ``RAUCLE_DEMO_MODE`` is off, exactly like the other ``/api/demo/*``
-routes. GET only; no write path anywhere in this module.
+routes. The findings listing is GET; the one write-shaped route is the
+receipt verification POST, which mutates nothing (it re-verifies
+offline). No other write path exists in this module.
 """
 
 from __future__ import annotations
@@ -319,10 +321,11 @@ def register_demo_session_routes(
 ) -> None:
     """Register the demo session behaviour endpoints on *app*.
 
-    Gated exactly like the other ``/api/demo/*`` surfaces: the routes
-    answer only when ``RAUCLE_DEMO_MODE`` is on, through the same
-    authenticated, read-only resource gate, and answer 404 otherwise.
-    GET only; no mutation path exists in this module.
+        Gated exactly like the other ``/api/demo/*`` surfaces: the routes
+        answer only when ``RAUCLE_DEMO_MODE`` is on, through the same
+        authenticated, read-only resource gate, and answer 404 otherwise.
+        GET for the listing; no mutation path exists in this module (the
+    verify POST re-verifies, it does not mutate).
     """
 
     def _gate(authorization: str | None, x_totp: Any) -> Any:

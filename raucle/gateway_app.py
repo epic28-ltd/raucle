@@ -4615,7 +4615,7 @@ function loadSessionRules(){
     let out='';
     if(d.config_error){out+='<div>'+esc('CONFIG ERROR (fail-closed): '+d.config_error)+'</div>';}
     (d.session_rules||[]).forEach(function(rl){
-      out+='<div>'+esc(rl.id+' - '+rl.kind+' (threshold '+rl.threshold+', window '+rl.window_seconds+'s'+((rl.tool_patterns&&rl.tool_patterns.length)?', tools '+rl.tool_patterns.join(','):'')+') deny-only')+'</div>';
+      out+='<div>'+esc(rl.id+' - '+rl.kind+' ('+(rl.threshold!==undefined&&rl.threshold!==null?'threshold '+rl.threshold+', ':'')+'window '+rl.window_seconds+'s'+((rl.tool_patterns&&rl.tool_patterns.length)?', tools '+rl.tool_patterns.join(','):'')+') '+(d.deny_only?'deny-only (v1)':'')+')')+'</div>';
     });
     if(d.window){out+='<div>'+esc('window state bound: ttl '+d.window.ttl_seconds+'s, max keys '+d.window.max_keys+', max entries '+d.window.max_entries)+'</div>';}
     (d.limits||[]).forEach(function(l){out+='<div>'+esc('honest limit: '+l)+'</div>';});
@@ -4628,11 +4628,16 @@ function loadSessionWindows(){
     return r.json();
   }).then(function(d){
     if(!d)return;
+    if(d.available===false){
+      document.getElementById('sessionWindowsBody').innerHTML='<div>'+esc(d.unavailable_note||'receipt index unavailable; windows are never fabricated')+'</div>';
+      return;
+    }
     let out='';
-    const wins=d.windows||[];
+    const wins=d.sessions||[];
     if(!wins.length){out+='<div>'+esc('no active windows (available only after demo traffic declares a session id)')+'</div>';}
     wins.forEach(function(w){
-      out+='<div>'+esc(String(w.session_id).slice(0,18)+' - agent '+w.agent_id+' - decisions '+w.count+' (allows '+w.allows+', denies '+w.denies+')')+'</div>';
+      const agents=(w.agents||[]).join(',')||'-';
+      out+='<div>'+esc(String(w.session_id).slice(0,18)+' - agents '+agents+' - receipts '+w.receipts+' (allows '+w.allows+', denies '+w.denies+', escalates '+w.escalates+')')+'</div>';
     });
     document.getElementById('sessionWindowsBody').innerHTML=out;
   }).catch(function(){document.getElementById('sessionWindowsBody').innerHTML=esc('unavailable');});
@@ -4652,9 +4657,30 @@ function loadSessionFindings(){
     document.getElementById('sessionFindingsBody').innerHTML=out;
   }).catch(function(){document.getElementById('sessionFindingsBody').innerHTML=esc('unavailable');});
 }
-function sessionFindingVerify(){
+function sessionFindingVerify(ev, el){
   const body=document.getElementById('sessionFindingsBody');
-  body.innerHTML+=('<div>'+esc('offline verify: runs the real ProvenanceVerifier over the minimal honest chain (cited gate receipt + session-monitor finding); see the offline-verify card on the Receipts tab for the single-receipt moment.')+'</div>');
+  const hash=(el&&el.getAttribute)?(el.getAttribute('data-receipt')||''):'';
+  const cited=el&&el.getAttribute?el.getAttribute('data-cited'):null;
+  if(!hash){body.innerHTML+='<div>'+esc('no receipt selected; use a finding row button')+'</div>';return;}
+  body.innerHTML+='<div>'+esc('offline verify running for '+(cited||hash))+'</div>';
+  api('/api/demo/session-findings/'+encodeURIComponent(hash)+'/offline-verify',{method:'POST'}).then(function(r){
+    const status=r.status;
+    return r.json().then(function(d){return {status:status, d:d};});
+  }).then(function(res){
+    let line='verifier responded '+res.status+'; disclosed rather than fabricated.';
+    if(res.status===200 && res.d && res.d.verdict==='valid'){
+      line='VERIFIED OFFLINE: the finding and its cited gate receipt verify through the real ProvenanceVerifier.';
+    } else if(res.status===422){
+      line='VERIFICATION FAILED (honest): the verifier rejected the chain; disclosed, never hidden.';
+    } else if(res.status===404){
+      line='UNAVAILABLE: the finding or its cited receipt is not in this chain.';
+    } else if(res.status===401||res.status===403){
+      line='AUTH REQUIRED: the verifier needs a signed-in session; the offline-verify card on the Receipts tab shows the same mechanism.';
+    }
+    body.innerHTML+='<div>'+esc(line)+'</div>';
+  }).catch(function(){
+    body.innerHTML+='<div>'+esc('verifier unreachable; nothing was claimed verified.')+'</div>';
+  });
 }
 // The threats lens (D6, cross-cutting): keep only the attack-relevant
 // decisions - denied and escalated calls - across every scenario.
