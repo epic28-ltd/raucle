@@ -1,6 +1,6 @@
 # EE proxy runtime (v1): enterprise LLM endpoint proxy over the OSS gate
 
-Status: accepted 18 November 2026. EPIC Q lane Q-7b (content-plane DLP,
+Status: accepted 17 November 2026. EPIC Q lane Q-7b (content-plane DLP,
 Q7). The receipts this runtime produces are specified by
 [provenance/v1.2/content-dlp.md](provenance/v1.2/content-dlp.md); the
 session rules it exercises are specified by
@@ -225,10 +225,12 @@ Validation rules, all enforced at load; violation is a named boot error:
 1. `schema_id` present and exactly `ee-proxy-routes/v1`.
 2. Route ids unique; profile ids unique.
 3. Every route's `profile` names a declared profile; `upstream` is
-   `https` (cleartext upstreams are refused); `path_prefix` starts
-   with `/`; no route prefix equals another route's prefix (distinct
-   prefixes only; ambiguity is a load error, longest prefix wins
-   matching between unequal prefixes).
+   `https` (cleartext upstreams are refused); `path_prefix` starts with
+   `/` AND ends with `/` (the trailing slash is required: the resolver
+   matches on path segments, so a prefix without one could swallow
+   longer sibling paths by segment ambiguity); no route prefix equals
+   another route's prefix (distinct prefixes only; ambiguity is a load
+   error, longest prefix wins matching between unequal prefixes).
 4. DLP classes inside the wired redaction vocabulary
    (`pii_card`, `pii_email`, `pii_national_id`, `secret_bearer`; the
    `pci_pan` class belongs to the enterprise scanner and is refused

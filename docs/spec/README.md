@@ -10,7 +10,7 @@ This directory holds normative specification documents for the Raucle protocol f
 | Raucle Time Source | v1 | Draft 1 (first published 2026-10-30) | [time-source-v1.md](time-source-v1.md) |
 | Raucle Data-Flow Enforcement | v1 | Draft 1 | [dataflow/v1.md](dataflow/v1.md) |
 | Advisory Middleware | v1 | Accepted 2026-11-17 | [advisory-middleware-v1.md](advisory-middleware-v1.md) |
-| EE Proxy Runtime | v1 | Accepted 2026-11-18 | [ee-proxy-runtime-v1.md](ee-proxy-runtime-v1.md) |
+| EE Proxy Runtime | v1 | Accepted 2026-11-17 | [ee-proxy-runtime-v1.md](ee-proxy-runtime-v1.md) |
 
 ## Process
 
