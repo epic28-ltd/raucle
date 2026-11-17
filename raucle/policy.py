@@ -135,6 +135,11 @@ class PolicyRule:
     # evidence quality the authority depends on, and the narrowing-side
     # behaviour when the evidence is degraded. See :class:`raucle.eqr.EQR`.
     eqr: Any = None
+    # Participant matcher (EPIC Q lane Q-3): which observable participant
+    # the rule scopes to, one of ``tool_call`` (default, the gate's own
+    # decision surface) or ``tool_response_taint``. Empty string keeps the
+    # historical behaviour byte-compatibly.
+    participant: str = ""
     # Source/destination matching: the policy only applies when the
     # inbound source and outbound destination match these patterns.
     # Empty string or "*" means "match anything".
@@ -219,6 +224,36 @@ SESSION_RULE_KINDS = (
     "scope_drift",
 )
 
+# ---------------------------------------------------------------------------
+# Participant matchers (EPIC Q lane Q-3): per-participant traffic tagging
+# ---------------------------------------------------------------------------
+
+#: The closed participant vocabulary: the two participants whose traffic
+#: the gate actually observes. ``tool_call`` is the gate's own decision
+#: surface (the default; semantics unchanged when omitted).
+#: ``tool_response_taint`` marks rules that additionally consider the
+#: recorded chain taint (``record_chain_output`` state) for the rule's
+#: tool. User, assistant and tool-definition participants deliberately do
+#: not exist here: the gateway never sees that content, and the DSL must
+#: not pretend to match it. Unknown values fail closed at load with a
+#: named error, never a silently skipped rule.
+PARTICIPANTS = ("tool_call", "tool_response_taint")
+
+
+def _validate_participant(value: Any, *, context: str) -> str:
+    """Validate one ``participant`` matcher value; empty means the default."""
+    if value is None:
+        return ""
+    if not isinstance(value, str) or value not in ("",) + PARTICIPANTS:
+        raise ValueError(
+            f"{context}: unknown participant {value!r}; use one of "
+            + ", ".join(PARTICIPANTS)
+            + " (unknown participants fail closed at load; the gateway "
+            "observes only tool calls and recorded tool-response taint)"
+        )
+    return value
+
+
 _KINDS_NEEDING_THRESHOLD = frozenset(
     {"repeated_deny_storm", "runaway_tool_loop", "gradual_extraction", "scope_drift"}
 )
@@ -263,6 +298,11 @@ class SessionRule:
     sequence: list[str] = field(default_factory=list)
     destination_class: str = ""
     tool_patterns: list[str] = field(default_factory=list)
+    # Participant matcher (EPIC Q lane Q-3): one of ``tool_call`` or
+    # ``tool_response_taint``; empty means the default (tool_call). A
+    # ``tool_response_taint`` session rule counts only window entries whose
+    # trace has recorded chain taint (``record_chain_output`` state).
+    participant: str = ""
     action: str = "deny"
     description: str = ""
 
@@ -312,6 +352,9 @@ class SessionRule:
         description = data.get("description", "")
         if not isinstance(description, str):
             raise ValueError("session rule field 'description' must be a string")
+        participant = _validate_participant(
+            data.get("participant"), context="session rule field 'participant'"
+        )
         return cls(
             id=rule_id,
             kind=kind,
@@ -321,6 +364,7 @@ class SessionRule:
             sequence=sequence,
             destination_class=destination_class,
             tool_patterns=list(patterns_raw),
+            participant=participant,
             action=action,
             description=description,
         )
@@ -344,6 +388,8 @@ class SessionRule:
             data["destination_class"] = self.destination_class
         if self.tool_patterns:
             data["tool_patterns"] = list(self.tool_patterns)
+        if self.participant:
+            data["participant"] = self.participant
         if self.action != "deny":
             data["action"] = self.action
         if self.description:
@@ -471,6 +517,9 @@ class PolicyFile:
                 ),
                 source=rule_data.get("source", ""),
                 destination=rule_data.get("destination", ""),
+                participant=_validate_participant(
+                    rule_data.get("participant"), context=f"Policy rule {i}"
+                ),
             )
             if not rule.id:
                 rule.id = f"{rule.tool}/{rule.agent_id}/{i}"
@@ -521,6 +570,7 @@ class PolicyFile:
                     **({"eqr": r.eqr.to_dict()} if r.eqr is not None else {}),
                     **({"source": r.source} if r.source else {}),
                     **({"destination": r.destination} if r.destination else {}),
+                    **({"participant": r.participant} if r.participant else {}),
                 }
                 for r in self.policies
             ],
@@ -729,6 +779,7 @@ __all__ = [
     "PolicyFile",
     "PolicyRule",
     "ChainTaintDeny",
+    "PARTICIPANTS",
     "compile_constraint_dsl",
     "ApprovalThreshold",
     "mint_from_policy",

@@ -19,6 +19,14 @@ fabricates session continuity.
 
 ## Rule kinds (v1)
 
+Session rules (and ordinary policy rules) carry an optional
+`participant` matcher with two observable values: `tool_call` (default)
+and `tool_response_taint` (a session rule counts only window entries
+whose trace has recorded taint for the rule's tool; an ordinary rule
+evaluates as a deny-only overlay only when recorded taint exists).
+Unknown participant values fail the policy load closed. User, assistant
+and tool-definition participants are deliberately absent: the gateway
+never sees that content, so the vocabulary cannot pretend to match it.
 | kind | fires when | notes |
 | --- | --- | --- |
 | `repeated_deny_storm` | >= `threshold` denies for the same tool pattern within `window_seconds` | patterns are fnmatch |
