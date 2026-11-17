@@ -218,6 +218,7 @@ The receipt is your audit artefact. Whatever you build on top — Microsoft Agen
 ## Where next
 
 - **[2. Agent Framework integration](02-agent-framework.md)** — wire the gate into Microsoft Agent Framework's middleware chain.
+- **[7. Advisory middleware](07-advisory-middleware.md)** — in-loop observation and advisory redaction; never enforcement, fail-open by design.
 - **[3. Prove a policy](06-prove-a-policy.md)** — turn `constraints={...}` into a *proof* that no string in the tool's schema can violate the policy.
 - **[Spec index](../spec/README.md)** — the receipt and provenance formats, in detail.
 
