@@ -83,6 +83,12 @@ spec:
               value: {{ .Values.config.receiptSegmentMaxBytes | quote }}
             - name: RAUCLE_RECEIPT_INDEX_PATH
               value: {{ .Values.config.receiptIndexPath | quote }}
+            - name: RAUCLE_SESSION_WINDOW_TTL_SECONDS
+              value: {{ .Values.config.sessionWindowTtlSeconds | quote }}
+            - name: RAUCLE_SESSION_WINDOW_MAX_KEYS
+              value: {{ .Values.config.sessionWindowMaxKeys | quote }}
+            - name: RAUCLE_SESSION_WINDOW_MAX_ENTRIES
+              value: {{ .Values.config.sessionWindowMaxEntries | quote }}
             - name: RAUCLE_SIGNER_KEY_PATH
               value: {{ .Values.config.signerKeyPath | quote }}
             - name: RAUCLE_POLICY_FILE

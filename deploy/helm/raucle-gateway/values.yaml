@@ -50,6 +50,13 @@ config:
   receiptStoreDir: /data/receipts-segments
   receiptSegmentMaxBytes: "67108864"
   receiptIndexPath: /data/receipts-segments/index.sqlite
+  # EPIC Q lane Q-2: session behavioural window bounds (defaults equal the
+  # code defaults). TTL bounds each session key's history in time, max keys
+  # bounds live (session, agent) windows, max entries bounds one key
+  # against a hot session.
+  sessionWindowTtlSeconds: "900"
+  sessionWindowMaxKeys: "1024"
+  sessionWindowMaxEntries: "10000"
   signerKeyPath: /data/gateway-signing-key.pem
   healthKey: ""
   policyFile: /etc/raucle/policies.yaml

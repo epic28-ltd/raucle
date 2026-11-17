@@ -259,6 +259,11 @@ class ConfigUpdateRequest(BaseModel):
     registry_path: str | None = None
     gate_auth: str | None = None
     health_check_token: str | None = None
+    # Session behavioural windows (EPIC Q lane Q-2): the bounded knobs the
+    # gateway reads (TTL, live key cap, per-key entry cap).
+    session_window_ttl_seconds: int | None = None
+    session_window_max_keys: int | None = None
+    session_window_max_entries: int | None = None
 
 
 class SIEMConfigRequest(BaseModel):

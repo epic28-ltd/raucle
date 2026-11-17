@@ -220,6 +220,47 @@ receipt's content hash: hand it to `raucle provenance verify` or the MCP
   receipt and is likewise captured by the projection from schema v3;
   session-scoped queries ride the `(session_id, iat)` index, `acting_for`
   is stored but not individually indexed.
+
+### Session behavioural rules
+
+With `session_id` declared, the gate evaluates deterministic session
+rules from the policy file in its deny-only pre-check tier - before any
+decision that could widen authority, after the policy tamper check.
+Five rule kinds ship in v1:
+
+- `repeated_deny_storm`: N or more denies for the same tool pattern
+  within the window.
+- `runaway_tool_loop`: N or more calls of the same tool within the
+  window with no receipted success between them.
+- `gradual_extraction`: N or more decisions touching destinations of a
+  given `destination_class` within the window (classification rides the
+  existing `destination_class` field; content is never scanned).
+- `forbidden_tool_chain`: the last K tools in the window exactly match
+  a declared ordered sequence.
+- `scope_drift`: calls to tools outside the rule's declared known set
+  for the agent, N strikes within the window.
+
+Semantics and limits, stated plainly:
+
+- A session rule can only **deny** in v1 (and the denial emits a
+  receipted `session-monitor` finding citing the triggering gate
+  receipt, so the whole attack sequence verifies offline). Escalation
+  to approval is a named follow-up, not shipped.
+- Rules never see content: windows hold decision summaries only
+  (decision, tool, timestamp, trace id, destination class). Absent
+  `session_id` means no session evaluation at all.
+- Window state is process memory, config-bounded
+  (`RAUCLE_SESSION_WINDOW_TTL_SECONDS`, `..._MAX_KEYS`, `..._MAX_ENTRIES`)
+  and replayed from the receipt index on boot within the TTL window.
+  A restart mid-session resets counters; the replay bounds the gap, and
+  replayed rows lack `destination_class` (not indexed), so
+  `gradual_extraction` can undercount after a restart - it never
+  fabricates a deny.
+- Session-rule files ride the policy-bytes tamper seal: an out-of-band
+  edit fails closed (`policy_tampered`), and each session-rule deny
+  binds the rule content digest as its ruleset hash.
+- Evaluation is deterministic and declared-first-wins when several
+  rules match one call.
 - Fail-closed accountability: if a receipt cannot be written, the decision
   is downgraded to deny. An action without its receipt is unauthorised.
 - Receipts are signed by the persistent gateway identity (`agent:gate`),
