@@ -1096,6 +1096,7 @@ class GateReceiptContext:
     rule_id: str = ""
     intent_block: dict[str, Any] | None = None
     acting_for: str = ""
+    session_id: str = ""
 
 
 class ChainTaintState:
@@ -1727,6 +1728,13 @@ class RaucleGateway:
                 ),
             },
         }
+        if ctx.session_id:
+            # Session continuity (EPIC Q lane Q-1): the session key is an
+            # identifier, never content, and is OPTIONAL BY DESIGN. When
+            # the caller supplies none, the key is absent entirely - no
+            # fabricated continuity, no trace_id fallback - so the
+            # receipt's byte-shape is unchanged from the pre-session era.
+            payload["x_gate"]["session_id"] = ctx.session_id
         if ctx.authorization is not None:  # receipts v1.1: delegated-authority binding
             payload["x_gate"]["authorization"] = ctx.authorization
         if ctx.intent_block is not None:  # receipts v1.2: task-intent binding
@@ -1904,6 +1912,7 @@ class RaucleGateway:
                     rule_id=result.get("rule_id", ""),
                     intent_block=_intent_hint,
                     acting_for=_acting_for,
+                    session_id=result.get("_session_id", ""),
                 )
             )
         except Exception:
@@ -1923,6 +1932,7 @@ class RaucleGateway:
             )
         self._log_connection(result)
         result.pop("_authorization_hint", None)
+        result.pop("_session_id", None)
         return result
 
     def record_chain_output(self, trace_id: str, tool: str, taint_tags: list[str]) -> None:
@@ -2345,6 +2355,7 @@ class RaucleGateway:
         trace_id: str = "",
         approval_id: str = "",
         destination_class: str = "",
+        session_id: str = "",
         _authorization_hint: dict[str, Any] | None = None,
         _token_decision: Any = None,
         _intent_hint: dict[str, Any] | None = None,
@@ -2373,6 +2384,12 @@ class RaucleGateway:
         result = self._fresh_check_result(
             tool, args, agent_id, source, destination, trace_id, _authorization_hint
         )
+        # Session continuity (EPIC Q lane Q-1): the optional caller-supplied
+        # session key rides the result as an internal bookkeeping field, so
+        # EVERY receipted decision (allow and deny) binds it. Empty means
+        # "none declared": nothing is fabricated downstream.
+        if session_id:
+            result["_session_id"] = session_id
 
         # P4.A v1 containment: trace quarantine + lease suspension are
         # consulted FIRST, before any delegated-authority shortcut or
@@ -2647,6 +2664,7 @@ class RaucleGateway:
                     rule_id=result.get("rule_id", ""),
                     intent_block=_intent_hint,
                     acting_for=_acting_for,
+                    session_id=result.get("_session_id", ""),
                 )
             )
         except Exception:
@@ -2657,6 +2675,7 @@ class RaucleGateway:
         # route strips these too; this keeps direct callers clean). rule_id
         # stays in the response: it is decision context, additive and useful.
         result.pop("_authorization_hint", None)
+        result.pop("_session_id", None)
         return result
 
     # ------------------------------------------------------------------

@@ -172,7 +172,7 @@ class TestReceiptIndex:
         conn.close()
         index = ReceiptIndex(sqlite_path=db)
         assert index.count() == 1  # copied across, not dropped
-        assert index._conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert index._conn.execute("PRAGMA user_version").fetchone()[0] == 3
 
     def test_rebuild_from_store(self, tmp_path):
         """The projection contract: drop the index, rebuild from segments."""

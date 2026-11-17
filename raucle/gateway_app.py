@@ -98,6 +98,37 @@ class GateRequest(BaseModel):
             "an unknown class fails closed when a deny_from_chain_taint rule is active)"
         ),
     )
+    session_id: str = Field(
+        default="",
+        description=(
+            "Optional client-declared behavioural session key (EPIC Q). An "
+            "identifier, never content: bound verbatim into the signed gate "
+            "receipt and the receipt index. When absent, NO session_id is "
+            "recorded - no fabricated continuity, no trace_id fallback."
+        ),
+    )
+
+
+# Session continuity (EPIC Q lane Q-1): the same bounded-identifier
+# discipline as every other caller-controlled field - a length cap and a
+# safe charset, validated fail-closed at the HTTP edge before any policy
+# evaluation. The value is a correlation key: no filesystem, shell or URL
+# characters, so it can be bound into receipts, indexes and logs verbatim.
+_SESSION_ID_PATTERN = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _validate_session_id(session_id: str) -> str:
+    if not session_id:  # absent by design: no continuity is declared
+        return ""
+    if not _re.fullmatch(_SESSION_ID_PATTERN, session_id):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "session_id must be 1-128 characters from "
+                "[A-Za-z0-9._-] starting alphanumeric (EPIC Q bounded identifier)"
+            ),
+        )
+    return session_id
 
 
 def _gate_deny_response(req: GateRequest, reason: str) -> dict[str, Any]:
@@ -395,6 +426,7 @@ def _handle_gate_tool_call(
         _token_decision=token_decision,
         _intent_hint=intent_hint,
         _acting_for=req.acting_for,
+        session_id=_validate_session_id(req.session_id),
     )
     # Internal bookkeeping fields never leave the process boundary
     response.pop("_trace_id", None)

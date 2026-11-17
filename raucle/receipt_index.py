@@ -52,13 +52,22 @@ class ReceiptIndex:
     # Schema
     # ------------------------------------------------------------------
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
-    # The old (pre-versioned) schema made receipt_hash the PRIMARY KEY and
-    # wrote with INSERT OR REPLACE: two byte-identical same-second attempts
-    # (identical payload, hence identical hash) collapsed to one projection
-    # row, so trace/attempts queries undercounted. The chain of record keeps
-    # every attempt; this version-2 schema projects all of them.
+    # Version history:
+    # - v1 (pre-versioned): receipt_hash PRIMARY KEY + INSERT OR REPLACE.
+    #   Two byte-identical same-second attempts (identical payload, hence
+    #   identical hash) collapsed to one projection row, so trace/attempts
+    #   queries undercounted. The chain of record keeps every attempt.
+    # - v2: keyless inserts project all attempts; rowid tiebreak in cursors.
+    # - v3 (EPIC Q lane Q-1): adds session_id (optional, Q1 behavioural
+    #   sessions; composite (session_id, iat) index) and acting_for
+    #   (present in x_gate since v1 but unindexed) as queryable columns.
+    #   Both are nullable/''-empty by design: a receipt carries NO
+    #   session_id unless the caller declared one - continuity is never
+    #   fabricated. The index remains a QUERY CACHE (rebuild on open); a
+    #   v2 file is copied across in place, a stale file also rebuilds
+    #   from the store. Verification NEVER consults the index.
     def _init_schema(self) -> None:
         version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
         has_table = (
@@ -75,20 +84,22 @@ class ReceiptIndex:
                 CREATE TABLE IF NOT EXISTS receipts (
                     receipt_hash TEXT NOT NULL,
                     iat          INTEGER NOT NULL,
-                agent_id     TEXT NOT NULL,
-                tool         TEXT NOT NULL,
-                decision     TEXT NOT NULL,
-                reason       TEXT NOT NULL DEFAULT '',
-                policy       TEXT,
-                latency_us   INTEGER NOT NULL DEFAULT 0,
-                trace_id     TEXT,
-                source       TEXT NOT NULL DEFAULT '',
-                destination  TEXT NOT NULL DEFAULT '',
-                parents_json TEXT NOT NULL DEFAULT '[]',
-                segment      TEXT,
-                line_no      INTEGER
-            )
-            """
+                    agent_id     TEXT NOT NULL,
+                    tool         TEXT NOT NULL,
+                    decision     TEXT NOT NULL,
+                    reason       TEXT NOT NULL DEFAULT '',
+                    policy       TEXT,
+                    latency_us   INTEGER NOT NULL DEFAULT 0,
+                    trace_id     TEXT,
+                    session_id   TEXT,
+                    acting_for   TEXT NOT NULL DEFAULT '',
+                    source       TEXT NOT NULL DEFAULT '',
+                    destination  TEXT NOT NULL DEFAULT '',
+                    parents_json TEXT NOT NULL DEFAULT '[]',
+                    segment      TEXT,
+                    line_no      INTEGER
+                )
+                """
             )
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_iat ON receipts (iat)")
         self._conn.execute(
@@ -96,19 +107,26 @@ class ReceiptIndex:
         )
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_tool ON receipts (tool, iat)")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_trace ON receipts (trace_id)")
+        # EPIC Q lane Q-1: behavioural sessions query receipts by
+        # (session_id, iat); only DECLARED session keys are ever indexed.
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_receipts_session ON receipts (session_id, iat)"
+        )
         self._conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
         self._conn.commit()
 
     def _migrate_dedupe_schema(self) -> None:
-        """Copy the legacy PRIMARY-KEY table across without losing rows.
+        """Copy a PRIOR-version table across in place, without losing rows.
 
-        The legacy table holds at most one row per (identical) receipt id,
-        so SELECT * preserves every row it has; future duplicates are kept
-        too because inserts no longer replace on the key. The index is a
+        v1 (pre-versioned) held at most one row per (identical) receipt id,
+        so SELECT * preserves every row it has; v2 rows project whole. Both
+        upgrade to the current shape with the newer columns left at their
+        no-continuity defaults (session_id NULL, acting_for '') - a row
+        never GAINS a session key it did not carry. The index is a
         disposable projection: any operator preferring a hard-rebuild path
         has ``rebuild_from_store``.
         """
-        self._conn.execute("ALTER TABLE receipts RENAME TO receipts_v1_backup")
+        self._conn.execute("ALTER TABLE receipts RENAME TO receipts_prev_backup")
         self._conn.execute(
             """
             CREATE TABLE receipts (
@@ -121,6 +139,8 @@ class ReceiptIndex:
                 policy       TEXT,
                 latency_us   INTEGER NOT NULL DEFAULT 0,
                 trace_id     TEXT,
+                session_id   TEXT,
+                acting_for   TEXT NOT NULL DEFAULT '',
                 source       TEXT NOT NULL DEFAULT '',
                 destination  TEXT NOT NULL DEFAULT '',
                 parents_json TEXT NOT NULL DEFAULT '[]',
@@ -130,7 +150,8 @@ class ReceiptIndex:
             """
         )
         old_cols = [
-            row[1] for row in self._conn.execute("PRAGMA table_info(receipts_v1_backup)").fetchall()
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(receipts_prev_backup)").fetchall()
         ]
         shared = [
             c
@@ -153,11 +174,13 @@ class ReceiptIndex:
             if c in old_cols
         ]
         cols_csv = ", ".join(shared)
-        # defaults cover the rest of the v2 shape
+        # defaults cover the newer columns (no-continuity: session_id NULL,
+        # acting_for ''); a v2->v3 upgrade copies v2 columns whole, and a
+        # v1->v3 upgrade also keeps the session columns empty.
         self._conn.execute(
-            f"INSERT INTO receipts ({cols_csv}) SELECT {cols_csv} FROM receipts_v1_backup"
+            f"INSERT INTO receipts ({cols_csv}) SELECT {cols_csv} FROM receipts_prev_backup"
         )
-        self._conn.execute("DROP TABLE receipts_v1_backup")
+        self._conn.execute("DROP TABLE receipts_prev_backup")
 
     # ------------------------------------------------------------------
     # Write path
@@ -184,9 +207,9 @@ class ReceiptIndex:
                 """
                 INSERT INTO receipts
                     (receipt_hash, iat, agent_id, tool, decision, reason,
-                     policy, latency_us, trace_id, source, destination,
-                     parents_json, segment, line_no)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     policy, latency_us, trace_id, session_id, acting_for,
+                     source, destination, parents_json, segment, line_no)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.get("receipt_hash", ""),
@@ -198,6 +221,11 @@ class ReceiptIndex:
                     x_gate.get("policy"),
                     int(x_gate.get("latency_us", 0)),
                     x_gate.get("trace_id"),
+                    # EPIC Q lane Q-1: optional session continuity. Absent
+                    # session keys stay NULL - continuity is never
+                    # fabricated from trace_id or anywhere else.
+                    x_gate.get("session_id") or None,
+                    str(x_gate.get("acting_for", "")),
                     str(x_gate.get("source", "")),
                     str(x_gate.get("destination", "")),
                     parents,
@@ -266,6 +294,7 @@ class ReceiptIndex:
         tool: str | None = None,
         decision: str | None = None,
         trace_id: str | None = None,
+        session_id: str | None = None,
         since: int | None = None,
         until: int | None = None,
         limit: int = 50,
@@ -292,6 +321,9 @@ class ReceiptIndex:
         if trace_id is not None:
             sql += " AND trace_id = ?"
             params.append(trace_id)
+        if session_id is not None:
+            sql += " AND session_id = ?"
+            params.append(session_id)
         if since is not None:
             sql += " AND iat >= ?"
             params.append(since)
@@ -330,6 +362,28 @@ class ReceiptIndex:
         params.append(max(1, min(int(limit), 1000)))
         rows = self._conn.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
+
+    def session_receipts(
+        self,
+        session_id: str,
+        *,
+        since: int | None = None,
+        until: int | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """All receipts of one declared behavioural session, oldest first.
+
+        The (session_id, iat) retrieval path the later session-window
+        lanes build on: every receipted decision (denies included) that
+        carried the session key, in call order. Only keys the callers
+        themselves declared are retrievable - receipts without a
+        session_id are never part of any session.
+        """
+        rows = self.query(
+            session_id=session_id, since=since, until=until, limit=min(int(limit), 1000)
+        )
+        rows.reverse()
+        return rows
 
     def cursor_for(self, row: dict[str, Any]) -> str:
         """The next-page cursor for the last row of a query result.
