@@ -37,7 +37,13 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install
-        run: pip install -e ".[dev]" ruff
+        # Toolchain pins: ruff is pinned to an EXACT version so local and CI
+        # lint cannot drift when a new ruff release lands. Bump the pin
+        # deliberately when a new ruff release is wanted, keeping it in sync
+        # with what developers run locally (the local venvs carry the same
+        # version); an unpinned `ruff` here once reformatted differently from
+        # local and cost a CI rerun.
+        run: pip install -e ".[dev]" ruff==0.17.5
       - name: Ruff check
         run: ruff check raucle/ tests/
       - name: Ruff format check

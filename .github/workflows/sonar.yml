@@ -19,7 +19,12 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install package (for tests and coverage)
-        run: pip install -e ".[dev]" pytest-cov
+        # Pin the installed raucle to the current released distribution
+        # (RAUCLE_DISTRIBUTION_PIN 'raucle 0.23.6 (git 645f5de)'). The
+        # editable install satisfies this pin only while pyproject.toml's
+        # version matches it, so a release that publishes 0.23.7+ without
+        # re-keying this pin fails the job loudly instead of drifting.
+        run: pip install -e ".[dev]" raucle==0.23.6 pytest-cov
       - name: Run tests with coverage
         run: pytest --cov --cov-report=xml:coverage.xml --tb=no -q
       - name: Cache SonarQube packages

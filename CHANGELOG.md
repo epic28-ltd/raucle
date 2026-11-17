@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Fixed - CI toolchain pinning
+
+- The CI lint job installs ruff pinned to an exact version
+  (`ruff==0.17.5`, the current released ruff) instead of unpinned, and the
+  SonarCloud job's raucle install is pinned to `raucle==0.23.6`, matching
+  the current distribution pin. Both previously drifted when a new release
+  landed on the package index: CI and local venvs then linted (or analysed)
+  with different tool versions and gates disagreed. Bump these pins
+  deliberately, keeping the ruff pin in sync with what developers run
+  locally.
+
 ## 0.23.6 (2026-11-12) - demo panels: read-only operator surfaces for the demo visitor
 
 ### Added - demo panels: read-only operator surfaces for the demo visitor
