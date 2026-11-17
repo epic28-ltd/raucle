@@ -3,8 +3,10 @@
 The middleware is an ADVISORY layer. It observes, redacts in the data
 plane and emits bounded-disclosure findings through the gateway's
 ``emit_finding`` when a gateway client is wired. It never enforces: it
-does not block calls, does not mint gate receipts and cannot pretend to
-be the deterministic gate.
+holds no gate authority (the pre_tool_call hook returns the scanner's
+own ``(allowed, result)`` verdict exactly as shipped, and the scanner
+may still BLOCK - what this layer never does is mint gate receipts or
+pretend to be the deterministic gate.
 
 Guarantees tested here:
 

@@ -66,7 +66,7 @@ not semantics; content matching no pattern passes. That limit is
 declared, not hidden. `[REDACTED:<class>]` collars never re-flag: a
 second pass over redacted content changes nothing.
 
-The middleware holds no gate authority overs and never modifies tool-call arguments. It
+The middleware holds no gate authority over a call's outcome and never modifies tool-call arguments. It
 is observation plus data-plane hygiene, and only where it is wired
 in-process.
 
