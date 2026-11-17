@@ -437,6 +437,15 @@ who stopped the agent, when, and why. Revocation propagates to
 enforcement on the next call; the receipt means the containment
 itself is attributable evidence in the incident review.
 
+### Content DLP scan receipts
+
+`emit_dlp_finding` mints a signed receipt with the `x_dlp` extension
+for an in-path content scanner (the enterprise LLM endpoint proxy is a
+client that scans; the gateway does not scan content itself). The
+extension carries digests, bounded pattern classes and span counts
+only - never content - and verifies offline like every other extension
+receipt ([spec](provenance/v1.2/content-dlp.md)).
+
 ## Trust boundary: outbound URL fetching
 
 Raucle makes outbound HTTP calls from a small, knowable surface. The

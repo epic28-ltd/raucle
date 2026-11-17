@@ -245,6 +245,32 @@ _MAX_SAFE_INT = 2**53 - 1
 _MIN_SAFE_INT = -(2**53 - 1)
 _SHA256_PREFIX = "sha256:"
 
+_DLP_ACTIONS = frozenset({"blocked", "redacted", "allowed_with_findings"})
+_DLP_DIRECTIONS = frozenset({"egress_to_model", "ingress_from_model", "egress_to_tool"})
+# Bounded, versioned matched-class vocabulary (v1.2 content DLP spec,
+# docs/spec/provenance/v1.2/content-dlp.md). The list grows only with a
+# schema-version bump so older verifiers fail closed on unknown classes
+# instead of silently widening the disclosure boundary.
+_DLP_MATCHED_CLASSES = frozenset(
+    {"pii_card", "pii_email", "pci_pan", "secret_bearer", "pii_national_id"}
+)
+# Content-like field names that must never appear in a signed x_dlp block:
+# counts, digests, class names and route identifiers only (bounded
+# disclosure), so a leaky emitter cannot hide matched values in evidence.
+_DLP_FORBIDDEN_CONTENT_FIELDS = frozenset(
+    {"matched_value", "content", "snippet", "match_text", "excerpt", "sample", "verbatim"}
+)
+_DLP_REQUIRED_FIELDS = (
+    "action",
+    "scan_id",
+    "route",
+    "direction",
+    "content_sha256",
+    "matched_classes",
+    "span_counts",
+    "rule_id",
+)
+
 
 def _reject_floats(obj: Any) -> None:
     """Raise if *obj* contains a float, an integer outside the safe range, or a
@@ -1738,6 +1764,7 @@ class ProvenanceVerifier:
         self._verify_harness_finding(decoded, line_no, report, receipts_by_hash)
         self._verify_time_anchor(decoded, line_no, report, receipts_by_hash, raw_lines_by_hash)
         self._verify_bilateral(decoded, line_no, receipt, report)
+        self._verify_x_dlp(decoded, line_no, report, receipts_by_hash)
 
     def _verify_bilateral(
         self,
@@ -1821,6 +1848,157 @@ class ProvenanceVerifier:
                     f"executor {executor_key_id!r})"
                 )
                 report.valid = False
+
+    def _verify_x_dlp(
+        self,
+        decoded: Any,
+        line_no: int,
+        report: VerificationReport,
+        receipts_by_hash: dict[str, ProvenanceReceipt],
+    ) -> None:
+        """Invariant (EPIC Q, lane Q-7a): a content-scanner DLP receipt
+        (x_dlp) carries digests, class names and counts only, never
+        content. Offline re-check with no scanner present: required
+        fields, closed action/direction vocabularies, sha256-shaped
+        digests, non-negative span counts agreeing with matched_classes,
+        redaction/action consistency, the bounded matched-class
+        vocabulary, and chain membership of any cited receipt. A payload
+        carrying a content-like field (matched_value, snippet, ...) fails
+        with a named error, so a leaky emitter cannot hide matched values
+        inside signed evidence. Receipts without the block are untouched
+        (additive extension, historical order preserved). Mutates *report*
+        in place."""
+        x_dlp = decoded.get("x_dlp") if isinstance(decoded, dict) else None
+        if x_dlp is None:
+            return
+        if not isinstance(x_dlp, dict):
+            report.errors.append(
+                f"line {line_no}: x_dlp must be an object, got {type(x_dlp).__name__}"
+            )
+            report.valid = False
+            return
+
+        # Structural validity first: every required field present.
+        for required in _DLP_REQUIRED_FIELDS:
+            if x_dlp.get(required) is None:
+                report.errors.append(f"line {line_no}: x_dlp missing field {required!r}")
+                report.valid = False
+
+        action = x_dlp.get("action")
+        if action not in _DLP_ACTIONS:
+            report.errors.append(
+                f"line {line_no}: x_dlp action {action!r} outside the closed "
+                f"vocabulary {sorted(_DLP_ACTIONS)}"
+            )
+            report.valid = False
+
+        direction = x_dlp.get("direction")
+        if direction not in _DLP_DIRECTIONS:
+            report.errors.append(
+                f"line {line_no}: x_dlp direction {direction!r} outside the closed "
+                f"vocabulary {sorted(_DLP_DIRECTIONS)}"
+            )
+            report.valid = False
+
+        # Digests are sha256-shaped: prefix plus 64 hex characters. The
+        # verifier never sees content, only these digests.
+        for digest_field in ("content_sha256", "redacted_content_sha256"):
+            digest = x_dlp.get(digest_field)
+            if digest is None:
+                continue
+            shape_ok = (
+                isinstance(digest, str)
+                and digest.startswith(_SHA256_PREFIX)
+                and re.fullmatch(r"[0-9a-f]{64}", digest[len(_SHA256_PREFIX) :]) is not None
+            )
+            if not shape_ok:
+                report.errors.append(
+                    f"line {line_no}: x_dlp {digest_field} is not a sha256 digest "
+                    f"of the form sha256:<64 hex characters>"
+                )
+                report.valid = False
+
+        # Action/redaction consistency: the post-redaction digest is
+        # present if and only if the action is redacted.
+        redacted_digest = x_dlp.get("redacted_content_sha256")
+        if action == "redacted" and not redacted_digest:
+            report.errors.append(
+                f"line {line_no}: x_dlp action 'redacted' carries no redacted_content_sha256"
+            )
+            report.valid = False
+        if action != "redacted" and redacted_digest is not None:
+            report.errors.append(
+                f"line {line_no}: x_dlp action {action!r} carries a "
+                f"redacted_content_sha256 (present only when action='redacted')"
+            )
+            report.valid = False
+
+        # Bounded class vocabulary, versioned: an unknown class fails
+        # closed rather than widening disclosure.
+        matched_classes = x_dlp.get("matched_classes")
+        classes: set[str] = set()
+        if not isinstance(matched_classes, list) or not matched_classes:
+            report.errors.append(f"line {line_no}: x_dlp matched_classes must be a non-empty list")
+            report.valid = False
+        else:
+            for mclass in matched_classes:
+                if not isinstance(mclass, str) or mclass not in _DLP_MATCHED_CLASSES:
+                    report.errors.append(
+                        f"line {line_no}: x_dlp unknown class {mclass!r} outside the "
+                        f"bounded vocabulary {sorted(_DLP_MATCHED_CLASSES)}"
+                    )
+                    report.valid = False
+                else:
+                    classes.add(mclass)
+
+        # Span counts: non-negative integers, keys in the same bounded
+        # vocabulary, and every counted class listed in matched_classes.
+        span_counts = x_dlp.get("span_counts")
+        if not isinstance(span_counts, dict):
+            report.errors.append(f"line {line_no}: x_dlp span_counts must be an object")
+            report.valid = False
+        else:
+            for spclass, count in span_counts.items():
+                if not isinstance(spclass, str) or spclass not in _DLP_MATCHED_CLASSES:
+                    report.errors.append(
+                        f"line {line_no}: x_dlp span_counts unknown class {spclass!r} "
+                        f"outside the bounded vocabulary {sorted(_DLP_MATCHED_CLASSES)}"
+                    )
+                    report.valid = False
+                    continue
+                if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                    report.errors.append(
+                        f"line {line_no}: x_dlp span_counts for {spclass!r} is not a "
+                        f"non-negative integer"
+                    )
+                    report.valid = False
+                if (
+                    isinstance(spclass, str)
+                    and spclass in _DLP_MATCHED_CLASSES
+                    and spclass not in classes
+                ):
+                    report.errors.append(
+                        f"line {line_no}: x_dlp span_counts names class {spclass!r} "
+                        f"absent from matched_classes"
+                    )
+                    report.valid = False
+
+        # Bounded disclosure: no content-like field anywhere in the block.
+        for leak_field in _DLP_FORBIDDEN_CONTENT_FIELDS:
+            if leak_field in x_dlp:
+                report.errors.append(
+                    f"line {line_no}: x_dlp carries content-like field "
+                    f"{leak_field!r} (bounded disclosure: counts, digests and "
+                    f"class names only, never content)"
+                )
+                report.valid = False
+
+        # Chain membership of any cited receipt, like every other
+        # extension citation.
+        cited = str(x_dlp.get("cited_receipt", ""))
+        if cited and cited not in receipts_by_hash:
+            report.errors.append(f"line {line_no}: x_dlp cites receipt {cited!r} not in the chain")
+            report.valid = False
 
     def _decode_gate_payload(self, raw: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         """Invariant: x_gate lives INSIDE the signed JWS payload, not in the

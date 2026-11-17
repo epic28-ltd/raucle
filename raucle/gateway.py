@@ -3384,6 +3384,68 @@ class RaucleGateway:
             },
         )
 
+    def emit_dlp_finding(
+        self,
+        *,
+        scan_id: str,
+        route: dict[str, str],
+        direction: str,
+        content_sha256: str,
+        matched_classes: list[str],
+        span_counts: dict[str, int],
+        action: str,
+        rule_id: str,
+        redacted_content_sha256: str | None = None,
+        cited_receipt: str | None = None,
+    ) -> str | None:
+        """EPIC Q (lane Q-7a): mint a content-DLP scan receipt as a signed
+        authority receipt carrying an ``x_dlp`` extension (v1.2, see
+        docs/spec/provenance/v1.2/content-dlp.md).
+
+        The caller is the in-path content scanner (the enterprise LLM
+        endpoint proxy, a client of the gateway): the gateway performs no
+        scanning itself and never receives content, only the already-mined
+        extension fields - digests, class names, counts and route
+        identifiers (bounded disclosure). The action, direction and
+        matched classes must fall inside the same closed vocabularies the
+        offline verifier re-checks; anything else is refused here, and the
+        verifier remains the enforcement point for structure, digest
+        shape, redaction consistency and chain membership.
+        """
+        from raucle.provenance import _DLP_ACTIONS, _DLP_DIRECTIONS, _DLP_MATCHED_CLASSES
+
+        if action not in _DLP_ACTIONS:
+            raise ValueError(f"unknown DLP action {action!r}; use one of {sorted(_DLP_ACTIONS)}")
+        if direction not in _DLP_DIRECTIONS:
+            raise ValueError(
+                f"unknown DLP direction {direction!r}; use one of {sorted(_DLP_DIRECTIONS)}"
+            )
+        unknown = [c for c in matched_classes if c not in _DLP_MATCHED_CLASSES]
+        if unknown:
+            raise ValueError(
+                f"unknown DLP matched classes {unknown!r}; use classes from the "
+                f"bounded vocabulary {sorted(_DLP_MATCHED_CLASSES)}"
+            )
+        extension: dict[str, Any] = {
+            "action": action,
+            "scan_id": scan_id,
+            "route": route,
+            "direction": direction,
+            "content_sha256": content_sha256,
+            "matched_classes": list(matched_classes),
+            "span_counts": dict(span_counts),
+            "rule_id": rule_id,
+        }
+        if redacted_content_sha256 is not None:
+            extension["redacted_content_sha256"] = redacted_content_sha256
+        if cited_receipt:
+            extension["cited_receipt"] = cited_receipt
+        return self._emit_authority_receipt(
+            verdict=action,
+            extension_key="x_dlp",
+            extension=extension,
+        )
+
     def _revoke_ids(self, ids: list[str], *, reason: str, actor: str, root: str) -> dict[str, Any]:
         """A3 shared leg: persist the revocation records, emit ONE signed
         revocation receipt naming the whole subtree.
