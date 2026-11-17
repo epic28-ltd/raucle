@@ -772,16 +772,24 @@ def gate_call(
     agent_id: str,
     source: str,
     destination: str,
+    session_id: str = "",
 ) -> dict:
-    payload = json.dumps(
-        {
-            "tool": tool,
-            "args": args,
-            "agent_id": agent_id,
-            "source": source,
-            "destination": destination,
-        }
-    ).encode()
+    """POST one tool call to the gate.
+
+    ``session_id`` rides the request only when the caller declares one:
+    the gateway never fabricates session continuity, and callers that do
+    not declare a session are never touched by session rules.
+    """
+    body = {
+        "tool": tool,
+        "args": args,
+        "agent_id": agent_id,
+        "source": source,
+        "destination": destination,
+    }
+    if session_id:
+        body["session_id"] = session_id
+    payload = json.dumps(body).encode()
     req = urllib.request.Request(
         gateway.rstrip("/") + "/gate",
         data=payload,
@@ -798,6 +806,63 @@ def gate_call(
             return {"decision": "ERROR", "status": e.code}
     except Exception as e:
         return {"decision": "ERROR", "error": str(e)}
+
+
+# ---------------------------------------------------------------------
+# Scripted runaway-loop scenario (EPIC D item D16): an agent retries a
+# failing batch export inside one declared session until the session
+# rule cuts the loop. The tool carries no allow rule, so every attempt
+# is denied by policy first; once the window holds threshold-1 denied
+# attempts, the runaway_tool_loop rule denies the next call and the
+# gateway receipts a session-monitor finding citing that deny.
+# ---------------------------------------------------------------------
+
+SESSION_RUNAWAY_AGENT = {
+    "agent_id": "agent:report-scheduler",
+    "source": "agent:report-scheduler",
+    "name": "Report Scheduler",
+}
+SESSION_RUNAWAY_TOOL = "batch_report_export"
+SESSION_RUNAWAY_RULE = "demo-runaway-batch-export"
+SESSION_RUNAWAY_MAX_CALLS = 8
+
+
+def run_session_runaway(gateway: str, cycle: int, quiet: bool = False) -> dict:
+    """Drive one scripted runaway loop through the real gate.
+
+    Uses a fresh session id per burst so every burst replays the whole
+    story (policy denies, then the session rule deny). Stops as soon as
+    the session rule fires. Returns a per-burst stats dict.
+    """
+    session_id = f"sess-demo-runaway-{cycle:04d}"
+    stats = {"calls": 0, "policy_denies": 0, "session_rule_denies": 0}
+    for attempt in range(1, SESSION_RUNAWAY_MAX_CALLS + 1):
+        result = gate_call(
+            gateway,
+            SESSION_RUNAWAY_TOOL,
+            {"batch_ref": f"RPT-{cycle:04d}-{attempt:02d}", "format": "csv"},
+            SESSION_RUNAWAY_AGENT["agent_id"],
+            SESSION_RUNAWAY_AGENT["source"],
+            "report-warehouse",
+            session_id=session_id,
+        )
+        stats["calls"] += 1
+        decision = str(result.get("decision", "ERROR")).upper()
+        rule_id = str(result.get("rule_id", ""))
+        if rule_id == SESSION_RUNAWAY_RULE:
+            stats["session_rule_denies"] += 1
+            if not quiet:
+                reason = str(result.get("reason", ""))[:70]
+                print(
+                    f"  [session] {session_id} runaway loop cut by "
+                    f"{SESSION_RUNAWAY_RULE} on call {attempt}: {reason}",
+                    flush=True,
+                )
+            break
+        if decision == "DENY":
+            stats["policy_denies"] += 1
+        time.sleep(0.05)
+    return stats
 
 
 def main() -> None:
@@ -822,6 +887,15 @@ def main() -> None:
         type=float,
         default=0.1,
         help="Lower bound on the inter-call sleep, in seconds",
+    )
+    parser.add_argument(
+        "--session-every",
+        type=int,
+        default=25,
+        help=(
+            "Run the scripted runaway-loop session burst every N cycles "
+            "(0 disables; the demo session tab rides this traffic)"
+        ),
     )
     parser.add_argument("--quiet", action="store_true", help="Only log errors")
     args = parser.parse_args()
@@ -887,6 +961,21 @@ def main() -> None:
                 stats[key] += 1
                 s = scenario_totals.setdefault(scenario, {"allow": 0, "deny": 0, "error": 0})
                 s[key if key in s else "error"] += 1
+
+            # Scripted runaway-loop burst (D16): every --session-every
+            # cycles, one declared session retries a failing export until
+            # the session rule cuts it. Real gate calls, real receipts.
+            if args.session_every and this_cycle % args.session_every == 0:
+                burst = run_session_runaway(args.gateway, this_cycle, quiet=args.quiet)
+                with stats_lock:
+                    stats["deny"] += burst["policy_denies"] + burst["session_rule_denies"]
+                if burst["session_rule_denies"] and not args.quiet:
+                    print(
+                        f"  [session] burst {this_cycle}: {burst['calls']} calls, "
+                        f"{burst['policy_denies']} policy denies, "
+                        f"{burst['session_rule_denies']} session-rule deny",
+                        flush=True,
+                    )
 
             if not args.quiet:
                 reason = str(result.get("reason", ""))[:50]

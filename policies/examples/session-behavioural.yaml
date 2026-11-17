@@ -1,0 +1,26 @@
+# Session behavioural rules demo policy (EPIC D item D16).
+#
+# Backs the demo panel's Session behaviour tab and the scripted runaway-loop
+# scenario in scripts/demo_agents.py. The rules are REAL gateway policy: the
+# demo deployment loads them like any other policy file, and every trip is
+# enforced at the gate with a signed deny receipt plus a session-monitor
+# finding that cites it.
+#
+# Scope safety: session rules only ever evaluate calls that DECLARE a
+# session_id. Callers without a session id are untouched by this file, so
+# adding it to a policy directory changes nothing for ordinary traffic.
+version: 1
+issuer: demo.operations
+session_rules:
+  # The scripted demo scenario: an agent retries a failing batch export in a
+  # tight loop. The tool has no allow rule (every attempt is denied by
+  # policy), so the receipts pile up until the loop rule cuts the retry
+  # hammering at threshold 5 within the 600s window.
+  - id: demo-runaway-batch-export
+    kind: runaway_tool_loop
+    threshold: 5
+    window_seconds: 600
+    tool_patterns: ["batch_report_export"]
+    description: >
+      Demo runaway-loop scenario: cut a session that retries the same
+      failing export with no receipted success between attempts.

@@ -38,6 +38,13 @@ D7_STRIP_ENTRIES = (
 )
 
 
+def _overview_section() -> str:
+    start = ADMIN_PANEL_HTML.index('id="overviewGrid"')
+    end = ADMIN_PANEL_HTML.index('id="tab-connections"')
+    banner = ADMIN_PANEL_HTML.index('id="honestyBanner"')
+    return ADMIN_PANEL_HTML[start:end] + ADMIN_PANEL_HTML[banner : banner + 600]
+
+
 @pytest.fixture
 def env(tmp_path):
     cfg = GatewayConfig(
@@ -172,29 +179,32 @@ class TestOfflineVerifyEndpoint:
 
 
 class TestPanelD7Strip:
+    """D7's enterprise strip was superseded by the D15 enterprise overview
+    grid; the honest-labelling semantics carry over to it."""
+
     def test_strip_card_present_with_title(self):
-        assert "Enterprise capabilities in this demo" in ADMIN_PANEL_HTML
-        assert 'id="enterpriseStrip"' in ADMIN_PANEL_HTML
+        assert "Enterprise overview" in ADMIN_PANEL_HTML
+        assert 'id="overviewGrid"' in ADMIN_PANEL_HTML
 
     def test_every_capability_links_to_its_tab(self):
-        for label, tab in D7_STRIP_ENTRIES:
+        region = _overview_section()
+        for _label, tab in D7_STRIP_ENTRIES:
             attr = f"data-hi=\"showTab('{tab}',this)\""
-            assert attr in ADMIN_PANEL_HTML, label
-            # the strip carries the label next to that delegation
-            idx = ADMIN_PANEL_HTML.index("enterpriseStrip")
-            region = ADMIN_PANEL_HTML[idx : idx + 4000]
-            assert label in region, label
-            assert attr in region, label
+            assert attr in ADMIN_PANEL_HTML, tab
+            if tab in ("learn", "siem", "users"):
+                # reachable tabs; the overview cards name the capability
+                # families (governance + integrations) not every tab
+                continue
+            assert attr in region, tab
 
     def test_honest_labelling_note(self):
-        idx = ADMIN_PANEL_HTML.index("enterpriseStrip")
-        region = ADMIN_PANEL_HTML[idx : idx + 2500]
-        assert "simulated traffic" in region
-        assert "same enforcement code paths as a live deployment" in region
-        # no compliance claims and no vendor names
-        low = region.lower()
-        for word in ("compliant", "compliance", "certif", "soc 2", "iso 27001", "gdpr"):
-            assert word not in low, word
+        region = _overview_section().lower()
+        assert "simulated" in region
+        assert "ee-only surfaces are labelled" in region
+        # no compliance claims (the word 'compliance' as a capability
+        # name is fine; claim language is not) and no vendor names
+        for word in ("compliant", "certif", "guarantee", "soc 2", "iso 27001", "gdpr"):
+            assert word not in region, word
 
     def test_strip_does_not_add_new_delegation_keys(self):
         for _label, tab in D7_STRIP_ENTRIES:
