@@ -6,7 +6,7 @@ scans, and, when you ask it to, redacts sensitive content in the data
 plane before the content lands back in the loop.
 
 One label, stated plainly: **this layer is advisory. It never
-enforces.** It never blocks a call, never mints a gate receipt, and
+enforces.** It holds no gate authority, never mints a gate receipt, and
 never replaces the deterministic gate. When something fails inside the
 advisory layer, it fails OPEN: the agent loop keeps running. The gate
 (`check_tool_call`) is the component with authority, and it is
@@ -66,7 +66,7 @@ not semantics; content matching no pattern passes. That limit is
 declared, not hidden. `[REDACTED:<class>]` collars never re-flag: a
 second pass over redacted content changes nothing.
 
-The middleware never blocks and never modifies tool-call arguments. It
+The middleware holds no gate authority overs and never modifies tool-call arguments. It
 is observation plus data-plane hygiene, and only where it is wired
 in-process.
 

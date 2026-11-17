@@ -18,11 +18,14 @@ What it is NOT, categorically and by construction:
   gate (`RaucleGateway.check_tool_call`);
 - it **never mints gate receipts**. Receipts minted here are findings
   (evidence class), not decisions;
-- it is **fail-open by design**. Any failure inside the advisory paths
-  (scan, redaction, emission) is logged and swallowed: the agent loop
-  keeps running and unredacted content passes through. In deliberate
-  contrast, the deterministic gate is fail-closed. This lane is not the
-  gate and must never be marketed as one.
+- it is **fail-open by design in the redaction and emission paths**:
+  a failure there is logged and swallowed; the agent loop keeps running
+  and unredacted content passes through. The heuristic scanner verdict
+  from `pre_tool_call` is not part of this contract (it returns
+  `(allowed, result)` exactly as shipped before this layer existed) and
+  scanner failures in `pre_process`/`pre_tool_call` bookkeeping still
+  raise. In deliberate contrast, the deterministic gate is fail-closed.
+  This lane is not the gate and must never be marketed as one.
 
 ## Redaction (versioned config, default OFF)
 
@@ -73,8 +76,7 @@ With a gateway client reference wired (an object exposing
 class through `RaucleGateway.emit_finding`:
 
 - `harness` is always `middleware-advisory`;
-- `test_id` is the redaction class (or, for non-redaction sessions, the
-  session scanner alert class);
+- `test_id` is the redaction class;
 - `verdict` is `confirmed` (the middleware observed what it reports);
 - `cited_receipt` is the RELATED tool-call gate receipt when one is
   bound to the call's `trace_id` via `record_trace_receipt`; the

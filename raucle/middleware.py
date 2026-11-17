@@ -51,10 +51,12 @@ class RaucleMiddleware:
     Provides pre/post processing hooks and event callbacks.
 
     The middleware is an ADVISORY layer by construction: it observes,
-    redacts (when configured) and reports. It never blocks a call and
-    never mints gate receipts; enforcement authority lives in the
-    deterministic gate, not here. Failure inside the advisory layer is
-    fail-open by design (logged, never raised into the agent loop) — in
+    redacts (when configured) and reports. It never holds gate
+    authority - it never mints gate receipts; enforcement lives in the
+    deterministic gate, not here. Post-processing, redaction and
+    finding emission fail open by design (logged, never raised into the
+    agent loop); the heuristic scanner still returns its own
+    (allowed, result) verdict from pre_tool_call, as shipped. In
     deliberate contrast to the gate, which is fail-closed.
 
     Parameters

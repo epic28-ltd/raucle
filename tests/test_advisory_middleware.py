@@ -54,9 +54,9 @@ class RecordingGateway:
         return "finding_stub_0001"
 
 
-def _make(redaction: bool, gateway: Any = None) -> RaucleMiddleware:
+def _make(redaction: bool, gateway: Any = None, session: bool = False) -> RaucleMiddleware:
     return RaucleMiddleware(
-        session_enabled=False,
+        session_enabled=session,
         redaction_classes=["pii_card", "pii_email", "pii_national_id", "secret_bearer"]
         if redaction
         else None,
@@ -200,12 +200,48 @@ class TestAdvisoryFindingEmission:
         mw.post_process(f"Card {CARD}, mail {EMAIL}.", trace_id="t1")
         assert {f["test_id"] for f in gw.findings} == {"pii_card", "pii_email"}
 
-    def test_pre_tool_call_finding_not_blocked_by_gateway_failure(self) -> None:
+    def test_pre_tool_call_redaction_emits_and_fail_open_on_gateway_failure(self) -> None:
+        # The pre_tool_call redaction path runs ONLY inside the session
+        # branch (session_enabled + session_id); a RecordingGateway failure
+        # must neither break the hook nor mint a finding, and the recorded
+        # text must stay REDACTED (the fail-open return is the collared
+        # text, not the raw secret).
+        raw_secret = f"user {EMAIL}"
         gw = RecordingGateway(fail=True)
-        mw = _make(redaction=True, gateway=gw)
+        mw = _make(redaction=True, gateway=gw, session=True)
         mw.record_trace_receipt("t1", "receipt_abc", "allow")
-        allowed, _ = mw.pre_tool_call("search", {"query": f"user {EMAIL}"}, trace_id="t1")
+
+        captured: list[str] = []
+
+        class _StubSession:
+            def scan_message(self, message, **kwargs):
+                captured.append(message)
+
+        mw._sessions["s1"] = _StubSession()  # noqa: SLF001 - capture hook
+        allowed, _ = mw.pre_tool_call(
+            "search", {"query": raw_secret}, session_id="s1", trace_id="t1"
+        )
         assert allowed is True
+        # best-effort emission: the gateway failure swallows the finding
+        assert gw.findings == []
+        assert captured, "pre_tool_call must reach the session record path"
+        assert EMAIL not in captured[0], "recorded text must be redacted"
+        assert "[REDACTED:pii_email]" in captured[0]
+
+
+# ---------------------------------------------------------------------------
+# (c2) Luhn gate: a PAN failing the checksum stays unredacted
+# ---------------------------------------------------------------------------
+
+
+def test_luhn_failing_pan_not_redacted() -> None:
+    from raucle.redaction import redact_text
+
+    result = redact_text("card 1234567812345678 end", ["pii_card"])
+    assert "1234567812345678" in result.redacted_text
+    assert "[REDACTED:pii_card]" not in result.redacted_text
+    ok = redact_text(f"card {CARD} end", ["pii_card"])
+    assert "[REDACTED:pii_card]" in ok.redacted_text
 
 
 # ---------------------------------------------------------------------------
