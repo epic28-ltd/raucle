@@ -219,5 +219,7 @@ class TestPanelAssureView:
         assert ADMIN_PANEL_HTML.count('''data-hi="showTab('assure',this)"''') == 1
 
     def test_tour_step_present(self):
-        assert "{tab:'assure', target:'#tab-assure'" in ADMIN_PANEL_HTML
-        assert "Proof across organisations" in ADMIN_PANEL_HTML
+        # D17 rewrite: the buyer arc tours the assurance packet view; the
+        # cross-org screen stays reachable in-panel via the packet view.
+        assert "{tab:'assure', target:'#assurancePacketView'" in ADMIN_PANEL_HTML
+        assert 'id="assurancePacketView"' in ADMIN_PANEL_HTML

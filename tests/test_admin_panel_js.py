@@ -475,7 +475,7 @@ def test_csp_header_on_panel_and_topology() -> None:
 
 
 # ---------------------------------------------------------------------------
-# G7: the guided tour narrative arc
+# D17: the enterprise-buyer tour narrative
 # ---------------------------------------------------------------------------
 
 
@@ -483,30 +483,43 @@ def _tour_steps() -> list[tuple[str, str, str]]:
     return re.findall(r"\{tab:'([a-z]+)', target:'([^']+)', title:'([^']*)'", ADMIN_PANEL_HTML)
 
 
-def test_tour_follows_the_narrative_arc() -> None:
-    """The arc: live traffic, what the gate caught, the policy behind it,
-    the evidence it leaves, then what an auditor takes away."""
+def test_tour_follows_the_enterprise_buyer_arc() -> None:
+    """The arc: enterprise overview, what the console shows over OSS
+    raucle, session monitoring catching a real runaway loop, DLP
+    receipts, receipt -> offline verify -> coverage, capability tokens
+    and PQ, compliance, then the honest EE-limits close."""
     tabs = [t for t, _, _ in _tour_steps()]
     assert tabs == [
-        "connections",  # live traffic
-        "connections",  # filter
-        "dlp",  # caught: sensitive data
-        "injection",  # caught: injected instructions
-        "shadow",  # caught: unapproved AI
-        "policies",  # the policy that did it (with simulate)
-        "receipts",  # evidence: signed receipts
-        "capdemo",  # evidence: capability tokens
-        "receipts",  # auditor takeaway: key model (G5)
-        "receipts",  # auditor takeaway: offline verify
-        "assure",  # auditor takeaway: assurance packet (G3)
-        "assure",  # auditor takeaway: cross-org proof
+        "dashboard",  # the enterprise overview grid
+        "dashboard",  # the stacks: EE console shape over OSS raucle
+        "session",  # session monitoring: the runaway loop, real traffic
+        "session",  # the catch is receipted, verified offline
+        "dlp",  # DLP receipts from the real pattern engine
+        "receipts",  # every decision leaves a signed receipt
+        "receipts",  # offline verify: no operator contact
+        "receipts",  # coverage: the receipted-share metric
+        "capdemo",  # capability tokens, attenuated live
+        "receipts",  # PQ receipts: the signing key family
+        "assure",  # compliance: the assurance packet story
+        "dashboard",  # honest close: EE-only surfaces labelled
     ]
 
 
-def test_tour_has_one_step_per_screen_family_and_is_bounded() -> None:
+def test_tour_targets_are_real_elements_in_the_new_layout() -> None:
+    """Every spotlight target must resolve in the shipped panel: an id
+    that exists, or the documented left-nav selector shape."""
+    import re as _re
+
+    for _tab, target, _title in _tour_steps():
+        if target.startswith("#"):
+            assert f'id="{target[1:]}"' in ADMIN_PANEL_HTML, target
+        else:
+            assert _re.fullmatch(r"\[data-tab-id=\"[a-z]+\"\]\.tab", target), target
+            assert f'data-tab-id="{target[14:-6]}"' in ADMIN_PANEL_HTML, target
+
+
+def test_tour_is_bounded_with_unique_targets_and_titles() -> None:
     steps = _tour_steps()
-    # "one step per screen family", not one per tab: the caught family
-    # carries three screens, evidence two, auditor takeaway two.
     assert len(steps) <= 12
     targets = [t for _, t, _ in steps]
     assert len(targets) == len(set(targets)), "no duplicate spotlight targets"
@@ -514,13 +527,31 @@ def test_tour_has_one_step_per_screen_family_and_is_bounded() -> None:
     assert len(titles) == len(set(titles)), "no duplicate step titles"
 
 
-def test_tour_no_longer_drops_into_side_quests() -> None:
-    """Retired screens stay off the tour; their tabs remain in the panel."""
+def test_tour_retired_screens_stay_off_the_walkthrough() -> None:
+    """The walkthrough stays the buyer narrative: the side screens (MCP
+    scanner, authority stop, learn mode) are reachable tabs the tour
+    deliberately does not drop into."""
     tabs = [t for t, _, _ in _tour_steps()]
-    for gone in ("dashboard", "mcp", "stop", "learn"):
+    for gone in ("mcp", "stop", "learn"):
         assert gone not in tabs
-    for kept in ("showTab('dashboard',this)", "showTab('mcp',this)"):
+    for kept in ("showTab('mcp',this)", "showTab('stop',this)", "showTab('learn',this)"):
         assert kept in ADMIN_PANEL_HTML
+
+
+def test_tour_opens_and_closes_on_the_overview_and_honesty_banner() -> None:
+    steps = _tour_steps()
+    assert steps[0][2] and "overview" in steps[0][2].lower()
+    assert steps[-1][0] == "dashboard"
+    assert steps[-1][1] == "#honestyBanner"
+
+
+def test_tour_spotlights_the_session_catch_with_real_traffic_copy() -> None:
+    titles = " | ".join(t for _, _, t in _tour_steps())
+    assert "runaway" in titles.lower()
+    bodies = " ".join(m.group(1) for m in re.finditer(r"body:'([^']*)'", ADMIN_PANEL_HTML))
+    assert "session id" in bodies.lower(), (
+        "the tour must say the demo traffic declares a session id (honest about continuity)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -594,13 +625,118 @@ def test_left_nav_collapses_to_a_top_strip_under_900px() -> None:
 
 
 def test_tour_spotlights_left_nav_items_for_caught_screens() -> None:
-    """G9: the caught screens spotlight their left-nav entries; the rest
-    spotlight content sections (scroll-and-spotlight semantics unchanged)."""
+    """G9 carried over: the DLP step spotlights its left-nav entry; the
+    D17 steps spotlight content sections (scroll-and-spotlight semantics
+    unchanged)."""
     targets = {tab: target for tab, target, _ in _tour_steps()}
-    for tab in ("dlp", "injection", "shadow"):
-        assert targets[tab] == f'[data-tab-id="{tab}"].tab'
-    for tab in ("connections", "policies", "receipts", "capdemo", "assure"):
+    assert targets["dlp"] == '[data-tab-id="dlp"].tab'
+    for tab in ("dashboard", "session", "receipts", "capdemo", "assure"):
         assert targets[tab].startswith("#"), tab
+
+
+# ---------------------------------------------------------------------------
+# D16: the session behaviour tab renderers (real endpoints, textContent)
+# ---------------------------------------------------------------------------
+
+
+def test_session_loaders_exist_and_are_wired_into_showtab() -> None:
+    for fn in ("loadSessionPanel", "loadSessionRules", "loadSessionWindows", "loadSessionFindings"):
+        assert f"function {fn}(" in ADMIN_PANEL_HTML, fn
+    assert "if(t==='session')loadSessionPanel()" in ADMIN_PANEL_HTML
+    # the offline-verify button rides the shared delegated map
+    assert "sessionFindingVerify" in ADMIN_PANEL_HTML
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_loadSessionRules_renders_the_real_config_escaped() -> None:
+    """Hostile rule ids and config errors render as text, never markup."""
+    block = _extract_script_blocks(ADMIN_PANEL_HTML)[0]
+    payload = {
+        "schema_version": "raucle.demo.session_rules/v1",
+        "config_error": "",
+        "deny_only": True,
+        "session_rules": [
+            {
+                "id": "<img src=x onerror=alert(1)>",
+                "kind": "runaway_tool_loop",
+                "threshold": 3,
+                "window_seconds": 600,
+                "tool_patterns": ["batch_report_export"],
+            }
+        ],
+        "window": {"ttl_seconds": 900, "max_keys": 1024, "max_entries": 10000},
+        "limits": ["deny-only v1", "process memory", "gradual_extraction"],
+    }
+    program = (
+        "const captured={};"
+        "global.document={getElementById:(id)=>"
+        "{if(!captured[id])captured[id]={innerHTML:'',textContent:''};return captured[id];}};"
+        "function api(){return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve("
+        + __import__("json").dumps(payload)
+        + ")});}"
+        + _extract_fn(block, "esc")
+        + _extract_fn(block, "escn")
+        + _extract_fn(block, "loadSessionRules")
+        + "\n(async()=>{"
+        "loadSessionRules();"
+        "await new Promise(r=>setTimeout(r,30));"
+        "const all=Object.values(captured).map(x=>(x.innerHTML||'')+(x.textContent||'')).join('|');"
+        "const rawBad=/<img[^>]*onerror/.test(all);"
+        "const escOk=all.includes('&lt;img src=x onerror=alert(1)&gt;');"
+        "if(rawBad||!escOk){console.log('BAD:',all);process.exit(1);}"
+        "console.log('ESCAPED');"
+        "})();"
+    )
+    _run_node(program)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_loadSessionFindings_renders_cited_receipts_and_verify_buttons() -> None:
+    """Each finding row shows its cited gate receipt and carries a
+    dispatcher-backed verify button; hostile text stays text."""
+    block = _extract_script_blocks(ADMIN_PANEL_HTML)[0]
+    payload = {
+        "schema_version": "raucle.demo.session_findings/v1",
+        "harness": "session-monitor",
+        "count": 1,
+        "findings": [
+            {
+                "finding_id": "finding_<script>",
+                "test_id": "demo-runaway-export-loop",
+                "verdict": "confirmed",
+                "cited_receipt": "rcpt-abc123",
+                "tool": "batch_report_export",
+                "expected_decision": "deny",
+                "actual_decision": "deny",
+                "detected_at": 1760000000,
+                "note": "session behavioural rule fired",
+                "receipt_hash": "sha-xyz<script>alert(2)</script>",
+            }
+        ],
+    }
+    program = (
+        "const captured={};"
+        "global.document={getElementById:(id)=>"
+        "{if(!captured[id])captured[id]={innerHTML:'',textContent:''};return captured[id];}};"
+        "function api(){return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve("
+        + __import__("json").dumps(payload)
+        + ")});}"
+        + _extract_fn(block, "esc")
+        + _extract_fn(block, "escn")
+        + _extract_fn(block, "loadSessionFindings")
+        + "\n(async()=>{"
+        "loadSessionFindings();"
+        "await new Promise(r=>setTimeout(r,30));"
+        "const all=Object.values(captured).map(x=>(x.innerHTML||'')+(x.textContent||'')).join('|');"
+        r"const rawBad=/<script>alert\(2\)<\/script>/.test(all)||/finding_<script>/.test(all);"
+        "const ok=all.includes('rcpt-abc123')"
+        "&&all.includes('demo-runaway-export-loop')"
+        "&&all.includes('sessionFindingVerify(event)');"
+        "if(rawBad||!ok){console.log('BAD:',all);process.exit(1);}"
+        "console.log('ESCAPED');"
+        "})();"
+    )
+    _run_node(program)
 
 
 # ---------------------------------------------------------------------------
@@ -646,3 +782,112 @@ def test_corporate_blue_tokens_are_scoped_to_the_nav_chrome() -> None:
     # green allow / red deny / amber escalate stay literal decision colours
     for colour in ("#22c55e", "#dd6b78", "#e5b85c"):
         assert colour in ADMIN_PANEL_HTML
+
+
+# ---------------------------------------------------------------------------
+# Checker-driven regression: the checker (17 Nov evening) found loadSession-
+# Windows reading a client-invented shape and sessionFindingVerify being a
+# stub. These probes pin the server shape and the real verify call.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_loadSessionWindows_renders_the_server_shape() -> None:
+    """The renderer reads d.sessions with agents/receipts/escalates and
+    honours available=false + unavailable_note (unavailable never
+    fabricated, client-side too)."""
+    block = _extract_script_blocks(ADMIN_PANEL_HTML)[0]
+    payload = {
+        "schema_version": "raucle.demo.session_windows/v1",
+        "available": True,
+        "sessions": [
+            {
+                "session_id": "sess-<script>",
+                "receipts": 3,
+                "allows": 1,
+                "denies": 2,
+                "escalates": 0,
+                "agents": ["agent:svc<img>"],
+                "first_iat": 1760000000,
+                "last_iat": 1760000300,
+                "recent": [],
+            }
+        ],
+    }
+    win_payload = {
+        "schema_version": "raucle.demo.session_windows/v1",
+        "available": False,
+        "sessions": [],
+        "unavailable_note": "receipt index unavailable",
+    }
+    program = (
+        "const captured={};"
+        "global.document={getElementById:(id)=>"
+        "{if(!captured[id])captured[id]={innerHTML:'',textContent:''};"
+        "return captured[id];}};"
+        "const payloads=["
+        + __import__("json").dumps(payload)
+        + ","
+        + __import__("json").dumps(win_payload)
+        + "];let call=0;"
+        "function api(){const p=payloads[Math.min(call,1)];call++;"
+        "return Promise.resolve({ok:true,status:200,json:()=>Promise.resolve(p)});}"
+        + _extract_fn(block, "esc")
+        + _extract_fn(block, "escn")
+        + _extract_fn(block, "loadSessionWindows")
+        + "\n(async()=>{"
+        "loadSessionWindows();"
+        "await new Promise(r=>setTimeout(r,30));"
+        "const first=captured['sessionWindowsBody'].innerHTML;"
+        "loadSessionWindows();"
+        "await new Promise(r=>setTimeout(r,30));"
+        "const second=captured['sessionWindowsBody'].innerHTML;"
+        "const rawBad=/<script>|<img>/.test(first+second);"
+        "const ok=first.includes('sess-&lt;script&gt;')"
+        "&&first.includes('receipts 3')"
+        "&&first.includes('agent:svc&lt;img&gt;')"
+        "&&second.includes('receipt index unavailable')"
+        "&&!second.includes('no active windows');"
+        "if(rawBad||!ok){console.log('BAD:',first,'||',second);process.exit(1);}"
+        "console.log('ESCAPED');"
+        "})();"
+    )
+    _run_node(program)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_sessionFindingVerify_calls_the_real_endpoint() -> None:
+    """The card/row button drives the real POST offline-verify endpoint
+    with the finding's receipt hash and renders the verdict - not the
+    stub sentence the checker caught."""
+    block = _extract_script_blocks(ADMIN_PANEL_HTML)[0]
+    program = (
+        "const captured={};"
+        "let __p='';let __m='';"
+        "global.document={getElementById:(id)=>"
+        "{if(!captured[id])captured[id]={innerHTML:'',textContent:''};"
+        "return captured[id];}};"
+        "function api(p,o){__p=p;__m=(o||{}).method||'GET';"
+        "return Promise.resolve({status:200,json:()=>Promise.resolve({verdict:'valid',"
+        "schema_version:'raucle.demo.chain_verification/v1'})});}"
+        + _extract_fn(block, "esc")
+        + _extract_fn(block, "escn")
+        + _extract_fn(block, "sessionFindingVerify")
+        + "\n(async()=>{"
+        "const el="
+        "{getAttribute:(k)=>k==='data-receipt'?'sha256:deadbeef':"
+        "(k==='data-cited'?'sha256:gate':'')};"
+        "sessionFindingVerify({},el);"
+        "await new Promise(r=>setTimeout(r,30));"
+        "const all=Object.values(captured).map(x=>"
+        "(x.innerHTML||'')+(x.textContent||'')).join('|');"
+        "const called=__p.indexOf("
+        '"/api/demo/session-findings/sha256%3Adeadbeef/offline-verify")>-1'
+        ' && __m==="POST";'
+        "const rawBad=/<script>/.test(all);"
+        "const ok=called&&all.includes('VERIFIED OFFLINE');"
+        "if(rawBad||!ok){console.log('BAD:',__p,__m,all);process.exit(1);}"
+        "console.log('ESCAPED');"
+        "})();"
+    )
+    _run_node(program)
