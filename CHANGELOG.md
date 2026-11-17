@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added - EE proxy runtime specification (EPIC Q lane Q-7b)
+
+- New public specification `docs/spec/ee-proxy-runtime-v1.md`: the
+  versioned design and wire contract for the enterprise LLM endpoint
+  proxy (the closed EE runtime that carries content-plane DLP), built
+  entirely over existing OSS gate surfaces: per-route policy profiles
+  with fail-closed unknown routes, request/response DLP scan-and-redact
+  with `x_dlp` receipts minted through `RaucleGateway.emit_dlp_finding`,
+  session rules by declared session identity, response taint feeding the
+  existing chain-taint rules, provenance headers, fail-closed failure
+  postures per failure class, and the versioned `ee-proxy-routes/v1`
+  configuration schema. The spec records the licence-split ruling
+  explicitly: the runtime is EE; the spec, receipts and verifier stay
+  OSS; no OSS code change is required. Spec index updated.
+
 ### Fixed - CI toolchain pinning
 
 - The CI lint job installs ruff pinned to an exact version
