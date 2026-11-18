@@ -13,6 +13,25 @@ This directory holds normative specification documents for the Raucle protocol f
 | EE Proxy Runtime | v1 | Accepted 2026-11-17 | [ee-proxy-runtime-v1.md](ee-proxy-runtime-v1.md) |
 | Advisor Classifier | v1 | Accepted 2026-11-18 | [advisor-classifier-v1.md](advisor-classifier-v1.md) |
 
+## Receipts v1.2 additive extensions
+
+Additive extensions to the Provenance Receipt v1
+([provenance/v1.md](provenance/v1.md)): absent fields produce
+byte-identical receipts, so a verifier that does not implement an
+extension still verifies chains without it. Each document is normative
+for the extension it defines.
+
+| Extension | Status | Document |
+|---|---|---|
+| Task-intent binding (`x_gate.intent`) | Accepted 2026-10-29 | [provenance/v1.2/intent-binding.md](provenance/v1.2/intent-binding.md) |
+| Credential-lease extension (`x_lease`) | Accepted 2026-10-30 | [provenance/v1.2/lease-extension.md](provenance/v1.2/lease-extension.md) |
+| Harness findings (`x_finding`) | Shipped 2026-10-30 | [provenance/v1.2/harness-findings.md](provenance/v1.2/harness-findings.md) |
+| Code authorship (`x_authorship`) | Shipped 2026-10-30 | [provenance/v1.2/code-authorship.md](provenance/v1.2/code-authorship.md) |
+| Bilateral outcomes (`x_bilateral`) | Shipped 2026-11-06 | [provenance/v1.2/bilateral-outcomes.md](provenance/v1.2/bilateral-outcomes.md) |
+| Content DLP (`x_dlp`) | Accepted 2026-11-17 | [provenance/v1.2/content-dlp.md](provenance/v1.2/content-dlp.md) |
+| Counterfactual evidence (`x_gate.counterfactual`) | Draft 2026-11-18, spec precedes implementation | [provenance/v1.2/counterfactual-evidence.md](provenance/v1.2/counterfactual-evidence.md) |
+| Revocation-event receipts (`x_revocation`, v1.2 kind) | Draft 2026-11-18, spec precedes the v1.2 kind; v1.0 emitter shipped | [provenance/v1.2/revocation-receipts.md](provenance/v1.2/revocation-receipts.md) |
+
 ## Process
 
 - Specs follow versioned URLs (`/spec/<name>/v<N>`). A spec at a given version is **immutable except for non-breaking clarifications**.
