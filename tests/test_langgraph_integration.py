@@ -516,6 +516,31 @@ def test_empty_agent_id_denies_receipted(lg_installed, tmp_path, issued):
     assert "no acting agent identity" in result["messages"][0].content
     receipts = _chain_events(tmp_path / "receipts.jsonl")
     assert receipts[0]["decision"] == "DENY"
+    assert receipts[0]["agent_id"] is None
+
+
+def test_deny_receipt_agent_id_never_placeholder(lg_installed, tmp_path, issued):
+    """Contract: a deny receipt's agent_id is the declared caller id or an
+    honest null - never a fabricated placeholder string. Mirrors the crewai
+    lane's honest-null contract (B2/D1)."""
+    _issuer, gate, token = issued
+    lg_installed.set_in_force_token(token)
+    sink = _sink(tmp_path)
+    # Unattributed call (empty agent_id) with a token in force: deny receipt
+    # must carry null, not "<unbound>".
+    node = _node(lg_installed, gate, sink, agent_id="")
+    _body.calls.clear()
+    node.node(_graph_state({"to": "ACC-001", "amount": 50}))
+    receipts = _chain_events(tmp_path / "receipts.jsonl")
+    placeholders = {"<unbound>", "<unknown>", "<none>", "", None}
+    assert receipts[0]["decision"] == "DENY"
+    assert receipts[0]["agent_id"] not in placeholders - {None}
+    # Declared caller id still survives untouched on deny.
+    node2 = _node(lg_installed, gate, sink, agent_id="agent:other")
+    _body.calls.clear()
+    node2.node(_graph_state({"to": "ACC-001", "amount": 50}, call_id="c-wrong-scope"))
+    receipts2 = _chain_events(tmp_path / "receipts.jsonl")
+    assert receipts2[-1]["agent_id"] == "agent:other"
 
 
 def test_agent_mismatch_denies_attributable(lg_installed, tmp_path, issued):

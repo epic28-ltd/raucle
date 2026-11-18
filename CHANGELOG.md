@@ -74,6 +74,18 @@
   restored a hardcoded `_HAS_CREWAI = False`, which in an extras venv
   poisons the real module state for every later crewai test in the same
   pytest process; it now restores the prior state truthfully.
+- Follow-up (integration doc + langgraph leg, D1-adjacent): the three
+  prose `guard_tools` examples were checked on a freshly fetched main
+  and already bind `agent_id` with the fail-closed note (the crewai
+  lane covered them; no doc change needed). The langgraph adapter
+  still carried the placeholder family the crewai fix removed: deny
+  emission defaulting a falsy `agent_id` to `"<unbound>"`. Unattributed
+  deny receipts now carry an honest null `agent_id` (empty string and
+  None both emit null; declared caller ids are untouched), matching the
+  crewai contract. Pinned red-first in
+  `tests/test_langgraph_integration.py::test_deny_receipt_agent_id_never_placeholder`
+  (deny receipt's `agent_id` is declared-or-null, never a placeholder
+  string) and by extending `test_empty_agent_id_denies_receipted`.
 
 ### Added - EE proxy runtime specification (EPIC Q lane Q-7b)
 
