@@ -13,7 +13,7 @@
   adapters already enforce (receipt-index v3: continuity is never
   fabricated). `CapabilityReceipt.agent_id` is now `str | None` and
   red-first pins in `tests/test_agent_framework_integration.py` hold
-  both legs (an unattributed deny receipts `agent_id: null`).
+  both legs (an unattributed deny receipt carries `agent_id: null`).
 
 ### Added - P2a: framework adapters for the OpenAI Agents SDK, Pydantic AI and Google ADK
 
