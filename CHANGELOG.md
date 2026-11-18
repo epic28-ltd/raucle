@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fixed - I1: the agent_framework adapter carried the last agent_id placeholder on receipt surfaces
+
+- `raucle/integrations/agent_framework.py` minted
+  `agent_id=agent_id or "<unknown>"` into capability receipts,
+  including deny receipts, so an unattributed call produced a
+  fabricated identity on the audit chain. The receipt now carries the
+  caller's `agent_id` verbatim when declared, or an honest null when it
+  is not - the same honest-null contract the crewai and langgraph
+  adapters already enforce (receipt-index v3: continuity is never
+  fabricated). `CapabilityReceipt.agent_id` is now `str | None` and
+  red-first pins in `tests/test_agent_framework_integration.py` hold
+  both legs (an unattributed deny receipts `agent_id: null`).
+
 ### Added - P2a: framework adapters for the OpenAI Agents SDK, Pydantic AI and Google ADK
 
 - Three new adapters carry the attribution-guard family (the crewai and
@@ -114,10 +127,12 @@
   `CapabilityDenied` propagates out of `run()` on all four); the 1.6.1
   framing came from the discovery venv's resolution, not a crewai
   behaviour change.
-- The fix is adapter-side and version-robust (mirrors the langgraph
-  adapter's `_evaluate_gate`): token check first (the pinned
-  no-token reason is unchanged), then a fail-closed attribution deny
-  ("no acting agent identity"), then the gate. Both the sync `_run` and
+- The fix is adapter-side and version-robust: in crewai the token
+  check comes first (the pinned no-token reason is unchanged), then a
+  fail-closed attribution deny ("no acting agent identity"), then the
+  gate; the langgraph adapter runs the same two fail-closed checks in
+  the opposite order (the agent_id deny before the token check). Both
+  the sync `_run` and
   async `_arun`/`arun` paths enforce it, and deny receipts carry an
   honest null `agent_id` - the `"<unbound>"` placeholder is gone.
 - Red-first evidence (recorded from the failing runs before the fix):
