@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 REF = ROOT / "reference"
@@ -44,7 +45,7 @@ def _run_lines(cmd: list[str], cwd: Path, reqs: list[dict]) -> list[dict]:
     proc = subprocess.run(cmd, cwd=cwd, input=stdin, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"{cmd}: {proc.stderr.strip()}")
-    return [json.loads(l) for l in proc.stdout.splitlines() if l.strip()]
+    return [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
 
 
 def _rejects(cmd: list[str], cwd: Path, obj) -> bool:
@@ -139,10 +140,10 @@ def _vector_requests(published: list[dict[str, Any]]) -> list[dict[str, Any]]:
     key, UTF-16 orders the non-BMP key first.
     """
     probes = [
-        {"name": "probe_non_bmp_key_ordering", "obj": {"a": "x", "\U0001f511": "y", "\uE000": "z"}},
+        {"name": "probe_non_bmp_key_ordering", "obj": {"a": "x", "\U0001f511": "y", "\ue000": "z"}},
         {
             "name": "probe_non_bmp_keys_only",
-            "obj": {"\U0001f600": "a", "\uFFFF": "b", "\U00010000": "c"},
+            "obj": {"\U0001f600": "a", "\uffff": "b", "\U00010000": "c"},
         },
     ]
     return [
@@ -151,7 +152,7 @@ def _vector_requests(published: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ] + probes
 
 
-def _build_available_langs() -> "tuple[list[str], list[str]] | int":
+def _build_available_langs() -> tuple[list[str], list[str]] | int:
     """Build every available language toolchain.
 
     Returns either ``(ran, skipped)`` on success, or the integer exit code
@@ -172,7 +173,7 @@ def _build_available_langs() -> "tuple[list[str], list[str]] | int":
     return ran, skipped
 
 
-def _hexes_for_langs(ran: list[str], valid: list[dict[str, Any]]) -> "dict[str, list[str]] | int":
+def _hexes_for_langs(ran: list[str], valid: list[dict[str, Any]]) -> dict[str, list[str]] | int:
     """Run the canon binary for each language over all valid requests.
 
     Returns the hexes per language on success, or the integer exit code

@@ -205,7 +205,7 @@ def main(policies_path: str) -> int:
         f"\nSUMMARY ({suite_name}): {n_blocked} / {n_attacks} attack attempts blocked "
         f"({100 * n_blocked / n_attacks:.1f}%)"
     )
-    print(f"  (* = known-legitimate coincidence — see KNOWN_LEGITIMATE_COINCIDENCES)")
+    print("  (* = known-legitimate coincidence - see KNOWN_LEGITIMATE_COINCIDENCES)")
 
     if unexpected_allows:
         print(f"\n⚠ {len(unexpected_allows)} unexpected ALLOWs:")

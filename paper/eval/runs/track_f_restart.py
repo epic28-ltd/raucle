@@ -6,7 +6,6 @@ memory. Fix: one subprocess per cell so memory resets, and RAUCLE_PARALLEL=2
 for shields cells specifically.
 """
 
-import json
 import os
 import subprocess
 import sys

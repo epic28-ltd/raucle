@@ -177,7 +177,8 @@ def main() -> int:
         input_store_path=str(store_path),
     )
     print(
-        f"  tampered document: {'VERIFIED (BAD!)' if ok2 else 'INVALID'} ({errors2[0] if errors2 else '-'})"
+        f"  tampered document: {'VERIFIED (BAD!)' if ok2 else 'INVALID'}"
+        f" ({errors2[0] if errors2 else '-'})"
     )
     return 0 if (ok and not ok2) else 1
 

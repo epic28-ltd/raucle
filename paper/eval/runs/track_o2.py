@@ -8,7 +8,10 @@ DeepSeek (MoE) + Qwen (MoE) + Kimi (MoE) + Gemma (dense).
 3 cells: banking × {none, shields, vcd_full} on gemma3:27b.
 """
 
-import json, os, subprocess, sys, time
+import os
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 ROOT = Path("/root/raucle-paper/raucle/runs")

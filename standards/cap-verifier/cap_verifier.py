@@ -36,7 +36,6 @@ import time
 import unicodedata
 from pathlib import Path
 
-
 # ---------------------------------------------------------------------------
 # Canonical-JSON serialisation (mirrors §"Canonical-JSON serialisation"
 # of standards/owasp-ai-exchange/01-capability-token.md).
@@ -290,7 +289,8 @@ def _normalise_constraints(c: dict) -> dict:
             norm = unicodedata.normalize("NFC", name)
             if norm in seen and seen[norm] != name:
                 raise ValueError(
-                    f"required_present field names {seen[norm]!r} and {name!r} collide under Unicode NFC"
+                    f"required_present field names {seen[norm]!r} and {name!r} collide "
+                    f"under Unicode NFC"
                 )
             seen[norm] = name
         out["required_present"] = sorted(rp, key=_utf16_key)

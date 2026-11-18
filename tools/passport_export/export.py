@@ -72,8 +72,7 @@ def chain_linkage_from_pack(pack_dir: str | Path) -> dict[str, Any] | None:
         "receipt_count": receipt_lines,
         "chain_verdict_summary": {
             key: chain_verdict[key]
-            for key in sorted({"status", "receipts", "findings"}
-                              & set(chain_verdict))
+            for key in sorted({"status", "receipts", "findings"} & set(chain_verdict))
         },
         "export_summary": {key: summary[key] for key in sorted(summary)},
     }

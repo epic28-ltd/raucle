@@ -98,7 +98,7 @@ def _run_lines(cmd: list[str], cwd: Path, reqs: list[dict]) -> list[dict]:
     proc = subprocess.run(cmd, cwd=cwd, input=stdin, capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"{cmd}: {proc.stderr.strip()}")
-    return [json.loads(l) for l in proc.stdout.splitlines() if l.strip()]
+    return [json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
 
 
 def emit_go(reqs):

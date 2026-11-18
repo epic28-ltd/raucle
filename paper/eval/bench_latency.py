@@ -25,7 +25,6 @@ from pathlib import Path
 from raucle.capability import CapabilityGate, CapabilityIssuer
 from raucle.prove import JSONSchemaProver
 
-
 SCHEMA = {
     "type": "object",
     "properties": {
@@ -160,7 +159,8 @@ def main(argv: list[str] | None = None) -> int:
     for k, v in results.items():
         if isinstance(v, dict) and "p50_ms" in v:
             print(
-                f"  {k:18s} p50={v['p50_ms']:.2f}ms  p95={v['p95_ms']:.2f}ms  p99={v['p99_ms']:.2f}ms"
+                f"  {k:18s} p50={v['p50_ms']:.2f}ms"
+                f"  p95={v['p95_ms']:.2f}ms  p99={v['p99_ms']:.2f}ms"
             )
     print(f"\nWrote {args.output}.")
     return 0

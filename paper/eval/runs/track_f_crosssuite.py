@@ -1,16 +1,20 @@
-"""Track F: cross-suite generalisation. v4-flash x {none, shields, vcd_full} x {slack, travel, workspace}.
+"""Track F: cross-suite generalisation.
+
+v4-flash x {none, shields, vcd_full} x {slack, travel, workspace}.
 
 Proves the result is not banking-specific. Three defences x three suites = 9 cells.
 """
 
-import json, logging, time
+import json
+import logging
+import time
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 log = logging.getLogger("track_f")
 
 from paper.eval import agentdojo_patches  # noqa
-from paper.eval.agentdojo_adapter import run
+from paper.eval.agentdojo_adapter import run  # noqa: E402
 
 MODEL = "deepseek-v4-flash"
 ROOT = Path("/root/raucle-paper/raucle/runs")
@@ -50,7 +54,9 @@ for defence in DEFENCES:
                 }
                 all_results.append(row)
                 log.info(
-                    f"  RESULT  {defence}/{r.suite}: ASR={100 * r.asr:.1f}% benign={100 * r.benign_completion:.1f}% n={r.total_tasks} wall={elapsed:.0f}s"
+                    f"  RESULT  {defence}/{r.suite}: ASR={100 * r.asr:.1f}%"
+                    f" benign={100 * r.benign_completion:.1f}% n={r.total_tasks}"
+                    f" wall={elapsed:.0f}s"
                 )
             (logdir / "aggregate.json").write_text(
                 json.dumps(
