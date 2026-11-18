@@ -356,6 +356,54 @@ def _build_intent_hint(
     }
 
 
+def _demo_dlp_advisory_scan(
+    gateway: RaucleGateway,
+    req: GateRequest,
+    agent_id: str,
+    trace_id: str,
+    response: dict[str, Any],
+) -> None:
+    """D2: run the OSS advisory redaction engine over one demo gate call.
+
+    Demo-plane only. When ``RAUCLE_DEMO_MODE`` is on, the gate route runs
+    the call's arguments through the real advisory redaction middleware
+    (``raucle.middleware``, wired pattern classes) and mints an
+    ``x_dlp`` receipt citing the gate receipt for the decision. The
+    scanned values are the canned synthetic patterns the demo agents
+    generate; production gate traffic is never content-scanned here
+    (the ``x_dlp`` emitter surface belongs to the enterprise content
+    proxy, per docs/spec/provenance/v1.2/content-dlp.md). Advisory and
+    fail-open by contract: this layer never changes the already-made
+    decision and never raises into the gate path.
+    """
+    receipt_id = str(response.get("receipt_id") or "")
+    if not receipt_id:
+        # No receipted decision to cite: the offline verifier refuses
+        # uncited findings, so nothing is minted. Never fabricate.
+        return
+    from raucle.demo_session import _demo_mode_on, run_demo_dlp_scan
+
+    if not _demo_mode_on():
+        return
+    try:
+        run_demo_dlp_scan(
+            gateway,
+            tool=req.tool,
+            args=req.args,
+            agent_id=agent_id,
+            destination=str(req.destination or ""),
+            session_id=_validate_session_id(req.session_id),
+            trace_id=trace_id,
+            gate_receipt_id=receipt_id,
+            gate_decision=str(response.get("decision") or ""),
+        )
+    except Exception:
+        logger.warning(
+            "demo DLP advisory scan failed open (advisory layer, the gate decision is unchanged)",
+            exc_info=True,
+        )
+
+
 def _handle_gate_tool_call(
     gateway: RaucleGateway,
     _request: Request,  # kept for call-site symmetry; unused (S1172)
@@ -437,6 +485,10 @@ def _handle_gate_tool_call(
     response.pop("_trace_id", None)
     response.pop("_args", None)
     response.pop("_authorization_hint", None)
+    # D2: the demo plane's advisory redaction scan. Runs only in demo
+    # mode, only for receipted decisions, and never touches the
+    # response already computed for the caller.
+    _demo_dlp_advisory_scan(gateway, req, agent_id, trace_id, response)
     return response
 
 
@@ -3186,10 +3238,10 @@ body.demo #policyEditorCard{display:none}
             <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span>
             <button class="btn btn-secondary" data-hi="showTab('capdemo',this)">Open Capability tokens</button>
           </div>
-          <div class="ov-card" data-truth-class="OSS MACHINERY + EE VIEW">
+          <div class="ov-card" data-truth-class="OSS LIVE">
             <div class="ov-title">Data loss prevention</div>
-            <div class="ov-desc">The real pattern engine screens demo traffic for sensitive data and leaves x_dlp receipts. The redaction action view is an EE-only surface, simulated here.</div>
-            <span class="truth-badge truth-oss-machinery" data-truth="OSS MACHINERY + EE VIEW">OSS MACHINERY + EE VIEW</span>
+            <div class="ov-desc">The advisory redaction engine collars sensitive spans in live demo tool calls, and every scan lands as a signed x_dlp receipt citing the gate receipt for the call. Digests and counts only, never content.</div>
+            <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span>
             <button class="btn btn-secondary" data-hi="showTab('dlp',this)">Open Data Protection</button>
           </div>
           <div class="ov-card" data-truth-class="OSS MACHINERY + EE VIEW">
@@ -3248,13 +3300,17 @@ body.demo #policyEditorCard{display:none}
       </div>
     </div>
 
-    <div id="tab-dlp" data-truth-class="OSS MACHINERY + EE VIEW" class="hidden"><span class="truth-badge" data-truth="OSS MACHINERY + EE VIEW">OSS MACHINERY + EE VIEW</span>
-      <div class="card"><div class="card-title"><span class="live-dot"></span>Data Loss Prevention</div>
-        <span class="findings-label">Simulated demo traffic</span>
-        <p class="screen-note">Every finding below was produced by the same pattern engine that screens live traffic, run over the simulated demo calls. Counts are grouped by data category, and each call shows the redaction action the policy applied and the rule responsible. No real personal data is shown anywhere on this screen.</p>
+    <div id="tab-dlp" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
+      <div class="card"><div class="card-title"><span class="live-dot"></span>Data Protection</div>
+        <span class="findings-label">OSS LIVE - the advisory redaction engine over live demo traffic</span>
+        <p class="screen-note">Every demo tool call is screened by the OSS advisory redaction engine: matched spans are collared with [REDACTED:class] markers, and every scan with a match lands as a signed x_dlp receipt citing the gate receipt for that call. The values are never shown: each row pairs the original content digest with the redacted digest, alongside bounded pattern classes and span counts only. The demo agents generate the canned patterns themselves (a test card number, a reserved-domain email, an example national id, an obviously-demo bearer token); nothing here is customer data.</p>
         <div class="stats-grid" id="dlpSummary"></div>
-        <table><thead><tr><th>Agent</th><th>Tool</th><th>Where</th><th>Rule</th><th>Category</th><th>Action</th></tr></thead>
+        <div class="ov-grid" style="margin-bottom:12px">
+          <div class="ov-card" id="dlpFindingsCard"><div class="ov-title">Collared spans by pattern class</div><p class="screen-note" id="dlpFindingsBody" style="margin-top:8px"></p></div>
+        </div>
+        <table><thead><tr><th>Scan</th><th>Route</th><th>Classes (spans)</th><th>Action</th><th>Rule</th><th>Content digest</th><th>Redacted digest</th><th>Cited receipt</th><th>Receipt</th></tr></thead>
         <tbody id="dlpTableBody"></tbody></table>
+        <p class="screen-note">Honest limits: the advisory engine wires a declared subset of the x_dlp vocabulary (pii_card, pii_email, pii_national_id, secret_bearer); pci_pan is deliberately not wired, because issuer-aware PAN heuristics belong to the enterprise scanner. The action is always redacted in this demo: block classes belong to the enterprise runtime and are never claimed here. The demo scan runs only when demo mode is on; production gate traffic is never content-scanned by the gateway.</p>
       </div>
     </div>
 
@@ -3712,7 +3768,8 @@ function showTab(t,el) {
   if(t==='dashboard')loadStats(); if(t==='connections'){demoExample();updatePathTail();if(!pathPollId)pathPollId=setInterval(updatePathTail,3000);startConnPolling();}else if(pathPollId){clearInterval(pathPollId);pathPollId=null;} else stopConnPolling();
   if(t==='policies'){loadPolicy();loadSimPanel();} if(t==='stop')loadStopPanel(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();if(typeof demoMode!=='undefined'&&demoMode)loadCoverage();} if(t==='capdemo')capDemoLoad(); if(t==='mcp')loadMcpPanel(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
   if(t==='policies')loadPolicy(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();if(typeof demoMode!=='undefined'&&demoMode)loadCoverage();} if(t==='capdemo')capDemoLoad(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
-  if(t==='dlp'||t==='injection'||t==='shadow')loadDemoFindings();
+  if(t==='dlp')loadDlpPanel();
+  if(t==='injection'||t==='shadow')loadDemoFindings();
   if(t==='session')loadSessionPanel();
 }
 function api(p,o){const h={'Authorization':key,...((o||{}).headers||{})};if(totpCode)h['X-TOTP']=totpCode;return fetch(p,{...(o||{}),headers:h});}
@@ -4533,10 +4590,10 @@ function loadDemoFindings() {
   const p = demoScenarioFilter && demoScenarioFilter !== 'all' ? demoScenarioFilter : 'all';
   api('/api/demo-findings?scenario=' + encodeURIComponent(p)).then(r => r.json()).then(d => {
     demoFindings = d;
-    renderDlpScreen(d);renderInjectionScreen(d);renderShadowScreen(d);
+    renderInjectionScreen(d);renderShadowScreen(d);
   }).catch(() => {});
 }
-function findingsRows(tbodyId, headers, rowsGetter) {
+function findingsRows(tbodyId, headers, rowsGetter, emptyLabel) {
   // shared textContent table builder for the findings screens
   const tb = document.getElementById(tbodyId);
   if (!tb) return;
@@ -4546,7 +4603,7 @@ function findingsRows(tbodyId, headers, rowsGetter) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
     td.colSpan = headers.length;
-    td.textContent = 'No findings for this scenario';
+    td.textContent = emptyLabel || 'No findings for this scenario';
     td.style.color = '#8b919e';
     tr.appendChild(td);tb.appendChild(tr);return;
   }
@@ -4572,10 +4629,6 @@ function findingsStats(gridId, entries) {
   });
 }
 function whereLabel(f) { return f.kind === 'agent_text' ? 'Agent text' : 'Tool output'; }
-function renderDlpScreen(d) {
-  findingsStats('dlpSummary', [['Findings', (d.dlp || {}).total], ['Blocked', ((d.dlp || {}).by_action || {}).block || 0], ['Redacted', ((d.dlp || {}).by_action || {}).redact || 0], ['Masked', ((d.dlp || {}).by_action || {}).mask || 0]]);
-  findingsRows('dlpTableBody', 6, () => ((d.dlp || {}).findings || []).map(f => [f.agent, f.tool, whereLabel(f), f.rule_id + (f.rule_name ? ' · ' + f.rule_name : ''), f.category, f.action]));
-}
 function renderInjectionScreen(d) {
   const fs = (d.injection || {}).findings || [];
   findingsStats('injSummary', [['Findings', fs.length], ['Denied', fs.filter(f => f.decision === 'deny').length], ['Escalated', fs.filter(f => f.decision === 'escalate').length]]);
@@ -4682,6 +4735,31 @@ function sessionFindingVerify(ev, el){
     body.innerHTML+='<div>'+esc('verifier unreachable; nothing was claimed verified.')+'</div>';
   });
 }
+// ================= DATA PROTECTION (D2 demo plane) =================
+// Renderers over the read-only /api/demo/dlp-findings endpoint: every
+// response-sourced value rides esc() into innerHTML or the shared
+// textContent-only table builder, so hostile strings can never become
+// markup. The rows show digests, class names and counts only: the
+// values behind them never reach this surface.
+function loadDlpPanel(){loadDlpFindings();}
+function dshort(v){v=String(v||'');return v.length>22?v.slice(0,22)+'...':v;}
+function collarSpans(f){return (f.matched_classes||[]).map(function(c){return '[REDACTED:'+c+'] x'+((f.span_counts||{})[c]||0);}).join(', ');}
+function loadDlpFindings(){
+  api('/api/demo/dlp-findings').then(function(r){
+    if(r.status===404){document.getElementById('dlpFindingsBody').innerHTML=esc('Demo mode is not configured on this deployment.');return null;}
+    return r.json();
+  }).then(function(d){
+    if(!d)return;
+    if(d.available===false){document.getElementById('dlpFindingsBody').innerHTML='<div>'+esc(d.unavailable_note||'x_dlp findings unavailable; never fabricated')+'</div>';return;}
+    findingsStats('dlpSummary', [['Scans', d.count], ['Advisory findings', d.advisory_findings||0], ['Pattern classes', Object.keys(d.by_class||{}).length]]);
+    let out='';
+    const byClass=d.by_class||{};
+    Object.keys(byClass).sort().forEach(function(cls){out+='<div>'+esc('[REDACTED:'+cls+'] x'+byClass[cls])+'</div>';});
+    if(!out){out='<div>'+esc(d.empty_note||'no x_dlp receipts yet')+'</div>';}
+    document.getElementById('dlpFindingsBody').innerHTML=out;
+    findingsRows('dlpTableBody', 9, () => (d.findings||[]).map(f => [dshort(f.scan_id), dshort((f.route||{}).source)+' -> '+dshort((f.route||{}).destination), collarSpans(f), f.action, f.rule_id, dshort(f.content_sha256), dshort(f.redacted_content_sha256), dshort(f.cited_receipt), dshort(f.receipt_hash)]), 'No x_dlp receipts yet: findings appear when demo traffic carries the canned patterns.');
+  }).catch(function(){document.getElementById('dlpFindingsBody').innerHTML=esc('unavailable');});
+}
 // The threats lens (D6, cross-cutting): keep only the attack-relevant
 // decisions - denied and escalated calls - across every scenario.
 function threatsLens(conns){ return conns.filter(c=>c.decision==='deny'||c.decision==='escalate'); }
@@ -4765,7 +4843,9 @@ const TOUR_STEPS = [
   {tab:'session', target:'#sessionFindingsCard', title:'The catch is receipted, verified offline',
    body:'Every session deny leaves a signed session-monitor finding citing the gate receipt that triggered it. The verify button runs the real ProvenanceVerifier over the minimal honest chain, with no contact with any operator.'},
   {tab:'dlp', target:'[data-tab-id="dlp"].tab', title:'DLP receipts from the real pattern engine',
-   body:'Sensitive data findings grouped by category, with the action and the rule responsible on every call from the simulated demo traffic; the receipt view is real, the redaction action view is an EE surface and is labelled as such.'},
+   body:'Demo tool calls run through the OSS advisory redaction engine: when the canned synthetic patterns appear in a call, the matched spans are collared and the scan lands as a signed x_dlp receipt citing the gate receipt for that call.'},
+  {tab:'dlp', target:'#dlpFindingsCard', title:'Bounded disclosure: digests, never values',
+   body:'Each row pairs the original content digest with the redacted digest, so a third party can prove the outbound content differed without either side ever holding the values. Class names and span counts only: the scanned content never enters the receipt.'},
   {tab:'receipts', target:'#rcptTable', title:'Every decision leaves a signed receipt',
    body:'Allows, denies, escalations and session findings alike: signed and content-addressed at the moment of decision, so the record cannot quietly change afterwards.'},
   {tab:'receipts', target:'#rcpt-offline', title:'Offline verify: no operator contact',
@@ -4779,7 +4859,7 @@ const TOUR_STEPS = [
   {tab:'assure', target:'#assurancePacketView', title:'Compliance: the assurance packet',
    body:'One click builds a real audit pack from the signed receipt chain, sha-pinned and verified offline. Framework crosswalks land where the regulation names them, in mapped-to language, never as compliance claims.'},
   {tab:'dashboard', target:'#honestyBanner', title:'The honest close: what is EE-only',
-   body:'Everything labelled EE-ONLY is simulated here because that surface is not built yet: the fleet multi-org view, SIEM targets, the redaction action view and the classifier layer. What you watched catch a runaway loop was real raucle, today.'},
+   body:'Everything labelled EE-ONLY is simulated here because that surface is not built yet: the fleet multi-org view, SIEM targets and the classifier layer. What you watched catch a runaway loop was real raucle, today.'},
 ];
 function tourShow(){
   const s=TOUR_STEPS[tourStep];
