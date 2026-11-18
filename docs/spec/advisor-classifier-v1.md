@@ -32,7 +32,7 @@ component of the gate and not a module of the proxy's in-path evaluation.
 Two independent evidence strands rule the design:
 
 1. LLM judges are probabilistic detectors. The ScopeJudge study
-   (Dreadnode, August 2026; arXiv:2607.07774) tested eight runtime LLM judges
+   (Dreadnode, July 2026; arXiv:2607.07774) tested eight runtime LLM judges
    against 4,897 offensive security tool calls: the best judge still missed
    more than 1 in 10 tool-scope violations. A verdict like that cannot anchor
    a receipt a third party verifies. A receipt is a reproducible,
@@ -106,7 +106,10 @@ INVARIANT (Q1a): the advisor classifier never participates in enforcement.
    bytes unchanged; (c) an unknown category or band from the model produces
    no finding and never a deny; (d) planted secret material passed through
    the classifier appears nowhere in the minted receipt, digests only; (e)
-   unparsable model output mints nothing.
+   unparsable model output mints nothing; (f) no code path runs from an
+   advisory finding to an active rule without the human promotion step
+   (the feed loop ends at a human-approved, receipted promotion, never an
+   automatic enrolment).
 
 ## The advisory finding shape (rides the EXISTING findings pipeline)
 
@@ -186,7 +189,7 @@ this vocabulary (the classifier vocabulary is EE by the boundary test).
 
 The Q-2 session rules already cover the tool-call-observable variants of
 the Atlas categories: repeated-deny-storm (cross-turn evasion),
-runaway-tool-loop, gradual-extraction, tool-chaining-pattern and scope-drift
+runaway-tool-loop, gradual-extraction, forbidden_tool_chain and scope-drift
 (the tool-call variant of purpose drift). The advisor adds the content-plane
 suspicions those rules cannot see and duplicates none of their enforcement
 semantics. Where both fire on the same behaviour, the deterministic rule
@@ -360,6 +363,8 @@ cost detection only.
   blurring it.
 - **Latency.** Classification is asynchronous; a finding lands after the
   fact. The advisor observes; it does not intervene.
+
+Also stated plainly, mirroring the vocabulary confession above: the verifier re-checks NO category vocabulary for x_finding findings, and x_finding carries NO content-field guard - the sibling x_dlp schema enforces one fail-closed; for advisory findings the never-content rule is emission-side discipline in this contract, honoured by the EE emitter and pinned by the advisory-only invariant test (d), not by the OSS verifier.
 
 ## Licence split (the ruled boundary)
 
