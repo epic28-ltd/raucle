@@ -37,7 +37,7 @@ Crew(agents=[agent], tasks=[...]).kickoff()
 ```
 
 A call outside the token's signed constraints raises `CapabilityDenied` **before
-the tool body runs** — CrewAI surfaces it to the agent, and the denial is
+the tool body runs**; CrewAI surfaces it to the agent, and the denial is
 recorded in the signed chain. The same is true of a call with no bound caller
 identity: it denies rather than running attributed to a placeholder, and the
 deny receipt carries an honest null `agent_id`. Because the gate evaluates
