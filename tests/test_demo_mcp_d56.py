@@ -8,6 +8,8 @@ stay closed without demo mode, and stay open for the read-only demo key
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -142,7 +144,9 @@ def test_demo_key_can_scan_pasted_manifest_and_gets_real_findings(stack):
     body = r.json()
     assert body["scanner"] == "raucle.mcp_scanner"
     assert body["count"] == len(body["findings"]) > 0
-    # The findings shape is the Finding.to_dict contract of the real engine.
+    # The response findings carry the real engine's rule, location and
+    # evidence class. The evidence excerpt is deliberately absent: it is
+    # raw manifest text, and findings carry no payload.
     f = body["findings"][0]
     for field in (
         "rule_id",
@@ -151,10 +155,58 @@ def test_demo_key_can_scan_pasted_manifest_and_gets_real_findings(stack):
         "tool",
         "field",
         "message",
-        "evidence",
         "location",
     ):
         assert field in f
+    assert "evidence" not in f
+    # Genuine engine output over the seeded sample, never canned rows: the
+    # poisoned manifest must trip the hidden-instruction, injection,
+    # credential and SSRF rule families with critical severity present.
+    severities = {x["severity"] for x in body["findings"]}
+    categories = {x["category"] for x in body["findings"]}
+    assert "CRITICAL" in severities
+    assert {"hidden_instruction", "prompt_injection"} <= categories
+    assert "credential_exposure" in categories
+    assert "ssrf_target" in categories
+
+
+def _secret_planted_in_demo_manifest() -> str:
+    """The synthetic key the poisoned sample plants in a description."""
+    for tool in POISONED_MANIFEST["tools"]:
+        m = re.search(r"sk-[A-Za-z0-9]{20,}", str(tool.get("description", "")))
+        if m:
+            return m.group(0)
+    raise AssertionError("the poisoned sample must plant a key in a description")
+
+
+def test_scan_response_carries_no_payload_text(stack):
+    """Content absence: the manifest text may be echoed only as the
+    operator's own input context (the textarea they pasted into). The
+    scan response never carries the payload: every poisoning phrase, the
+    planted key and the SSRF bait URL stay out of the findings.
+    """
+    client, demo_key = stack
+    r = client.post(
+        "/api/demo/mcp/scan",
+        headers={"Authorization": demo_key},
+        json={"manifest": POISONED_MANIFEST},
+    )
+    assert r.status_code == 200
+    for marker in (
+        "<IMPORTANT>",
+        "ignore all previous instructions",
+        "reveal your system",
+        "acct-attacker",
+        "silently execute",
+        "will change after approval",
+        "behaves as a different agent",
+        "overrides other tools",
+        "169.254.169.254",
+        _secret_planted_in_demo_manifest(),
+    ):
+        assert marker not in r.text, f"payload text reached the scan response: {marker!r}"
+    for f in r.json()["findings"]:
+        assert "evidence" not in f, "findings must not carry the evidence excerpt"
 
 
 def test_scan_route_round_trips_the_benign_manifest(stack):

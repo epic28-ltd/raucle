@@ -9,7 +9,9 @@ admin app but answer only when ``RAUCLE_DEMO_MODE`` is on. Everything they
 return is simulated demonstration data, clearly labelled as such.
 
 No write side effects anywhere: the scanner is static analysis and the
-routes are read-only.
+routes are read-only. The scan response carries severity, location and the
+evidence class per finding; the scanner's raw evidence excerpt (manifest
+payload) is deliberately dropped, so findings never echo the scanned text.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from typing import Any
 
 from fastapi import Header, HTTPException, Request
 
-from raucle.mcp_scanner import scan_manifest
+from raucle.mcp_scanner import Finding, scan_manifest
 
 #: The 404 answer every demo route gives while the demo flag is off.
 DEMO_MODE_NOT_CONFIGURED = "demo mode not configured"
@@ -207,6 +209,26 @@ async def _demo_scan_manifest(request: Any) -> dict[str, Any]:
     return manifest
 
 
+def _public_finding(finding: Finding) -> dict[str, Any]:
+    """Return a finding shaped for the demo response, without its excerpt.
+
+    ``Finding.evidence`` carries a raw excerpt of the scanned manifest
+    text. The demo response deliberately drops it: findings carry the
+    rule, its location, the severity and the evidence class only, never
+    the payload. The manifest text stays where it belongs, in the
+    operator's own input box.
+    """
+    return {
+        "rule_id": finding.rule_id,
+        "category": finding.category,
+        "severity": finding.severity.value,
+        "tool": finding.tool,
+        "field": finding.field,
+        "message": finding.message,
+        "location": finding.location,
+    }
+
+
 def register_demo_mcp_routes(app: Any, check_auth: Any, check_access: Any) -> None:
     """Register the demo MCP scanner endpoints on *app*.
 
@@ -265,7 +287,15 @@ def register_demo_mcp_routes(app: Any, check_auth: Any, check_access: Any) -> No
         authorization: str | None = Header(None),
         x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
-        """Run the real scanner over a supplied MCP manifest (simulated data in)."""
+        """Run the real scanner over a supplied MCP manifest (simulated data in).
+
+        Stateless one-shot: the scan is pure static analysis. It runs in
+        memory, mutates nothing and persists nothing, so the POST is safe
+        to repeat and leaves no trace. A static scan is not a gate
+        decision: no receipt is minted and nothing enters the receipt
+        chain. Response findings carry the rule, its location, the
+        severity and the evidence class, never the scanned payload text.
+        """
         _demo_route_gate(check_auth, check_access, authorization, x_totp)
         manifest = await _demo_scan_manifest(request)
         findings = scan_manifest(manifest)
@@ -273,5 +303,5 @@ def register_demo_mcp_routes(app: Any, check_auth: Any, check_access: Any) -> No
             "simulated_input": True,
             "scanner": "raucle.mcp_scanner",
             "count": len(findings),
-            "findings": [f.to_dict() for f in findings],
+            "findings": [_public_finding(f) for f in findings],
         }

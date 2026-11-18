@@ -487,7 +487,8 @@ def test_tour_follows_the_enterprise_buyer_arc() -> None:
     """The arc: enterprise overview, what the console shows over OSS
     raucle, session monitoring catching a real runaway loop, DLP
     receipts, receipt -> offline verify -> coverage, capability tokens
-    and PQ, compliance, then the honest EE-limits close."""
+    and PQ, compliance, the MCP scanner catching tool poisoning
+    statically, then the honest EE-limits close."""
     tabs = [t for t, _, _ in _tour_steps()]
     assert tabs == [
         "dashboard",  # the enterprise overview grid
@@ -502,6 +503,7 @@ def test_tour_follows_the_enterprise_buyer_arc() -> None:
         "capdemo",  # capability tokens, attenuated live
         "receipts",  # PQ receipts: the signing key family
         "assure",  # compliance: the assurance packet story
+        "mcp",  # tool poisoning caught statically by the real scanner
         "dashboard",  # honest close: EE-only surfaces labelled
     ]
 
@@ -521,7 +523,8 @@ def test_tour_targets_are_real_elements_in_the_new_layout() -> None:
 
 def test_tour_is_bounded_with_unique_targets_and_titles() -> None:
     steps = _tour_steps()
-    assert len(steps) <= 13
+    # 14 after the D2 DLP spotlight + the D5 MCP scanner step joined the arc
+    assert len(steps) <= 14
     targets = [t for _, t, _ in steps]
     assert len(targets) == len(set(targets)), "no duplicate spotlight targets"
     titles = [t for _, _, t in steps]
@@ -529,11 +532,12 @@ def test_tour_is_bounded_with_unique_targets_and_titles() -> None:
 
 
 def test_tour_retired_screens_stay_off_the_walkthrough() -> None:
-    """The walkthrough stays the buyer narrative: the side screens (MCP
-    scanner, authority stop, learn mode) are reachable tabs the tour
-    deliberately does not drop into."""
+    """The walkthrough stays the buyer narrative: the side screens
+    (authority stop, learn mode) are reachable tabs the tour
+    deliberately does not drop into. The MCP scanner joined the arc
+    when D5 made it the tool-poisoning story."""
     tabs = [t for t, _, _ in _tour_steps()]
-    for gone in ("mcp", "stop", "learn"):
+    for gone in ("stop", "learn"):
         assert gone not in tabs
     for kept in ("showTab('mcp',this)", "showTab('stop',this)", "showTab('learn',this)"):
         assert kept in ADMIN_PANEL_HTML
@@ -635,6 +639,44 @@ def test_tour_spotlights_left_nav_items_for_caught_screens() -> None:
     for tab in ("dashboard", "session", "receipts", "capdemo", "assure"):
         targets = [target for t, target, _ in steps if t == tab]
         assert all(x.startswith("#") for x in targets), tab
+
+
+def test_tour_steps_carry_dlp_and_mcp_spotlights() -> None:
+    """G9 carried over: the DLP and MCP steps spotlight their left-nav
+    entries; the content-spotlight semantics are unchanged."""
+    targets = {tab: target for tab, target, _ in _tour_steps()}
+    assert targets["dlp"] == "#dlpFindingsCard"
+    for tab in ("dashboard", "session", "receipts", "capdemo", "assure", "mcp"):
+        assert targets[tab].startswith("#"), tab
+
+
+# ---------------------------------------------------------------------------
+# D5: the MCP scanner tab (real engine, evidence class, no payload echo)
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_findings_render_the_evidence_class_never_the_excerpt() -> None:
+    """The findings table shows severity, location and the evidence class
+    (the scanner's category). The raw evidence excerpt is manifest payload
+    and never reaches a cell."""
+    start = ADMIN_PANEL_HTML.find("function renderMcpFindings(")
+    assert start != -1
+    body = ADMIN_PANEL_HTML[start : ADMIN_PANEL_HTML.find("function mcpScan(")]
+    assert "f.category" in body
+    assert "f.evidence" not in body
+
+
+def test_mcp_scan_caps_the_pasted_manifest_client_side() -> None:
+    """Pasted manifests are size-capped in the browser before the scan
+    POST leaves, matching the server's refusal of oversize bodies."""
+    start = ADMIN_PANEL_HTML.find("function mcpScan(")
+    assert start != -1
+    body = ADMIN_PANEL_HTML[start : start + 3000]
+    cap = body.find("256*1024")
+    post = body.find("/api/demo/mcp/scan")
+    assert cap != -1, "the client-side size cap is missing"
+    assert post != -1
+    assert cap < post, "the client-side size cap must run before the scan POST"
 
 
 # ---------------------------------------------------------------------------

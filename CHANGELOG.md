@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added - D5: the MCP scanner joins the buyer tour with payload-free findings
+
+- The MCP Scanner tab is now labelled OSS LIVE and joins the enterprise
+  walkthrough as the tool-poisoning story, one step before the honest
+  close: the real `raucle.mcp_scanner` engine runs live over a seeded
+  or pasted manifest. The scan is a stateless one-shot POST: it runs in
+  memory, mutates nothing and persists nothing, and because a static
+  scan is not a gate decision it mints no receipt and enters nothing
+  into the receipt chain; the panel states that instead of implying a
+  citation.
+- Content absence, test-pinned: the scan response and the findings
+  table carry severity, location and the evidence class (the scanner's
+  category) only. The scanner's raw `evidence` excerpt is manifest
+  payload and is dropped server-side, so poisoning phrases, planted
+  keys and SSRF bait URLs never reach the response; the manifest text
+  stays in the operator's own input box. The pasted textarea is also
+  size-capped client-side at 256 KiB, mirroring the server's refusal of
+  oversize bodies.
+- The overview card is retitled "MCP tool scanner" with an OSS LIVE
+  badge: the engine, the endpoints and the findings are real code
+  running in the demo. The seeded manifests stay labelled simulated,
+  and Agent Red tradecraft remains closed-core and out of this demo.
+
 ### Fixed - D1: crewai attribution guard regression (bearer mode was never closed)
 
 - The B2 attribution audit (v0.23.3) recorded the CrewAI leg as shipped

@@ -235,7 +235,7 @@ class TestEnterpriseConsoleFrame:
 
     def test_truth_class_classification_is_honest(self):
         """Machinery-backed demo screens are never labelled OSS LIVE."""
-        machinery = ("injection", "shadow", "mcp", "siem", "users")
+        machinery = ("injection", "shadow", "siem", "users")
         live = (
             "dashboard",
             "connections",
@@ -247,6 +247,7 @@ class TestEnterpriseConsoleFrame:
             "dlp",
             "session",
             "assure",
+            "mcp",
             "stop",
         )
         for tab_id in machinery:
@@ -274,7 +275,7 @@ class TestEnterpriseOverview:
         "AI gateway",
         "Policy editor + simulate",
         "Kill switch: operator stop",
-        "Red scanner verdicts",
+        "MCP tool scanner",
         "Shadow AI discovery",
     )
 
@@ -422,3 +423,41 @@ class TestSessionBehaviourTab:
             "/api/demo/session-findings",
         ):
             assert endpoint in ADMIN_PANEL_HTML, endpoint
+
+
+class TestMcpScannerTab:
+    """D5: the MCP scanner tab runs the real engine with honest labels."""
+
+    def test_mcp_tab_exists_in_the_assurance_stack(self):
+        assert 'id="tab-mcp"' in ADMIN_PANEL_HTML
+        assert 'data-tab-id="mcp"' in ADMIN_PANEL_HTML
+        # G9 order: after Shadow AI, before Cross-org proof
+        nav = ADMIN_PANEL_HTML[ADMIN_PANEL_HTML.index('data-nav-group="assurance"') :]
+        nav = nav[: nav.index("</nav>")]
+        assert nav.index('data-tab-id="shadow"') < nav.index('data-tab-id="mcp"')
+        assert nav.index('data-tab-id="mcp"') < nav.index('data-tab-id="assure"')
+
+    def test_mcp_tab_declares_two_modes_and_the_scan_route(self):
+        body = _tab_sections(ADMIN_PANEL_HTML)["mcp"]
+        for marker in (
+            'id="mcpManifestList"',
+            'id="mcpManifestText"',
+            'id="mcpFindingsCard"',
+            'id="mcpFindingsBody"',
+            'id="mcpSummary"',
+            "Evidence class",
+        ):
+            assert marker in body, marker
+        # Two modes: a canned demo manifest to select, a textarea to paste into.
+        assert "paste your own" in body.lower()
+        assert "/api/demo/mcp/scan" in ADMIN_PANEL_HTML
+
+    def test_mcp_tab_states_the_honest_limits(self):
+        body = _tab_sections(ADMIN_PANEL_HTML)["mcp"]
+        for limit in (
+            "mints no receipt",
+            "Stateless one-shot",
+            "256 KiB",
+            "simulated",
+        ):
+            assert limit in body, f"honest limit missing from the mcp tab: {limit}"
