@@ -809,6 +809,78 @@ def gate_call(
 
 
 # ---------------------------------------------------------------------
+# Scripted PII/DLP burst (EPIC D item D2): the demo agents generate
+# synthetic, obviously-canned sensitive values (a Luhn-valid test card
+# number, a reserved-documentation email domain, the canonical example
+# national id, an obviously-demo bearer token and API key) and drive
+# them through the real gate. In demo mode the gateway's advisory
+# redaction engine scans each call, collars the matched spans and mints
+# an x_dlp receipt citing the gate receipt; the Data Protection screen
+# reads those receipts. Nothing here is or resembles customer data.
+# ---------------------------------------------------------------------
+
+DLP_DEMO_AGENT = {
+    "agent_id": "agent:dlp-demo-analyst",
+    "source": "agent:dlp-demo-analyst",
+    "name": "DLP Demo Analyst",
+}
+
+DLP_DEMO_CALLS = [
+    (
+        "screen_user_message",
+        {
+            "ticket_ref": "TCK-DLP-0001",
+            "channel": "web-form",
+            "body": (
+                "Demo card 4111111111111111 on file, contact "
+                "demo.person@example.test, national id AB123456C, header "
+                "Authorization: Bearer RAUCLE-DEMO-TOKEN-000000000000"
+            ),
+        },
+        "inbound-screener",
+    ),
+    (
+        "send_email",
+        {
+            "mailbox": "dlp-demo",
+            "recipient": "demo.person@example.test",
+            "body": "Credentials attached: api_key=raucle-demo-synthetic-key-000000",
+        },
+        "mail-relay",
+    ),
+]
+
+
+def run_dlp_pii_burst(gateway: str, cycle: int, quiet: bool = False) -> dict:
+    """Drive the scripted canned-pattern burst through the real gate.
+
+    Returns a per-burst stats dict. Gate decisions are counted, not
+    asserted: the burst's product is the advisory redaction evidence
+    (collared spans plus x_dlp receipts), which mints whatever the
+    policy decided for the call.
+    """
+    stats = {"calls": 0, "allows": 0, "denies": 0}
+    for tool, args, destination in DLP_DEMO_CALLS:
+        result = gate_call(
+            gateway,
+            tool,
+            args,
+            DLP_DEMO_AGENT["agent_id"],
+            DLP_DEMO_AGENT["source"],
+            destination,
+        )
+        stats["calls"] += 1
+        decision = str(result.get("decision", "ERROR")).upper()
+        if decision == "ALLOW":
+            stats["allows"] += 1
+        elif decision == "DENY":
+            stats["denies"] += 1
+        if not quiet:
+            print(f"  [dlp] burst {cycle}: {tool} -> {decision}", flush=True)
+    return stats
+
+
+# ---------------------------------------------------------------------
 # Scripted runaway-loop scenario (EPIC D item D16): an agent retries a
 # failing batch export inside one declared session until the session
 # rule cuts the loop. The tool carries no allow rule, so every attempt
@@ -897,6 +969,15 @@ def main() -> None:
             "(0 disables; the demo session tab rides this traffic)"
         ),
     )
+    parser.add_argument(
+        "--dlp-every",
+        type=int,
+        default=40,
+        help=(
+            "Run the scripted PII/DLP burst every N cycles "
+            "(0 disables; the Data Protection tab rides this traffic)"
+        ),
+    )
     parser.add_argument("--quiet", action="store_true", help="Only log errors")
     args = parser.parse_args()
 
@@ -976,6 +1057,17 @@ def main() -> None:
                         f"{burst['session_rule_denies']} session-rule deny",
                         flush=True,
                     )
+
+            # Scripted PII/DLP burst (D2): every --dlp-every cycles, the
+            # demo agents drive the canned synthetic patterns through the
+            # real gate so the advisory redaction engine leaves x_dlp
+            # receipts for the Data Protection screen. Real gate calls,
+            # synthetic values, real evidence.
+            if args.dlp_every and this_cycle % args.dlp_every == 0:
+                burst = run_dlp_pii_burst(args.gateway, this_cycle, quiet=args.quiet)
+                with stats_lock:
+                    stats["allow"] += burst["allows"]
+                    stats["deny"] += burst["denies"]
 
             if not args.quiet:
                 reason = str(result.get("reason", ""))[:50]

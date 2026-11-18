@@ -495,6 +495,7 @@ def test_tour_follows_the_enterprise_buyer_arc() -> None:
         "session",  # session monitoring: the runaway loop, real traffic
         "session",  # the catch is receipted, verified offline
         "dlp",  # DLP receipts from the real pattern engine
+        "dlp",  # bounded disclosure: digests, never values (D2)
         "receipts",  # every decision leaves a signed receipt
         "receipts",  # offline verify: no operator contact
         "receipts",  # coverage: the receipted-share metric
@@ -520,7 +521,7 @@ def test_tour_targets_are_real_elements_in_the_new_layout() -> None:
 
 def test_tour_is_bounded_with_unique_targets_and_titles() -> None:
     steps = _tour_steps()
-    assert len(steps) <= 12
+    assert len(steps) <= 13
     targets = [t for _, t, _ in steps]
     assert len(targets) == len(set(targets)), "no duplicate spotlight targets"
     titles = [t for _, _, t in steps]
@@ -625,13 +626,15 @@ def test_left_nav_collapses_to_a_top_strip_under_900px() -> None:
 
 
 def test_tour_spotlights_left_nav_items_for_caught_screens() -> None:
-    """G9 carried over: the DLP step spotlights its left-nav entry; the
-    D17 steps spotlight content sections (scroll-and-spotlight semantics
-    unchanged)."""
-    targets = {tab: target for tab, target, _ in _tour_steps()}
-    assert targets["dlp"] == '[data-tab-id="dlp"].tab'
+    """G9 carried over: the first DLP step spotlights its left-nav entry;
+    the D2 step spotlights the in-tab class card. The D17 steps spotlight
+    content sections (scroll-and-spotlight semantics unchanged)."""
+    steps = _tour_steps()
+    dlp_targets = [target for tab, target, _ in steps if tab == "dlp"]
+    assert dlp_targets == ['[data-tab-id="dlp"].tab', "#dlpFindingsCard"]
     for tab in ("dashboard", "session", "receipts", "capdemo", "assure"):
-        assert targets[tab].startswith("#"), tab
+        targets = [target for t, target, _ in steps if t == tab]
+        assert all(x.startswith("#") for x in targets), tab
 
 
 # ---------------------------------------------------------------------------
@@ -887,6 +890,111 @@ def test_sessionFindingVerify_calls_the_real_endpoint() -> None:
         "const rawBad=/<script>/.test(all);"
         "const ok=called&&all.includes('VERIFIED OFFLINE');"
         "if(rawBad||!ok){console.log('BAD:',__p,__m,all);process.exit(1);}"
+        "console.log('ESCAPED');"
+        "})();"
+    )
+    _run_node(program)
+
+
+# ---------------------------------------------------------------------------
+# D2: the Data Protection tab renderers (real x_dlp plane, digests only)
+# ---------------------------------------------------------------------------
+
+
+def test_dlp_loader_exists_and_is_wired_into_showtab() -> None:
+    for fn in ("loadDlpPanel", "loadDlpFindings"):
+        assert f"function {fn}(" in ADMIN_PANEL_HTML, fn
+    assert "if(t==='dlp')loadDlpPanel()" in ADMIN_PANEL_HTML
+    assert "/api/demo/dlp-findings" in ADMIN_PANEL_HTML
+    # the simulated DLP renderer is gone: the screen no longer reads the
+    # request-time demo findings pack
+    assert "function renderDlpScreen(" not in ADMIN_PANEL_HTML
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_loadDlpFindings_renders_digest_pairs_and_absence_states() -> None:
+    """Hostile route values stay text; the digest pair renders side by
+    side with the collar and the citation; the 404 and unavailable
+    states render honestly, never fabricated."""
+    block = _extract_script_blocks(ADMIN_PANEL_HTML)[0]
+    payload = {
+        "schema_version": "raucle.demo.dlp_findings/v1",
+        "available": True,
+        "count": 1,
+        "advisory_findings": 4,
+        "by_class": {"pii_email": 2},
+        "findings": [
+            {
+                "scan_id": "scan:<script>alert(1)</script>",
+                "action": "redacted",
+                "direction": "egress_to_tool",
+                "route": {"source": "agent:<img>", "destination": "inbound-screener"},
+                "content_sha256": "sha256:" + "a" * 64,
+                "redacted_content_sha256": "sha256:" + "b" * 64,
+                "matched_classes": ["pii_email"],
+                "span_counts": {"pii_email": 2},
+                "rule_id": "demo-advisory-redact",
+                "cited_receipt": "rcpt-xyz<script>",
+                "detected_at": 1760000000,
+                "receipt_hash": "sha-abc<script>alert(2)</script>",
+            }
+        ],
+    }
+    unavailable = {
+        "schema_version": "raucle.demo.dlp_findings/v1",
+        "available": False,
+        "findings": [],
+        "by_class": {},
+        "count": 0,
+        "advisory_findings": 0,
+        "unavailable_note": "receipt store not configured",
+    }
+    program = (
+        "const captured={};"
+        "function mkEl(){return {style:{},children:[],innerHTML:'',textContent:'',"
+        "appendChild:function(c){this.children.push(c);}};}"
+        "global.document={getElementById:(id)=>"
+        "{if(!captured[id])captured[id]=mkEl();return captured[id];},"
+        "createElement:()=>mkEl()};"
+        "function textOf(el){let out=(el.textContent||'')+(el.innerHTML||'');"
+        "(el.children||[]).forEach(function(c){out+=textOf(c);});return out;}"
+        "const responses=[{status:404},"
+        + __import__("json").dumps(payload)
+        + ","
+        + __import__("json").dumps(unavailable)
+        + "];let call=0;"
+        "function api(){const r=responses[Math.min(call,2)];call++;"
+        "return Promise.resolve({status:r.status||200,json:()=>Promise.resolve(r)});}"
+        + _extract_fn(block, "esc")
+        + _extract_fn(block, "escn")
+        + _extract_fn(block, "findingsRows")
+        + _extract_fn(block, "findingsStats")
+        + _extract_fn(block, "dshort")
+        + _extract_fn(block, "collarSpans")
+        + _extract_fn(block, "loadDlpFindings")
+        + "\n(async()=>{"
+        "loadDlpFindings();"
+        "await new Promise(r=>setTimeout(r,30));"
+        "const notConfigured=captured['dlpFindingsBody'].innerHTML;"
+        "loadDlpFindings();"
+        "await new Promise(r=>setTimeout(r,30));"
+        "const rowHtml=textOf(captured['dlpTableBody']);"
+        "const classHtml=captured['dlpFindingsBody'].innerHTML;"
+        "loadDlpFindings();"
+        "await new Promise(r=>setTimeout(r,30));"
+        "const unavailableHtml=captured['dlpFindingsBody'].innerHTML;"
+        "const all=notConfigured+rowHtml+classHtml+unavailableHtml;"
+        "const markupSurfaces=notConfigured+classHtml+unavailableHtml;"
+        "const tableClean=captured['dlpTableBody'].innerHTML==='';"
+        "const rawBad=/<script>|<img>/.test(markupSurfaces)||!tableClean;"
+        "const ok=notConfigured.includes('Demo mode is not configured')"
+        "&&rowHtml.includes('sha256:aaaa')&&rowHtml.includes('sha256:bbbb')"
+        "&&rowHtml.includes('[REDACTED:pii_email] x2')"
+        "&&rowHtml.includes('demo-advisory-redact')"
+        "&&rowHtml.includes('rcpt-xyz')"
+        "&&classHtml.includes('[REDACTED:pii_email] x2')"
+        "&&unavailableHtml.includes('receipt store not configured');"
+        "if(rawBad||!ok){console.log('BAD:',all);process.exit(1);}"
         "console.log('ESCAPED');"
         "})();"
     )

@@ -235,7 +235,7 @@ class TestEnterpriseConsoleFrame:
 
     def test_truth_class_classification_is_honest(self):
         """Machinery-backed demo screens are never labelled OSS LIVE."""
-        machinery = ("dlp", "injection", "shadow", "mcp", "siem", "users")
+        machinery = ("injection", "shadow", "mcp", "siem", "users")
         live = (
             "dashboard",
             "connections",
@@ -244,6 +244,7 @@ class TestEnterpriseConsoleFrame:
             "receipts",
             "learn",
             "config",
+            "dlp",
             "session",
             "assure",
             "stop",
@@ -319,6 +320,65 @@ class TestEnterpriseOverview:
     def test_overview_carries_no_numbers(self):
         """Cards describe; tabs demonstrate: no fabricated counts."""
         assert not re.search(r"stat-value", self._grid()), "the overview grid must not fake data"
+
+
+class TestDataProtectionTab:
+    """D2: the Data Protection tab ships the real advisory redaction plane.
+
+    The screen reads signed x_dlp receipts minted by the OSS advisory
+    redaction engine over live demo traffic, so its truth class is OSS
+    LIVE and its copy must state the bounded-disclosure rules.
+    """
+
+    def test_tab_declares_oss_live_over_real_machinery(self):
+        tag = _opening_tag(ADMIN_PANEL_HTML, "dlp")
+        assert 'data-truth-class="OSS LIVE"' in tag
+        body = _tab_sections(ADMIN_PANEL_HTML)["dlp"]
+        for marker in (
+            "advisory redaction engine",
+            "x_dlp",
+            "[REDACTED:",
+            "digest",
+            "pci_pan",
+            "canned",
+        ):
+            assert marker in body, marker
+        for element_id in ("dlpSummary", "dlpFindingsCard", "dlpFindingsBody", "dlpTableBody"):
+            assert f'id="{element_id}"' in body, element_id
+
+    def test_tab_fetches_the_real_dlp_plane(self):
+        assert "/api/demo/dlp-findings" in ADMIN_PANEL_HTML
+
+    def test_overview_dlp_card_is_oss_live(self):
+        grid = _balanced_body(ADMIN_PANEL_HTML, '<div class="ov-grid" id="overviewGrid">')
+        i = grid.index('<div class="ov-title">Data loss prevention</div>')
+        start = grid.rindex('<div class="ov-card"', 0, i)
+        nxt = grid.find('<div class="ov-card"', i)
+        card = grid[start : nxt if nxt != -1 else len(grid)]
+        assert 'data-truth-class="OSS LIVE"' in card
+        assert "OSS MACHINERY" not in card
+
+    def test_overview_region_carries_no_banned_claim_words(self):
+        """The overview cards describe; no overclaim vocabulary ships."""
+        grid = _balanced_body(ADMIN_PANEL_HTML, '<div class="ov-grid" id="overviewGrid">')
+        for word in (
+            "certified",
+            "guaranteed",
+            "100%",
+            "unbreakable",
+            "military-grade",
+            "bank-grade",
+            "industry-leading",
+            "state-of-the-art",
+            "next-generation",
+        ):
+            assert word not in grid.lower(), word
+
+    def test_nav_entry_sits_first_in_the_assurance_stack(self):
+        nav = ADMIN_PANEL_HTML[ADMIN_PANEL_HTML.index('data-nav-group="assurance"') :]
+        nav = nav[: nav.index("</nav>")]
+        assert 'data-tab-id="dlp"' in nav
+        assert nav.index('data-tab-id="dlp"') < nav.index('data-tab-id="injection"')
 
 
 class TestSessionBehaviourTab:

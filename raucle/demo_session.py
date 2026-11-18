@@ -18,6 +18,19 @@ machinery a live operator's deployment runs.
   Each finding cites the gate receipt of the very call it cut off; the
   panel's offline verifier re-checks that claim against the chain, so
   a finding cannot lie about what happened and still verify.
+- ``/api/demo/dlp-findings`` reads the signed ``x_dlp`` receipts the
+  demo advisory redaction engine minted (EPIC D item D2, lanes Q-7a +
+  Q-7c machinery). Each row carries digests, bounded pattern classes
+  and span counts only (never content) and cites the gate receipt of
+  the scanned call. ``run_demo_dlp_scan`` is the demo-plane driver the
+  gateway app calls after a receipted demo gate decision: it runs the
+  call's arguments through the REAL advisory redaction middleware
+  (``raucle.middleware`` configured with the wired pattern classes)
+  and mints the ``x_dlp`` receipt through the OSS emitter. It runs
+  only when ``RAUCLE_DEMO_MODE`` is on: production gate traffic is
+  never content-scanned by the gateway (the ``x_dlp`` emitter surface
+  belongs to the enterprise content proxy, per
+  ``docs/spec/provenance/v1.2/content-dlp.md``).
 
 Honest limits ride every response: v1 rules are deny-only; window
 state is process memory replayed from the index on boot; the replay
@@ -32,25 +45,34 @@ offline). No other write path exists in this module.
 from __future__ import annotations
 
 import base64 as _b64
+import contextlib
 import json
+import logging
 import os
 import time
+import weakref
 from typing import Any
 
 from fastapi import Header, HTTPException
 
 __all__ = [
+    "DLP_DEMO_RULE_ID",
     "FINDING_ROW_CAP",
     "SESSION_ROW_CAP",
+    "build_dlp_findings",
     "build_session_findings",
     "build_session_rules",
     "build_session_windows",
     "register_demo_session_routes",
+    "run_demo_dlp_scan",
 ]
+
+logger = logging.getLogger(__name__)
 
 RULES_SCHEMA = "raucle.demo.session_rules/v1"
 WINDOWS_SCHEMA = "raucle.demo.session_windows/v1"
 FINDINGS_SCHEMA = "raucle.demo.session_findings/v1"
+DLP_SCHEMA = "raucle.demo.dlp_findings/v1"
 
 #: Sessions shown in the windows view, most recently active first.
 SESSION_ROW_CAP = 20
@@ -62,6 +84,18 @@ FINDING_ROW_CAP = 50
 #: Receipt envelopes scanned newest-first while looking for findings;
 #: the truncation is disclosed in the response, never silent.
 FINDING_SCAN_CAP = 400
+#: x_dlp scan rows returned, newest first.
+DLP_ROW_CAP = 50
+#: Receipt envelopes scanned newest-first while collecting x_dlp rows
+#: and advisory findings; the truncation is disclosed, never silent.
+DLP_SCAN_CAP = 400
+#: The advisory session key the demo middleware leg uses when the call
+#: declared no session id of its own.
+DLP_ADVISORY_SESSION = "demo-dlp-advisory"
+#: The advisory redaction policy rule the demo plane applies. The
+#: action is always ``redacted`` in the demo (block classes belong to
+#: the enterprise runtime, Q-7b): honestly never a block claim.
+DLP_DEMO_RULE_ID = "demo-advisory-redact"
 
 _HARNESS = "session-monitor"
 
@@ -80,6 +114,137 @@ _NO_INDEX_NOTE = (
     "session windows are unavailable on this deployment: the receipt "
     "index is not configured, and absence of a view is never a zero"
 )
+
+_NO_DLP_STORE_NOTE = (
+    "x_dlp findings are unavailable on this deployment: the receipt "
+    "store is not configured, and absence of a view is never a zero"
+)
+
+_DLP_EMPTY_NOTE = (
+    "no x_dlp receipts yet: findings appear when demo traffic carries "
+    "the canned patterns and the advisory redaction engine matches a "
+    "span. A clean scan mints nothing, and the empty view never pads."
+)
+
+#: Honest limits riding every DLP response (bounded disclosure rules and
+#: the deliberately narrow advisory coverage).
+_DLP_LIMITS = (
+    "the advisory engine wires a declared subset of the x_dlp "
+    "vocabulary: pii_card, pii_email, pii_national_id and secret_bearer; "
+    "pci_pan is deliberately not wired (issuer-aware PAN heuristics "
+    "belong to the enterprise scanner)",
+    "the demo scan runs only when RAUCLE_DEMO_MODE is on: production "
+    "gate traffic is never content-scanned by the gateway",
+    "rows carry digests, class names and span counts only; the scanned "
+    "content never enters a receipt",
+    "the action is always redacted in the demo: block classes belong "
+    "to the enterprise runtime and are never claimed here",
+)
+
+#: One advisory middleware per gateway process (the demo plane drives
+#: the same RaucleMiddleware an agent adapter configures; weak-keyed so
+#: the cache never outlives the gateway it serves).
+_DEMO_DLP_MIDDLEWARE: weakref.WeakKeyDictionary[Any, Any] = weakref.WeakKeyDictionary()
+
+
+def _demo_dlp_middleware(gateway: Any) -> Any:
+    """The demo gateway's advisory redaction middleware, built once.
+
+    Configured with the wired advisory pattern classes and the gateway
+    as the findings client, so the middleware's advisory findings mint
+    through the real emitter exactly as they do in an adapter run.
+    """
+    mw = _DEMO_DLP_MIDDLEWARE.get(gateway)
+    if mw is None:
+        from raucle.middleware import RaucleMiddleware
+        from raucle.redaction import wired_redaction_classes
+
+        mw = RaucleMiddleware(redaction_classes=wired_redaction_classes(), gateway=gateway)
+        with contextlib.suppress(TypeError):  # pragma: no cover - non-weakrefable gateway
+            _DEMO_DLP_MIDDLEWARE[gateway] = mw
+    return mw
+
+
+def run_demo_dlp_scan(
+    gateway: Any,
+    *,
+    tool: str,
+    args: dict[str, Any],
+    agent_id: str,
+    destination: str,
+    session_id: str,
+    trace_id: str,
+    gate_receipt_id: str,
+    gate_decision: str,
+) -> None:
+    """D2: run one demo gate call through the real advisory redaction
+    path and mint its ``x_dlp`` receipt.
+
+    Two legs, both advisory and both fail-open (the gate decision is
+    already made and returned; this layer never changes it):
+
+    1. the REAL middleware path (``raucle.middleware``): the call is
+       scanned, the argument text recorded into the advisory session
+       window carries ``[REDACTED:<class>]`` collars, and the
+       middleware's advisory findings mint citing the gate receipt.
+    2. the ``x_dlp`` receipt, minted through the OSS emitter from the
+       same engine pass over the same serialized argument text, so
+       the digests in both receipts agree and the scan is
+       replay-verifiable offline with the cited gate receipt in the
+       chain.
+
+    Nothing matched means no receipt: an honest clean scan mints no
+    evidence (mirroring the enterprise proxy contract).
+    """
+    from raucle.redaction import redact_text, wired_redaction_classes
+
+    try:
+        mw = _demo_dlp_middleware(gateway)
+        mw.clear_trace_receipt(trace_id)
+        mw.record_trace_receipt(trace_id, gate_receipt_id, gate_decision)
+        mw.pre_tool_call(
+            tool,
+            args,
+            session_id=session_id or DLP_ADVISORY_SESSION,
+            trace_id=trace_id,
+        )
+    except Exception:
+        logger.warning(
+            "demo DLP advisory middleware leg failed open (decision "
+            "unchanged; this layer has no enforcement authority)",
+            exc_info=True,
+        )
+    arg_text = " ".join(f"{k}={v}" for k, v in args.items())
+    rr = redact_text(arg_text, wired_redaction_classes())
+    if not rr.span_counts:
+        return
+    from raucle.provenance import _canonical_json, _sha256_hex
+
+    digest_hex = _sha256_hex(
+        _canonical_json({"cited": gate_receipt_id, "content": rr.content_sha256})
+    )
+    scan_id = "scan:" + digest_hex[:16]
+    try:
+        gateway.emit_dlp_finding(
+            scan_id=scan_id,
+            route={
+                "source": str(agent_id),
+                "destination": str(destination) or f"tool:{tool}",
+            },
+            direction="egress_to_tool",
+            content_sha256=rr.content_sha256,
+            matched_classes=rr.matched_classes,
+            span_counts=dict(rr.span_counts),
+            action="redacted",
+            rule_id=DLP_DEMO_RULE_ID,
+            redacted_content_sha256=rr.redacted_content_sha256,
+            cited_receipt=gate_receipt_id,
+        )
+    except Exception:
+        logger.warning(
+            "demo x_dlp emission failed (advisory only, no receipt minted)",
+            exc_info=True,
+        )
 
 
 def _demo_mode_on() -> bool:
@@ -311,6 +476,110 @@ def build_session_findings(gateway: Any) -> dict[str, Any]:
     }
 
 
+def build_dlp_findings(gateway: Any) -> dict[str, Any]:
+    """The x_dlp scan receipts, read from the signed receipt chain.
+
+    Scans the newest receipt envelopes for ``x_dlp`` receipts (the
+    demo advisory redaction engine's scans), newest first, bounded and
+    disclosed. Every row field comes from the signed extension:
+    digests, bounded class names, span counts and route identifiers,
+    never content. The advisory middleware findings from the same scan
+    window are counted alongside, so the screen can show both halves
+    of the advisory story without ever holding the values.
+    """
+    from raucle.redaction import wired_redaction_classes
+
+    store = getattr(gateway, "_receipt_store", None)
+    payload: dict[str, Any] = {
+        "schema_version": DLP_SCHEMA,
+        "label": "signed x_dlp receipts from this deployment's chain",
+        "wired_classes": wired_redaction_classes(),
+        "rule_id": DLP_DEMO_RULE_ID,
+        "limits": list(_DLP_LIMITS),
+    }
+    if store is None:
+        payload.update(
+            {
+                "available": False,
+                "findings": [],
+                "by_class": {},
+                "count": 0,
+                "advisory_findings": 0,
+                "unavailable_note": _NO_DLP_STORE_NOTE,
+            }
+        )
+        return payload
+    records: list[dict[str, Any]] = store.recent(DLP_SCAN_CAP)
+    findings: list[dict[str, Any]] = []
+    by_class: dict[str, int] = {}
+    advisory = 0
+    scanned = 0
+    truncated = False
+    for record in records:
+        scanned += 1
+        try:
+            decoded = _decode_payload(record)
+            if not isinstance(decoded, dict):
+                continue
+            x_dlp = decoded.get("x_dlp")
+            if not isinstance(x_dlp, dict):
+                x_finding = decoded.get("x_finding")
+                if (
+                    isinstance(x_finding, dict)
+                    and x_finding.get("harness") == "middleware-advisory"
+                ):
+                    advisory += 1
+                continue
+            route = x_dlp.get("route") if isinstance(x_dlp.get("route"), dict) else {}
+            row = {
+                "scan_id": str(x_dlp.get("scan_id") or ""),
+                "action": str(x_dlp.get("action") or ""),
+                "direction": str(x_dlp.get("direction") or ""),
+                "route": {
+                    "source": str(route.get("source") or ""),
+                    "destination": str(route.get("destination") or ""),
+                },
+                "content_sha256": str(x_dlp.get("content_sha256") or ""),
+                "redacted_content_sha256": str(x_dlp.get("redacted_content_sha256") or ""),
+                "matched_classes": sorted(str(c) for c in (x_dlp.get("matched_classes") or [])),
+                "span_counts": {
+                    str(k): int(v) for k, v in (x_dlp.get("span_counts") or {}).items()
+                },
+                "rule_id": str(x_dlp.get("rule_id") or ""),
+                "cited_receipt": str(x_dlp.get("cited_receipt") or ""),
+                "detected_at": int(decoded.get("iat") or 0),
+                "receipt_hash": str(record.get("receipt_hash") or ""),
+            }
+            findings.append(row)
+            for cls, count in row["span_counts"].items():
+                by_class[cls] = by_class.get(cls, 0) + count
+            if len(findings) >= DLP_ROW_CAP:
+                truncated = True
+                break
+        except Exception:  # noqa: BLE001 - a malformed line is skipped, never served
+            continue
+    findings.sort(key=lambda f: f["detected_at"], reverse=True)
+    payload.update(
+        {
+            "available": True,
+            "findings": findings,
+            "by_class": dict(sorted(by_class.items())),
+            "count": len(findings),
+            "scanned": scanned,
+            "truncated": truncated,
+            "advisory_findings": advisory,
+            "empty_note": "" if findings else _DLP_EMPTY_NOTE,
+            "monitor_note": (
+                "every row is a signed x_dlp receipt; the offline verifier "
+                "re-checks its structure, bounded vocabulary and citation "
+                "against the chain, so a scan citing a missing receipt or "
+                "carrying content fails verification"
+            ),
+        }
+    )
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -382,6 +651,23 @@ def register_demo_session_routes(
         """The session-monitor findings, each citing its gate receipt."""
         _gate(authorization, x_totp)
         return build_session_findings(gateway)
+
+    @app.get(
+        "/api/demo/dlp-findings",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+            "404": {"description": "Demo mode not configured"},
+        },
+    )
+    def demo_dlp_findings(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        """The x_dlp scan receipts the demo advisory redaction engine
+        minted, each citing the gate receipt of the call it scanned."""
+        _gate(authorization, x_totp)
+        return build_dlp_findings(gateway)
 
     @app.post(
         "/api/demo/session-findings/{receipt_hash}/offline-verify",

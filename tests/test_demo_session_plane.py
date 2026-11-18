@@ -40,12 +40,41 @@ policies:
     constraints:
       allow:
         account: ["ACC-001"]
+  - tool: screen_user_message
+    agent_id: agent:svc
+    ttl_seconds: 60
+    constraints:
+      allow:
+        channel: ["web-form"]
 """
 
 RULE_ID = "demo-runaway-export-loop"
 LOOP_TOOL = "batch_report_export"
 HEALTHY_SESSION = "sess-demo-healthy-001"
 LOOP_SESSION = "sess-demo-runaway-001"
+
+# D2: the Data Protection screen. The canned values are synthetic and
+# self-generated (a Luhn-valid test card number, a reserved-documentation
+# email domain, the canonical example national id, an obviously-demo bearer
+# token); nothing here is or resembles customer data. The plane test drives
+# them through the real gate and asserts the x_dlp evidence that mints.
+DLP_TOOL = "screen_user_message"
+DLP_CANNED_ARGS = {
+    "ticket_ref": "TCK-DLP-0001",
+    "channel": "web-form",
+    "body": (
+        "Demo card 4111111111111111 on file, contact "
+        "demo.person@example.test, national id AB123456C, header "
+        "Authorization: Bearer RAUCLE-DEMO-TOKEN-000000000000"
+    ),
+}
+CANNED_VALUES = (
+    "4111111111111111",
+    "demo.person@example.test",
+    "AB123456C",
+    "RAUCLE-DEMO-TOKEN-000000000000",
+)
+WIRED_CLASSES = ("pii_card", "pii_email", "pii_national_id", "secret_bearer")
 
 
 @pytest.fixture
@@ -362,3 +391,168 @@ class TestSessionFindingsView:
         assert in_store, "the finding must exist as a signed receipt in the chain"
         assert data["count"] == len(in_store)
         assert {f["finding_id"] for f in data["findings"]} == {f["finding_id"] for f in in_store}
+
+
+# ---------------------------------------------------------------------------
+# D2: the Data Protection plane - the real advisory redaction engine over
+# live demo gate traffic, minting x_dlp receipts that cite the gate receipt.
+# ---------------------------------------------------------------------------
+
+
+def _drive_canned_dlp_call(gate_client: TestClient, ticket: str = "TCK-DLP-0001") -> dict:
+    """One demo gate call whose arguments carry the canned synthetic
+    patterns: the same traffic shape the demo sidecar's scripted DLP burst
+    generates. Returns the gate response (decision + receipt id)."""
+    args = dict(DLP_CANNED_ARGS, ticket_ref=ticket)
+    return gate_client.post(
+        "/gate",
+        json={"tool": DLP_TOOL, "args": args, "agent_id": "agent:svc"},
+    ).json()
+
+
+class TestDataProtectionPlane:
+    def test_canned_call_mints_x_dlp_rows_citing_the_gate_receipt(self, plane):
+        _gw, gate, admin, auth = plane
+        body = _drive_canned_dlp_call(gate)
+        assert body["decision"] == "allow", body
+        cited = body["receipt_id"]
+        resp = admin.get("/api/demo/dlp-findings", headers=auth)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["schema_version"] == "raucle.demo.dlp_findings/v1"
+        assert data["available"] is True
+        assert data["count"] == 1, data
+        row = data["findings"][0]
+        assert row["cited_receipt"] == cited, row
+        assert row["action"] == "redacted", row
+        assert row["direction"] == "egress_to_tool", row
+        assert sorted(row["matched_classes"]) == sorted(WIRED_CLASSES), row
+        for cls in WIRED_CLASSES:
+            assert row["span_counts"][cls] == 1, row
+        # the digest pair: the original and the redacted content differ,
+        # proven by digest without either ever being shown
+        assert row["content_sha256"].startswith("sha256:")
+        assert row["redacted_content_sha256"].startswith("sha256:")
+        assert row["content_sha256"] != row["redacted_content_sha256"]
+        assert row["rule_id"]
+        assert row["scan_id"].startswith("scan:")
+        assert row["route"]["source"] == "agent:svc"
+        # the row is itself a receipted artefact
+        assert row["receipt_hash"]
+        # the advisory middleware findings from the same scan are surfaced
+        assert data["advisory_findings"] >= len(WIRED_CLASSES), data
+
+    def test_canned_values_never_reach_the_plane_response(self, plane):
+        """Bounded disclosure, end to end: no canned value appears anywhere
+        in the plane response text, and no signed x_dlp receipt in the
+        store carries one either."""
+        gw, gate, admin, auth = plane
+        _drive_canned_dlp_call(gate)
+        resp = admin.get("/api/demo/dlp-findings", headers=auth)
+        for value in CANNED_VALUES:
+            assert value not in resp.text, value
+        for _rec, payload in _store_payloads(gw):
+            if "x_dlp" not in payload:
+                continue
+            for value in CANNED_VALUES:
+                assert value not in json.dumps(payload["x_dlp"]), value
+
+    def test_rows_are_newest_first_bounded_and_scanned_is_disclosed(self, plane):
+        _gw, gate, admin, auth = plane
+        first = _drive_canned_dlp_call(gate, ticket="TCK-DLP-0001")
+        second = _drive_canned_dlp_call(gate, ticket="TCK-DLP-0002")
+        assert first["receipt_id"] != second["receipt_id"]
+        data = admin.get("/api/demo/dlp-findings", headers=auth).json()
+        assert data["count"] == 2, data
+        assert data["scanned"] >= 2, data
+        assert data["truncated"] is False, data
+        iats = [row["detected_at"] for row in data["findings"]]
+        assert iats == sorted(iats, reverse=True), iats
+        by_cited = {row["cited_receipt"] for row in data["findings"]}
+        assert by_cited == {first["receipt_id"], second["receipt_id"]}
+        # the per-class span totals aggregate the same rows
+        for cls in WIRED_CLASSES:
+            assert data["by_class"][cls] == 2, data["by_class"]
+
+    def test_clean_call_mints_nothing_and_the_screen_says_so(self, plane):
+        _gw, gate, admin, auth = plane
+        body = gate_client_clean_call(gate)
+        assert body["decision"] == "allow", body
+        data = admin.get("/api/demo/dlp-findings", headers=auth).json()
+        assert data["count"] == 0, data
+        assert data["findings"] == []
+        assert "no x_dlp" in data["empty_note"].lower(), data
+
+    def test_off_demo_answers_404(self, plane, monkeypatch):
+        _gw, _gate, admin, auth = plane
+        monkeypatch.delenv("RAUCLE_DEMO_MODE")
+        resp = admin.get("/api/demo/dlp-findings", headers=auth)
+        assert resp.status_code == 404, resp.text
+
+    def test_off_demo_gate_traffic_mints_no_x_dlp(self, tmp_path, monkeypatch):
+        """With demo mode off the gateway never scans gate traffic: the
+        advisory scan is a demo-plane surface, not production behaviour."""
+        monkeypatch.delenv("RAUCLE_DEMO_MODE", raising=False)
+        policy = tmp_path / "policies.yaml"
+        policy.write_text(DEMO_POLICY)
+        config = GatewayConfig(
+            host="127.0.0.1",
+            admin_api_key="admin-key-0123456789abcdef",
+            signer_backend="local",
+            policy_file=str(policy),
+            receipt_store=str(tmp_path / "receipts.jsonl"),
+            receipt_store_dir=str(tmp_path / "segments"),
+            audit_chain=str(tmp_path / "audit.jsonl"),
+            registry_path=str(tmp_path / "registry.jsonl"),
+            emit_receipts=True,
+        )
+        gw = RaucleGateway(config)
+        gate = TestClient(create_gateway_app(gw))
+        body = gate.post(
+            "/gate",
+            json={"tool": DLP_TOOL, "args": DLP_CANNED_ARGS, "agent_id": "agent:svc"},
+        ).json()
+        assert body["decision"] == "allow", body
+        x_dlp_payloads = [payload for _rec, payload in _store_payloads(gw) if "x_dlp" in payload]
+        assert x_dlp_payloads == []
+
+    def test_store_unavailable_is_honest_never_fabricated(self):
+        from types import SimpleNamespace
+
+        from raucle.demo_session import build_dlp_findings
+
+        data = build_dlp_findings(SimpleNamespace())
+        assert data["available"] is False
+        assert data["findings"] == []
+        assert "unavailable" in data["unavailable_note"].lower()
+
+    def test_minted_x_dlp_receipts_verify_offline(self, plane, tmp_path):
+        """The receipts the demo minted are replay-verifiable evidence: the
+        real offline verifier accepts the whole chain (gate receipts,
+        advisory findings and x_dlp scans together)."""
+        gw, gate, _admin, _auth = plane
+        body = _drive_canned_dlp_call(gate)
+        assert body["decision"] == "allow", body
+        from raucle.provenance import ProvenanceVerifier
+
+        chain = tmp_path / "chain.jsonl"
+        with open(chain, "w", encoding="utf-8") as fh:
+            for rec, _payload in _store_payloads(gw):
+                fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        report = ProvenanceVerifier(
+            public_keys={gw._gate_identity.key_id: gw._gate_identity.public_key_pem()}
+        ).verify_chain(chain)
+        assert report.valid, report.errors
+
+
+def gate_client_clean_call(gate_client: TestClient) -> dict:
+    """A demo gate call carrying no canned patterns: nothing to detect,
+    so no x_dlp receipt must exist (honest empty, never padded)."""
+    return gate_client.post(
+        "/gate",
+        json={
+            "tool": "lookup_balance",
+            "args": {"account": "ACC-001"},
+            "agent_id": "agent:svc",
+        },
+    ).json()
