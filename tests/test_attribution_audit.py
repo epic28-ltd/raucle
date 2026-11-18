@@ -50,12 +50,15 @@ def test_crewai_unattributed_call_denies(tmp_path):
 
     from crewai.tools import BaseTool
 
+    body_calls: list = []
+
     class _Tool(BaseTool):
         name: str = "lookup_contact"
         description: str = "test tool"
         args_schema: type = _Args
 
         def _run(self, to: str) -> str:
+            body_calls.append(to)
             return f"LOOKED UP {to}"
 
     issuer = CapabilityIssuer.generate(issuer="test.platform")
@@ -67,11 +70,59 @@ def test_crewai_unattributed_call_denies(tmp_path):
     try:
         with pytest.raises(CapabilityDenied):
             guarded.run(to="someone")
+        # D1: an unattributed deny must also block the tool body, not only
+        # raise after the fact
+        assert body_calls == []
         # the receipt records the attempt honestly: a real decision, no
         # fabricated identity
         receipt = json.loads(log.read_text().strip().splitlines()[-1])["event"]
         assert receipt["decision"] == "DENY"
         assert "agent_id" in receipt  # present, honestly None
+        assert receipt["agent_id"] is None
+        assert receipt["decision_reason"], receipt
+        # D1: no "<unbound>" placeholder is minted into the chain
+        assert "unbound" not in json.dumps(receipt), receipt
+    finally:
+        set_in_force_token(None)
+
+
+def test_crewai_unattributed_async_call_denies(tmp_path):
+    """The async entry point enforces the same attribution doctrine (D1)."""
+    pytest.importorskip("crewai")
+    import asyncio
+
+    from pydantic import BaseModel
+
+    from raucle.integrations.crewai import CapabilityDenied, guard_tool, set_in_force_token
+
+    class _Args(BaseModel):
+        to: str
+
+    from crewai.tools import BaseTool
+
+    body_calls: list = []
+
+    class _Tool(BaseTool):
+        name: str = "lookup_contact"
+        description: str = "test tool"
+        args_schema: type = _Args
+
+        def _run(self, to: str) -> str:
+            body_calls.append(to)
+            return f"LOOKED UP {to}"
+
+    issuer = CapabilityIssuer.generate(issuer="test.platform")
+    gate = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
+    sink, log = _sink(tmp_path)
+    guarded = guard_tool(_Tool(), gate=gate, sink=sink, agent_id=None)  # bearer-mode attempt
+    token = issuer.mint(agent_id="agent:test", tool="lookup_contact", ttl_seconds=60)
+    set_in_force_token(token)
+    try:
+        with pytest.raises(CapabilityDenied):
+            asyncio.run(guarded.arun(to="someone"))
+        assert body_calls == []
+        receipt = json.loads(log.read_text().strip().splitlines()[-1])["event"]
+        assert receipt["decision"] == "DENY"
         assert receipt["agent_id"] is None
         assert receipt["decision_reason"], receipt
     finally:

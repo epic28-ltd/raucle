@@ -28,6 +28,26 @@ jobs:
       - name: Run scanner smoke test
         run: python -c "from raucle import Scanner; s = Scanner(); r = s.scan('hello world'); assert r.verdict == 'CLEAN'"
 
+  test-integration-extras:
+    name: Test (integration extras)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        with:
+          # crewai publishes no 3.14 distribution; 3.13 is the newest the
+          # extra supports and the interpreter the D1 version span
+          # (1.0.0 / 1.5.0 / 1.6.1 / 1.15.41) was verified on.
+          python-version: '3.13'
+      - name: Install
+        # The [dev] matrix never installs the optional-framework extras, so
+        # every extras-gated suite skipped silently in CI - the crewai
+        # attribution regression (D1) hid that way for two weeks. This job
+        # installs the extras so those suites run, not skip.
+        run: pip install -e ".[dev,crewai,langgraph]"
+      - name: Run integration suites (crewai + langgraph extras)
+        run: python -m pytest tests/test_attribution_audit.py tests/test_crewai_integration.py tests/test_langgraph_integration.py -v --tb=short
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

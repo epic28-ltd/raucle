@@ -5,11 +5,14 @@ otherwise. These drive the genuine ``BaseTool.run(**kwargs)`` path — the same
 path a Crew uses — so a denied call is verified to block the real tool body, not
 a mock.
 
-SKIP DECISION (2026-11-05): ``crewai>=1.0`` has no Python 3.14 distribution
-(the dev venv is py3.14), so these tests are documented-excluded locally; the
-CI 3.11-3.13 matrix installs the extra and owns this proof. Until a py3.14
-crewai exists, ``tests/test_integrations_contract.py`` covers the wrapper's
-own surface against a faithful BaseTool stand-in. Backlog: retire the
+SKIP DECISION (2026-11-05, updated by D1): ``crewai>=1.0`` has no Python
+3.14 distribution (the dev venv is py3.14), so these tests are
+documented-excluded locally; the ``Test (integration extras)`` CI job
+installs ``.[dev,crewai,langgraph]`` on 3.13 and owns this proof (before
+D1 no CI job installed the extra, so this suite never ran in CI and the
+bearer-mode regression hid behind the skip). Until a py3.14 crewai
+exists, ``tests/test_integrations_contract.py`` covers the wrapper's own
+surface against a faithful BaseTool stand-in. Backlog: retire the
 stand-ins when a py3.14-compatible crewai ships.
 """
 
@@ -56,7 +59,9 @@ def env(tmp_path: pathlib.Path):
     signer = Ed25519Signer.generate()
     log = tmp_path / "receipts.jsonl"
     sink = HashChainSink(log, signer=signer)
-    guarded = guard_tool(_Pay(), gate=gate, sink=sink)
+    # D1: the acting identity is bound to the guard; bearer mode is closed,
+    # so an unattributed guard would deny every call below.
+    guarded = guard_tool(_Pay(), gate=gate, sink=sink, agent_id="agent:test")
     token = issuer.mint(
         agent_id="agent:test",
         tool="transfer_funds",

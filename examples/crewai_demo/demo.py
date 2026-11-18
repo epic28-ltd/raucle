@@ -73,7 +73,11 @@ def main() -> int:
     signer = Ed25519Signer.generate()
     sink = HashChainSink(receipt_log, signer=signer)
 
-    [transfer_funds] = guard_tools([TransferFunds()], gate=gate, sink=sink)
+    # D1: bind the acting identity to the guard - bearer mode is closed, so
+    # an unattributed guard would deny the legitimate payment too.
+    [transfer_funds] = guard_tools(
+        [TransferFunds()], gate=gate, sink=sink, agent_id="agent:demo.invoice-bot"
+    )
 
     # Token scoped to the user's actual request: this payee, small amounts.
     set_in_force_token(
