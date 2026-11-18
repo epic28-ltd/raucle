@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Added - H3: I1 counterfactual evidence and revocation-event receipt specifications (receipts v1.2)
+
+- New public specification
+  `docs/spec/provenance/v1.2/counterfactual-evidence.md`: an intent
+  receipt MAY carry the not-taken decision under a named alternative
+  ruleset, evaluated at decision time by the same deterministic
+  machinery as the enforced decision. Bounded, fail-closed shape
+  (version anchor, ruleset digest, decision, rule id and kind drawn
+  from the shipped policy and session vocabularies, session-window
+  evidence per the session rules spec, a decision-time bound on
+  `evaluated_at`); no silent schema extension (a verifier that does not
+  implement the block refuses with a named error); the spec states what
+  a third party CAN and CANNOT conclude from counterfactual evidence:
+  never enforcement, never whole-incident prevention, never model
+  outputs, never a proof.
+- New public specification
+  `docs/spec/provenance/v1.2/revocation-receipts.md`: the
+  revocation-event receipt kind. Mandatory chain linkage to the revoked
+  object by hash, revoker identity, a closed reason-class vocabulary
+  and a decision-time timestamp; no secret material, no capability
+  replay content, no content. Verifiable offline like every receipt;
+  revocation is a new link in the chain, never an edit; an unknown
+  revocation-receipt version refuses with a named error, never silently
+  ignored. The shipped 30 October emitter shape stays valid and is
+  documented as such.
+- `docs/spec/README.md` now indexes the receipts v1.2 additive-extension
+  family, including the two new documents. Spec precedes
+  implementation: no gateway, emission or verifier code changes in this
+  PR; those legs land with the implementing Q lanes.
+
 ### Added - D5: the MCP scanner joins the buyer tour with payload-free findings
 
 - The MCP Scanner tab is now labelled OSS LIVE and joins the enterprise
