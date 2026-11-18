@@ -93,10 +93,13 @@ from typing import Any
 from raucle.audit import (
     HashChainSink,
     NullSink,
-    _canonical_json,
-    _sha256_hex,
 )
-from raucle.capability import Capability, CapabilityGate, GateDecision
+from raucle.capability import Capability, CapabilityGate
+from raucle.integrations._guard_core import (
+    CapabilityDenied,
+    emit_receipt,
+    evaluate_gate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,20 +109,6 @@ try:  # pragma: no cover - import-time check
     _HAS_GOOGLE_ADK = True
 except ImportError:  # pragma: no cover
     _HAS_GOOGLE_ADK = False
-
-
-class CapabilityDenied(Exception):
-    """Raised by a guarded tool when the gate denies the call.
-
-    ADK's runner surfaces a raising tool as an error event back to the
-    model; the denial receipt is emitted *before* the raise, and the tool
-    body never executes.
-    """
-
-    def __init__(self, tool: str, reason: str) -> None:
-        super().__init__(f"raucle denied {tool!r}: {reason}")
-        self.tool = tool
-        self.reason = reason
 
 
 # --- In-force token resolution (shared contextvar pattern) -----------------
@@ -139,75 +128,14 @@ def get_in_force_token() -> Capability | None:
     return _in_force_token.get()
 
 
-def _hash_args(args: dict[str, Any]) -> str:
-    try:
-        return _sha256_hex(_canonical_json(args))
-    except Exception:  # pragma: no cover - non-canonicalisable args
-        return _sha256_hex(repr(sorted(args.items())).encode("utf-8"))
-
-
-def _emit_receipt(
-    sink: HashChainSink | NullSink,
-    *,
-    token: Capability | None,
-    agent_id: str | None,
-    tool: str,
-    args: dict[str, Any],
-    decision: GateDecision,
-) -> None:
-    receipt = {
-        "kind": "capability_receipt",
-        "issuer": token.issuer if token else "",
-        "issuer_pubkey": token.key_id if token else "<unknown>",
-        "agent_id": agent_id,
-        "tool": tool,
-        "call_args_hash": _hash_args(args),
-        "decision": "ALLOW" if decision.allowed else "DENY",
-        "decision_reason": decision.reason or "",
-        "framework": "google-adk",
-    }
-    try:
-        sink.append(receipt)
-    except Exception:
-        # The sink's own fail-loud contract propagates: an action without
-        # its receipt is unauthorised (fail-closed).
-        logger.exception("failed to emit capability receipt for %s", tool)
-        raise
-
-
-def _evaluate_gate(
-    gate: CapabilityGate,
-    token: Capability | None,
-    tool_name: str,
-    call_args: dict[str, Any],
-    agent_id: str | None,
-) -> GateDecision:
-    """Build the decision for an incoming tool call (fail-closed boundaries).
-
-    B2 attribution doctrine (same as the crewai and langgraph adapters): a
-    call with no bound caller identity cannot be checked against the
-    token's agent scope, so it denies rather than running attributed to a
-    placeholder receipt.
-    """
-    if not agent_id:
-        return GateDecision(
-            allowed=False, reason="no acting agent identity (no caller agent_id bound)"
-        )
-    if token is None:
-        return GateDecision(allowed=False, reason="no in-force capability token")
-    return gate.check(token=token, tool=tool_name, args=call_args, agent_id=agent_id)
-
-
 def _normalise_agent_name(name: str) -> str:
-    """Join an ADK agent name into the raucle ``agent:`` scheme.
-
-    ADK validates ``LlmAgent`` names as identifiers (colons are refused),
-    while raucle capability ids require the ``agent:`` prefix, so the
-    namespaces are joined deterministically: ``billing_agent`` acts as
-    ``agent:billing_agent``. A name already carrying the scheme passes
-    through unchanged; the join is collision-free because ADK names cannot
-    contain the separator.
-    """
+    """Join an ADK agent name into the raucle ``agent:`` scheme the way
+    the tokens' agent scope matches: an already-schemed id passes through,
+    a bare identifier gains the scheme prefix (``billing_agent`` ->
+    ``agent:billing_agent``). Empty or non-scheme-but-schemed inputs are
+    not possible through the caller (it checks ``isinstance(name, str)
+    and name``), and an unexpected shape degrades upstream to an honest
+    unattributed deny."""
     return name if name.startswith("agent:") else f"agent:{name}"
 
 
@@ -242,11 +170,14 @@ def _make_gated_function(
     """Build the gate-checked wrapper, preserving sync/async identity."""
     tool_name = getattr(original, "__name__", None) or "<unknown>"
 
-    def _decide(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any] | None:
-        # ADK calls tools positionally as fn(args, tool_context); accept
-        # the keyword spelling too without weakening either.
+    def _extract_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[dict[str, Any], Any]:
+        """Present either call spelling as (call_args, tool_context).
+
+        ADK calls tools positionally as fn(args, tool_context); the
+        keyword spelling is accepted too without weakening either.
+        """
         call_args: dict[str, Any] | None = None
-        tool_context = None
+        tool_context: Any = None
         if args:
             call_args = args[0] if isinstance(args[0], dict) else {"input": args[0]}
             if len(args) > 1:
@@ -256,22 +187,26 @@ def _make_gated_function(
             call_args = value if isinstance(value, dict) else {"input": value}
         if "tool_context" in kwargs:
             tool_context = kwargs["tool_context"]
+        return call_args or {}, tool_context
+
+    def _decide(args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+        call_args, tool_context = _extract_call(args, kwargs)
         acting = agent_id or _identity_from_tool_context(tool_context)
         token = get_in_force_token()
-        decision = _evaluate_gate(gate, token, tool_name, call_args or {}, acting)
+        decision = evaluate_gate(gate, token, tool_name, call_args, acting)
         # Emission precedes enforcement: there is no path that drops a
         # decision, and a sink failure aborts an in-flight ALLOW too.
-        _emit_receipt(
+        emit_receipt(
             sink,
+            framework="google-adk",
             token=token,
             agent_id=acting,
             tool=tool_name,
-            args=call_args or {},
+            args=call_args,
             decision=decision,
         )
         if not decision.allowed:
             raise CapabilityDenied(tool_name, decision.reason or "denied")
-        return call_args
 
     @functools.wraps(original)
     def gated_sync(*args: Any, **kwargs: Any) -> Any:

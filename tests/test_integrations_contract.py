@@ -469,8 +469,9 @@ def test_pydantic_ai_guard_unattributed_denies(pydantic_ai_stub, tmp_path, issue
         return f"LOOKED UP {to}"
 
     guarded = pa_mod.guard_tool(lookup, gate=gate, sink=_sink(tmp_path))  # no agent_id bound
+    stub_ctx = _StubRunContext(None)
     with pytest.raises(pa_mod.CapabilityDenied, match="no acting agent identity"):
-        guarded(_StubRunContext(None), to="ACC-001")
+        guarded(stub_ctx, to="ACC-001")
     assert ran == []
     lines = (tmp_path / "audit.jsonl").read_text().strip().splitlines()
     events = [json.loads(line).get("event", json.loads(line)) for line in lines]

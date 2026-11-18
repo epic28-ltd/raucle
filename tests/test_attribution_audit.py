@@ -23,6 +23,7 @@ Audit findings (29 Oct):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import pathlib
 
@@ -272,10 +273,9 @@ def test_openai_agents_unattributed_call_denies(tmp_path):
             tool_call_id="call-1",
             tool_arguments=args,
         )
+        attempt = guarded.on_invoke_tool(ctx, args)
         with pytest.raises(CapabilityDenied):
-            import asyncio
-
-            asyncio.run(guarded.on_invoke_tool(ctx, args))
+            asyncio.run(attempt)
         assert body_calls == []
         receipt = json.loads(log.read_text().strip().splitlines()[-1])["event"]
         assert receipt["decision"] == "DENY"
@@ -338,7 +338,6 @@ def test_pydantic_ai_unattributed_call_denies(tmp_path):
 
 def test_pydantic_ai_unattributed_async_call_denies(tmp_path):
     pytest.importorskip("pydantic_ai")
-    import asyncio
 
     from pydantic_ai import Agent
     from pydantic_ai.models.test import TestModel
@@ -373,8 +372,9 @@ def test_pydantic_ai_unattributed_async_call_denies(tmp_path):
             tool_call_id="call-1",
             retry=0,
         )
+        attempt = guarded(ctx, to="someone")
         with pytest.raises(CapabilityDenied):
-            asyncio.run(guarded(ctx, to="someone"))
+            asyncio.run(attempt)
         assert body_calls == []
         receipt = json.loads(log.read_text().strip().splitlines()[-1])["event"]
         assert receipt["decision"] == "DENY"
@@ -431,7 +431,6 @@ def test_google_adk_unattributed_call_denies(tmp_path):
 
 def test_google_adk_unattributed_async_call_denies(tmp_path):
     pytest.importorskip("google.adk.tools")
-    import asyncio
 
     from google.adk.tools import ToolContext
 
@@ -465,8 +464,9 @@ def test_google_adk_unattributed_async_call_denies(tmp_path):
     set_in_force_token(token)
     try:
         tc = ToolContext(invocation_context=_Invocation())
+        attempt = guarded({"to": "someone"}, tc)
         with pytest.raises(CapabilityDenied):
-            asyncio.run(guarded({"to": "someone"}, tc))
+            asyncio.run(attempt)
         assert body_calls == []
         receipt = json.loads(log.read_text().strip().splitlines()[-1])["event"]
         assert receipt["decision"] == "DENY"

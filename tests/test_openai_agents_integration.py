@@ -520,8 +520,9 @@ async def test_both_decisions_land_in_verifiable_chain(guard_env):
     _issuer, gate, sink, signer, log = guard_env
     guarded = guard_tool(transfer_funds, gate=gate, sink=sink, agent_id="agent:billing")
     await guarded.on_invoke_tool(_sdk_ctx({}, ALLOW_ARGS), ALLOW_ARGS)
+    deny_ctx = _sdk_ctx({}, DENY_ARGS)
     with pytest.raises(CapabilityDenied):
-        await guarded.on_invoke_tool(_sdk_ctx({}, DENY_ARGS), DENY_ARGS)
+        await guarded.on_invoke_tool(deny_ctx, DENY_ARGS)
     sink.close()
     report = AuditVerifier(public_key_pem=signer.public_key_pem()).verify_chain(log)
     assert report.valid

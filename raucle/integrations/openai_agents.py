@@ -61,8 +61,15 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from raucle.audit import HashChainSink, NullSink, _canonical_json, _sha256_hex
+from raucle.audit import HashChainSink, NullSink
 from raucle.capability import Capability, CapabilityGate, GateDecision
+from raucle.integrations._guard_core import (
+    CapabilityDenied,
+    declares_ctx_param,
+    emit_receipt,
+    evaluate_gate,
+    gate_args,
+)
 from raucle.scanner import Scanner
 
 logger = logging.getLogger(__name__)
@@ -256,20 +263,6 @@ def output_guardrail(
 # the ``RunContextWrapper``); the guard reads it duck-typed.
 
 
-class CapabilityDenied(Exception):
-    """Raised by a guarded tool when the gate denies the call.
-
-    The SDK surfaces a raising tool to the model as a tool error (unless
-    ``raise_tool_errors`` is configured otherwise); the denial receipt is
-    emitted *before* the raise, so there is no path that drops a decision.
-    """
-
-    def __init__(self, tool: str, reason: str) -> None:
-        super().__init__(f"raucle denied {tool!r}: {reason}")
-        self.tool = tool
-        self.reason = reason
-
-
 _in_force_token: contextvars.ContextVar[Capability | None] = contextvars.ContextVar(
     "raucle_openai_agents_in_force_token", default=None
 )
@@ -283,65 +276,6 @@ def set_in_force_token(token: Capability | None) -> None:
 def get_in_force_token() -> Capability | None:
     """Read the bound token (or None)."""
     return _in_force_token.get()
-
-
-def _hash_args(args: dict[str, Any]) -> str:
-    try:
-        return _sha256_hex(_canonical_json(args))
-    except Exception:  # pragma: no cover - non-canonicalisable args
-        return _sha256_hex(repr(sorted(args.items())).encode("utf-8"))
-
-
-def _emit_receipt(
-    sink: HashChainSink | NullSink,
-    *,
-    token: Capability | None,
-    agent_id: str | None,
-    tool: str,
-    args: dict[str, Any],
-    decision: GateDecision,
-) -> None:
-    receipt = {
-        "kind": "capability_receipt",
-        "issuer": token.issuer if token else "",
-        "issuer_pubkey": token.key_id if token else "<unknown>",
-        "agent_id": agent_id,
-        "tool": tool,
-        "call_args_hash": _hash_args(args),
-        "decision": "ALLOW" if decision.allowed else "DENY",
-        "decision_reason": decision.reason or "",
-        "framework": "openai-agents",
-    }
-    try:
-        sink.append(receipt)
-    except Exception:
-        # The sink's own fail-loud contract propagates: an action without
-        # its receipt is unauthorised (fail-closed).
-        logger.exception("failed to emit capability receipt for %s", tool)
-        raise
-
-
-def _evaluate_gate(
-    gate: CapabilityGate,
-    token: Capability | None,
-    tool_name: str,
-    call_args: dict[str, Any],
-    agent_id: str | None,
-) -> GateDecision:
-    """Build the decision for an incoming tool call (fail-closed boundaries).
-
-    B2 attribution doctrine (same as the crewai and langgraph adapters): a
-    call with no bound caller identity cannot be checked against the
-    token's agent scope, so it denies rather than running attributed to a
-    placeholder receipt.
-    """
-    if not agent_id:
-        return GateDecision(
-            allowed=False, reason="no acting agent identity (no caller agent_id bound)"
-        )
-    if token is None:
-        return GateDecision(allowed=False, reason="no in-force capability token")
-    return gate.check(token=token, tool=tool_name, args=call_args, agent_id=agent_id)
 
 
 def _identity_from_context(ctx: Any) -> str | None:
@@ -374,42 +308,6 @@ def _identity_from_context(ctx: Any) -> str | None:
     return candidate if isinstance(candidate, str) and candidate else None
 
 
-def _declares_run_context(fn: Any) -> bool:
-    """Whether the tool function declares the SDK run-context parameter.
-
-    The SDK passes the run context as the first argument of functions whose
-    first parameter is annotated ``RunContextWrapper``; the guard reads the
-    annotation text (class or subscripted generic) so the detection is the
-    same across the verified span.
-    """
-    params = list(inspect.signature(fn).parameters.values())
-    if not params:
-        return False
-    annotation = params[0].annotation
-    text = getattr(annotation, "__name__", None) or str(annotation)
-    return "RunContextWrapper" in text
-
-
-def _gate_args(args: tuple[Any, ...], kwargs: dict[str, Any], needs_ctx: bool) -> dict[str, Any]:
-    """Present the invocation to the gate in a canonical shape.
-
-    The run context is never part of the hashed call args (it is the
-    vehicle, not the payload); positional args are folded in by index so a
-    positional call cannot slip past constraint evaluation.
-    """
-    if needs_ctx and args:
-        args = args[1:]
-    if kwargs and not args:
-        return dict(kwargs)
-    if args and not kwargs and len(args) == 1:
-        return {"input": args[0]}
-    combined: dict[str, Any] = {}
-    for i, value in enumerate(args):
-        combined[str(i)] = value
-    combined.update(kwargs)
-    return combined
-
-
 def _decide_call(
     *,
     gate: CapabilityGate,
@@ -421,11 +319,12 @@ def _decide_call(
 ) -> None:
     acting = agent_id or _identity_from_context(ctx)
     token = get_in_force_token()
-    decision = _evaluate_gate(gate, token, tool_name, call_args, acting)
+    decision = evaluate_gate(gate, token, tool_name, call_args, acting)
     # Emission precedes enforcement: there is no path that drops a
     # decision, and a sink failure aborts an in-flight ALLOW too.
-    _emit_receipt(
+    emit_receipt(
         sink,
+        framework="openai-agents",
         token=token,
         agent_id=acting,
         tool=tool_name,
@@ -468,11 +367,11 @@ def guard_function(
             "Install with: pip install 'openai-agents'"
         )
     tool_name = getattr(fn, "__name__", None) or "<unknown>"
-    needs_ctx = _declares_run_context(fn)
+    needs_ctx = declares_ctx_param(fn, "RunContextWrapper")
 
     def _decide(args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
         ctx = args[0] if needs_ctx and args and hasattr(args[0], "context") else None
-        call_args = _gate_args(args, kwargs, needs_ctx)
+        call_args = gate_args(args, kwargs, needs_ctx)
         _decide_call(
             gate=gate,
             sink=sink,
@@ -570,8 +469,9 @@ def guard_tool(
                 decision = GateDecision(
                     allowed=False, reason="tool arguments not parseable as JSON object"
                 )
-                _emit_receipt(
+                emit_receipt(
                     sink,
+                    framework="openai-agents",
                     token=get_in_force_token(),
                     agent_id=agent_id or _identity_from_context(ctx),
                     tool=tool_name,
