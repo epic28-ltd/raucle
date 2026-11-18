@@ -3280,10 +3280,10 @@ body.demo #policyEditorCard{display:none}
             <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span>
             <button class="btn btn-secondary" data-hi="showTab('stop',this)">Open Emergency authority stop</button>
           </div>
-          <div class="ov-card" data-truth-class="OSS MACHINERY + EE VIEW">
-            <div class="ov-title">Red scanner verdicts</div>
-            <div class="ov-desc">The MCP tool scanner runs the real static analysis engine over simulated manifests. Agent Red tradecraft is closed-core and not part of this demo.</div>
-            <span class="truth-badge truth-oss-machinery" data-truth="OSS MACHINERY + EE VIEW">OSS MACHINERY + EE VIEW</span>
+          <div class="ov-card" data-truth-class="OSS LIVE">
+            <div class="ov-title">MCP tool scanner</div>
+            <div class="ov-desc">The real static analysis engine runs live over seeded or pasted manifests: prompt injection, hidden instructions, planted keys, rug-pull wording and SSRF targets. Findings carry severity, location and evidence class, never payload text. Agent Red tradecraft is closed-core and not part of this demo.</div>
+            <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span>
             <button class="btn btn-secondary" data-hi="showTab('mcp',this)">Open MCP Scanner</button>
           </div>
           <div class="ov-card" data-truth-class="OSS MACHINERY + EE VIEW">
@@ -3605,14 +3605,19 @@ body.demo #policyEditorCard{display:none}
         <p class="screen-note" style="margin-top:6px;white-space:pre-line" id="demoCoverageFlagsNote"></p>
       </div>
     </div>
-    <div id="tab-mcp" data-truth-class="OSS MACHINERY + EE VIEW" class="hidden"><span class="truth-badge" data-truth="OSS MACHINERY + EE VIEW">OSS MACHINERY + EE VIEW</span>
+    <div id="tab-mcp" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
       <div class="card">
         <div class="card-title">MCP Tool Scanner</div>
         <p style="font-size:0.85rem;color:#8b919e;margin-bottom:14px">
           Static analysis of MCP tool manifests for prompt injection, hidden
           instructions, exposed credentials, rug-pull wording and SSRF targets.
-          Findings are produced by the gateway's real scanner engine; the demo
-          manifests are simulated samples, labelled as such.
+          Pick a seeded demo manifest or paste your own manifest JSON: either
+          way the scan runs the gateway's real scanner engine live, and every
+          finding below is its genuine output. A static scan does not cross
+          the gate's decision path, so it mints no receipt and enters nothing
+          into the receipt chain; findings carry the rule, its location and
+          the evidence class, never the payload text. The demo manifests are
+          simulated samples, labelled as such.
         </p>
         <div style="font-size:0.75rem;color:#a3a3a3;margin-bottom:8px">Choose a simulated demo manifest, or paste your own manifest JSON below.</div>
         <div class="file-list" id="mcpManifestList"></div>
@@ -3620,7 +3625,7 @@ body.demo #policyEditorCard{display:none}
         <div class="actions">
           <button class="btn" data-hi="mcpScan()">Scan manifest</button>
           <button class="btn btn-secondary" data-hi="mcpClear()">Clear</button>
-          <span style="font-size:0.75rem;color:#a3a3a3;align-self:center">Read-only: scanning has no side effects on the gate.</span>
+          <span style="font-size:0.75rem;color:#a3a3a3;align-self:center">Stateless one-shot scan: it mutates nothing and persists nothing. Pasted manifests over 256 KiB are refused.</span>
         </div>
         <div style="display:flex;gap:8px;margin-top:8px;font-size:0.78rem;color:#737373" id="mcpSummary"></div>
       </div>
@@ -4858,6 +4863,8 @@ const TOUR_STEPS = [
    body:'Read from the live signer configuration: the backend, the key family, and the enrolment checks. Self-custody keys, post-quantum receipts, and private material never leaves the boundary.'},
   {tab:'assure', target:'#assurancePacketView', title:'Compliance: the assurance packet',
    body:'One click builds a real audit pack from the signed receipt chain, sha-pinned and verified offline. Framework crosswalks land where the regulation names them, in mapped-to language, never as compliance claims.'},
+  {tab:'mcp', target:'#mcpManifestText', title:'Tool poisoning, caught before it runs',
+   body:'Pick the seeded poisoned manifest or paste your own tool JSON and the real static analysis engine runs live: hidden instructions, injection phrases, rug-pull wording, planted keys and SSRF targets, each finding carrying its severity, location and evidence class. A static scan mints no receipt, and the findings never echo the payload.'},
   {tab:'dashboard', target:'#honestyBanner', title:'The honest close: what is EE-only',
    body:'Everything labelled EE-ONLY is simulated here because that surface is not built yet: the fleet multi-org view, SIEM targets and the classifier layer. What you watched catch a runaway loop was real raucle, today.'},
 ];
@@ -5523,15 +5530,15 @@ function renderMcpFindings(list){
     badge.style.cssText='font-size:11px;font-weight:600;padding:2px 10px;border-radius:999px;color:#fff;background:'+(MCP_SEV_COLOUR[f.severity]||'#a3a3a3');
     badge.textContent=f.severity;
     sev.appendChild(badge);
-    const evidence=f.evidence?(f.evidence.length>60?f.evidence.slice(0,60)+'\u2026':f.evidence):'';
     tr.appendChild(sev);
     tr.appendChild(td(f.rule_id));
     tr.appendChild(td(f.tool));
     tr.appendChild(td(f.field));
     tr.appendChild(td(f.message));
     const ev=document.createElement('td');
-    ev.style.cssText='font-family:ui-monospace,monospace;font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis';
-    ev.textContent=evidence;
+    ev.style.cssText='font-family:ui-monospace,monospace;font-size:11px';
+    // evidence class only: the raw excerpt is payload and never reaches a cell
+    ev.textContent=f.category||'';
     tr.appendChild(ev);
     body.appendChild(tr);
   });
@@ -5543,6 +5550,8 @@ function td(html){const el=document.createElement('td');el.textContent=html==nul
 function mcpScan(){
   const raw=document.getElementById('mcpManifestText').value.trim();
   if(!raw){alert('Choose a demo manifest or paste manifest JSON first.');return;}
+  // client-side size cap, mirroring the server's 256 KiB refusal
+  if(raw.length>256*1024){alert('The pasted manifest is over 256 KiB: the demo refuses oversize manifests.');return;}
   let manifest;
   try{ manifest=JSON.parse(raw); }catch(e){ alert('The manifest is not valid JSON: '+e.message); return; }
   const sum=document.getElementById('mcpSummary');
