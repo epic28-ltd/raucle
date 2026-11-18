@@ -17,6 +17,9 @@ This guide is task-first. Pick a path. Run the code. You'll have a working signe
 | Claude Desktop / Claude Code / Cursor / Cline | **[3. MCP clients](03-mcp-clients.md)** — add raucle's detection tools to your assistant with one config block. | 2 min |
 | CrewAI crew | **[5. CrewAI](05-crewai.md)** — `guard_tools(...)` wraps every tool; gated + receipted, no interface change; bind `agent_id` at wrap time (unattributed calls deny). | 5 min |
 | LangGraph graph | **[4. LangGraph](04-langgraph.md)** — `RaucleToolNode` / `gate_tools(...)` gate the tool-node layer (`ToolNode` / `tools=`); the model node is untouched. | 5 min |
+| OpenAI Agents SDK agent | **[15. OpenAI Agents SDK](15-openai-agents.md)**: `guard_tool(...)` gates every `FunctionTool` (bind `agent_id` at wrap time; unattributed calls deny), plus the content guardrails. | 5 min |
+| Pydantic AI agent | **[16. Pydantic AI](16-pydantic-ai.md)**: `guard_tool(...)` wraps every tool function, signature unchanged (bind `agent_id` at wrap time; unattributed calls deny). | 5 min |
+| Google ADK agent | **[17. Google ADK](17-google-adk.md)**: `guard_tool(...)` wraps every `(args, tool_context)` tool (bind `agent_id` at wrap time; unattributed calls deny). | 5 min |
 | You want to prove a policy is sound, not just configured | **[6. Prove a policy](06-prove-a-policy.md)** — SMT-backed `ProofResult`, content-addressed, citeable. | 10 min |
 | You want in-loop observation + advisory redaction (never enforcement) | **[7. Advisory middleware](07-advisory-middleware.md)** — `RaucleMiddleware`: session scans, data-plane redaction, best-effort advisory findings. | 5 min |
 | You run a SOC / need a SIEM feed + live view | **[8. SIEM export & live monitoring](08-siem-and-live-view.md)** — ECS JSON to Splunk/Sentinel, `raucle watch`, and a live `/dashboard`. | 5 min |
