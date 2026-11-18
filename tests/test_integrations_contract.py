@@ -62,11 +62,17 @@ def crewai_integration(monkeypatch):
     crew_pkg.tools = tools_mod
     monkeypatch.setitem(sys.modules, "crewai", crew_pkg)
     monkeypatch.setitem(sys.modules, "crewai.tools", tools_mod)
+    # D1: restore the PRIOR module state, not a hardcoded False - when the
+    # crewai extra is installed (the integration-extras CI job), clobbering
+    # _HAS_CREWAI to False here would poison every later crewai test in the
+    # same pytest process.
+    had_crewai = crewai_mod._HAS_CREWAI
+    prev_base_tool = crewai_mod.BaseTool
     crewai_mod._HAS_CREWAI = True
     crewai_mod.BaseTool = _StubBaseTool
     yield crewai_mod
-    crewai_mod._HAS_CREWAI = False
-    crewai_mod.BaseTool = object
+    crewai_mod._HAS_CREWAI = had_crewai
+    crewai_mod.BaseTool = prev_base_tool
 
 
 class _PayTool(_StubBaseTool):
@@ -149,6 +155,29 @@ def test_guarded_tool_without_token_denies(crewai_integration, tmp_path, issued)
     guarded = mod.guard_tool(_PayTool(), gate=gate, sink=_sink(tmp_path))
     with pytest.raises(mod.CapabilityDenied, match="no in-force capability token"):
         guarded._run(to="ACC-001")
+
+
+def test_guarded_tool_unattributed_denies(crewai_integration, tmp_path, issued):
+    """D1: bearer mode is closed - a valid token does not authorise a call
+    with no bound caller identity, and the deny is receipted honestly."""
+    _issuer, gate, token = issued
+    mod = crewai_integration
+    mod.set_in_force_token(token)
+    tool = _PayTool()
+    guarded = mod.guard_tool(tool, gate=gate, sink=_sink(tmp_path))  # no agent_id bound
+    with pytest.raises(mod.CapabilityDenied, match="no acting agent identity"):
+        guarded._run(to="ACC-001")
+    assert not getattr(tool, "ran", False)  # body never executed
+    lines = (tmp_path / "audit.jsonl").read_text().strip().splitlines()
+    events = []
+    for line in lines:
+        rec = json.loads(line)
+        events.append(rec.get("event", rec))
+    receipts = [e for e in events if e.get("kind") == "capability_receipt"]
+    assert len(receipts) == 1
+    assert receipts[0]["decision"] == "DENY"
+    assert receipts[0]["agent_id"] is None  # honest null, never a placeholder
+    assert "unbound" not in json.dumps(receipts[0]), receipts[0]
 
 
 def test_guard_tools_wraps_every_tool(crewai_integration, tmp_path, issued):

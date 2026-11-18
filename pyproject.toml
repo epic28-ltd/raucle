@@ -63,7 +63,16 @@ agent-framework = ["agent-framework>=1.0"]
 openai-agents = ["openai-agents>=0.1"]
 langchain = ["langchain-core>=0.3"]
 autogen = ["autogen-agentchat>=0.4"]
-crewai = ["crewai>=1.0"]
+# D1 (attribution-guard regression hunt): bearer mode is closed in the
+# guard, so guard_tool(agent_id=None) denies on every supported release.
+# The deny is verified against crewai 1.0.0, 1.5.0, 1.6.1 and 1.15.41 (the
+# 1.x BaseTool surface is stable across that span; there was never a
+# crewai-side version boundary - the B2 crewai fix was lost in transit and
+# no CI job installed the extra, so the red test hid behind skip). The
+# upper bound records the last VERIFIED minor: lift it deliberately after
+# the integration-extras CI job re-verifies tests/test_attribution_audit.py
+# and tests/test_crewai_integration.py on the newer release.
+crewai = ["crewai>=1.0,<1.16"]
 langgraph = ["langgraph>=0.2"]
 multimodal = [
     "Pillow>=10.0",       # image loading + EXIF

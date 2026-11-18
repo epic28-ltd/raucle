@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+### Fixed - D1: crewai attribution guard regression (bearer mode was never closed)
+
+- The B2 attribution audit (v0.23.3) recorded the CrewAI leg as shipped
+  ("bearer mode is closed; unattributed attempts deny"), but the
+  `raucle/integrations/crewai.py` change was lost in transit. No CI job
+  installed the `crewai` extra, so `test_crewai_unattributed_call_denies`
+  skipped silently and the red test hid behind `importorskip` until the
+  D1 regression hunt reproduced it in an all-extras venv under crewai
+  1.6.1.
+- The failure: with a valid in-force token and no bound caller identity
+  (`agent_id=None`), a guarded tool call RAN - receipted as ALLOW and
+  attributed to the fabricated `"<unbound>"` placeholder - instead of
+  denying per the B2 invariant (every ALLOWED execution carries a real
+  acting identity; no receipt ever carries a placeholder).
+- Version boundary, honestly: there is none. The deny never existed on
+  any release. Reproduced identically under crewai 1.0.0, 1.5.0, 1.6.1
+  and 1.15.41 (the 1.x `BaseTool` surface is stable across the span, and
+  `CapabilityDenied` propagates out of `run()` on all four); the 1.6.1
+  framing came from the discovery venv's resolution, not a crewai
+  behaviour change.
+- The fix is adapter-side and version-robust (mirrors the langgraph
+  adapter's `_evaluate_gate`): token check first (the pinned
+  no-token reason is unchanged), then a fail-closed attribution deny
+  ("no acting agent identity"), then the gate. Both the sync `_run` and
+  async `_arun`/`arun` paths enforce it, and deny receipts carry an
+  honest null `agent_id` - the `"<unbound>"` placeholder is gone.
+- Red-first evidence (recorded from the failing runs before the fix):
+  `DID NOT RAISE CapabilityDenied` under crewai 1.15.41 for both the
+  sync and the new async unattributed tests; the stub-backed contract
+  variant failed identically in a crewai-free venv.
+- CI can no longer hide extras regressions: a new
+  `Test (integration extras)` job installs `.[dev,crewai,langgraph]` on
+  Python 3.13 and runs the attribution audit, crewai integration and
+  langgraph integration suites. The `[dev]` matrix jobs are unchanged.
+- The `crewai` extra is bounded to `>=1.0,<1.16`, recording the last
+  verified minor (1.15.41); lift it deliberately after the extras job
+  re-verifies on a newer release. Demo, getting-started doc, and the
+  real-crewai test fixture now bind the acting identity, which closed
+  bearer mode makes mandatory.
+- langgraph: `test_module_import_survives_without_langgraph_subprocess`
+  failed under the extras venv because it assumed the pytest interpreter
+  never has langgraph installed. Not an adapter bug: the test now puts a
+  blocker package that raises `ImportError` first on the subprocess's
+  `PYTHONPATH`, so the import-survival path executes under every install
+  shape. The langgraph adapter itself needed no change.
+- Also fixed while landing this: the stub-backed contract fixture
+  restored a hardcoded `_HAS_CREWAI = False`, which in an extras venv
+  poisons the real module state for every later crewai test in the same
+  pytest process; it now restores the prior state truthfully.
+
 ### Added - EE proxy runtime specification (EPIC Q lane Q-7b)
 
 - New public specification `docs/spec/ee-proxy-runtime-v1.md`: the

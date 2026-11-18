@@ -22,7 +22,9 @@ issuer = CapabilityIssuer.generate(issuer="acme.platform")
 gate   = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
 sink   = HashChainSink("receipts.jsonl", signer=Ed25519Signer.generate())
 
-tools = guard_tools(my_raw_tools, gate=gate, sink=sink)
+# agent_id binds the acting identity the gate holds every call against.
+# Bearer mode is closed: an unattributed call denies, so bind it up front.
+tools = guard_tools(my_raw_tools, gate=gate, sink=sink, agent_id="agent:billing")
 
 # Per session: bind a token scoped to what THIS task may do.
 set_in_force_token(issuer.mint(
@@ -35,10 +37,12 @@ Crew(agents=[agent], tasks=[...]).kickoff()
 ```
 
 A call outside the token's signed constraints raises `CapabilityDenied` **before
-the tool body runs** — CrewAI surfaces it to the agent, and the denial is
-recorded in the signed chain. Because the gate evaluates arguments, not the
-agent's reasoning, a prompt-injected call is denied on the same path as any
-other.
+the tool body runs**; CrewAI surfaces it to the agent, and the denial is
+recorded in the signed chain. The same is true of a call with no bound caller
+identity: it denies rather than running attributed to a placeholder, and the
+deny receipt carries an honest null `agent_id`. Because the gate evaluates
+arguments, not the agent's reasoning, a prompt-injected call is denied on the
+same path as any other.
 
 Verify the evidence offline:
 

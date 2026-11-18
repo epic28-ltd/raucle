@@ -301,9 +301,24 @@ def test_raucle_tool_node_without_langgraph_raises_runtime_error(_no_langgraph):
         lg.RaucleToolNode([transfer_funds], gate=gate, sink=sink, agent_id="agent:pay")
 
 
-def test_module_import_survives_without_langgraph_subprocess():
-    """A clean interpreter without langgraph imports the adapter module fine."""
+def test_module_import_survives_without_langgraph_subprocess(tmp_path):
+    """A clean interpreter without langgraph imports the adapter module fine.
+
+    D1: in an environment with the langgraph extra installed (the
+    integration-extras CI job) the subprocess inherits this interpreter,
+    so langgraph is importable and the absence path never executes. A
+    blocker package that raises ImportError on import sits FIRST on the
+    subprocess's PYTHONPATH, shadowing any installed langgraph: the
+    adapter's import guard sees exactly the failure mode it must survive,
+    under every install shape.
+    """
+    blocker = tmp_path / "no_langgraph"
+    (blocker / "langgraph").mkdir(parents=True)
+    (blocker / "langgraph" / "__init__.py").write_text(
+        'raise ImportError("langgraph blocked: raucle import-survival test")\n'
+    )
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["PYTHONPATH"] = str(blocker)
     proc = subprocess.run(
         [
             sys.executable,
