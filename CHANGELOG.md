@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### Added - P2a: framework adapters for the OpenAI Agents SDK, Pydantic AI and Google ADK
+
+- Three new adapters carry the attribution-guard family (the crewai and
+  langgraph shape) to the next three frameworks, investigation-first:
+  `raucle/integrations/openai_agents.py` gains the capability guard
+  (`guard_tool` / `guard_function`) beside the existing content
+  guardrails; `raucle/integrations/pydantic_ai.py` and
+  `raucle/integrations/google_adk.py` are new wrapping-function gates.
+  Every adapter denies BEFORE any tool interaction (the wrapped body
+  never runs on the deny path), preserves the tool's signature so the
+  framework sees an identical tool, and enforces the B2 doctrine: a call
+  with no attributable identity denies and the deny receipt carries an
+  honest null `agent_id`, never a placeholder.
+- Attribution surfaces, probed live per version (18 Nov 2026, CPython
+  3.13): openai-agents carries the acting agent on the SDK's internal
+  `ToolContext` (agent name or the run context's `agent_id`), pinned
+  `agent_id` at guard time wins; pydantic-ai carries it on
+  `RunContext.agent.name` (the registered `Agent`, nameable in the
+  raucle scheme); google-adk carries it on the invocation context
+  (`_invocation_context.agent.name`, an ADK identifier joined into the
+  raucle `agent:` scheme because ADK refuses colons in names).
+- Verified spans, each pinned in pyproject with the lift rule:
+  openai-agents 0.19.1 / 0.21.0 / 0.23.1 / 0.25.0 (MIT, floor lifted
+  from >= 0.1); pydantic-ai 1.107.10 / 2.59.0 / 2.65.0 / 2.70.0 (MIT);
+  google-adk 1.39.1 / 2.7.0 / 2.11.0 / 2.14.1 (Apache-2.0). The last two
+  cannot co-install with the crewai extra at these spans (crewai's pins
+  downgrade both to pre-1.0 releases in joint resolution), so they ride
+  a second CI slot, `Test (integration extras, P2a)`, and deployments
+  install at most one family per environment.
+- Tests: real-framework suites (offline `TestModel` end-to-end for
+  pydantic-ai, the SDK's own invocation context for openai-agents, ADK's
+  `FunctionTool` call shape for google-adk) plus attribution-doctrine
+  legs in `tests/test_attribution_audit.py` and stand-in contract
+  coverage in `tests/test_integrations_contract.py` (RuntimeError
+  install hints, honest-null receipts, blocker-package import-survival
+  subprocesses). Docs: matrix rows for the three adapters and a
+  getting-started track each, every snippet showing `guard_tool` WITH
+  `agent_id`.
+
 ### Added - H3: I1 counterfactual evidence and revocation-event receipt specifications (receipts v1.2)
 
 - New public specification

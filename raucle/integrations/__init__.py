@@ -9,7 +9,9 @@ ImportError at top-level import time. Available adapters:
 * ``crewai.py`` — CrewAI wrapping-tool gate
 * ``langchain.py`` — LangChain callback-handler gate
 * ``langgraph.py`` — LangGraph tool-node layer gate (``ToolNode`` / ``tools=``)
-* ``openai_agents.py`` — OpenAI Agents SDK guardrails
+* ``openai_agents.py``: OpenAI Agents SDK guardrails + capability guard
+* ``pydantic_ai.py``: Pydantic AI wrapping-function gate
+* ``google_adk.py``: Google ADK wrapping-function gate
 * ``agt.py`` / ``agt_backend.py`` — Microsoft Agent Governance Toolkit
 * ``qm.py`` — QM-class delegation harnesses
 * ``retry_guidance.py`` — cross-adapter deny→retry guidance

@@ -23,6 +23,9 @@ retired.
 from __future__ import annotations
 
 import json
+import os
+import pathlib
+import subprocess
 import sys
 import types
 from dataclasses import dataclass, field
@@ -34,6 +37,8 @@ from raucle.audit import Ed25519Signer
 from raucle.capability import CapabilityGate, CapabilityIssuer
 from raucle.integrations import agt_backend as agt_backend_mod
 from raucle.integrations import crewai as crewai_mod
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 # ---------------------------------------------------------------------------
 # CrewAI stand-in: the BaseTool surface the wrapper relies on
@@ -373,3 +378,242 @@ def test_agt_backend_degrades_on_legacy_decision(agent_os_full, issued, monkeypa
     )
     assert decision.allowed is True
     assert not hasattr(decision, "proof_artefact")
+
+
+# ---------------------------------------------------------------------------
+# P2a adapters (pydantic-ai, google-adk): the same contract shape the crewai
+# stand-in section pins, so the wrapper's own surface is covered even in the
+# hermetic dev env where the extras are absent. The real-framework suites
+# (test_pydantic_ai_integration.py / test_google_adk_integration.py) own the
+# end-to-end proof and run in the integration-extras CI jobs.
+# ---------------------------------------------------------------------------
+
+
+class _StubRunContextAgent:
+    """The Agent surface the pydantic-ai guard reads (name only)."""
+
+    def __init__(self, name: str | None) -> None:
+        self.name = name
+
+
+class _StubRunContext:
+    """The RunContext surface the guard reads: agent -> name."""
+
+    def __init__(self, agent_name: str | None) -> None:
+        self.agent = _StubRunContextAgent(agent_name)
+        self.deps = None
+
+
+@pytest.fixture
+def pydantic_ai_stub(monkeypatch):
+    tools_mod = types.ModuleType("pydantic_ai.tools")
+    tools_mod.RunContext = _StubRunContext  # type: ignore[attr-defined]
+    pkg = types.ModuleType("pydantic_ai")
+    pkg.tools = tools_mod  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "pydantic_ai", pkg)
+    monkeypatch.setitem(sys.modules, "pydantic_ai.tools", tools_mod)
+    import raucle.integrations.pydantic_ai as pa_mod
+
+    # D1 rule: restore the PRIOR module state, never hardcode the
+    # absent-state, so an extras venv's real flag is not poisoned.
+    had = pa_mod._HAS_PYDANTIC_AI
+    pa_mod._HAS_PYDANTIC_AI = True
+    yield pa_mod
+    pa_mod._HAS_PYDANTIC_AI = had
+
+
+@pytest.fixture
+def google_adk_stub(monkeypatch):
+    tools_mod = types.ModuleType("google.adk.tools")
+
+    class _StubToolContext:  # the surface the guard reads (invocation context)
+        def __init__(self, invocation_context=None):  # noqa: ANN001
+            self._invocation_context = invocation_context
+
+    tools_mod.ToolContext = _StubToolContext  # type: ignore[attr-defined]
+    adk_mod = types.ModuleType("google.adk")
+    adk_mod.tools = tools_mod  # type: ignore[attr-defined]
+    google_pkg = types.ModuleType("google")
+    google_pkg.adk = adk_mod  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "google", google_pkg)
+    monkeypatch.setitem(sys.modules, "google.adk", adk_mod)
+    monkeypatch.setitem(sys.modules, "google.adk.tools", tools_mod)
+    import raucle.integrations.google_adk as adk_guard
+
+    had = adk_guard._HAS_GOOGLE_ADK
+    adk_guard._HAS_GOOGLE_ADK = True
+    yield adk_guard
+    adk_guard._HAS_GOOGLE_ADK = had
+
+
+def test_pydantic_ai_guard_without_pydantic_ai_raises(monkeypatch, tmp_path, issued):
+    _issuer, gate, _token = issued
+    import raucle.integrations.pydantic_ai as pa_mod
+
+    monkeypatch.setattr(pa_mod, "_HAS_PYDANTIC_AI", False)
+    sink = _sink(tmp_path)
+    with pytest.raises(RuntimeError, match="pydantic-ai"):
+        pa_mod.guard_tool(lambda ctx, to: to, gate=gate, sink=sink)
+
+
+def test_pydantic_ai_guard_unattributed_denies(pydantic_ai_stub, tmp_path, issued):
+    """Bearer mode is closed: a valid token does not authorise a call with
+    no bound caller identity, and the deny is receipted honestly."""
+    _issuer, gate, token = issued
+    pa_mod = pydantic_ai_stub
+    pa_mod.set_in_force_token(token)
+    ran: list = []
+
+    def lookup(ctx: object, to: str) -> str:  # noqa: ARG001
+        ran.append(to)
+        return f"LOOKED UP {to}"
+
+    guarded = pa_mod.guard_tool(lookup, gate=gate, sink=_sink(tmp_path))  # no agent_id bound
+    stub_ctx = _StubRunContext(None)
+    with pytest.raises(pa_mod.CapabilityDenied, match="no acting agent identity"):
+        guarded(stub_ctx, to="ACC-001")
+    assert ran == []
+    lines = (tmp_path / "audit.jsonl").read_text().strip().splitlines()
+    events = [json.loads(line).get("event", json.loads(line)) for line in lines]
+    receipts = [e for e in events if e.get("kind") == "capability_receipt"]
+    assert len(receipts) == 1
+    assert receipts[0]["decision"] == "DENY"
+    assert receipts[0]["agent_id"] is None
+    assert "unbound" not in json.dumps(receipts[0])
+
+
+def test_pydantic_ai_guard_attributed_allow_receipts(pydantic_ai_stub, tmp_path, issued):
+    _issuer, gate, token = issued
+    pa_mod = pydantic_ai_stub
+    pa_mod.set_in_force_token(token)
+    guarded = pa_mod.guard_tool(
+        _pyd_transfer_funds(),
+        gate=gate,
+        sink=_sink(tmp_path),
+        agent_id="agent:pay",
+    )
+    assert guarded(_StubRunContext("agent:pay"), to="ACC-001") == "TRANSFERRED ACC-001"
+    lines = (tmp_path / "audit.jsonl").read_text().strip().splitlines()
+    events = [json.loads(line).get("event", json.loads(line)) for line in lines]
+    receipts = [e for e in events if e.get("kind") == "capability_receipt"]
+    assert len(receipts) == 1
+    assert receipts[0]["decision"] == "ALLOW"
+    assert receipts[0]["agent_id"] == "agent:pay"
+
+
+def _pyd_transfer_funds():
+    # Declared under the stub the fixture installs, so the guard's
+    # ctx-detection (annotation text) recognises the parameter and the
+    # run-context identity path is genuinely exercised.
+    from pydantic_ai.tools import RunContext
+
+    def transfer_funds(ctx: RunContext, to: str) -> str:
+        return f"TRANSFERRED {to}"
+
+    return transfer_funds
+
+
+def test_pydantic_ai_context_supplies_identity(pydantic_ai_stub, tmp_path, issued):
+    """The run context's agent name binds the call when nothing is pinned."""
+    _issuer, gate, token = issued
+    pa_mod = pydantic_ai_stub
+    pa_mod.set_in_force_token(token)
+    guarded = pa_mod.guard_tool(_pyd_transfer_funds(), gate=gate, sink=_sink(tmp_path))
+    guarded(_StubRunContext("agent:pay"), to="ACC-001")
+    lines = (tmp_path / "audit.jsonl").read_text().strip().splitlines()
+    events = [json.loads(line).get("event", json.loads(line)) for line in lines]
+    receipts = [e for e in events if e.get("kind") == "capability_receipt"]
+    assert receipts[0]["decision"] == "ALLOW"
+    assert receipts[0]["agent_id"] == "agent:pay"
+
+
+def test_google_adk_guard_without_google_adk_raises(monkeypatch, tmp_path, issued):
+    _issuer, gate, _token = issued
+    import raucle.integrations.google_adk as adk_guard
+
+    monkeypatch.setattr(adk_guard, "_HAS_GOOGLE_ADK", False)
+    sink = _sink(tmp_path)
+    with pytest.raises(RuntimeError, match="google-adk"):
+        adk_guard.guard_tool(lambda args, tc: args, gate=gate, sink=sink)
+
+
+def test_google_adk_guard_unattributed_denies(google_adk_stub, tmp_path, issued):
+    _issuer, gate, token = issued
+    adk_guard = google_adk_stub
+    adk_guard.set_in_force_token(token)
+    ran: list = []
+
+    def lookup(args: dict, tool_context: object) -> dict:  # noqa: ARG001
+        ran.append(dict(args))
+        return {"ok": True}
+
+    guarded = adk_guard.guard_tool(lookup, gate=gate, sink=_sink(tmp_path))  # no agent_id
+    from google.adk.tools import ToolContext as _TC  # the stub installed above
+
+    with pytest.raises(adk_guard.CapabilityDenied, match="no acting agent identity"):
+        guarded({"to": "ACC-001"}, _TC(invocation_context=None))
+    assert ran == []
+    lines = (tmp_path / "audit.jsonl").read_text().strip().splitlines()
+    events = [json.loads(line).get("event", json.loads(line)) for line in lines]
+    receipts = [e for e in events if e.get("kind") == "capability_receipt"]
+    assert len(receipts) == 1
+    assert receipts[0]["decision"] == "DENY"
+    assert receipts[0]["agent_id"] is None
+    assert "unbound" not in json.dumps(receipts[0])
+
+
+def test_module_import_survives_without_pydantic_ai_subprocess(tmp_path):
+    """A clean interpreter without pydantic-ai imports the adapter fine; a
+    blocker package shadowing any installed pydantic_ai constructs the
+    absence under every install shape (the langgraph rule)."""
+    blocker = tmp_path / "no_pydantic_ai"
+    (blocker / "pydantic_ai").mkdir(parents=True)
+    (blocker / "pydantic_ai" / "__init__.py").write_text(
+        'raise ImportError("pydantic_ai blocked: raucle import-survival test")\n'
+    )
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["PYTHONPATH"] = str(blocker)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from raucle.integrations import pydantic_ai as m;"
+            "print(m._HAS_PYDANTIC_AI);"
+            "print('guard_tool' in m.__all__)",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        env=env,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.splitlines() == ["False", "True"]
+
+
+def test_module_import_survives_without_google_adk_subprocess(tmp_path):
+    """Same rule for google-adk: the blocker shadows google.adk only (the
+    google namespace itself stays intact)."""
+    blocker = tmp_path / "no_google_adk"
+    (blocker / "google" / "adk").mkdir(parents=True)
+    (blocker / "google" / "adk" / "__init__.py").write_text(
+        'raise ImportError("google.adk blocked: raucle import-survival test")\n'
+    )
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["PYTHONPATH"] = str(blocker)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from raucle.integrations import google_adk as m;"
+            "print(m._HAS_GOOGLE_ADK);"
+            "print('guard_tool' in m.__all__)",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        env=env,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.splitlines() == ["False", "True"]

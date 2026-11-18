@@ -60,7 +60,12 @@ timestamp = ["asn1crypto>=1.5.1", "cryptography>=42.0"]
 # cryptography>=47 built with AWS-LC/BoringSSL; shipped wheels have it since 48.
 pq = ["cryptography>=48.0"]
 agent-framework = ["agent-framework>=1.0"]
-openai-agents = ["openai-agents>=0.1"]
+# P2a: the capability guard + guardrail surface were probed under
+# 0.19.1 / 0.21.0 / 0.23.1 / 0.25.0 (MIT; FunctionTool ctor and the
+# internal ToolContext are stable across that span). The bounds record
+# VERIFICATION, not a behavioural limit: lift them deliberately after
+# the integration-extras CI job re-verifies on a newer release.
+openai-agents = ["openai-agents>=0.19,<0.26"]
 langchain = ["langchain-core>=0.3"]
 autogen = ["autogen-agentchat>=0.4"]
 # D1 (attribution-guard regression hunt): bearer mode is closed in the
@@ -74,6 +79,19 @@ autogen = ["autogen-agentchat>=0.4"]
 # and tests/test_crewai_integration.py on the newer release.
 crewai = ["crewai>=1.0,<1.16"]
 langgraph = ["langgraph>=0.2"]
+# P2a verified spans (18 Nov 2026, CPython 3.13). Same convention as the
+# rows above: the bounds record VERIFICATION, not a behavioural limit.
+# pydantic-ai: guard + RunContext attribution surface probed under
+# 1.107.10 / 2.59.0 / 2.65.0 / 2.70.0 (MIT; upstream floor py>=3.11).
+pydantic-ai = ["pydantic-ai>=1.107,<3"]
+# google-adk: guard + ToolContext attribution surface probed under
+# 1.39.1 / 2.7.0 / 2.11.0 / 2.14.1 (Apache-2.0; py>=3.11). NOTE: neither
+# of these extras can be co-installed with the crewai extra at these
+# spans - joint resolution downgrades both to pre-1.0 releases (the
+# crewai pins win on shared dependencies) - so they ride their own CI
+# slot, 'Test (integration extras, P2a)', and deployments install at
+# most one family per environment.
+google-adk = ["google-adk>=1.39,<3"]
 multimodal = [
     "Pillow>=10.0",       # image loading + EXIF
     "pytesseract>=0.3.10", # OCR (requires tesseract on PATH)

@@ -23,6 +23,7 @@ Audit findings (29 Oct):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import pathlib
 
@@ -226,5 +227,249 @@ async def test_autogen_empty_identity_denies(tmp_path):
         receipt = json.loads(log.read_text().strip().splitlines()[-1])["event"]
         assert receipt["decision"] == "DENY"
         assert not receipt["agent_id"], receipt
+    finally:
+        set_in_force_token(None)
+
+
+# ---------------------------------------------------------------------------
+# P2a adapters: the same doctrine legs for openai-agents, pydantic-ai and
+# google-adk (the full sync/async behaviour suites live in
+# tests/test_openai_agents_integration.py, test_pydantic_ai_integration.py
+# and test_google_adk_integration.py; these pin the attribution invariant).
+# ---------------------------------------------------------------------------
+
+
+def test_openai_agents_unattributed_call_denies(tmp_path):
+    pytest.importorskip("agents")
+
+    from agents import RunContextWrapper, function_tool
+    from agents.tool import ToolContext as SdkToolContext
+
+    from raucle.integrations.openai_agents import (
+        CapabilityDenied,
+        guard_tool,
+        set_in_force_token,
+    )
+
+    body_calls: list = []
+
+    @function_tool
+    def lookup_contact(to: str) -> str:
+        """Look up a contact (test tool)."""
+        body_calls.append(to)
+        return f"LOOKED UP {to}"
+
+    issuer = CapabilityIssuer.generate(issuer="test.platform")
+    gate = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
+    sink, log = _sink(tmp_path)
+    guarded = guard_tool(lookup_contact, gate=gate, sink=sink, agent_id=None)
+    token = issuer.mint(agent_id="agent:test", tool="lookup_contact", ttl_seconds=60)
+    set_in_force_token(token)
+    try:
+        args = '{"to": "someone"}'
+        ctx = SdkToolContext(
+            context=RunContextWrapper(context={}),
+            tool_name="lookup_contact",
+            tool_call_id="call-1",
+            tool_arguments=args,
+        )
+        attempt = guarded.on_invoke_tool(ctx, args)
+        with pytest.raises(CapabilityDenied):
+            asyncio.run(attempt)
+        assert body_calls == []
+        receipt = json.loads(log.read_text().strip().splitlines()[-1])["event"]
+        assert receipt["decision"] == "DENY"
+        assert receipt["agent_id"] is None
+        assert receipt["decision_reason"], receipt
+        assert "unbound" not in json.dumps(receipt), receipt
+    finally:
+        set_in_force_token(None)
+
+
+def test_pydantic_ai_unattributed_call_denies(tmp_path):
+    pytest.importorskip("pydantic_ai")
+
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+    from pydantic_ai.tools import RunContext
+    from pydantic_ai.usage import RunUsage
+
+    from raucle.integrations.pydantic_ai import (
+        CapabilityDenied,
+        guard_tool,
+        set_in_force_token,
+    )
+
+    def lookup_contact(ctx: RunContext, to: str) -> str:  # noqa: ARG001
+        return f"LOOKED UP {to}"
+
+    body_calls: list = []
+
+    def tracking(ctx: RunContext, to: str) -> str:  # noqa: ARG001
+        body_calls.append(to)
+        return lookup_contact(ctx, to)
+
+    issuer = CapabilityIssuer.generate(issuer="test.platform")
+    gate = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
+    sink, log = _sink(tmp_path)
+    guarded = guard_tool(tracking, gate=gate, sink=sink, agent_id=None)
+    token = issuer.mint(agent_id="agent:test", tool="tracking", ttl_seconds=60)
+    set_in_force_token(token)
+    try:
+        ctx = RunContext(
+            deps=None,
+            model=TestModel(),
+            usage=RunUsage(),
+            agent=Agent(TestModel(), name=None),  # no acting identity anywhere
+            prompt="test",
+            tool_call_id="call-1",
+            retry=0,
+        )
+        with pytest.raises(CapabilityDenied):
+            guarded(ctx, to="someone")
+        assert body_calls == []
+        receipt = json.loads(log.read_text().strip().splitlines()[-1])["event"]
+        assert receipt["decision"] == "DENY"
+        assert receipt["agent_id"] is None
+        assert "unbound" not in json.dumps(receipt), receipt
+    finally:
+        set_in_force_token(None)
+
+
+def test_pydantic_ai_unattributed_async_call_denies(tmp_path):
+    pytest.importorskip("pydantic_ai")
+
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+    from pydantic_ai.tools import RunContext
+    from pydantic_ai.usage import RunUsage
+
+    from raucle.integrations.pydantic_ai import (
+        CapabilityDenied,
+        guard_tool,
+        set_in_force_token,
+    )
+
+    body_calls: list = []
+
+    async def tracking(ctx: RunContext, to: str) -> str:  # noqa: ARG001
+        body_calls.append(to)
+        return f"LOOKED UP {to}"
+
+    issuer = CapabilityIssuer.generate(issuer="test.platform")
+    gate = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
+    sink, log = _sink(tmp_path)
+    guarded = guard_tool(tracking, gate=gate, sink=sink, agent_id=None)
+    token = issuer.mint(agent_id="agent:test", tool="tracking", ttl_seconds=60)
+    set_in_force_token(token)
+    try:
+        ctx = RunContext(
+            deps=None,
+            model=TestModel(),
+            usage=RunUsage(),
+            agent=Agent(TestModel(), name=None),
+            prompt="test",
+            tool_call_id="call-1",
+            retry=0,
+        )
+        attempt = guarded(ctx, to="someone")
+        with pytest.raises(CapabilityDenied):
+            asyncio.run(attempt)
+        assert body_calls == []
+        receipt = json.loads(log.read_text().strip().splitlines()[-1])["event"]
+        assert receipt["decision"] == "DENY"
+        assert receipt["agent_id"] is None
+    finally:
+        set_in_force_token(None)
+
+
+def test_google_adk_unattributed_call_denies(tmp_path):
+    pytest.importorskip("google.adk.tools")
+
+    from google.adk.tools import ToolContext
+
+    from raucle.integrations.google_adk import (
+        CapabilityDenied,
+        guard_tool,
+        set_in_force_token,
+    )
+
+    class _Session:
+        state: dict = {}
+
+    class _Agent:
+        name = None
+
+    class _Invocation:
+        agent = _Agent()
+        session = _Session()
+
+    body_calls: list = []
+
+    def lookup_contact(args: dict, tool_context: ToolContext) -> dict:  # noqa: ARG001
+        body_calls.append(dict(args))
+        return {"ok": True}
+
+    issuer = CapabilityIssuer.generate(issuer="test.platform")
+    gate = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
+    sink, log = _sink(tmp_path)
+    guarded = guard_tool(lookup_contact, gate=gate, sink=sink, agent_id=None)
+    token = issuer.mint(agent_id="agent:test", tool="lookup_contact", ttl_seconds=60)
+    set_in_force_token(token)
+    try:
+        tc = ToolContext(invocation_context=_Invocation())
+        with pytest.raises(CapabilityDenied):
+            guarded({"to": "someone"}, tc)
+        assert body_calls == []
+        receipt = json.loads(log.read_text().strip().splitlines()[-1])["event"]
+        assert receipt["decision"] == "DENY"
+        assert receipt["agent_id"] is None
+        assert "unbound" not in json.dumps(receipt), receipt
+    finally:
+        set_in_force_token(None)
+
+
+def test_google_adk_unattributed_async_call_denies(tmp_path):
+    pytest.importorskip("google.adk.tools")
+
+    from google.adk.tools import ToolContext
+
+    from raucle.integrations.google_adk import (
+        CapabilityDenied,
+        guard_tool,
+        set_in_force_token,
+    )
+
+    class _Session:
+        state: dict = {}
+
+    class _Agent:
+        name = None
+
+    class _Invocation:
+        agent = _Agent()
+        session = _Session()
+
+    body_calls: list = []
+
+    async def lookup_contact(args: dict, tool_context: ToolContext) -> dict:  # noqa: ARG001
+        body_calls.append(dict(args))
+        return {"ok": True}
+
+    issuer = CapabilityIssuer.generate(issuer="test.platform")
+    gate = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
+    sink, log = _sink(tmp_path)
+    guarded = guard_tool(lookup_contact, gate=gate, sink=sink, agent_id=None)
+    token = issuer.mint(agent_id="agent:test", tool="lookup_contact", ttl_seconds=60)
+    set_in_force_token(token)
+    try:
+        tc = ToolContext(invocation_context=_Invocation())
+        attempt = guarded({"to": "someone"}, tc)
+        with pytest.raises(CapabilityDenied):
+            asyncio.run(attempt)
+        assert body_calls == []
+        receipt = json.loads(log.read_text().strip().splitlines()[-1])["event"]
+        assert receipt["decision"] == "DENY"
+        assert receipt["agent_id"] is None
     finally:
         set_in_force_token(None)
