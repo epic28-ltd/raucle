@@ -161,7 +161,10 @@ class CapabilityReceipt:
     policy_proof_hash: str | None
     lean_theorem_id: str
     attenuation_chain: list[str]
-    agent_id: str
+    # Honest null on the deny/attribution path: None when no caller
+    # identity was bound, never a placeholder string (receipt-index v3:
+    # continuity is never fabricated).
+    agent_id: str | None
     tool: str
     call_args_hash: str
     decision: str  # "ALLOW" or "DENY"
@@ -327,7 +330,10 @@ class RaucleFunctionMiddleware(FunctionMiddleware):
             policy_proof_hash=(token.policy_proof_hash if token else None),
             lean_theorem_id=self._lean_theorem_id,
             attenuation_chain=(decision.chain or ([] if token is None else [token.token_id])),
-            agent_id=agent_id or _UNKNOWN,
+            # Honest-null contract: the receipt carries agent_id verbatim
+            # when the caller declared it, or None when it did not - a
+            # fabricated placeholder would corrupt chain continuity.
+            agent_id=agent_id or None,
             tool=tool,
             call_args_hash=_hash_args(args),
             decision=("ALLOW" if decision.allowed else "DENY"),
