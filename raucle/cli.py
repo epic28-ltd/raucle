@@ -316,6 +316,23 @@ def _build_parser() -> argparse.ArgumentParser:
         "--out", default="raucle-audit", help="Output prefix (default: raucle-audit)"
     )
 
+    # -- rotate-chain (J1: receipted rotation of the gateway boot stores) -
+    rotate_p = subparsers.add_parser(
+        "rotate-chain",
+        help=(
+            "Rotate the audit chain + receipt store: archive them intact "
+            "(.archived-<date>), record a signed rotation receipt, verify a fresh boot"
+        ),
+    )
+    rotate_p.add_argument(
+        "--operator",
+        default="",
+        help="Operator identity recorded in the rotation receipt (or set RAUCLE_OPERATOR)",
+    )
+    rotate_p.add_argument(
+        "--reason", default="", help="Reason recorded in the rotation receipt"
+    )
+
     # -- verify-receipt -----------------------------------------------------
     watch_p = subparsers.add_parser(
         "watch",
@@ -2381,6 +2398,45 @@ def _cmd_verify_receipt(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_rotate_chain(args: argparse.Namespace) -> int:
+    """J1: receipted operator rotation of the gateway boot stores.
+
+    Bonds to the same env vars the gateway boot reads (RAUCLE_AUDIT_CHAIN,
+    RAUCLE_AUDIT_LOG, RAUCLE_RECEIPT_STORE / RAUCLE_RECEIPT_STORE_DIR,
+    RAUCLE_RECEIPT_INDEX_PATH, RAUCLE_SIGNER_KEY_PATH), archives the
+    stores intact, records the boundary as a signed rotation receipt in
+    the fresh chain of record and verifies the fresh store boots.
+    """
+    from raucle.chain_rotation import rotate_chain
+    from raucle.errors import RotationRefusedError
+    from raucle.gateway import GatewayConfig
+
+    config = GatewayConfig.from_env()
+    try:
+        result = rotate_chain(config, operator=args.operator, reason=args.reason)
+    except RotationRefusedError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print("rotation complete (archived, never deleted):")
+    for entry in result["rotated"]:
+        print(f"  {entry['kind']}: {entry['path']} -> {entry['archived_path']}")
+        for digest in entry["files"]:
+            print(
+                f"      sha256 {digest['sha256']}  {digest['bytes']} bytes  "
+                f"{Path(digest['path']).name}"
+            )
+    print(f"  rotation receipt: {result['receipt_hash']}")
+    print(f"  receipt written:  {result['receipt_path']}")
+    boot = result["boot"]
+    print(
+        f"  fresh boot verified: audit chain {boot['audit_chain']}, "
+        f"receipt store {boot['receipt_store']} "
+        f"({boot.get('receipt_count', 0)} receipt(s) projected)"
+    )
+    print("Archived chains stay verifiable offline (raucle audit verify <archive>).")
+    return 0
+
+
 def _containment_dispatch(manager: Any, sub: str, args: argparse.Namespace) -> dict:
     """Route a containment subcommand to its manager call and return the result."""
     reason = getattr(args, "reason", "")
@@ -3388,7 +3444,12 @@ def main(argv: list[str] | None = None) -> int:
             file=_sys.stderr,
         )
 
-    from raucle.errors import ConfigurationError, PolicyUnproven
+    from raucle.errors import (
+        BootMemoryCeilingExceeded,
+        ConfigurationError,
+        PolicyUnproven,
+        RotationRefusedError,
+    )
 
     args_in = argv if argv is not None else sys.argv[1:]
     if args_in[:1] and args_in[0] in ("stonechat", "bird"):
@@ -3415,6 +3476,9 @@ def main(argv: list[str] | None = None) -> int:
     except (ConfigurationError, PolicyUnproven, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    except (BootMemoryCeilingExceeded, RotationRefusedError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
 
 def _dispatch(argv: list[str] | None = None) -> int:
@@ -3437,6 +3501,7 @@ def _dispatch(argv: list[str] | None = None) -> int:
         "passport": _cmd_passport,
         "verify-receipt": _cmd_verify_receipt,
         "audit-export": _cmd_audit_export,
+        "rotate-chain": _cmd_rotate_chain,
     }
     handler = _SIMPLE_COMMANDS.get(args.command)
     if handler:

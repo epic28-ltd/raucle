@@ -47,3 +47,31 @@ class PolicyUnproven(Exception):
     succeeds without a proof, and the resulting token has no proof
     binding.
     """
+
+
+class BootMemoryCeilingExceeded(Exception):
+    """The gateway boot's RSS projection exceeds the configured ceiling.
+
+    Raised by the boot memory preflight (:mod:`raucle.chain_rotation`)
+    BEFORE any store is loaded. The gateway boot refuses rather than
+    balloon: the 18 Nov demo incident had the process OOM-killed at
+    boot, repeatedly, under ``restart:always``, because the audit chain
+    and the receipt-store index grow without bound while the box does
+    not. The message names the projected size, the ceiling, and the
+    operator's escape route (``raucle rotate-chain``).
+    """
+
+
+class RotationRefusedError(Exception):
+    """A chain rotation refused before touching anything.
+
+    Raised by ``raucle rotate-chain`` (:func:`raucle.chain_rotation.rotate_chain`)
+    when the rotation would be unsafe or pointless:
+
+    * an archive with today's date suffix already exists (idempotent-safe:
+      a same-day re-run must never overwrite or duplicate an archive),
+    * nothing to rotate (no configured store exists),
+    * no operator identity (``--operator`` or ``RAUCLE_OPERATOR``).
+
+    The refusal is all-or-nothing: no file is renamed when it raises.
+    """
