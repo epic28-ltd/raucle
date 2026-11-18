@@ -28,6 +28,7 @@ record must stand for the life of the archive.
       "kind": "capability" | "lease" | "receipt",
       "revoked_ids": ["<the revoked objects' identifiers>"],
       "revoked_hashes": {"<revoked id>": "sha256:<hash of that object>"},
+      "root": "<optional: the revoked capability subtree's root id>",
       "actor": "<the revoking identity>",
       "reason_class": "<closed vocabulary>",
       "reason": "<optional free-text detail>",
@@ -35,7 +36,7 @@ record must stand for the life of the archive.
     }
 
 Mandatory: `version`, `kind`, `revoked_ids`, `revoked_hashes`, `actor`,
-`reason_class`, `revoked_at`. Optional: `reason`.
+`reason_class`, `revoked_at`. Optional: `root`, `reason`.
 
 Field rules:
 
@@ -67,9 +68,12 @@ Field rules:
 
 What the block does NOT carry:
 
-- No secret material: no vault references, no secret digests, no key
-  material. Lease revocations cite the grant receipt by hash; the
-  secret never enters the revocation.
+- No secret material: no vault references, no key material, no digests
+  of vault-held secrets. Lease revocations cite the grant receipt by
+  hash; the secret never enters the revocation. A revoked bearer
+  credential is cited by its digest only (`revoked_hashes`): a digest
+  of the token is the chain linkage the field carries, not secret
+  material.
 - No capability replay content: the revoked capability's constraints,
   scopes, expiry or token bytes never appear. Ids and hashes only: a
   revocation receipt is evidence of an ending, not a replayable
@@ -129,7 +133,9 @@ The accepted 30 October 2026 emitter writes `revoked_ids`, `root`,
 `actor` and a free-text `reason` under verdict `authority_revoked`, and
 the verifier marks post-revocation citations invalid with a named
 error. The v1.2 kind specified here adds `version`, `kind`,
-`revoked_hashes`, `reason_class` and `revoked_at`. Revocations minted
+`revoked_hashes`, `reason_class` and `revoked_at`, and normative-ises
+the shipped `root` field as the optional subtree-root id it already
+carries. Revocations minted
 before this document are valid and stay valid (rule 4); the
 implementing Q lane extends the emitter, and until it does the shipped
 shape is what the chain holds.

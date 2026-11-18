@@ -47,7 +47,10 @@ carries:
           "session_id": "<the receipt's own session id>",
           "window_seconds": <the rule's declared window bound>,
           "participant": "tool_call" | "tool_response_taint",
-          "window_evidence": {"<counter name>": <int>, ...}
+          "window_evidence": {
+              "counters": {"<counter name>": <int>, ...},
+              "tools": ["<tool name>", ...]
+          }
       },
       "evaluated_at": <epoch seconds>
     }
@@ -69,7 +72,9 @@ Field rules:
   counterfactual evaluated against another session's window is
   incoherent and fails verification. `window_evidence` carries counter
   names, counts and tool names only, never arguments or content, the
-  same bounded shape a session-rule denial's reason carries.
+  same bounded shape a session-rule denial's reason carries: a closed
+  two-key shape with `counters` first and `tools` always present (an
+  empty list when the window counted none).
 - **evaluated_at** is an integer epoch and MUST NOT be later than the
   receipt's own `iat`: counterfactual evidence is recorded at decision
   time. A post-dated block is editorial, not evidence, and fails with
@@ -99,9 +104,11 @@ and re-runs the evaluation when it holds the pieces:
 3. Session coherence, when the `session` block is present: `session_id`
    equals the receipt's own; `window_seconds` is a positive integer;
    `participant` is inside the two-value matcher vocabulary;
-   `window_evidence` counters are non-negative integers and tool names
-   are strings. A content-like value inside `window_evidence` fails
-   verification with a named error.
+   `window_evidence` is exactly the two-key shape above: its `counters`
+   map carries non-negative integers and its `tools` list carries
+   tool-name strings. A missing key, an extra key, or a content-like
+   value inside `window_evidence` fails verification with a named
+   error.
 4. The replay re-check is conditional, and stated honestly: a verifier
    that holds the alternative ruleset (by digest) and the stored input
    re-runs the deterministic evaluation and confirms the recorded
