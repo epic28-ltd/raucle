@@ -219,3 +219,98 @@ class TestEndToEnd:
                     str(website_path),
                 ]
             )
+
+
+class TestCuratedNotes:
+    _NOTES = textwrap.dedent("""\
+        # Website release notes: 0.4.0
+
+        Preamble that must be ignored.
+
+        ## Features
+
+        - **Curated feature** — from the curated file only.
+        - Plain bullet two. See the changelog for the full list.
+
+        ## What's new
+
+        curated summary one, curated summary two
+        """)
+
+    def test_parse_website_notes_sections(self):
+        notes = sync_website.parse_website_notes(self._NOTES, "0.4.0")
+        assert len(notes.headline_features) == 2
+        assert notes.headline_features[0].startswith("Curated feature")
+        assert "**" not in notes.headline_features[0]
+        assert "Preamble" not in " ".join(notes.headline_features)
+
+    def test_parse_website_notes_summary_verbatim(self):
+        notes = sync_website.parse_website_notes(self._NOTES, "0.4.0")
+        assert notes.whatsnew_summary == "curated summary one, curated summary two"
+
+    def test_malformed_notes_missing_summary_raises(self):
+        import pytest
+
+        truncated = self._NOTES.split("## What's new")[0]
+        with pytest.raises(SystemExit, match="What's new"):
+            sync_website.parse_website_notes(truncated, "0.4.0")
+
+    def test_curated_sync_replaces_blocks_and_is_idempotent(self, tmp_path):
+        notes_path = tmp_path / "0.4.0.md"
+        notes_path.write_text(self._NOTES)
+        changelog_path = tmp_path / "CHANGELOG.md"
+        changelog_path.write_text(_CHANGELOG)
+        website_path = tmp_path / "index.html"
+        website_path.write_text(_HTML_TEMPLATE)
+        args = [
+            "--changelog",
+            str(changelog_path),
+            "--version",
+            "0.4.0",
+            "--notes",
+            str(notes_path),
+            "--website-html",
+            str(website_path),
+        ]
+        sync_website.main(args)
+        once = website_path.read_text()
+        sync_website.main(args)
+        assert once == website_path.read_text()
+        assert "Also in this release" in once
+        assert "curated summary one" in once
+        # Changelog prose must not leak when curated notes are used.
+        assert "Tamper-evident audit chain" not in once
+
+    def test_missing_notes_file_falls_back_with_warning(self, tmp_path, capsys):
+        changelog_path = tmp_path / "CHANGELOG.md"
+        changelog_path.write_text(_CHANGELOG)
+        website_path = tmp_path / "index.html"
+        website_path.write_text(_HTML_TEMPLATE)
+        rc = sync_website.main(
+            [
+                "--changelog",
+                str(changelog_path),
+                "--version",
+                "0.4.0",
+                "--notes",
+                str(tmp_path / "nope.md"),
+                "--website-html",
+                str(website_path),
+            ]
+        )
+        assert rc == 0
+        assert "Tamper-evident audit chain" in website_path.read_text()
+        assert "::warning::" in capsys.readouterr().err
+
+    def test_curated_whatsnew_summary_reaches_page(self):
+        out = sync_website.render_whatsnew("0.5.0", ["Added - something"], "url", summary="a, b")
+        assert "a, b" in out
+        assert "something" not in out
+
+    def test_fallback_whatsnew_strips_category_prefix(self):
+        out = sync_website.render_whatsnew(
+            "0.5.0", ["Added - EPIC S2: thing", "New Features"], "url"
+        )
+        assert "Added - " not in out
+        assert "EPIC S2: thing" in out
+        assert "New Features" in out

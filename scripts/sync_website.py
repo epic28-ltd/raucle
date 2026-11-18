@@ -8,6 +8,12 @@ pieces of HTML content into the target site between named comment markers:
 - ``RAUCLE_DETECT:FEATURES``  — bullet list of headline features
 - ``RAUCLE_DETECT:WHATSNEW``  — "what's new in vN" callout
 
+A curated per-release notes file (``scripts/website-notes/<version>.md``,
+passed via ``--notes``) replaces the changelog extraction for FEATURES and
+WHATSNEW.  Without it the script falls back to first-sentence extraction
+from ``CHANGELOG.md`` and prints a warning — engineering changelog prose
+should not reach the home page, so write the notes file before tagging.
+
 Usage::
 
     python scripts/sync_website.py \\
@@ -66,6 +72,7 @@ class ReleaseNotes:
     headline_features: list[str] = field(default_factory=list)
     section_titles: list[str] = field(default_factory=list)
     raw_section: str = ""
+    whatsnew_summary: str = ""
 
 
 # Matches `## <version>`, optionally `(<date>)`, and optionally a trailing
@@ -181,6 +188,50 @@ def _strip_markdown(text: str) -> str:
     return text
 
 
+_NOTES_SECTION_RE = re.compile(r"^##\s+(Features|What's new)\s*$", re.IGNORECASE)
+
+# Curated site copy must not leak the changelog's category labels such as
+# "Added - EPIC S2: ..." in the fallback WHATSNEW callout.
+_FALLBACK_TITLE_PREFIX_RE = re.compile(r"^(Added|Changed|Fixed|Security|Deprecated)\s*-?\s*")
+
+
+def parse_website_notes(text: str, version: str) -> ReleaseNotes:
+    """Parse a curated website notes file (``website-notes/<version>.md``).
+
+    ``## Features`` holds one bullet per line; ``## What's new`` holds a
+    single plain paragraph rendered verbatim inside the callout.  A file
+    missing either section is a hard error: curated copy that cannot be
+    parsed must fail the sync rather than silently regressing to changelog
+    prose on the home page.
+    """
+    notes = ReleaseNotes(version=version)
+    bullets: list[str] = []
+    summary_lines: list[str] = []
+    section: str | None = None
+    for line in text.splitlines():
+        header = _NOTES_SECTION_RE.match(line.strip())
+        if header:
+            section = "features" if header.group(1).lower().startswith("feature") else "whatsnew"
+            continue
+        if section is None:
+            continue  # skip the h1 and any preamble
+        if section == "features":
+            bullet = _BULLET_RE.match(line)
+            if bullet:
+                cleaned = _strip_markdown(bullet.group(1).strip())
+                if cleaned:
+                    bullets.append(cleaned)
+        elif line.strip():
+            summary_lines.append(_strip_markdown(line.strip()))
+    if not bullets:
+        raise SystemExit("error: curated website notes have no '## Features' bullet list")
+    if not summary_lines:
+        raise SystemExit("error: curated website notes have no '## What's new' paragraph")
+    notes.headline_features = bullets
+    notes.whatsnew_summary = " ".join(summary_lines).rstrip(".")
+    return notes
+
+
 # ---------------------------------------------------------------------------
 # HTML rendering
 # ---------------------------------------------------------------------------
@@ -201,7 +252,13 @@ def render_version_badge(version: str) -> str:
     )
 
 
-def render_features_list(features: list[str]) -> str:
+def render_features_list(features: list[str], heading: str | None = None) -> str:
+    prefix = ""
+    if heading:
+        prefix = (
+            '<h3 style="font-size:1.15rem;font-weight:600;margin:28px 0 8px;">'
+            f"{html.escape(heading)}</h3>\n"
+        )
     items = []
     for feat in features:
         items.append(
@@ -220,19 +277,33 @@ def render_features_list(features: list[str]) -> str:
             "                </li>"
         )
     )
-    return '<ul class="oss-features">\n' + body + "\n            </ul>"
+    return prefix + '<ul class="oss-features">\n' + body + "\n            </ul>"
 
 
-def render_whatsnew(version: str, section_titles: list[str], repo_url: str) -> str:
-    """Render a small 'what's new in vN' callout linking to the release notes."""
-    if not section_titles:
+def render_whatsnew(
+    version: str,
+    section_titles: list[str],
+    repo_url: str,
+    summary: str | None = None,
+) -> str:
+    """Render a small 'what's new in vN' callout linking to the release notes.
+
+    A curated *summary* replaces the section-title heuristic.  The fallback
+    strips the changelog's leading "Added - " style prefixes so raw category
+    labels never reach the page.
+    """
+    if summary:
+        title_summary = html.escape(summary)
+    elif not section_titles:
         title_summary = "release notes"
     else:
-        # Take the most marketing-friendly section titles.
-        # If "New Features" is in the list, lead with that.
+        # Take the most marketing-friendly section titles after stripping
+        # changelog category prefixes.  If "New Features" is in the list,
+        # lead with that.
         priority = ["New Features", "Compliance & Audit (EU AI Act / SOC 2 ready)"]
+        cleaned = [_FALLBACK_TITLE_PREFIX_RE.sub("", t).strip() for t in section_titles]
         titles = sorted(
-            section_titles,
+            cleaned,
             key=lambda t: (priority.index(t) if t in priority else 99, t),
         )
         title_summary = ", ".join(html.escape(t) for t in titles[:4])
@@ -265,6 +336,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to the website index.html to update in-place",
     )
     parser.add_argument(
+        "--notes",
+        type=Path,
+        default=None,
+        help=(
+            "Optional curated website notes file (website-notes/<version>.md) "
+            "replacing changelog extraction for FEATURES/WHATSNEW"
+        ),
+    )
+    parser.add_argument(
         "--repo-url",
         default="https://github.com/epic28-ltd/raucle",
         help="Base URL for the raucle GitHub repo",
@@ -275,13 +355,35 @@ def main(argv: list[str] | None = None) -> int:
     changelog_text = args.changelog.read_text(encoding="utf-8")
     notes = parse_changelog(changelog_text, args.version)
 
+    features_heading = None
+    if args.notes is not None:
+        if args.notes.exists():
+            curated = parse_website_notes(args.notes.read_text(encoding="utf-8"), args.version)
+            notes.headline_features = curated.headline_features
+            notes.whatsnew_summary = curated.whatsnew_summary
+            features_heading = "Also in this release"
+            print(f"  Using curated website notes: {args.notes}", file=sys.stderr)
+        else:
+            print(
+                f"::warning::No curated website notes at {args.notes}; "
+                "falling back to changelog heuristics.",
+                file=sys.stderr,
+            )
+
     html_doc = args.website_html.read_text(encoding="utf-8")
     html_doc = _replace_block(html_doc, "VERSION", render_version_badge(notes.version))
-    html_doc = _replace_block(html_doc, "FEATURES", render_features_list(notes.headline_features))
+    html_doc = _replace_block(
+        html_doc, "FEATURES", render_features_list(notes.headline_features, features_heading)
+    )
     html_doc = _replace_block(
         html_doc,
         "WHATSNEW",
-        render_whatsnew(notes.version, notes.section_titles, args.repo_url),
+        render_whatsnew(
+            notes.version,
+            notes.section_titles,
+            args.repo_url,
+            summary=notes.whatsnew_summary or None,
+        ),
     )
 
     if args.dry_run:

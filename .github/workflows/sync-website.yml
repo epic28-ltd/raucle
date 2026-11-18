@@ -75,6 +75,7 @@ jobs:
           python scripts/sync_website.py \
             --changelog CHANGELOG.md \
             --version "$VERSION" \
+            --notes "scripts/website-notes/${VERSION}.md" \
             --website-html website/index.html
 
       - name: Smoke-check rendered output (fails closed on broken render)
