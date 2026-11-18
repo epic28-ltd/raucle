@@ -329,9 +329,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Operator identity recorded in the rotation receipt (or set RAUCLE_OPERATOR)",
     )
-    rotate_p.add_argument(
-        "--reason", default="", help="Reason recorded in the rotation receipt"
-    )
+    rotate_p.add_argument("--reason", default="", help="Reason recorded in the rotation receipt")
 
     # -- verify-receipt -----------------------------------------------------
     watch_p = subparsers.add_parser(

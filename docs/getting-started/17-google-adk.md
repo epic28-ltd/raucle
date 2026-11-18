@@ -24,11 +24,12 @@ from raucle.capability import CapabilityGate, CapabilityIssuer
 from raucle.integrations.google_adk import guard_tool, set_in_force_token
 
 issuer = CapabilityIssuer.generate(issuer="acme.platform")
-gate   = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
-sink   = HashChainSink("receipts.jsonl", signer=Ed25519Signer.generate())
+gate = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
+sink = HashChainSink("receipts.jsonl", signer=Ed25519Signer.generate())
 
-def transfer_funds(args: dict, tool_context: ToolContext) -> dict:
-    ...
+
+def transfer_funds(args: dict, tool_context: ToolContext) -> dict: ...
+
 
 # agent_id binds the acting identity; an unattributed call denies.
 # ADK names its agents with plain identifiers, so the raucle id is the
@@ -36,15 +37,22 @@ def transfer_funds(args: dict, tool_context: ToolContext) -> dict:
 agent = LlmAgent(
     name="billing_agent",
     model="gemini-2.0-flash",
-    tools=[FunctionTool(guard_tool(transfer_funds, gate=gate, sink=sink,
-                                   agent_id="agent:billing_agent"))],
+    tools=[
+        FunctionTool(
+            guard_tool(transfer_funds, gate=gate, sink=sink, agent_id="agent:billing_agent")
+        )
+    ],
 )
 
 # Per session: bind a token scoped to what THIS task may do.
-set_in_force_token(issuer.mint(
-    agent_id="agent:billing_agent", tool="transfer_funds",
-    constraints={"max_value": {"amount": 100}}, ttl_seconds=60,
-))
+set_in_force_token(
+    issuer.mint(
+        agent_id="agent:billing_agent",
+        tool="transfer_funds",
+        constraints={"max_value": {"amount": 100}},
+        ttl_seconds=60,
+    )
+)
 ```
 
 With no `agent_id` pinned, the identity comes from the invocation context
