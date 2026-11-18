@@ -1,16 +1,20 @@
-"""Track H: attack-family robustness. v4-flash banking x {none, shields, vcd_full} x {direct, ignore_previous}.
+"""Track H: attack-family robustness.
+
+v4-flash banking x {none, shields, vcd_full} x {direct, ignore_previous}.
 
 Proves the result is not overfit to important_instructions. 3 defences x 2 attacks = 6 cells.
 """
 
-import json, logging, time
+import json
+import logging
+import time
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 log = logging.getLogger("track_h")
 
 from paper.eval import agentdojo_patches  # noqa
-from paper.eval.agentdojo_adapter import run
+from paper.eval.agentdojo_adapter import run  # noqa: E402
 
 MODEL = "deepseek-v4-flash"
 ROOT = Path("/root/raucle-paper/raucle/runs")
@@ -52,7 +56,9 @@ for attack in ATTACKS:
                 }
                 all_results.append(row)
                 log.info(
-                    f"  RESULT  {attack}/{defence}: ASR={100 * r.asr:.1f}% benign={100 * r.benign_completion:.1f}% n={r.total_tasks} wall={elapsed:.0f}s"
+                    f"  RESULT  {attack}/{defence}: ASR={100 * r.asr:.1f}%"
+                    f" benign={100 * r.benign_completion:.1f}% n={r.total_tasks}"
+                    f" wall={elapsed:.0f}s"
                 )
             (logdir / "aggregate.json").write_text(
                 json.dumps(

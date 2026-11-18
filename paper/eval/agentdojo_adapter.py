@@ -15,34 +15,27 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
 
 # Order matters: importing agentdojo.task_suite first fully initialises the
 # registration machinery and side-steps the v1↔v1_1_1 circular import.
 import agentdojo.task_suite  # noqa: F401
-
-# Add 2026-generation models to AgentDojo's frozen ModelsEnum.
-from paper.eval import agentdojo_patches  # noqa: F401
-
 from agentdojo.agent_pipeline import (
     AgentPipeline,
     BasePipelineElement,
-    GroundTruthPipeline,
-    InitQuery,
     PipelineConfig,
-    SystemMessage,
     ToolsExecutionLoop,
     ToolsExecutor,
 )
-from agentdojo.attacks.base_attacks import BaseAttack
-from agentdojo.attacks.attack_registry import ATTACKS, load_attack
+from agentdojo.attacks.attack_registry import load_attack
 from agentdojo.benchmark import (
-    benchmark_suite_with_injections,
-    run_task_with_injection_tasks,
     SuiteResults,
+    run_task_with_injection_tasks,
 )
 from agentdojo.logging import OutputLogger
 from agentdojo.task_suite import get_suites
+
+# Add 2026-generation models to AgentDojo's frozen ModelsEnum.
+from paper.eval import agentdojo_patches  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +204,6 @@ def run(
     """
     suite_names = suites if suites is not None else SUITES
     suite_dict = get_suites(SUITE_VERSION)
-    is_vcd = defence.startswith("vcd_")
 
     out: list[SuiteAggregate] = []
     # AgentDojo's benchmark machinery uses OutputLogger as a context manager
@@ -271,15 +263,16 @@ def _run_one_user_task_subprocess(
     """
     from pathlib import Path
 
+    import agentdojo.task_suite  # noqa
+    from agentdojo.attacks.attack_registry import load_attack
+    from agentdojo.benchmark import run_task_with_injection_tasks
+    from agentdojo.logging import OutputLogger
+    from agentdojo.task_suite import get_suites
+
     # Re-apply the AgentDojo patches in the subprocess (ModelsEnum, providers,
     # MODEL_NAMES, get_llm). This import has side effects via its top-level
     # apply() call.
     from paper.eval import agentdojo_patches  # noqa
-    import agentdojo.task_suite  # noqa
-    from agentdojo.task_suite import get_suites
-    from agentdojo.attacks.attack_registry import load_attack
-    from agentdojo.benchmark import run_task_with_injection_tasks
-    from agentdojo.logging import OutputLogger
 
     suite = get_suites(SUITE_VERSION)[suite_name]
     ut = suite.get_user_task_by_id(ut_id)
