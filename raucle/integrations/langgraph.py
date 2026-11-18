@@ -168,7 +168,7 @@ def _emit_receipt(
     sink: HashChainSink | NullSink,
     *,
     token: Capability | None,
-    agent_id: str,
+    agent_id: str | None,
     tool: str,
     args: Any,
     decision: GateDecision,
@@ -293,7 +293,11 @@ def _make_gated_handler(
         _emit_receipt(
             sink,
             token=token,
-            agent_id=agent_id or "<unbound>",
+            # Honest null: an unattributed deny carries no fabricated agent
+            # id (same doctrine as the crewai adapter - the "<unbound>"
+            # placeholder is gone); an empty string is equally not an
+            # identity, so both falsy forms emit null.
+            agent_id=agent_id or None,
             tool=tool_name,
             args=call_args,
             decision=decision,
