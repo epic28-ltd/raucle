@@ -13,20 +13,81 @@ Design contract, enforced by tests:
 - Verification NEVER consults the index; it reads the chain.
 - WAL mode with one writer thread and concurrent readers (matching the
   gateway's single-writer design); ``busy_timeout`` smooths lock races.
+- Crash-resilience (J2): schema migration runs as ONE transaction, and
+  open first inspects for - and deterministically repairs - the
+  half-migrated state an interrupted migration leaves behind. A
+  rebuildable projection must never crash-loop a boot.
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import logging
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 
 def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * ((4 - len(s) % 4) % 4))
+
+
+# The live projection table (schema v3). One column list and one CREATE
+# literal shared by the fresh path, the v1/v2 -> v3 migration and the
+# mid-migration crash recovery, so the three can never drift apart.
+_RECEIPTS_COLUMNS = (
+    "receipt_hash",
+    "iat",
+    "agent_id",
+    "tool",
+    "decision",
+    "reason",
+    "policy",
+    "latency_us",
+    "trace_id",
+    "session_id",
+    "acting_for",
+    "source",
+    "destination",
+    "parents_json",
+    "segment",
+    "line_no",
+)
+
+_RECEIPTS_TABLE_SQL = """
+    CREATE TABLE receipts (
+        receipt_hash TEXT NOT NULL,
+        iat          INTEGER NOT NULL,
+        agent_id     TEXT NOT NULL,
+        tool         TEXT NOT NULL,
+        decision     TEXT NOT NULL,
+        reason       TEXT NOT NULL DEFAULT '',
+        policy       TEXT,
+        latency_us   INTEGER NOT NULL DEFAULT 0,
+        trace_id     TEXT,
+        session_id   TEXT,
+        acting_for   TEXT NOT NULL DEFAULT '',
+        source       TEXT NOT NULL DEFAULT '',
+        destination  TEXT NOT NULL DEFAULT '',
+        parents_json TEXT NOT NULL DEFAULT '[]',
+        segment      TEXT,
+        line_no      INTEGER
+    )
+"""
+
+_RECEIPTS_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_receipts_iat ON receipts (iat)",
+    "CREATE INDEX IF NOT EXISTS idx_receipts_agent ON receipts (agent_id, iat)",
+    "CREATE INDEX IF NOT EXISTS idx_receipts_tool ON receipts (tool, iat)",
+    "CREATE INDEX IF NOT EXISTS idx_receipts_trace ON receipts (trace_id)",
+    # EPIC Q lane Q-1: behavioural sessions query receipts by
+    # (session_id, iat); only DECLARED session keys are ever indexed.
+    "CREATE INDEX IF NOT EXISTS idx_receipts_session ON receipts (session_id, iat)",
+)
 
 
 class ReceiptIndex:
@@ -41,7 +102,12 @@ class ReceiptIndex:
         self._path = Path(sqlite_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
+        # Autocommit (isolation_level=None) makes transaction boundaries
+        # explicit and deterministic: schema work runs inside the BEGIN
+        # IMMEDIATE blocks of _init_schema and of crash recovery (J2).
+        # Every write call site already committed per statement, so the
+        # durability semantics of the write path are unchanged.
+        self._conn = sqlite3.connect(str(self._path), check_same_thread=False, isolation_level=None)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
@@ -68,52 +134,146 @@ class ReceiptIndex:
     #   fabricated. The index remains a QUERY CACHE (rebuild on open); a
     #   v2 file is copied across in place, a stale file also rebuilds
     #   from the store. Verification NEVER consults the index.
+    # - J2 (crash-resilience, no schema change): the migration and the
+    #   version stamp became one transaction, and open first repairs the
+    #   half-migrated artifact the previous autocommitting implementation
+    #   could leave behind (the 18 Nov demo incident: an OOM kill
+    #   mid-migration, then a permanent boot crash-loop).
     def _init_schema(self) -> None:
+        # Crash-resilience (J2): BEFORE any ALTER, inspect the schema for
+        # an interrupted migration and repair it deterministically. The
+        # migrate-on-open of v3 ran as separate autocommitted statements,
+        # so a process killed between the rename and the copy (the 18 Nov
+        # demo incident: an OOM kill at 23.4 GB RSS, three kills) left
+        # receipts_prev_backup beside a half-built live table, and every
+        # later boot re-entered the migration and died on the rename - a
+        # permanent crash-loop under restart:always.
+        self._recover_interrupted_migration()
         version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
-        has_table = (
+        has_table = self._table_exists("receipts")
+        # The schema version rows are the migration journal. One explicit
+        # transaction carries the schema change AND the version stamp
+        # (probe-verified on SQLite 3.53.1: DDL and PRAGMA user_version
+        # are transactional), so user_version only ever claims a shape a
+        # committed transaction actually produced, and a crash at any
+        # step rolls the file back to the pristine pre-migration state,
+        # where the next open simply re-runs the migration.
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            if has_table and version < self.SCHEMA_VERSION:
+                self._migrate_dedupe_schema()
+            else:
+                self._create_receipts_table(if_not_exists=True)
+            for stmt in _RECEIPTS_INDEXES:
+                self._conn.execute(stmt)
+            self._conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            raise
+
+    def _create_receipts_table(self, *, if_not_exists: bool = False) -> None:
+        """Create the live projection table. The caller owns the transaction."""
+        prefix = "CREATE TABLE IF NOT EXISTS receipts" if if_not_exists else "CREATE TABLE receipts"
+        self._conn.execute(_RECEIPTS_TABLE_SQL.replace("CREATE TABLE receipts", prefix, 1))
+
+    def _table_exists(self, name: str) -> bool:
+        return (
             self._conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'receipts'"
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (name,),
             ).fetchone()
             is not None
         )
-        if has_table and version < self.SCHEMA_VERSION:
-            self._migrate_dedupe_schema()
-        else:
-            self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS receipts (
-                    receipt_hash TEXT NOT NULL,
-                    iat          INTEGER NOT NULL,
-                    agent_id     TEXT NOT NULL,
-                    tool         TEXT NOT NULL,
-                    decision     TEXT NOT NULL,
-                    reason       TEXT NOT NULL DEFAULT '',
-                    policy       TEXT,
-                    latency_us   INTEGER NOT NULL DEFAULT 0,
-                    trace_id     TEXT,
-                    session_id   TEXT,
-                    acting_for   TEXT NOT NULL DEFAULT '',
-                    source       TEXT NOT NULL DEFAULT '',
-                    destination  TEXT NOT NULL DEFAULT '',
-                    parents_json TEXT NOT NULL DEFAULT '[]',
-                    segment      TEXT,
-                    line_no      INTEGER
-                )
-                """
-            )
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_iat ON receipts (iat)")
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_receipts_agent ON receipts (agent_id, iat)"
+
+    def _shared_columns(self, table: str) -> list[str]:
+        """The projection columns *table* also carries, in table order."""
+        old_cols = [row[1] for row in self._conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        return [c for c in _RECEIPTS_COLUMNS if c in old_cols]
+
+    def _recreate_receipts_from(self, source: str) -> None:
+        """Create the current-shape receipts table and copy the shared
+        columns of *source* into it. The caller owns the transaction.
+
+        Defaults cover the newer columns (no-continuity: session_id NULL,
+        acting_for ''); a v2->v3 upgrade copies v2 columns whole, and a
+        v1->v3 upgrade also keeps the session columns empty. A row never
+        GAINS a session key it did not carry.
+        """
+        self._create_receipts_table(if_not_exists=False)
+        shared = self._shared_columns(source)
+        if not shared:
+            return  # nothing projectable to copy
+        cols_csv = ", ".join(shared)
+        self._conn.execute(f"INSERT INTO receipts ({cols_csv}) SELECT {cols_csv} FROM {source}")
+
+    def _recover_interrupted_migration(self) -> None:
+        """Repair a migration interrupted by a crash, BEFORE any ALTER runs.
+
+        Detection is by schema inspection - a receipts_prev_backup table
+        is the artifact an interrupted rename leaves - never by catching
+        the rename error after the fact. Three states, each recovered in
+        the ordering that cannot lose projected data:
+
+        - backup WITHOUT a live table: the crash landed between the rename
+          and the re-create. Undo the rename - the backup is all the
+          projection there is - and stamp user_version 0, because the
+          restored table's true version is unknown and the version row
+          must not claim a migration the schema did not get. The normal
+          migration in _init_schema then re-runs from a known state.
+        - backup WITH a live table at the current version: a completed
+          migration commits the drop of the backup and the version stamp
+          together, so this is a stale leftover this code cannot produce;
+          the current live table is authoritative and the backup is
+          dropped.
+        - backup WITH a half-built live table at an older version: the
+          observed OOM signature. The half-built table only ever received
+          rows INSERT ... SELECTed from the backup (the store never
+          finished booting, so no other writer touched it): its rows are a
+          subset of the backup's. Drop the half-built table, complete the
+          interrupted migration by re-copying from the backup, drop the
+          backup only after its rows are re-copied, and stamp the version
+          - all in one committed transaction.
+
+        The chain of record is the truth and verification never consults
+        the index, so recovery cannot affect any trust decision; it
+        preserves the projected rows to avoid an avoidable cold rebuild at
+        boot (the gateway rebuilds from the store only when the opened
+        index is empty). Recovery is idempotent: a crash during it rolls
+        back to the same detected state and the same branch re-runs.
+        Every branch logs one named line an operator can grep:
+        "receipt_index: recovered interrupted schema migration".
+        """
+        if not self._table_exists("receipts_prev_backup"):
+            return
+        live = self._table_exists("receipts")
+        version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            if not live:
+                self._conn.execute("ALTER TABLE receipts_prev_backup RENAME TO receipts")
+                self._conn.execute("PRAGMA user_version = 0")
+                action = "renamed the backup back; migration re-runs"
+            elif version >= self.SCHEMA_VERSION:
+                self._conn.execute("DROP TABLE receipts_prev_backup")
+                action = "dropped a stale backup beside a current index"
+            else:
+                self._conn.execute("DROP TABLE receipts")
+                self._recreate_receipts_from("receipts_prev_backup")
+                self._conn.execute("DROP TABLE receipts_prev_backup")
+                self._conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+                action = "completed the interrupted copy from the backup"
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            raise
+        logger.warning(
+            "receipt_index: recovered interrupted schema migration (%s): "
+            "%d projected rows preserved at %s",
+            action,
+            self.count(),
+            self._path,
         )
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_tool ON receipts (tool, iat)")
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_trace ON receipts (trace_id)")
-        # EPIC Q lane Q-1: behavioural sessions query receipts by
-        # (session_id, iat); only DECLARED session keys are ever indexed.
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_receipts_session ON receipts (session_id, iat)"
-        )
-        self._conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
-        self._conn.commit()
 
     def _migrate_dedupe_schema(self) -> None:
         """Copy a PRIOR-version table across in place, without losing rows.
@@ -121,65 +281,19 @@ class ReceiptIndex:
         v1 (pre-versioned) held at most one row per (identical) receipt id,
         so SELECT * preserves every row it has; v2 rows project whole. Both
         upgrade to the current shape with the newer columns left at their
-        no-continuity defaults (session_id NULL, acting_for '') - a row
-        never GAINS a session key it did not carry. The index is a
-        disposable projection: any operator preferring a hard-rebuild path
-        has ``rebuild_from_store``.
+        no-continuity defaults (session_id NULL, acting_for ''). The index
+        is a disposable projection: any operator preferring a hard-rebuild
+        path has ``rebuild_from_store``.
+
+        Crash-resilience (J2): the caller runs this inside ONE explicit
+        transaction with the version stamp, so a crash at any step rolls
+        back to the pre-migration file and the next open re-runs it. This
+        code can no longer produce a half-migrated file; the ones the
+        previous autocommitting implementation left behind are repaired
+        before any ALTER by ``_recover_interrupted_migration``.
         """
         self._conn.execute("ALTER TABLE receipts RENAME TO receipts_prev_backup")
-        self._conn.execute(
-            """
-            CREATE TABLE receipts (
-                receipt_hash TEXT NOT NULL,
-                iat          INTEGER NOT NULL,
-                agent_id     TEXT NOT NULL,
-                tool         TEXT NOT NULL,
-                decision     TEXT NOT NULL,
-                reason       TEXT NOT NULL DEFAULT '',
-                policy       TEXT,
-                latency_us   INTEGER NOT NULL DEFAULT 0,
-                trace_id     TEXT,
-                session_id   TEXT,
-                acting_for   TEXT NOT NULL DEFAULT '',
-                source       TEXT NOT NULL DEFAULT '',
-                destination  TEXT NOT NULL DEFAULT '',
-                parents_json TEXT NOT NULL DEFAULT '[]',
-                segment      TEXT,
-                line_no      INTEGER
-            )
-            """
-        )
-        old_cols = [
-            row[1]
-            for row in self._conn.execute("PRAGMA table_info(receipts_prev_backup)").fetchall()
-        ]
-        shared = [
-            c
-            for c in (
-                "receipt_hash",
-                "iat",
-                "agent_id",
-                "tool",
-                "decision",
-                "reason",
-                "policy",
-                "latency_us",
-                "trace_id",
-                "source",
-                "destination",
-                "parents_json",
-                "segment",
-                "line_no",
-            )
-            if c in old_cols
-        ]
-        cols_csv = ", ".join(shared)
-        # defaults cover the newer columns (no-continuity: session_id NULL,
-        # acting_for ''); a v2->v3 upgrade copies v2 columns whole, and a
-        # v1->v3 upgrade also keeps the session columns empty.
-        self._conn.execute(
-            f"INSERT INTO receipts ({cols_csv}) SELECT {cols_csv} FROM receipts_prev_backup"
-        )
+        self._recreate_receipts_from("receipts_prev_backup")
         self._conn.execute("DROP TABLE receipts_prev_backup")
 
     # ------------------------------------------------------------------

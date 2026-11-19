@@ -18,6 +18,44 @@
   on a 24 GB box) is refused before it can happen.
 - Runbook: docs/ops/chain-rotation.md (worked example: the live incident).
 
+### Fixed - J2: receipt index mid-migration crash recovery (OOM crash-loop)
+
+- The receipt index migrate-on-open (`raucle/receipt_index.py`) ran as
+  separate autocommitted statements, so a process killed between the
+  rename and the copy left the file half-migrated
+  (`receipts_prev_backup` beside a half-built live table) and every
+  later boot re-entered the migration and died on "there is already
+  another table or index with this name: receipts_prev_backup" - a
+  permanent crash-loop under restart:always (the 18 Nov demo
+  incident: three OOM kills at 23.4 GB RSS). The index is a rebuildable
+  projection of the chain of record, so a boot must recover, never
+  crash-loop.
+- Open now inspects the schema BEFORE any ALTER runs and recovers each
+  interrupted state deterministically, in the ordering that cannot lose
+  projected data: the backup table is the authoritative pre-migration
+  snapshot (the rename that created it was the migration's first
+  durable step, and the half-built live table only ever held rows
+  copied from the backup), so the backup is dropped only after its rows
+  are re-copied, in the same transaction that stamps `user_version`.
+  Every recovery branch logs the named line "receipt_index: recovered
+  interrupted schema migration".
+- The migration, its index definitions and the version stamp now run
+  as ONE explicit transaction (probe-verified on SQLite 3.53.1: DDL
+  and `PRAGMA user_version` are transactional), so a crash at any step
+  rolls the file back to the pristine pre-migration state and the next
+  open re-runs it; this code can no longer produce a half-migrated
+  file. The schema version rows are the migration journal; their
+  invariants, and the incident as the worked example, are documented
+  in `docs/nfr/receipt-index-ops-v1.md` (operator runbook and honest
+  residual register included).
+- Red-first tests in `tests/test_receipt_index.py`
+  (`TestMigrationCrashRecovery`): the observed production signature
+  boots and recovers with the named log line and passes a full
+  projection rebuild verification against the chain; a real SIGKILL
+  replay of the old migration's durable rename recovers on the next
+  boot; a SIGKILL inside the new one-transaction migration leaves no
+  artifact and loses no rows.
+
 ### Fixed - I1: the agent_framework adapter carried the last agent_id placeholder on receipt surfaces
 
 - `raucle/integrations/agent_framework.py` minted
