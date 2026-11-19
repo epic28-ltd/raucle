@@ -7,7 +7,7 @@ stop mapping whole stores. It builds on the shipped interim primitives, the
 boot memory preflight and `raucle rotate-chain` (J1, PR #297, in review) and
 the receipt-index mid-migration recovery (J2, PR #296, merged). No code ships
 in this lane; the implementing lane takes the acceptance criteria in
-section 6. Line numbers are as of origin/main 4a4b0a9 (19 November 2026).
+section 6. Line numbers are as of origin/main at this PR's head (includes #297's rotation command and boot preflight).
 
 ## 1. The problem, with the incident as evidence
 
@@ -19,14 +19,16 @@ The incident record (docs/nfr/receipt-index-ops-v1.md, the J2 operational
 note; docs/ops/chain-rotation.md, the J1 runbook, PR #297): during the 18
 November demo, /data/gateway-audit.jsonl had grown to 12.2 GB and
 /data/receipts-segments/index.sqlite to 15 GB. The boot ballooned to about
-23.4 GB resident on a 24 GB box and the kernel killed it three times
-(dmesg, UID 999), crash-looping under `restart:always`. The demo served 502
-from about 18:20. Two facts make this a class defect rather than a bad day:
+23.4 GB resident on a 24 GB box and the kernel killed it three times,
+crash-looping under `restart:always`. Operator-reported details beyond the
+records below (18 November deploy-session console and dmesg, not part of
+this repository): kills visible from about 18:20, UID 999; the rolled-back
+build (caf4a91) OOM'd identically. Two facts make this a class defect
+rather than a bad day:
 
 - The previous container had been up for six days, so the growth wall was
-  crossed between restarts. The rebuilt code and the rolled-back build
-  (caf4a91) OOM'd identically: the size, not that day's changes, was the
-  cause.
+  crossed between restarts. The rebuilt code and the rollback OOM'd
+  identically: the size, not that day's changes, was the cause.
 - The second crash signature was independent of memory: the index's
   migrate-on-open failed closed on a half-migrated store an earlier OOM
   death had left behind. Fail-closed worked; recovery did not exist (J2
@@ -51,7 +53,7 @@ load-bearing shrinks.
 
 ## 2. Current behaviour (the sites that are size-proportional)
 
-Verified against the tree at 4a4b0a9:
+Verified against this PR's base main (includes #297):
 
 | Site | What it does | Cost class |
 |---|---|---|
@@ -260,7 +262,8 @@ The contract the implementing lane must pin:
 Defaults are starting points for the bench, not decisions. The boot also
 carries a watchdog: it samples its own resident size against the J1
 ceiling during the scan and compactor, and a breach is a named refusal
-(`boot_memory_ceiling_exceeded`, the shipped J1 error), never an OOM kill.
+(the shipped J1 exception `BootMemoryCeilingExceeded`; the deny-reason
+  vocabulary renders it `boot_memory_ceiling_exceeded`), never an OOM kill.
 The watchdog turns the preflight's projection from a claim into a checked
 invariant.
 
