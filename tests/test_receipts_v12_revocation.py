@@ -332,15 +332,11 @@ def test_unknown_version_refuses_never_ignores(tmp_path):
     gw, tmp = _emitter_only(tmp_path)
     _emit_revocation(
         gw,
-        _v12_block(
-            ["tok-1"], {"tok-1": "sha256:" + "ab" * 32}, version="revocation/v2"
-        ),
+        _v12_block(["tok-1"], {"tok-1": "sha256:" + "ab" * 32}, version="revocation/v2"),
     )
     report = _verify(gw, tmp)
     assert not report.valid
-    assert any("x_revocation" in e and "revocation/v2" in e for e in report.errors), (
-        report.errors
-    )
+    assert any("x_revocation" in e and "revocation/v2" in e for e in report.errors), report.errors
 
 
 @pytest.mark.parametrize("kind", ["token", "session", ""])
@@ -367,9 +363,7 @@ def test_revoked_hashes_keys_must_equal_ids(tmp_path):
     gw, tmp = _emitter_only(tmp_path)
     _emit_revocation(
         gw,
-        _v12_block(
-            ["tok-1", "tok-2"], {"tok-1": "sha256:" + "ab" * 32}, root="tok-1"
-        ),
+        _v12_block(["tok-1", "tok-2"], {"tok-1": "sha256:" + "ab" * 32}, root="tok-1"),
     )
     report = _verify(gw, tmp)
     assert not report.valid
@@ -439,9 +433,7 @@ def test_receipt_kind_valid_citation_verifies(tmp_path):
 
 def test_digest_shape_enforced(tmp_path):
     gw, tmp = _emitter_only(tmp_path)
-    _emit_revocation(
-        gw, _v12_block(["tok-1"], {"tok-1": "sha256:deadbeef"})
-    )
+    _emit_revocation(gw, _v12_block(["tok-1"], {"tok-1": "sha256:deadbeef"}))
     report = _verify(gw, tmp)
     assert not report.valid
     assert any("revoked_hashes" in e and "sha256" in e for e in report.errors)
@@ -487,8 +479,10 @@ def test_reason_quoting_constraint_value_fails(tmp_path):
             trace_id="trace-1",
             intent_block={
                 "intent": intent,
-                "intent_check": {"tool": "lookup_balance",
-                 "satisfied_fields": {"account": "ACC-001"}},
+                "intent_check": {
+                    "tool": "lookup_balance",
+                    "satisfied_fields": {"account": "ACC-001"},
+                },
             },
         )
     )

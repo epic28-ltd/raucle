@@ -414,9 +414,7 @@ class GatewayConfig:
             session_window_max_entries=max(
                 1, int(os.environ.get("RAUCLE_SESSION_WINDOW_MAX_ENTRIES", "10000"))
             ),
-            counterfactual_ruleset_file=os.environ.get(
-                "RAUCLE_COUNTERFACTUAL_RULESET_FILE", ""
-            ),
+            counterfactual_ruleset_file=os.environ.get("RAUCLE_COUNTERFACTUAL_RULESET_FILE", ""),
         )
 
     @classmethod
@@ -2000,9 +1998,7 @@ class RaucleGateway:
                 )
                 if fired is not None:
                     in_window = [
-                        e
-                        for e in entries
-                        if evaluated_at - e["iat"] < rule.window_seconds
+                        e for e in entries if evaluated_at - e["iat"] < rule.window_seconds
                     ]
                     return {
                         **block,
@@ -4211,8 +4207,7 @@ class RaucleGateway:
 
         if kind not in _REVOCATION_KINDS:
             raise ValueError(
-                f"unknown revocation kind {kind!r}; use one of "
-                f"{sorted(_REVOCATION_KINDS)}"
+                f"unknown revocation kind {kind!r}; use one of {sorted(_REVOCATION_KINDS)}"
             )
         if reason_class not in _REVOCATION_REASON_CLASSES:
             raise ValueError(

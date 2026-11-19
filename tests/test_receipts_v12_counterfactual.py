@@ -170,9 +170,7 @@ def test_intent_receipt_carries_counterfactual_allow(tmp_path):
     assert cf["evaluated_at"] <= payload["iat"]
     # the ruleset is named by digest over the file bytes: a third party
     # holding the same bytes hashes them and confirms it
-    expected = "sha256:" + hashlib.sha256(
-        (tmp / "counterfactual.yaml").read_bytes()
-    ).hexdigest()
+    expected = "sha256:" + hashlib.sha256((tmp / "counterfactual.yaml").read_bytes()).hexdigest()
     assert cf["ruleset_hash"] == expected
 
 
@@ -272,9 +270,7 @@ def test_counterfactual_session_rule_with_window_evidence(tmp_path):
 def test_counterfactual_ruleset_file_from_env(monkeypatch, tmp_path):
     """Config wiring round-trip: the env var lands on the field."""
     monkeypatch.setenv("RAUCLE_COUNTERFACTUAL_RULESET_FILE", str(tmp_path / "cf.yaml"))
-    assert (
-        GatewayConfig.from_env().counterfactual_ruleset_file == str(tmp_path / "cf.yaml")
-    )
+    assert GatewayConfig.from_env().counterfactual_ruleset_file == str(tmp_path / "cf.yaml")
 
 
 def test_malformed_ruleset_mints_no_block(tmp_path):
@@ -525,9 +521,7 @@ def test_session_block_presence_tracks_rule_kind(tmp_path, monkeypatch):
     assert any("session" in e for e in report.errors), report.errors
 
     # a session rule without a session block
-    block = _valid_block(
-        decision="deny", rule_id="cf-storm", rule_kind="repeated_deny_storm"
-    )
+    block = _valid_block(decision="deny", rule_id="cf-storm", rule_kind="repeated_deny_storm")
     gw, report = _forge(tmp_path, monkeypatch, block, session_id="session:sess-1")
     assert not report.valid
     assert any("session" in e for e in report.errors), report.errors

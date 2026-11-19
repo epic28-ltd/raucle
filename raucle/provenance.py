@@ -1850,9 +1850,7 @@ class ProvenanceVerifier:
             receipts_by_hash,
             intent_constraint_values,
         )
-        self._verify_task_intent(
-            x_gate_payload, receipt, line_no, report, intent_constraint_values
-        )
+        self._verify_task_intent(x_gate_payload, receipt, line_no, report, intent_constraint_values)
         self._verify_harness_finding(decoded, line_no, report, receipts_by_hash)
         self._verify_time_anchor(decoded, line_no, report, receipts_by_hash, raw_lines_by_hash)
         self._verify_bilateral(decoded, line_no, receipt, report)
@@ -2170,9 +2168,7 @@ class ProvenanceVerifier:
 
         for required in ("version", "ruleset_hash", "decision", "evaluated_at"):
             if cf.get(required) is None:
-                report.errors.append(
-                    f"line {line_no}: counterfactual missing field {required!r}"
-                )
+                report.errors.append(f"line {line_no}: counterfactual missing field {required!r}")
                 report.valid = False
 
         version = cf.get("version")
@@ -2203,9 +2199,7 @@ class ProvenanceVerifier:
         evaluated_at = cf.get("evaluated_at")
         iat = decoded.get("iat") if isinstance(decoded, dict) else None
         if not isinstance(evaluated_at, int) or isinstance(evaluated_at, bool):
-            report.errors.append(
-                f"line {line_no}: counterfactual evaluated_at is not an integer"
-            )
+            report.errors.append(f"line {line_no}: counterfactual evaluated_at is not an integer")
             report.valid = False
         elif isinstance(iat, int) and evaluated_at > iat:
             report.errors.append(
@@ -2269,9 +2263,7 @@ class ProvenanceVerifier:
         # the window evidence is exactly the closed two-key shape.
         session = cf.get("session")
         if session is not None:
-            self._verify_counterfactual_session(
-                session, x_gate_payload, line_no, report
-            )
+            self._verify_counterfactual_session(session, x_gate_payload, line_no, report)
 
         if len(report.errors) == errors_before:
             report.counterfactual_evidence.append(
@@ -2334,12 +2326,13 @@ class ProvenanceVerifier:
             report.valid = False
 
         window_seconds = session.get("window_seconds")
-        if not isinstance(window_seconds, int) or isinstance(
-            window_seconds, bool
-        ) or window_seconds < 1:
+        if (
+            not isinstance(window_seconds, int)
+            or isinstance(window_seconds, bool)
+            or window_seconds < 1
+        ):
             report.errors.append(
-                f"line {line_no}: counterfactual session window_seconds is not a "
-                f"positive integer"
+                f"line {line_no}: counterfactual session window_seconds is not a positive integer"
             )
             report.valid = False
 
@@ -2378,8 +2371,7 @@ class ProvenanceVerifier:
             not isinstance(tool, str) or not tool for tool in tools
         ):
             report.errors.append(
-                f"line {line_no}: counterfactual window_evidence tools must be a "
-                f"list of tool names"
+                f"line {line_no}: counterfactual window_evidence tools must be a list of tool names"
             )
             report.valid = False
 
@@ -2593,9 +2585,7 @@ class ProvenanceVerifier:
             "revoked_at",
         ):
             if revocation.get(required) is None:
-                report.errors.append(
-                    f"line {line_no}: x_revocation missing field {required!r}"
-                )
+                report.errors.append(f"line {line_no}: x_revocation missing field {required!r}")
                 report.valid = False
 
         version = revocation.get("version")
@@ -2627,13 +2617,9 @@ class ProvenanceVerifier:
         # sha256 digest a third party holding the revoked material re-derives.
         revoked_ids = revocation.get("revoked_ids")
         revoked_hashes = revocation.get("revoked_hashes")
-        ids_ok = isinstance(revoked_ids, list) and all(
-            isinstance(rid, str) for rid in revoked_ids
-        )
+        ids_ok = isinstance(revoked_ids, list) and all(isinstance(rid, str) for rid in revoked_ids)
         if not ids_ok:
-            report.errors.append(
-                f"line {line_no}: x_revocation revoked_ids must be a list of ids"
-            )
+            report.errors.append(f"line {line_no}: x_revocation revoked_ids must be a list of ids")
             report.valid = False
         if not isinstance(revoked_hashes, dict):
             report.errors.append(
@@ -2690,8 +2676,7 @@ class ProvenanceVerifier:
             for rid in revoked_ids:
                 if rid not in receipts_by_hash:
                     report.errors.append(
-                        f"line {line_no}: x_revocation cites receipt {rid!r} "
-                        f"not in the chain"
+                        f"line {line_no}: x_revocation cites receipt {rid!r} not in the chain"
                     )
                     report.valid = False
 
