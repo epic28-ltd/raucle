@@ -152,3 +152,34 @@ def test_main_without_admin_key_still_boots_both_servers(
 
     gateway_server.main()
     assert [s.config.port for s in _StubUvicornServer.built] == [8182, 8183]
+
+
+def test_boot_memory_preflight_refusal_exits_cleanly_without_serving(
+    stub_uvicorn, tmp_path, monkeypatch, capsys
+) -> None:
+    """J1: when the boot RSS projection exceeds the memory ceiling the entry
+    point refuses with a named error naming ``raucle rotate-chain`` and never
+    builds the servers (the pre-fix failure mode was an OOM kill loop under
+    restart:always)."""
+    import json as _json
+
+    (tmp_path / "audit.jsonl").write_text(
+        _json.dumps({"index": 0, "pad": "x" * 2_000_000}) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("RAUCLE_SIGNER", "local")
+    monkeypatch.setenv("RAUCLE_POLICY_FILE", "")
+    monkeypatch.setenv("RAUCLE_RECEIPT_STORE", str(tmp_path / "receipts.jsonl"))
+    monkeypatch.setenv("RAUCLE_AUDIT_CHAIN", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv("RAUCLE_AUDIT_PERSIST", "true")
+    monkeypatch.setenv("RAUCLE_AUDIT_LOG", str(tmp_path / "gateway-audit.jsonl"))
+    monkeypatch.setenv("RAUCLE_REGISTRY_PATH", str(tmp_path / "registry.jsonl"))
+    monkeypatch.setenv("RAUCLE_USERS_FILE", str(tmp_path / "users.jsonl"))
+    monkeypatch.setenv("RAUCLE_BOOT_MEM_CEILING_MB", "1")
+
+    with pytest.raises(SystemExit) as excinfo:
+        gateway_server.main()
+
+    assert excinfo.value.code == 1
+    # No servers were built: the refusal happened before any serve.
+    assert _StubUvicornServer.built == []
+    assert "raucle rotate-chain" in capsys.readouterr().err

@@ -34,6 +34,22 @@
   note the tab (`docs/deployment-demonstrator.md`,
   `docs/spec/x6-policy-simulate.md`).
 
+### Added - J1: operator chain rotation and a boot memory preflight
+
+- `raucle rotate-chain`: the receipted operator rotation of the gateway's
+  boot stores (the audit chain and the receipt-store segments) - archives
+  the current files with a .archived-DATE suffix (never deletes,
+  idempotent-safe refusal when today's archive exists), mints a rotation
+  receipt naming the archived digests, operator identity, reason and
+  timestamps, and verifies the fresh stores boot.
+- Boot memory preflight: the gateway states the projected boot memory
+  before loading and refuses with a named error and the exact rotate
+  command when the projection exceeds RAUCLE_BOOT_MEM_CEILING_MB - the
+  OOM-killed-forever boot class (observed live on 18 November 2026:
+  a 12.2 GB audit chain plus a 15 GB index ballooned to 23.4 GB resident
+  on a 24 GB box) is refused before it can happen.
+- Runbook: docs/ops/chain-rotation.md (worked example: the live incident).
+
 ### Fixed - J2: receipt index mid-migration crash recovery (OOM crash-loop)
 
 - The receipt index migrate-on-open (`raucle/receipt_index.py`) ran as

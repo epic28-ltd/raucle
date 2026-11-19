@@ -22,13 +22,15 @@ from raucle.capability import CapabilityGate, CapabilityIssuer
 from raucle.integrations.openai_agents import guard_tool, set_in_force_token
 
 issuer = CapabilityIssuer.generate(issuer="acme.platform")
-gate   = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
-sink   = HashChainSink("receipts.jsonl", signer=Ed25519Signer.generate())
+gate = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
+sink = HashChainSink("receipts.jsonl", signer=Ed25519Signer.generate())
+
 
 @function_tool
 def transfer_funds(to: str, amount: int) -> str:
     """Move money on the ledger."""
     ...
+
 
 # agent_id binds the acting identity; an unattributed call denies.
 tools = [guard_tool(transfer_funds, gate=gate, sink=sink, agent_id="agent:billing")]
@@ -36,10 +38,14 @@ tools = [guard_tool(transfer_funds, gate=gate, sink=sink, agent_id="agent:billin
 agent = Agent(name="agent:billing", tools=tools)
 
 # Per session: bind a token scoped to what THIS task may do.
-set_in_force_token(issuer.mint(
-    agent_id="agent:billing", tool="transfer_funds",
-    constraints={"max_value": {"amount": 100}}, ttl_seconds=60,
-))
+set_in_force_token(
+    issuer.mint(
+        agent_id="agent:billing",
+        tool="transfer_funds",
+        constraints={"max_value": {"amount": 100}},
+        ttl_seconds=60,
+    )
+)
 
 result = await Runner.run(agent, "pay the invoice")
 ```
