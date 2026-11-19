@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- Receipts v1.2: counterfactual evidence blocks (emitter + verifier: version-gated, closed field set, two-key session window evidence, evaluated_at bound, never re-run, no content) and revocation-event receipts (v1.2 x_revocation kind: revocation kind, reason_class, revoked_hashes, capability-to-token ledger linkage; admin /api/revoke + request upgrades). Unknown versions refuse.
 
 ### Added - J1: operator chain rotation and a boot memory preflight
 

@@ -29,8 +29,8 @@ for the extension it defines.
 | Code authorship (`x_authorship`) | Shipped 2026-10-30 | [provenance/v1.2/code-authorship.md](provenance/v1.2/code-authorship.md) |
 | Bilateral outcomes (`x_bilateral`) | Shipped 2026-11-06 | [provenance/v1.2/bilateral-outcomes.md](provenance/v1.2/bilateral-outcomes.md) |
 | Content DLP (`x_dlp`) | Accepted 2026-11-17 | [provenance/v1.2/content-dlp.md](provenance/v1.2/content-dlp.md) |
-| Counterfactual evidence (`x_gate.counterfactual`) | Draft 2026-11-18, spec precedes implementation | [provenance/v1.2/counterfactual-evidence.md](provenance/v1.2/counterfactual-evidence.md) |
-| Revocation-event receipts (`x_revocation`, v1.2 kind) | Draft 2026-11-18, spec precedes the v1.2 kind; v1.0 emitter shipped | [provenance/v1.2/revocation-receipts.md](provenance/v1.2/revocation-receipts.md) |
+| Counterfactual evidence (`x_gate.counterfactual`) | Shipped 2026-11-19 (spec #291, implementation #K3) | [provenance/v1.2/counterfactual-evidence.md](provenance/v1.2/counterfactual-evidence.md) |
+| Revocation-event receipts (`x_revocation`, v1.2 kind) | Shipped 2026-11-19 (spec #291; v1.0 emitter shipped earlier) | [provenance/v1.2/revocation-receipts.md](provenance/v1.2/revocation-receipts.md) |
 
 ## Process
 

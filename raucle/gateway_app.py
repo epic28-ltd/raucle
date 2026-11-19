@@ -114,7 +114,11 @@ class GateRequest(BaseModel):
 # safe charset, validated fail-closed at the HTTP edge before any policy
 # evaluation. The value is a correlation key: no filesystem, shell or URL
 # characters, so it can be bound into receipts, indexes and logs verbatim.
-_SESSION_ID_PATTERN = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+# Receipts v1.2 (lane K3): the scoped-identifier colon joins the charset
+# so a behavioural session may be named the way every other raucle id is
+# ("session:sess-1", the same form agent:svc uses). It is still not a
+# path separator, a quote or shell metacharacter.
+_SESSION_ID_PATTERN = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 def _validate_session_id(session_id: str) -> str:
@@ -125,7 +129,7 @@ def _validate_session_id(session_id: str) -> str:
             status_code=400,
             detail=(
                 "session_id must be 1-128 characters from "
-                "[A-Za-z0-9._-] starting alphanumeric (EPIC Q bounded identifier)"
+                "[A-Za-z0-9._:-] starting alphanumeric (EPIC Q bounded identifier)"
             ),
         )
     return session_id
@@ -165,18 +169,56 @@ class ApprovalDecisionRequest(BaseModel):
 
 
 class SuspendRequest(BaseModel):
-    """Kill-switch request body: why an agent is being suspended."""
+    """Kill-switch request body: why an agent is being suspended.
+
+    Receipts v1.2 (lane K3): ``kind``/``reason_class`` carry the v1.2
+    revocation-receipt request (also the body of /revoke-chains). Left
+    empty, the shipped v1.0 block shape is minted.
+    """
 
     reason: str = Field(..., description="Why the agent is being suspended")
+    kind: str = Field(
+        default="",
+        description=(
+            "Receipts v1.2: requested revocation receipt kind "
+            "(capability, lease or receipt; empty = the shipped v1.0 block)"
+        ),
+    )
+    reason_class: str = Field(
+        default="",
+        description=(
+            "Receipts v1.2: closed reason class "
+            "(compromise, owner_departure, scope_correction, policy_change, operational)"
+        ),
+    )
 
 
 class RevokeRequest(BaseModel):
-    """A3: cascade-revocation request body."""
+    """A3: cascade-revocation request body.
+
+    Receipts v1.2 (lane K3): ``kind``/``reason_class`` request the
+    versioned v1.2 block; left empty the shipped v1.0 shape is minted
+    (byte-compat with the 30 October emitter).
+    """
 
     token_id: str = Field(
         ..., description="The capability id to revoke (its whole subtree cascades)"
     )
     reason: str = Field(..., description="Why the authority is being revoked")
+    kind: str = Field(
+        default="",
+        description=(
+            "Receipts v1.2: requested revocation receipt kind "
+            "(capability, lease or receipt; empty = the shipped v1.0 block)"
+        ),
+    )
+    reason_class: str = Field(
+        default="",
+        description=(
+            "Receipts v1.2: closed reason class "
+            "(compromise, owner_departure, scope_correction, policy_change, operational)"
+        ),
+    )
 
 
 class PolicySimulateRequest(BaseModel):
@@ -242,6 +284,10 @@ class ConfigUpdateRequest(BaseModel):
     policy_dir: str | None = None
     policy_seal_file: str | None = None
     policy_ledger_path: str | None = None
+    # Receipts v1.2 (lane K3): the alternative ruleset that mints the
+    # signed counterfactual block. It feeds evidence, so it is guarded
+    # like every other evidence path (EVIDENCE_PATH_FIELDS).
+    counterfactual_ruleset_file: str | None = None
     receipt_store: str | None = None
     receipt_store_dir: str | None = None
     receipt_index_path: str | None = None
@@ -663,6 +709,46 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
                 raise HTTPException(status_code=401, detail="Health check unauthorized")
         return {"status": "ok"}
 
+    @app.post(
+        "/api/revoke",
+        responses={
+            "401": {"description": "Admin API key missing, incorrect, or not configured"},
+        },
+    )
+    def revoke(
+        req: RevokeRequest,
+        authorization: str | None = Header(None),
+    ) -> dict[str, Any]:
+        """Receipts v1.2 (lane K3): programmatic revocation on the
+        agent-facing surface, receipted.
+
+        Fail-closed against the configured admin API key (constant-time
+        comparison, the health-check pattern): a gateway with no
+        admin_api_key refuses every caller rather than serving the
+        revocation surface unauthenticated. There is no admin users
+        manager on this port, so the key IS the authority and the
+        receipt records the operator as actor="admin".
+        """
+        key = authorization or ""
+        if key.startswith(_BEARER_PREFIX):
+            key = key[len(_BEARER_PREFIX) :]
+        import hmac as _hmac
+
+        if not gateway.config.admin_api_key or not _hmac.compare_digest(
+            key, gateway.config.admin_api_key
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail="Admin API key required (Authorization: Bearer <admin_api_key>)",
+            )
+        return gateway.revoke_capability(
+            req.token_id,
+            reason=req.reason,
+            actor="admin",
+            kind=req.kind,
+            reason_class=req.reason_class,
+        )
+
     _register_deployment_intake_routes(app, gateway)
 
     @app.get(
@@ -776,7 +862,9 @@ def _validate_policy_content(content: str) -> dict[str, Any]:
 
 # Fields that decide WHERE evidence lands. Redirecting one changes the audit
 # story, so an operator may not move it and the target must sit inside the
-# data root (RED-035).
+# data root (RED-035). Receipts v1.2 (lane K3): the counterfactual ruleset
+# names the alternative policy the signed block speaks about, so it is
+# guarded like the rest: it decides what the evidence can claim.
 EVIDENCE_PATH_FIELDS = (
     "policy_file",
     "policy_dir",
@@ -791,6 +879,7 @@ EVIDENCE_PATH_FIELDS = (
     "policy_seal_file",
     "policy_ledger_path",
     "signer_key_path",
+    "counterfactual_ruleset_file",
 )
 
 
@@ -1694,11 +1783,20 @@ def _register_authority_routes(
         authorization: str | None = Header(None),
         x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
-        """A3: revoke a capability and its whole subtree, receipted."""
+        """A3: revoke a capability and its whole subtree, receipted.
+
+        Receipts v1.2 (lane K3): ``kind``/``reason_class`` pass through
+        to the receipted revocation (validated fail-closed by the
+        emitter; empty keeps the shipped v1.0 block).
+        """
         user = check_auth(authorization, x_totp)
         check_access(user, "users")
         return gateway.revoke_capability(
-            req.token_id, reason=req.reason, actor=user.name or user.role
+            req.token_id,
+            reason=req.reason,
+            actor=user.name or user.role,
+            kind=req.kind,
+            reason_class=req.reason_class,
         )
 
     @app.post(
@@ -1715,11 +1813,20 @@ def _register_authority_routes(
         x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
         """A3 owner-departure: revoke every delegated chain of an identity in
-        one receipted operation (the lifecycle audit trail)."""
+        one receipted operation (the lifecycle audit trail).
+
+        Receipts v1.2 (lane K3): ``kind``/``reason_class`` pass through
+        to the receipted revocation (validated fail-closed by the
+        emitter; empty keeps the shipped v1.0 block).
+        """
         user = check_auth(authorization, x_totp)
         check_access(user, "users")
         return gateway.revoke_agent_chains(
-            agent_id, reason=req.reason, actor=user.name or user.role
+            agent_id,
+            reason=req.reason,
+            actor=user.name or user.role,
+            kind=req.kind,
+            reason_class=req.reason_class,
         )
 
 
