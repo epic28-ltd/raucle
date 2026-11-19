@@ -64,7 +64,7 @@ docstrings of the `_cmd_*` handlers in `raucle/cli.py`.)
 | feed | publish/verify/subscribe feeds; 2 on signature failure |
 | prove | 0 proven, 2 refuted/undecided (CI gate), 1 build error |
 | cap | capability mint/verify; 2 on cap violation |
-| rotate-chain | receipted rotation of the gateway boot stores (audit chain + receipt-store segments); 1 on preflight or refusal (boot memory ceiling reached, archive-exists guard, unreadable store) - runbook: docs/ops/chain-rotation.md |
+| rotate-chain | receipted rotation of the gateway boot stores (audit chain + receipt-store segments); 1 on preflight or refusal (boot memory ceiling reached; named refusals: today's archive exists, nothing to rotate, no operator identity; a store that fails mid-digest aborts exit 1 with stores untouched) - runbook: docs/ops/chain-rotation.md |
 
 ## Honesty notes
 

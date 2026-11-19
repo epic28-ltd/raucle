@@ -20,16 +20,19 @@ execute it.
 
 ## What rotate-chain does
 
-1. Refuses safely unless it owns three facts: a readable audit chain, a
-   readable segment store, and an operator identity (`--operator` or
-   `RAUCLE_OPERATOR`) plus a reason.
+1. Refuses with named errors unless it owns: an operator identity
+   (`--operator` or `RAUCLE_OPERATOR` - required), something to rotate
+   (at least one configured store present; either store alone
+   suffices), and no archive for today existing yet. It does not
+   require a reason and it does not pre-read the stores for
+   readability - it archives what is configured and exists.
 2. Archives the current stores (audit chain and receipt-store segments) under
    the same directory with a `.archived-<date>` suffix. It never deletes.
    Idempotent safety: an archive for today already existing is a named
    refusal, not a second move.
 3. Mints a rotation receipt (a new link in the chain of record): what
    rotated, the archived files' digests, the operator identity, the reason,
-   timestamps. Prior links are never rewritten.
+   timestamps. Prior links are never rewritten. When `RAUCLE_AUDIT_PERSIST` is set the persisted connection log rotates too, and any externally placed receipt index is archived with its digest printed.
 4. Verifies the fresh stores boot.
 
 ## After rotation
