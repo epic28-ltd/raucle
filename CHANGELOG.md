@@ -24,6 +24,38 @@
   the k1-boot-streaming bench (X5 harness extension) decides the knob
   defaults.
 
+### Added - K2: the policy-simulate panel tab (X6 slice 2)
+
+- The X6 surface named in the slice 1 follow-up now has its panel tab:
+  `Policy simulate` sits in the trust group after Policies, truth class
+  OSS LIVE, and makes the simulation demo visible in the panel - paste a
+  candidate policy YAML (operator plane, `POST /api/policy/simulate`,
+  window and input-store refs optional) or pick a preset tweak (the D10
+  demo plane, the same real engine over the simulated served window).
+- Bounded rendering, same content discipline as the existing tabs: what
+  the candidate would have allowed and denied, the decisions that flip
+  (tool, agent, both decisions, evidence depth, receipt hash), the
+  verdict and chain depth, then candidate/window/receipt hashes and the
+  signed EdDSA JWS as metadata. Never argument values, never denial
+  reasons: the tab renders only what the simulate API emits, pinned by
+  an ACC-999-class sweep over both response shapes
+  (`tests/test_simulate_panel_tab.py`) plus a node render probe.
+- Honest states throughout: the guided empty state names what to do; a
+  404 renders the demo-mode notice; a 403 renders the auditor-role
+  refusal (the demo key is auditor by design, and the paste path says
+  so up front); FastAPI 422 validation rows render as named text;
+  pasted policies over 256 KiB are refused client-side before any
+  request leaves (the MCP manifest precedent); one run at a time.
+  The tab applies nothing and never references the apply path.
+- The tour gains the simulate steps (nav entry spotlight plus the result
+  card, the DLP precedent split), slotted after the DLP pair in the
+  buyer arc; the tour bound moves to 16 and no test was dropped.
+- Render-contract tests follow the dlp/mcp precedents
+  (`TestPolicySimulateTab`, the K2 block in
+  `tests/test_admin_panel_js.py`); the evaluator guide and the X6 spec
+  note the tab (`docs/deployment-demonstrator.md`,
+  `docs/spec/x6-policy-simulate.md`).
+
 ### Added - J1: operator chain rotation and a boot memory preflight
 
 - `raucle rotate-chain`: the receipted operator rotation of the gateway's

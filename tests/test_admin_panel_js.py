@@ -486,9 +486,10 @@ def _tour_steps() -> list[tuple[str, str, str]]:
 def test_tour_follows_the_enterprise_buyer_arc() -> None:
     """The arc: enterprise overview, what the console shows over OSS
     raucle, session monitoring catching a real runaway loop, DLP
-    receipts, receipt -> offline verify -> coverage, capability tokens
-    and PQ, compliance, the MCP scanner catching tool poisoning
-    statically, then the honest EE-limits close."""
+    receipts, policy simulation over served traffic, receipt -> offline
+    verify -> coverage, capability tokens and PQ, compliance, the MCP
+    scanner catching tool poisoning statically, then the honest
+    EE-limits close."""
     tabs = [t for t, _, _ in _tour_steps()]
     assert tabs == [
         "dashboard",  # the enterprise overview grid
@@ -497,6 +498,8 @@ def test_tour_follows_the_enterprise_buyer_arc() -> None:
         "session",  # the catch is receipted, verified offline
         "dlp",  # DLP receipts from the real pattern engine
         "dlp",  # bounded disclosure: digests, never values (D2)
+        "simulate",  # policy simulate: test a change before you deploy (K2)
+        "simulate",  # the flippable diff, signed
         "receipts",  # every decision leaves a signed receipt
         "receipts",  # offline verify: no operator contact
         "receipts",  # coverage: the receipted-share metric
@@ -523,8 +526,9 @@ def test_tour_targets_are_real_elements_in_the_new_layout() -> None:
 
 def test_tour_is_bounded_with_unique_targets_and_titles() -> None:
     steps = _tour_steps()
-    # 14 after the D2 DLP spotlight + the D5 MCP scanner step joined the arc
-    assert len(steps) <= 14
+    # 16 after the K2 policy-simulate steps (nav entry + result card) joined
+    # the arc, on top of the D2 DLP spotlight + the D5 MCP scanner step
+    assert len(steps) <= 16
     targets = [t for _, t, _ in steps]
     assert len(targets) == len(set(targets)), "no duplicate spotlight targets"
     titles = [t for _, _, t in steps]
@@ -588,6 +592,7 @@ def test_left_nav_replaces_the_top_tab_strip() -> None:
         "siem",
         "users",
         "config",
+        "simulate",
     ):
         assert f"showTab('{tab}',this)" in ADMIN_PANEL_HTML, tab
 
@@ -648,6 +653,138 @@ def test_tour_steps_carry_dlp_and_mcp_spotlights() -> None:
     assert targets["dlp"] == "#dlpFindingsCard"
     for tab in ("dashboard", "session", "receipts", "capdemo", "assure", "mcp"):
         assert targets[tab].startswith("#"), tab
+
+
+def test_tour_steps_carry_the_simulate_spotlight_split() -> None:
+    """K2: the policy-simulate steps follow the DLP precedent split: the
+    first step spotlights the left-nav entry, the second the in-tab
+    result card (always visible, so the spotlight has real extent)."""
+    steps = _tour_steps()
+    sim_targets = [target for tab, target, _ in steps if tab == "simulate"]
+    assert sim_targets == ['[data-tab-id="simulate"].tab', "#simTabResultCard"]
+
+
+# ---------------------------------------------------------------------------
+# K2 (X6 slice 2): the policy-simulate tab renderers and honest states
+# ---------------------------------------------------------------------------
+
+
+def test_simulate_tab_loaders_exist_and_are_wired_into_showtab() -> None:
+    for fn in ("loadSimTab", "simTabPick", "simTabRun", "simTabClear", "renderSimTab"):
+        assert f"function {fn}(" in ADMIN_PANEL_HTML, fn
+    assert "if(t==='simulate')loadSimTab();" in ADMIN_PANEL_HTML
+
+
+def test_simulate_tab_controls_are_dispatcher_backed() -> None:
+    # the run and clear buttons are static HTML; the preset chips gain
+    # data-hi in JS (the D10 pattern)
+    assert 'data-hi="simTabRun()"' in ADMIN_PANEL_HTML
+    assert 'data-hi="simTabClear()"' in ADMIN_PANEL_HTML
+    assert "chip.setAttribute('data-hi','simTabPick(event)')" in ADMIN_PANEL_HTML
+    for hi in ("simTabRun()", "simTabClear()", "simTabPick(event)", "showTab('simulate',this)"):
+        assert f'"{hi}":(ev,el)=>' in ADMIN_PANEL_HTML, hi
+
+
+def test_simulate_tab_block_is_textcontent_only() -> None:
+    """The K2 block builds every row through createElement/textContent."""
+    script = "".join(re.findall(r"<script[^>]*>(.*?)</script>", ADMIN_PANEL_HTML, re.S))
+    start = script.find("// ================= X6 POLICY SIMULATE TAB")
+    assert start != -1, "the K2 simulate tab block marker is missing"
+    end = script.find("// ================= EMERGENCY AUTHORITY STOP SCREEN")
+    block = script[start:end]
+    assert "innerHTML" not in block
+    assert "textContent" in block
+
+
+def test_simulate_run_caps_the_pasted_policy_client_side() -> None:
+    """Pasted candidate policies are size-capped in the browser before
+    the simulate POST leaves (the MCP manifest precedent)."""
+    body = _extract_fn(_extract_script_blocks(ADMIN_PANEL_HTML)[0], "simTabRun")
+    cap = body.find("256*1024")
+    post = body.find("'/api/policy/simulate'")
+    assert cap != -1, "the client-side size cap is missing"
+    assert post != -1
+    assert cap < post, "the client-side size cap must run before the simulate POST"
+
+
+def test_simulate_run_is_one_at_a_time() -> None:
+    """The run button refuses a second concurrent run: the busy guard is
+    checked before the request and cleared when it settles."""
+    body = _extract_fn(_extract_script_blocks(ADMIN_PANEL_HTML)[0], "simTabRun")
+    assert body.find("if(simTabBusy)") < body.find("api("), "the busy guard must gate the request"
+    assert "simTabBusy=true" in body
+    assert "simTabBusy=false" in body
+
+
+def test_simulate_tab_renders_the_honest_unavailable_states() -> None:
+    """Named notices for every refusal shape the surfaces can return:
+    demo mode off (404), role refusal (403), malformed body (422 rows),
+    and the guided empty state before any run."""
+    script = _extract_script_blocks(ADMIN_PANEL_HTML)[0]
+    body = _extract_fn(script, "simTabRequest")
+    assert "r.status===404" in body, "the 404 demo-not-configured notice is missing"
+    assert "r.status===403" in body, "the 403 role-refusal notice is missing"
+    assert "r.status===422" in body, "the 422 malformed-body notice is missing"
+    assert "Array.isArray(detail)" in body, "FastAPI 422 detail rows must render as named text"
+    run = _extract_fn(script, "simTabRun")
+    assert "Choose a preset policy tweak or paste a candidate policy YAML first" in run
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+def test_renderSimTab_renders_bounded_rows_never_markup() -> None:
+    """Hostile tool/agent strings render as text: the changed-decisions
+    table holds no markup and never echoes argument values."""
+    block = _extract_script_blocks(ADMIN_PANEL_HTML)[0]
+    payload = {
+        "result": {
+            "candidate_policy_hash": "sha256:" + "a" * 64,
+            "window_hash": "sha256:" + "b" * 64,
+            "gate": {
+                "actions_replayed": 2,
+                "actions_unreplayable": 0,
+                "current": {"allow": 2, "deny": 0},
+                "candidate": {"allow": 1, "deny": 1},
+                "changed_decisions": [
+                    {
+                        "receipt_hash": "sha256:" + "c" * 64,
+                        "tool": "<img src=x onerror=alert(1)>",
+                        "agent_id": "</td><script>alert(2)</script>",
+                        "current_decision": "allow",
+                        "candidate_decision": "deny",
+                        "evidence_depth": 2,
+                    }
+                ],
+                "verdict": "the alternative policy would have prevented 1 of 2 actions",
+                "chain_depth": 2,
+            },
+        },
+        "receipt_hash": "sha256:" + "d" * 64,
+        "jws": "eyJhbGciOiJFZERTQSJ9...<script>alert(3)</script>",
+    }
+    program = (
+        "const captured={};"
+        "function el(tag){return {tag:tag,style:{},children:[],innerHTML:'',textContent:'',"
+        "colSpan:null,appendChild(c){this.children.push(c);},setAttribute(){},"
+        "classList:{add(){},remove(){},toggle(){}},dataset:{}};}"
+        "global.document={getElementById:(id)=>{if(!captured[id])captured[id]=el('div');"
+        "return captured[id];},createElement:(tag)=>el(tag)};"
+        "const SIM_TAB_MAX_ROWS=200;"
+        + _extract_fn(block, "renderSimTab")
+        + "renderSimTab("
+        + __import__("json").dumps(payload)
+        + ");"
+        "function textOf(x){let t=x.textContent||'';(x.children||[]).forEach(c=>{t+=textOf(c);});"
+        "return t;}"
+        "const all=Object.values(captured).map(x=>textOf(x)).join('|');"
+        "const inner=Object.values(captured).map(x=>x.innerHTML).join('');"
+        "const rawBad=/<img[^>]*onerror|<script/.test(inner);"
+        "const rowsOk=all.includes('allow 2 / deny 0')&&all.includes('Decisions that flip: 1')&&"
+        "all.includes('the alternative policy would have prevented 1 of 2 actions');"
+        "const noArgEcho=!all.includes('account=');"
+        "if(rawBad||!rowsOk||!noArgEcho||inner!==''){console.log('BAD:'+all);process.exit(1);}"
+        "console.log('ESCAPED');"
+    )
+    _run_node(program)
 
 
 # ---------------------------------------------------------------------------

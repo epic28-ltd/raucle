@@ -3287,6 +3287,7 @@ body.demo #policyEditorCard{display:none}
       <div class="tab active" tabindex="0" data-hi="showTab('dashboard',this)">Dashboard</div>
       <div class="tab" tabindex="0" data-hi="showTab('connections',this)">Connections</div>
       <div class="tab" tabindex="0" data-hi="showTab('policies',this)" data-tab-id="policies">Policies</div>
+      <div class="tab" tabindex="0" data-hi="showTab('simulate',this)" data-tab-id="simulate">Policy simulate</div>
       <div class="tab" tabindex="0" data-hi="showTab('capdemo',this)" data-tab-id="capdemo">Capability tokens</div>
       <div class="tab" tabindex="0" data-hi="showTab('receipts',this)">Receipts</div>
       <div class="tab" tabindex="0" data-hi="showTab('learn',this)" data-tab-id="learn">Learn</div>
@@ -3578,6 +3579,30 @@ body.demo #policyEditorCard{display:none}
         <div class="file-list" id="fileList"></div>
         <textarea class="editor" id="policyEditor"></textarea>
         <div class="actions"><button class="btn" data-hi="validatePolicy()">Validate</button><button class="btn" data-hi="savePolicy()">Save & Deploy</button><button class="btn btn-secondary" data-hi="reloadPolicy()">Reload</button></div>
+      </div>
+    </div>
+    <div id="tab-simulate" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
+      <div class="card" id="simTabCard"><div class="card-title"><span class="live-dot"></span>Policy simulate: test a change before you deploy</div>
+        <span class="findings-label">Deterministic, signed, flippable</span>
+        <p class="screen-note">The operator question this screen answers: what would THIS candidate policy have done to the traffic we actually served? Pick a preset tweak and the real simulate engine replays a simulated served window; paste a candidate policy YAML and name the historical window, and it replays every recorded decision from this deployment's own store. Either way the outcome is deterministic and signed: what the candidate would have allowed and denied, and every decision that flips. The rows below stay bounded to tools, agents, decisions and hashes: never argument values, never denial reasons. The signed receipt binds the candidate policy and the window by hash. This screen applies nothing; deploying a validated change is the policy editor's Save &amp; Deploy path, which re-verifies the signed receipt before anything lands. The paste path needs an operator key: the demo key holds the auditor role, and the refusal it gets is named below, not hidden.</p>
+        <div style="font-size:0.75rem;color:#a3a3a3;margin-bottom:8px">Choose a preset tweak, or paste a candidate policy YAML. Pasting simulates over this deployment's own recorded window; picking a preset runs the same real engine over the simulated window.</div>
+        <div class="file-list" id="simTabPresetList"></div>
+        <textarea class="editor" id="simTabCandidate" style="height:180px" spellcheck="false" placeholder="candidate policy YAML"></textarea>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;max-width:560px">
+          <input class="input" id="simTabWindow" placeholder="window: receipt-chain JSONL path (operator, optional)">
+          <input class="input" id="simTabStore" placeholder="input store JSONL path (operator, optional)">
+        </div>
+        <div class="actions">
+          <button class="btn" data-hi="simTabRun()">Run simulation</button>
+          <button class="btn btn-secondary" data-hi="simTabClear()">Clear</button>
+          <span style="font-size:0.75rem;color:#a3a3a3;align-self:center">Read-only: one run at a time; pasted policies over 256 KiB are refused.</span>
+        </div>
+      </div>
+      <div class="card" id="simTabResultCard" style="margin-top:14px"><div class="card-title">Simulation outcome</div>
+        <div id="simTabSummary" class="screen-note">No simulation yet: choose a preset tweak or paste a candidate policy, then run. The outcome renders here.</div>
+        <table class="hidden" id="simTabChangesTable"><thead><tr><th>Tool</th><th>Agent</th><th>Current</th><th>Candidate</th><th>Evidence depth</th><th>Receipt</th></tr></thead>
+        <tbody id="simTabChangesBody"></tbody></table>
+        <div id="simTabHashes" style="font-family:ui-monospace,monospace;font-size:11px;color:#737373;word-break:break-all;margin-top:8px"></div>
       </div>
     </div>
     <div id="tab-stop" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
@@ -3878,7 +3903,7 @@ function showTab(t,el) {
   document.querySelectorAll('[id^=tab-]').forEach(x=>x.classList.add('hidden'));
   el.classList.add('active'); document.getElementById('tab-'+t).classList.remove('hidden');
   if(t==='dashboard')loadStats(); if(t==='connections'){demoExample();updatePathTail();if(!pathPollId)pathPollId=setInterval(updatePathTail,3000);startConnPolling();}else if(pathPollId){clearInterval(pathPollId);pathPollId=null;} else stopConnPolling();
-  if(t==='policies'){loadPolicy();loadSimPanel();} if(t==='stop')loadStopPanel(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();if(typeof demoMode!=='undefined'&&demoMode)loadCoverage();} if(t==='capdemo')capDemoLoad(); if(t==='mcp')loadMcpPanel(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
+  if(t==='policies'){loadPolicy();loadSimPanel();} if(t==='simulate')loadSimTab(); if(t==='stop')loadStopPanel(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();if(typeof demoMode!=='undefined'&&demoMode)loadCoverage();} if(t==='capdemo')capDemoLoad(); if(t==='mcp')loadMcpPanel(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
   if(t==='policies')loadPolicy(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();if(typeof demoMode!=='undefined'&&demoMode)loadCoverage();} if(t==='capdemo')capDemoLoad(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
   if(t==='dlp')loadDlpPanel();
   if(t==='injection'||t==='shadow')loadDemoFindings();
@@ -4958,6 +4983,10 @@ const TOUR_STEPS = [
    body:'Demo tool calls run through the OSS advisory redaction engine: when the canned synthetic patterns appear in a call, the matched spans are collared and the scan lands as a signed x_dlp receipt citing the gate receipt for that call.'},
   {tab:'dlp', target:'#dlpFindingsCard', title:'Bounded disclosure: digests, never values',
    body:'Each row pairs the original content digest with the redacted digest, so a third party can prove the outbound content differed without either side ever holding the values. Class names and span counts only: the scanned content never enters the receipt.'},
+  {tab:'simulate', target:'[data-tab-id="simulate"].tab', title:'Policy simulate: test a change before you deploy',
+   body:'The operator question the demo answers: what would THIS policy have done to the traffic actually served? Pick a preset tweak or paste a candidate, and the real engine replays the recorded window deterministically, with no wall clock in the signed result.'},
+  {tab:'simulate', target:'#simTabResultCard', title:'The flippable diff, signed',
+   body:'Current against candidate decisions, bounded to tools, agents and hashes: never argument values, never denial reasons. The receipt binds the candidate policy and the window by hash, and a validated change deploys through the editor path that re-verifies the signature.'},
   {tab:'receipts', target:'#rcptTable', title:'Every decision leaves a signed receipt',
    body:'Allows, denies, escalations and session findings alike: signed and content-addressed at the moment of decision, so the record cannot quietly change afterwards.'},
   {tab:'receipts', target:'#rcpt-offline', title:'Offline verify: no operator contact',
@@ -5524,6 +5553,143 @@ function simRun(){
   }).then(d=>{ if(d) renderSimOutcome(d); }).catch(()=>{ sum.textContent='Simulation request failed.'; });
 }
 
+// ================= X6 POLICY SIMULATE TAB (K2) =================
+// The panel tab over the shipped X6 surface: pick a preset tweak (the
+// D10 demo plane, real engine over the simulated window) or paste a
+// candidate policy (the operator plane, POST /api/policy/simulate).
+// textContent-only rendering; no apply path lives in this tab.
+let simTabPresets = [], simTabPreset = '', simTabBusy = false;
+const SIM_TAB_MAX_ROWS = 200;
+function loadSimTab(){
+  const bar=document.getElementById('simTabPresetList');
+  if(!bar)return;
+  api('/api/demo/policy-simulate/presets').then(r=>{ if(r.ok) return r.json(); throw 0; }).then(d=>{
+    simTabPresets=d.presets||[];
+    bar.textContent='';
+    simTabPresets.forEach(p=>{
+      const chip=document.createElement('div');
+      chip.className='file-chip'+(simTabPreset===p.name?' active':'');
+      chip.setAttribute('data-sim-tab-name',p.name);
+      chip.setAttribute('data-hi','simTabPick(event)');
+      chip.title=p.description||'';
+      chip.textContent=p.label+' (simulated window)';
+      bar.appendChild(chip);
+    });
+  }).catch(()=>{ bar.textContent='Demo mode is not configured on this deployment: preset tweaks are unavailable here.'; });
+}
+function simTabPick(ev){
+  const el=ev.currentTarget||ev.target.closest('[data-sim-tab-name]');
+  const name=el?el.dataset.simTabName:null; if(!name)return;
+  simTabPreset=name;
+  document.querySelectorAll('#simTabPresetList .file-chip').forEach(c=>c.classList.toggle('active',c.dataset.simTabName===name));
+}
+function simTabNotice(text){
+  const sum=document.getElementById('simTabSummary');
+  if(sum)sum.textContent=text;
+}
+function simTabClear(){
+  simTabPreset='';
+  document.querySelectorAll('#simTabPresetList .file-chip').forEach(c=>c.classList.remove('active'));
+  ['simTabCandidate','simTabWindow','simTabStore'].forEach(id=>{const f=document.getElementById(id);if(f)f.value='';});
+  const tb=document.getElementById('simTabChangesBody'); if(tb)tb.textContent='';
+  const table=document.getElementById('simTabChangesTable'); if(table)table.classList.add('hidden');
+  const hs=document.getElementById('simTabHashes'); if(hs)hs.textContent='';
+  simTabNotice('No simulation yet: choose a preset tweak or paste a candidate policy, then run. The outcome renders here.');
+}
+function renderSimTab(d){
+  // both response shapes end in the same bounded view: the demo plane
+  // carries d.outcome, the operator plane carries d.result.gate
+  const gate=d.outcome||((d.result||{}).gate)||{};
+  const root=d.outcome||d.result||{};
+  const sum=document.getElementById('simTabSummary');
+  sum.textContent='';
+  const parts=[
+    'Recorded actions replayed: '+(gate.actions_replayed||0)+(gate.actions_unreplayable?(' (unreplayable: '+gate.actions_unreplayable+', never guessed)'):''),
+    'Under the current policy: allow '+((gate.current||{}).allow||0)+' / deny '+((gate.current||{}).deny||0),
+    'Under the candidate: allow '+((gate.candidate||{}).allow||0)+' / deny '+((gate.candidate||{}).deny||0),
+    'Decisions that flip: '+((gate.changed_decisions||[]).length),
+    'Verdict: '+(gate.verdict||''),
+    'Evidence depth behind the verdict (chain depth): '+(gate.chain_depth||0)
+  ];
+  parts.forEach(t=>{ const p=document.createElement('div'); p.textContent=t; sum.appendChild(p); });
+  const tb=document.getElementById('simTabChangesBody');
+  tb.textContent='';
+  const table=document.getElementById('simTabChangesTable');
+  const changed=gate.changed_decisions||[];
+  if(changed.length)table.classList.remove('hidden');
+  changed.slice(0,SIM_TAB_MAX_ROWS).forEach(c=>{
+    const tr=document.createElement('tr');
+    [c.tool,c.agent_id,c.current_decision,c.candidate_decision,String(c.evidence_depth==null?'':c.evidence_depth),c.receipt_hash].forEach(v=>{
+      const tdEl=document.createElement('td'); tdEl.textContent=v==null?'':String(v); tr.appendChild(tdEl);
+    });
+    tb.appendChild(tr);
+  });
+  if(changed.length>SIM_TAB_MAX_ROWS){
+    const tr=document.createElement('tr');
+    const tdEl=document.createElement('td');
+    tdEl.colSpan=6;
+    tdEl.textContent='Display bounded to the first '+SIM_TAB_MAX_ROWS+' of '+changed.length+' flipping decisions.';
+    tr.appendChild(tdEl);
+    tb.appendChild(tr);
+  }
+  const hs=document.getElementById('simTabHashes');
+  hs.textContent='';
+  const hlines=[
+    'Candidate policy hash: '+(root.candidate_policy_hash||''),
+    'Window hash: '+(root.window_hash||''),
+    'Simulation receipt hash: '+(d.receipt_hash||''),
+    'Signed receipt (EdDSA JWS): '+(d.jws||'')
+  ];
+  if(d.note)hlines.push(d.note);
+  hlines.forEach(t=>{ const p=document.createElement('div'); p.textContent=t; hs.appendChild(p); });
+}
+function simTabRequest(r){
+  if(r.ok)return r.json();
+  if(r.status===404){ simTabNotice('Demo mode is not configured on this deployment: preset tweaks are unavailable here.'); return null; }
+  return r.json().catch(()=>({})).then(det=>{
+    const detail=det&&det.detail!==undefined?det.detail:det;
+    let text='';
+    if(Array.isArray(detail)){ text=detail.map(x=>(x&&(x.msg||x))||'').join('; '); }
+    else if(detail){ text=String(detail); }
+    if(r.status===403){ text='Simulation refused: '+(text||'insufficient role')+'. The key in use holds the auditor role; simulation over a live deployment window needs an operator key.'; }
+    else if(r.status===422){ text='The request was refused as malformed (422): '+(text||'validation failed'); }
+    else if(r.status===400){ text='The simulation was refused named: '+text; }
+    else { text='The simulation request failed (HTTP '+r.status+').'; }
+    simTabNotice(text);
+    return null;
+  });
+}
+function simTabRun(){
+  if(simTabBusy){ simTabNotice('A simulation is already running: one run at a time.'); return; }
+  const cEl=document.getElementById('simTabCandidate');
+  const yaml=cEl&&cEl.value?cEl.value.trim():'';
+  let url='', body=null;
+  if(yaml){
+    // client-side size cap: refuse oversize pasted policies before any
+    // request leaves the panel (the MCP manifest precedent)
+    if(yaml.length>256*1024){ simTabNotice('The pasted candidate policy is over 256 KiB: the panel refuses it before any request leaves.'); return; }
+    body={candidate_policy_yaml:yaml};
+    const w=document.getElementById('simTabWindow');
+    if(w&&w.value.trim())body.window_ref=w.value.trim();
+    const st=document.getElementById('simTabStore');
+    if(st&&st.value.trim())body.input_store_ref=st.value.trim();
+    url='/api/policy/simulate';
+  } else if(simTabPreset){
+    url='/api/demo/policy-simulate';
+    body={preset:simTabPreset};
+  } else {
+    simTabNotice('Choose a preset policy tweak or paste a candidate policy YAML first: nothing has been simulated yet.');
+    return;
+  }
+  simTabBusy=true;
+  simTabNotice('Running the real simulation engine...');
+  api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(simTabRequest)
+    .then(d=>{ if(d)renderSimTab(d); })
+    .catch(()=>{ simTabNotice('The simulation request failed.'); })
+    .finally(()=>{ simTabBusy=false; });
+}
+
 // ================= EMERGENCY AUTHORITY STOP SCREEN (D9) =================
 // Read-only display of the operator-control story: receipted transitions
 // rendered as textContent; nothing here arms or applies anything.
@@ -5669,7 +5835,7 @@ function mcpScan(){
   }).then(d=>{ if(d) renderMcpFindings(d.findings||[]); }).catch(()=>{ sum.textContent='Scan request failed.'; });
 }
 
-if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();}function navEvidencePack(el){showTab('assure',el);setTimeout(function(){var t=document.getElementById('assurancePacketView');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navKeyModel(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcpt-keymodel');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navCoverage(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcptCoverageCard');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadAssure()":(ev,el)=>loadAssure(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('assure',this)":(ev,el)=>showTab('assure',el),"showTab('capdemo',this)":(ev,el)=>showTab('capdemo',el),"navEvidencePack()":(ev,el)=>navEvidencePack(el),"navKeyModel()":(ev,el)=>navKeyModel(el),"navCoverage()":(ev,el)=>navCoverage(el),"capDemoPick(event)":(ev,el)=>capDemoPick(ev),"capDemoVerify()":(ev,el)=>capDemoVerify(),"loadAssurancePacket()":(ev,el)=>loadAssurancePacket(),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"sessionFindingVerify(event)":(ev,el)=>sessionFindingVerify(ev),"showTab('session',this)":(ev,el)=>showTab('session',el),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
+if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();}function navEvidencePack(el){showTab('assure',el);setTimeout(function(){var t=document.getElementById('assurancePacketView');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navKeyModel(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcpt-keymodel');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navCoverage(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcptCoverageCard');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadAssure()":(ev,el)=>loadAssure(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('assure',this)":(ev,el)=>showTab('assure',el),"showTab('capdemo',this)":(ev,el)=>showTab('capdemo',el),"navEvidencePack()":(ev,el)=>navEvidencePack(el),"navKeyModel()":(ev,el)=>navKeyModel(el),"navCoverage()":(ev,el)=>navCoverage(el),"capDemoPick(event)":(ev,el)=>capDemoPick(ev),"capDemoVerify()":(ev,el)=>capDemoVerify(),"loadAssurancePacket()":(ev,el)=>loadAssurancePacket(),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"sessionFindingVerify(event)":(ev,el)=>sessionFindingVerify(ev),"showTab('session',this)":(ev,el)=>showTab('session',el),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev),"simTabPick(event)":(ev,el)=>simTabPick(ev),"simTabRun()":(ev,el)=>simTabRun(),"simTabClear()":(ev,el)=>simTabClear(),"showTab('simulate',this)":(ev,el)=>showTab('simulate',el)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
 </script>
 </body>
 </html>"""

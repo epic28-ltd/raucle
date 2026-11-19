@@ -249,6 +249,7 @@ class TestEnterpriseConsoleFrame:
             "assure",
             "mcp",
             "stop",
+            "simulate",
         )
         for tab_id in machinery:
             assert 'data-truth-class="OSS MACHINERY + EE VIEW"' in _opening_tag(
@@ -258,6 +259,69 @@ class TestEnterpriseConsoleFrame:
             assert 'data-truth-class="OSS LIVE"' in _opening_tag(ADMIN_PANEL_HTML, tab_id), (
                 f"tab-{tab_id} must carry the OSS LIVE class"
             )
+
+
+class TestPolicySimulateTab:
+    """K2 (X6 slice 2): the policy-simulate tab over POST /api/policy/simulate.
+
+    The tab makes the X6 surface visible in the panel: the operator pastes a
+    candidate policy (operator plane over the deployment's own window) or
+    picks a preset tweak (demo plane, same real engine over the simulated
+    window). The engine, the deterministic outcome and the signed receipt
+    are the real machinery, so the truth class is OSS LIVE.
+    """
+
+    def test_simulate_tab_exists_in_the_trust_stack(self):
+        assert 'id="tab-simulate"' in ADMIN_PANEL_HTML
+        assert 'data-tab-id="simulate"' in ADMIN_PANEL_HTML
+        assert "showTab('simulate',this)" in ADMIN_PANEL_HTML
+        # the entry sits in the trust group, after Policies (its sibling
+        # surface) and before Capability tokens
+        nav = ADMIN_PANEL_HTML[
+            ADMIN_PANEL_HTML.index('<div class="nav-group" data-nav-group="trust"') :
+        ]
+        nav = nav[: nav.index("</nav>")]
+        assert nav.index('data-tab-id="policies"') < nav.index('data-tab-id="simulate"')
+        assert nav.index('data-tab-id="simulate"') < nav.index('data-tab-id="capdemo"')
+
+    def test_simulate_tab_declares_the_real_machinery_and_honest_limits(self):
+        body = _tab_sections(ADMIN_PANEL_HTML)["simulate"]
+        for marker in (
+            'id="simTabPresetList"',
+            'id="simTabCandidate"',
+            'id="simTabWindow"',
+            'id="simTabStore"',
+            'id="simTabResultCard"',
+            'id="simTabSummary"',
+            'id="simTabChangesBody"',
+            'id="simTabHashes"',
+            "deterministic",
+            "signed receipt",
+            "re-verifies the signed receipt",
+            "never argument values",
+            "never denial reasons",
+            "256 KiB",
+            "auditor",
+        ):
+            assert marker in body, marker
+
+    def test_simulate_tab_fetches_the_real_simulate_surfaces(self):
+        # the operator plane is the shipped endpoint; the preset path is the
+        # D10 demo plane over the same real engine
+        assert "'/api/policy/simulate'" in ADMIN_PANEL_HTML
+        assert "'/api/demo/policy-simulate/presets'" in ADMIN_PANEL_HTML
+        assert "'/api/demo/policy-simulate'" in ADMIN_PANEL_HTML
+        # the tab never touches the apply path: the flip is the editor's
+        # Save & Deploy, which re-verifies the signed receipt
+        assert "policy-simulate/apply" not in ADMIN_PANEL_HTML
+
+    def test_simulate_tab_carries_the_guided_empty_state(self):
+        body = _tab_sections(ADMIN_PANEL_HTML)["simulate"]
+        assert "No simulation yet" in body, "the result card opens with the guided empty state"
+
+    def test_simulate_tab_applies_nothing(self):
+        body = _tab_sections(ADMIN_PANEL_HTML)["simulate"]
+        assert "applies nothing" in body, "the tab states it applies nothing"
 
 
 class TestEnterpriseOverview:
