@@ -333,6 +333,14 @@ class GatewayConfig:
     session_window_ttl_seconds: int = 900
     session_window_max_keys: int = 1024
     session_window_max_entries: int = 10000
+    # Receipts v1.2 (lane K3): the optional alternative ruleset the gate
+    # evaluates at decision time to mint the counterfactual block on
+    # intent receipts. Named by digest over the RAW FILE BYTES inside the
+    # block, never parsed into the enforcement surface: enforcement never
+    # depends on the evidence block. Empty = no counterfactual evidence
+    # (receipts keep their v1.1 byte-shape). A malformed file mints no
+    # block, never a fabricated one.
+    counterfactual_ruleset_file: str = ""
 
     @classmethod
     def from_env(cls) -> GatewayConfig:
@@ -406,6 +414,7 @@ class GatewayConfig:
             session_window_max_entries=max(
                 1, int(os.environ.get("RAUCLE_SESSION_WINDOW_MAX_ENTRIES", "10000"))
             ),
+            counterfactual_ruleset_file=os.environ.get("RAUCLE_COUNTERFACTUAL_RULESET_FILE", ""),
         )
 
     @classmethod
@@ -1862,6 +1871,11 @@ class RaucleGateway:
             return None
         from raucle.provenance import _canonical_json, _sha256_hex
 
+        # Receipts v1.2 (lane K3): the counterfactual is evaluated BEFORE
+        # the payload iat is stamped, so the block can never post-date its
+        # own receipt. Intent-gated: a receipt without an intent block
+        # carries no counterfactual, byte-identical to its v1.1 shape.
+        counterfactual = self._counterfactual_block(ctx)
         payload: dict[str, Any] = {
             "iss": "raucle-gateway",
             "typ": _RECEIPT_TYP,
@@ -1907,6 +1921,8 @@ class RaucleGateway:
         if ctx.intent_block is not None:  # receipts v1.2: task-intent binding
             payload["x_gate"]["intent"] = ctx.intent_block["intent"]
             payload["x_gate"]["intent_check"] = ctx.intent_block["intent_check"]
+        if counterfactual is not None:  # receipts v1.2: the not-taken decision
+            payload["x_gate"]["counterfactual"] = counterfactual
         # Header + JWS signing + store append are shared with the other
         # authority receipt emitters (PR-E extraction).
         receipt_hash = self._sign_and_store_receipt(payload)
@@ -1927,6 +1943,118 @@ class RaucleGateway:
                 destination_class=ctx.destination_class,
             )
         return receipt_hash
+
+    def _counterfactual_block(self, ctx: GateReceiptContext) -> dict[str, Any] | None:
+        """Receipts v1.2 (lane K3): the NOT-TAKEN decision under the
+        configured alternative ruleset, evaluated at decision time by the
+        same deterministic machinery that produced the enforced decision.
+
+        The block rides intent receipts only (no intent, no block); the
+        ruleset is named inside the block by a sha256 digest over the raw
+        file bytes, so a third party holding the same bytes confirms the
+        naming without the verifier needing the file. Session rules
+        evaluate first, then policy rules; the first firing rule wins,
+        else the alternative ruleset would have allowed. A missing or
+        malformed ruleset mints no block, never a fabricated one:
+        enforcement never depends on the evidence surface. Returns None
+        when no block applies.
+        """
+        import hashlib as _hl
+
+        from raucle.policy import PolicyFile, compile_constraint_dsl
+        from raucle.provenance import _COUNTERFACTUAL_VERSION, _SHA256_PREFIX
+
+        if ctx.intent_block is None:
+            return None
+        ruleset_path = self.config.counterfactual_ruleset_file
+        if not ruleset_path:
+            return None
+        try:
+            raw = Path(ruleset_path).read_bytes()
+            ruleset = PolicyFile.from_dict(yaml.safe_load(raw))
+        except Exception as exc:  # noqa: BLE001 - the block is optional, never fabricated
+            logger.warning(
+                "counterfactual ruleset %s is unusable (%s); no counterfactual "
+                "evidence on this receipt",
+                ruleset_path,
+                type(exc).__name__,
+            )
+            return None
+
+        block: dict[str, Any] = {
+            "version": _COUNTERFACTUAL_VERSION,
+            "ruleset_hash": _SHA256_PREFIX + _hl.sha256(raw).hexdigest(),
+        }
+        evaluated_at = int(time.time())
+
+        # Session rules first: the alternative may fire over the receipt's
+        # own session window (bounded, content-free decision summaries
+        # recorded at receipt emission time - this call is not yet in it).
+        if ctx.session_id:
+            entries = self._session_windows.entries(ctx.session_id, ctx.agent_id)
+            for rule in ruleset.session_rules:
+                fired = self._evaluate_session_rule(
+                    rule, entries, evaluated_at, ctx.tool, ctx.destination_class
+                )
+                if fired is not None:
+                    in_window = [
+                        e for e in entries if evaluated_at - e["iat"] < rule.window_seconds
+                    ]
+                    return {
+                        **block,
+                        "decision": "deny",
+                        "rule_id": rule.id,
+                        "rule_kind": rule.kind,
+                        "session": {
+                            "session_id": ctx.session_id,
+                            "window_seconds": rule.window_seconds,
+                            "participant": rule.participant or "tool_call",
+                            "window_evidence": {
+                                "counters": {
+                                    "denied_calls": sum(
+                                        1
+                                        for e in in_window
+                                        if e["decision"] == "deny" and e["tool"] == ctx.tool
+                                    )
+                                },
+                                "tools": sorted(
+                                    {
+                                        e["tool"]
+                                        for e in in_window
+                                        if isinstance(e.get("tool"), str) and e["tool"]
+                                    }
+                                ),
+                            },
+                        },
+                        "evaluated_at": evaluated_at,
+                    }
+
+        # Policy rules: the same matching and constraint machinery the
+        # enforced decision uses (_find_rule semantics: tool exact, then
+        # source/destination patterns; taint-participant rules are deny
+        # overlays, never authority).
+        from raucle.capability import _check_constraints
+
+        for rule in ruleset.policies:
+            if rule.tool != ctx.tool:
+                continue
+            if (getattr(rule, "participant", "") or "") == "tool_response_taint":
+                continue
+            if not rule.matches(ctx.source, ctx.destination):
+                continue
+            why = _check_constraints(compile_constraint_dsl(rule.constraints), ctx.args)
+            if why is not None:
+                return {
+                    **block,
+                    "decision": "deny",
+                    "rule_id": rule.id,
+                    "rule_kind": "policy_rule",
+                    "evaluated_at": evaluated_at,
+                }
+
+        # Nothing fired: the alternative ruleset would also have allowed,
+        # and the block records that with no rule fields.
+        return {**block, "decision": "allow", "evaluated_at": evaluated_at}
 
     def _policy_ruleset_hash(self, tool: str, source: str = "", destination: str = "") -> str:
         """Content digest of the policy rule in force for *tool* (binds
@@ -4051,14 +4179,137 @@ class RaucleGateway:
             extension=extension,
         )
 
-    def _revoke_ids(self, ids: list[str], *, reason: str, actor: str, root: str) -> dict[str, Any]:
+    def _v12_revocation_extension(
+        self,
+        ids: list[str],
+        *,
+        kind: str,
+        reason_class: str,
+        reason: str,
+        actor: str,
+        root: str,
+    ) -> dict[str, Any]:
+        """Receipts v1.2 (lane K3): the versioned revocation block - kind,
+        reason_class, chain linkage, class-level reason. The kind and
+        reason_class vocabularies are validated FIRST, fail-closed, so an
+        unknown kind never mints anything; the kind=capability chain
+        linkage hashes the revoked tokens out of the delegation ledger
+        resolver and refuses (never fabricates) when a cited token cannot
+        be resolved. kind=receipt cites receipt hashes, which are already
+        their own digests. Fail-closed for kinds without a resolver in
+        this gateway rather than minting an unlinked block."""
+        from raucle.provenance import (
+            _REVOCATION_KINDS,
+            _REVOCATION_REASON_CLASSES,
+            _REVOCATION_VERSION,
+            _is_sha256_digest,
+        )
+
+        if kind not in _REVOCATION_KINDS:
+            raise ValueError(
+                f"unknown revocation kind {kind!r}; use one of {sorted(_REVOCATION_KINDS)}"
+            )
+        if reason_class not in _REVOCATION_REASON_CLASSES:
+            raise ValueError(
+                f"unknown revocation reason_class {reason_class!r}; use one of "
+                f"{sorted(_REVOCATION_REASON_CLASSES)}"
+            )
+        revoked_hashes: dict[str, str] = {}
+        if kind == "capability":
+            revoked_hashes = self._v12_capability_hashes(ids)
+        elif kind == "receipt":
+            for rid in ids:
+                if not _is_sha256_digest(rid):
+                    raise ValueError(
+                        f"kind 'receipt' cites {rid!r}, which is not a sha256 "
+                        f"receipt hash (fail-closed)"
+                    )
+                revoked_hashes[rid] = rid
+        else:
+            raise ValueError(
+                f"revocation kind {kind!r} has no chain-linkage resolver in "
+                f"this gateway (fail-closed)"
+            )
+        return {
+            "version": _REVOCATION_VERSION,
+            "kind": kind,
+            "revoked_ids": list(ids),
+            "revoked_hashes": revoked_hashes,
+            "root": root,
+            "actor": actor,
+            "reason_class": reason_class,
+            "reason": reason,
+            "revoked_at": int(time.time()),
+        }
+
+    def _v12_capability_hashes(self, ids: list[str]) -> dict[str, str]:
+        """The kind=capability chain linkage: one sha256 digest per revoked
+        token, hashed from the delegation ledger resolver so a third
+        party holding the revoked token re-derives it. Fail-closed: with
+        no ledger, or a cited token the ledger cannot resolve, the block
+        cannot cite what it cannot hash and the request is refused."""
+        from raucle.capability import DelegationLedger
+        from raucle.provenance import _canonical_json, _sha256_hex
+
+        if not (self.config.delegations_file and Path(self.config.delegations_file).exists()):
+            raise ValueError(
+                "kind 'capability' needs the delegation ledger for its chain "
+                "linkage (delegations_file is not configured; fail-closed)"
+            )
+        resolve = DelegationLedger(self.config.delegations_file).resolver()
+        hashes: dict[str, str] = {}
+        for tid in ids:
+            token = resolve(tid)
+            if token is None:
+                raise ValueError(
+                    f"kind 'capability' cites token {tid!r} absent from the "
+                    "delegation ledger (fail-closed: the block cannot hash what "
+                    "it cannot resolve)"
+                )
+            hashes[tid] = "sha256:" + _sha256_hex(_canonical_json(token.to_dict()))
+        return hashes
+
+    def _revoke_ids(
+        self,
+        ids: list[str],
+        *,
+        reason: str,
+        actor: str,
+        root: str,
+        kind: str = "",
+        reason_class: str = "",
+    ) -> dict[str, Any]:
         """A3 shared leg: persist the revocation records, emit ONE signed
         revocation receipt naming the whole subtree.
+
+        Receipts v1.2 (lane K3): a requested kind extends the shipped
+        v1.0 block to the versioned v1.2 shape (validated BEFORE any
+        persistence or emission, so a refused kind mints nothing); no
+        kind keeps the shipped v1.0 byte-shape exactly.
 
         Persistence requires a configured ``revocations_file``: revocation
         records in a world-writable directory (/tmp) would be tamperable,
         so an unset path is refused outright rather than defaulted (fail
         closed, SonarCloud S5443)."""
+        # Validate first: an unknown kind or reason class never persists
+        # or mints anything.
+        extension: dict[str, Any]
+        if kind or reason_class:
+            extension = self._v12_revocation_extension(
+                ids,
+                kind=kind,
+                reason_class=reason_class,
+                reason=reason,
+                actor=actor,
+                root=root,
+            )
+        else:
+            extension = {
+                "revoked_ids": ids,
+                "root": root,
+                "actor": actor,
+                "reason": reason,
+            }
         if not self.config.revocations_file:
             raise ValueError(
                 "revocations_file is not configured; cascade revocation cannot "
@@ -4080,21 +4331,27 @@ class RaucleGateway:
             receipt_id = self._emit_authority_receipt(
                 verdict="authority_revoked",
                 extension_key="x_revocation",
-                extension={
-                    "revoked_ids": ids,
-                    "root": root,
-                    "actor": actor,
-                    "reason": reason,
-                },
+                extension=extension,
             )
         except Exception:
             logger.exception("revocation receipt emission failed")
         return {"revoked": ids, "receipt_id": receipt_id}
 
-    def revoke_capability(self, token_id: str, *, reason: str, actor: str) -> dict[str, Any]:
+    def revoke_capability(
+        self,
+        token_id: str,
+        *,
+        reason: str,
+        actor: str,
+        kind: str = "",
+        reason_class: str = "",
+    ) -> dict[str, Any]:
         """A3: revoke a capability and its whole subtree, receipted. The gate
         refuses new actions on every revoked id at the next call; receipts
-        minted afterwards are marked invalid by the offline verifier."""
+        minted afterwards are marked invalid by the offline verifier.
+        Receipts v1.2 (lane K3): ``kind``/``reason_class`` request the
+        versioned v1.2 block (validated fail-closed; the capability kind
+        adds the ledger-backed chain linkage)."""
         from raucle.capability import DelegationLedger
 
         if self.config.delegations_file and Path(self.config.delegations_file).exists():
@@ -4102,11 +4359,28 @@ class RaucleGateway:
             ids = ledger.descendants(token_id)
         else:
             ids = [token_id]
-        return self._revoke_ids(ids, reason=reason, actor=actor, root=token_id)
+        return self._revoke_ids(
+            ids,
+            reason=reason,
+            actor=actor,
+            root=token_id,
+            kind=kind,
+            reason_class=reason_class,
+        )
 
-    def revoke_agent_chains(self, agent_id: str, *, reason: str, actor: str) -> dict[str, Any]:
+    def revoke_agent_chains(
+        self,
+        agent_id: str,
+        *,
+        reason: str,
+        actor: str,
+        kind: str = "",
+        reason_class: str = "",
+    ) -> dict[str, Any]:
         """A3 owner-departure: revoke every delegated chain of an identity in
-        one receipted operation (the lifecycle audit trail)."""
+        one receipted operation (the lifecycle audit trail). Receipts v1.2
+        (lane K3): ``kind``/``reason_class`` request the versioned v1.2
+        block, validated fail-closed like revoke_capability."""
         from raucle.capability import DelegationLedger
 
         if not (self.config.delegations_file and Path(self.config.delegations_file).exists()):
@@ -4117,7 +4391,14 @@ class RaucleGateway:
             for descendant in ledger.descendants(tid):
                 if descendant not in ids:
                     ids.append(descendant)
-        return self._revoke_ids(ids, reason=reason, actor=actor, root=f"agent:{agent_id}")
+        return self._revoke_ids(
+            ids,
+            reason=reason,
+            actor=actor,
+            root=f"agent:{agent_id}",
+            kind=kind,
+            reason_class=reason_class,
+        )
 
     def get_stats(self) -> dict[str, Any]:
         return self.stats.summary()
