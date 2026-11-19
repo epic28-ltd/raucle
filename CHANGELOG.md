@@ -3,6 +3,27 @@
 ## Unreleased
 - Receipts v1.2: counterfactual evidence blocks (emitter + verifier: version-gated, closed field set, two-key session window evidence, evaluated_at bound, never re-run, no content) and revocation-event receipts (v1.2 x_revocation kind: revocation kind, reason_class, revoked_hashes, capability-to-token ledger linkage; admin /api/revoke + request upgrades). Unknown versions refuse.
 
+### Added - K1: boot streaming architecture (design slice, spec precedes implementation)
+
+- docs/spec/boot-streaming-v0.1.md + ADR 0007 (docs/adr/, continuing the
+  suite ADR series): the gateway boot streams the audit chain and feeds the
+  receipt index in bounded windows and never maps a store whole - the named
+  bigger follow-up to the 18 Nov demo OOM incident (12.2 GB audit log +
+  15 GB index -> 23.4 GB resident, three kernel kills).
+- The design: bind first (gate traffic needs neither the index nor the
+  audit chain), a bounded reverse tail read replaces whole-scan chain
+  resume, the receipt index builds in a background compactor with
+  per-surface readiness (named refusals while building, never empty
+  answers), session continuity restored from a TTL-bounded tail window,
+  and the fail-closed tail discipline tightened (a torn tail is a named
+  refusal, never a silently skipped line).
+- Built on the shipped primitives, contracts unchanged: J1's preflight
+  (projection re-derived from the window budget; the ceiling lowers as
+  windows shrink) and rotate-chain (PR #297), J2's recovery doctrine
+  (PR #296). Acceptance criteria for the implementing lane in the spec;
+  the k1-boot-streaming bench (X5 harness extension) decides the knob
+  defaults.
+
 ### Added - J1: operator chain rotation and a boot memory preflight
 
 - `raucle rotate-chain`: the receipted operator rotation of the gateway's
