@@ -26,7 +26,9 @@ Quick start
     sink   = HashChainSink("receipts.jsonl", signer=Ed25519Signer.generate())
 
     raw_tools = [TransferFundsTool(), LookupCustomerTool()]
-    tools = guard_tools(raw_tools, gate=gate, sink=sink)   # wrap every tool
+    # agent_id binds the acting identity the gate holds the call against;
+    # an unattributed call denies (bearer mode is closed, B2 doctrine)
+    tools = guard_tools(raw_tools, gate=gate, sink=sink, agent_id="agent:billing")
 
     # Per session: bind the token scoped to what THIS task may do.
     set_in_force_token(issuer.mint(
@@ -112,7 +114,7 @@ def _emit_receipt(
     sink: HashChainSink | NullSink,
     *,
     token: Capability | None,
-    agent_id: str,
+    agent_id: str | None,
     tool: str,
     args: dict[str, Any],
     decision: GateDecision,
@@ -137,6 +139,33 @@ def _emit_receipt(
         raise
 
 
+def _evaluate_gate(
+    gate: CapabilityGate,
+    token: Capability | None,
+    tool_name: str,
+    call_args: dict[str, Any],
+    agent_id: str | None,
+) -> GateDecision:
+    """Build the decision for an incoming tool call (fail-closed boundaries).
+
+    B2 attribution doctrine: bearer mode is closed. The B2 audit (v0.23.3)
+    recorded this leg as shipped, but the crewai.py change was lost in
+    transit and no CI job installed the extra, so the red test hid behind
+    importorskip until the D1 regression hunt reproduced it under crewai
+    1.6.1 (and then 1.0.0 / 1.5.0 / 1.15.41 - the gap was never
+    version-specific). A call with no bound caller identity cannot be
+    checked against the token's agent scope, so it denies rather than
+    running attributed to a placeholder receipt.
+    """
+    if token is None:
+        return GateDecision(allowed=False, reason="no in-force capability token")
+    if not agent_id:
+        return GateDecision(
+            allowed=False, reason="no acting agent identity (no caller agent_id bound)"
+        )
+    return gate.check(token=token, tool=tool_name, args=call_args, agent_id=agent_id)
+
+
 def guard_tool(
     tool: Any,
     *,
@@ -153,11 +182,15 @@ def guard_tool(
     2. asks the gate to ALLOW/DENY the call with these arguments,
     3. emits a signed receipt for the decision,
     4. delegates to the wrapped tool on ALLOW, or raises
-       :class:`CapabilityDenied` on DENY (or when no token is bound).
+       :class:`CapabilityDenied` on DENY (or when no token is bound, or
+       when no caller identity is bound).
 
-    ``agent_id`` optionally pins the caller identity the gate checks the
-    token's agent scope against; if ``None`` the holder of the in-force token
-    is trusted (bearer mode) and the agent-scope check is skipped.
+    ``agent_id`` pins the caller identity the gate checks the token's
+    agent scope against. Bearer mode is closed (the B2 attribution
+    doctrine): a call with no bound identity cannot be attributed, so it
+    denies with the decision receipted - the guard never runs a call it
+    cannot attribute, and the deny receipt carries an honest null
+    ``agent_id`` rather than a placeholder.
     """
     if not _HAS_CREWAI:
         raise RuntimeError("guard_tool requires crewai. Install with: pip install 'raucle[crewai]'")
@@ -177,21 +210,11 @@ def guard_tool(
         def _run(self, *args: Any, **kwargs: Any) -> Any:
             call_args: dict[str, Any] = dict(kwargs)
             token = get_in_force_token()
-
-            if token is None:
-                decision = GateDecision(allowed=False, reason="no in-force capability token")
-            else:
-                decision = gate.check(
-                    token=token,
-                    tool=tool_name,
-                    args=call_args,
-                    agent_id=agent_id,
-                )
-
+            decision = _evaluate_gate(gate, token, tool_name, call_args, agent_id)
             _emit_receipt(
                 sink,
                 token=token,
-                agent_id=agent_id or "<unbound>",
+                agent_id=agent_id,
                 tool=tool_name,
                 args=call_args,
                 decision=decision,
@@ -208,15 +231,11 @@ def guard_tool(
             # wrapped async impl if it has one.
             call_args: dict[str, Any] = dict(kwargs)
             token = get_in_force_token()
-            decision = (
-                GateDecision(allowed=False, reason="no in-force capability token")
-                if token is None
-                else gate.check(token=token, tool=tool_name, args=call_args, agent_id=agent_id)
-            )
+            decision = _evaluate_gate(gate, token, tool_name, call_args, agent_id)
             _emit_receipt(
                 sink,
                 token=token,
-                agent_id=agent_id or "<unbound>",
+                agent_id=agent_id,
                 tool=tool_name,
                 args=call_args,
                 decision=decision,

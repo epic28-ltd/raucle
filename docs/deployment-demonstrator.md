@@ -70,6 +70,7 @@ read-only at `/etc/raucle/policies-demo`.
 4. **Receipts** — the cryptographic evidence for any decision, offline-verifiable
 5. **Policy editor** (admin only) — the YAML DSL as a risk officer writes it
 6. **Learn mode** (admin only) — with `RAUCLE_LEARN_MODE=true`, the gate records every call it denied for having no matching policy and drafts candidate rules from the observed traffic. Fail-closed by design: learning never authorises; the operator reviews the draft, copies it into the policy editor, and deploys.
+7. **Policy simulate**: paste a candidate policy YAML (operator plane, over this deployment's own recorded window) or pick a preset tweak (same real engine over a simulated served window): the outcome is deterministic and signed, shows what the candidate would have allowed and denied plus every decision that flips, and stays bounded to tools, agents, decisions and hashes. Applying a validated change stays with the policy editor's Save & Deploy, which re-verifies the signed simulation receipt.
 
 ## Learn mode (onboarding a new agent)
 

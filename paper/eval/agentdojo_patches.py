@@ -131,6 +131,7 @@ def _patch_get_llm() -> None:
     the OLLAMA_API_KEY environment variable.
     """
     import os
+
     import agentdojo.agent_pipeline.agent_pipeline as ap_mod
 
     original_get_llm = ap_mod.get_llm

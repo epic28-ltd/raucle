@@ -11,6 +11,11 @@ import gc
 import json
 import logging
 import re
+import signal
+import sqlite3
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -172,7 +177,7 @@ class TestReceiptIndex:
         conn.close()
         index = ReceiptIndex(sqlite_path=db)
         assert index.count() == 1  # copied across, not dropped
-        assert index._conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert index._conn.execute("PRAGMA user_version").fetchone()[0] == 3
 
     def test_rebuild_from_store(self, tmp_path):
         """The projection contract: drop the index, rebuild from segments."""
@@ -300,6 +305,249 @@ class TestReceiptIndex:
         result = index.ancestry("sha256:nonexistent")
         assert result["nodes"] == []
         assert result["edges"] == []
+
+
+# ---------------------------------------------------------------------------
+# J2: mid-migration crash recovery (the 18 Nov demo incident)
+# ---------------------------------------------------------------------------
+
+
+# The live projection shape at schema v3. Recovery drops a half-built live
+# table without reading it, but the crash-state fixtures replay what the
+# interrupted migration actually left on disk, so they pin this shape
+# (mirrors the table in raucle/receipt_index.py).
+_V3_CREATE = """
+    CREATE TABLE receipts (
+        receipt_hash TEXT NOT NULL,
+        iat          INTEGER NOT NULL,
+        agent_id     TEXT NOT NULL,
+        tool         TEXT NOT NULL,
+        decision     TEXT NOT NULL,
+        reason       TEXT NOT NULL DEFAULT '',
+        policy       TEXT,
+        latency_us   INTEGER NOT NULL DEFAULT 0,
+        trace_id     TEXT,
+        session_id   TEXT,
+        acting_for   TEXT NOT NULL DEFAULT '',
+        source       TEXT NOT NULL DEFAULT '',
+        destination  TEXT NOT NULL DEFAULT '',
+        parents_json TEXT NOT NULL DEFAULT '[]',
+        segment      TEXT,
+        line_no      INTEGER
+    )
+"""
+
+_RECOVERY_LOG_MARKER = "recovered interrupted schema migration"
+
+
+class TestMigrationCrashRecovery:
+    """An interrupted migrate-on-open must recover on the next boot.
+
+    The 18 Nov demo incident: the migrate-on-open ran as separate
+    autocommitted statements; an OOM kill (23.4 GB RSS, three kills)
+    landed after the rename had committed but before the copy had, and
+    every later boot re-entered the migration and died on "there is
+    already another table or index with this name: receipts_prev_backup"
+    - a permanent crash-loop under restart:always. The index is a
+    rebuildable projection of the chain of record: the store must boot,
+    and the half-migrated projection must resume, not crash-loop.
+    """
+
+    @staticmethod
+    def _v2_file(path, n):
+        """A pre-v3 index file (v2 shape: no session columns)."""
+        conn = sqlite3.connect(str(path))
+        conn.execute(
+            """
+            CREATE TABLE receipts (
+                receipt_hash TEXT NOT NULL, iat INTEGER NOT NULL,
+                agent_id TEXT NOT NULL, tool TEXT NOT NULL,
+                decision TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '',
+                policy TEXT, latency_us INTEGER NOT NULL DEFAULT 0,
+                trace_id TEXT, source TEXT NOT NULL DEFAULT '',
+                destination TEXT NOT NULL DEFAULT '',
+                parents_json TEXT NOT NULL DEFAULT '[]',
+                segment TEXT, line_no INTEGER
+            )
+            """
+        )
+        for i in range(n):
+            conn.execute(
+                "INSERT INTO receipts (receipt_hash, iat, agent_id, tool, decision)"
+                f" VALUES ('sha256:{i:064x}', {1758000000 + i}, 'agent:svc', 't', 'allow')"
+            )
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+        conn.close()
+
+    @classmethod
+    def _half_migrated_file(cls, path, n):
+        """The observed production signature, built directly.
+
+        The rename and the empty re-created live table are durable (the
+        old migration autocommitted each statement); the copy and the
+        version stamp are not - that is where the OOM kill landed.
+        """
+        cls._v2_file(path, n)
+        conn = sqlite3.connect(str(path))
+        conn.execute("ALTER TABLE receipts RENAME TO receipts_prev_backup")
+        conn.execute(_V3_CREATE)
+        conn.close()
+
+    @staticmethod
+    def _tables(index):
+        rows = index._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+        ).fetchall()
+        return {r[0] for r in rows}
+
+    def test_boot_recovers_half_migrated_store(self, tmp_path, caplog):
+        """The observed signature boots: recovered, not crash-looped."""
+        db = tmp_path / "half.sqlite"
+        self._half_migrated_file(db, n=6)
+        with caplog.at_level(logging.WARNING):
+            index = ReceiptIndex(sqlite_path=db)
+        assert _RECOVERY_LOG_MARKER in caplog.text
+        assert index.count() == 6  # the pre-crash projection survived
+        assert "receipts_prev_backup" not in self._tables(index)
+        version = index._conn.execute("PRAGMA user_version").fetchone()[0]
+        assert version == 3
+        assert len(index.query()) == 6  # the projection still answers
+
+    def test_recovered_index_passes_rebuild_verification(self, tmp_path, caplog):
+        """After recovery the projection reconciles with the chain of record."""
+        store = SegmentedReceiptStore(base_dir=tmp_path / "segs", max_segment_bytes=2048)
+        for i in range(6):
+            store.append_line(json.dumps(_make_receipt(i, trace=f"tr{i}")))
+        db = tmp_path / "half.sqlite"
+        self._half_migrated_file(db, n=6)
+        with caplog.at_level(logging.WARNING):
+            index = ReceiptIndex(sqlite_path=db)
+        assert _RECOVERY_LOG_MARKER in caplog.text
+        # a full rebuild from the chain reproduces the same row count the
+        # recovered projection holds: back to derivable parity
+        assert index.rebuild_from_store(store) == 6
+        assert index.count() == 6
+        assert len(index.query(trace_id="tr3")) == 1
+
+    def test_boot_recovers_crash_between_rename_and_create(self, tmp_path, caplog):
+        """Backup table with no live table: undo the rename, re-migrate."""
+        db = tmp_path / "rename-only.sqlite"
+        self._v2_file(db, n=5)
+        conn = sqlite3.connect(str(db))
+        conn.execute("ALTER TABLE receipts RENAME TO receipts_prev_backup")
+        conn.close()
+        with caplog.at_level(logging.WARNING):
+            index = ReceiptIndex(sqlite_path=db)
+        assert _RECOVERY_LOG_MARKER in caplog.text
+        assert index.count() == 5
+        version = index._conn.execute("PRAGMA user_version").fetchone()[0]
+        assert version == 3
+        assert "receipts_prev_backup" not in self._tables(index)
+
+    def test_stale_backup_beside_current_index_dropped(self, tmp_path, caplog):
+        """A completed migration never leaves the backup behind; if one
+        appears anyway, the current live table is authoritative."""
+        db = tmp_path / "current.sqlite"
+        index = ReceiptIndex(sqlite_path=db)
+        for i in range(3):
+            index.index_receipt(_make_receipt(i))
+        index.close()
+        conn = sqlite3.connect(str(db))
+        conn.execute("CREATE TABLE receipts_prev_backup AS SELECT * FROM receipts")
+        conn.commit()
+        conn.close()
+        with caplog.at_level(logging.WARNING):
+            index = ReceiptIndex(sqlite_path=db)
+        assert _RECOVERY_LOG_MARKER in caplog.text
+        assert index.count() == 3  # the live rows win
+        assert "receipts_prev_backup" not in self._tables(index)
+
+    def test_oom_kill_mid_migration_recovers(self, tmp_path, caplog):
+        """The incident replayed: a SIGKILL (what the OOM killer sends)
+        lands after the old migration's durable rename and re-create, and
+        the next boot must recover instead of crash-looping."""
+        db = tmp_path / "oom.sqlite"
+        # pre-versioned v1 shape (the PK-dedup table the old migration renamed)
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "CREATE TABLE receipts (receipt_hash TEXT PRIMARY KEY, iat INTEGER NOT NULL,"
+            " agent_id TEXT NOT NULL, tool TEXT NOT NULL, decision TEXT NOT NULL)"
+        )
+        for i in range(4):
+            conn.execute(
+                "INSERT INTO receipts VALUES"
+                f" ('sha256:{i:064x}', {1758000000 + i}, 'agent:svc', 't', 'allow')"
+            )
+        conn.commit()
+        conn.close()
+        script = f"""
+import os, signal, sqlite3
+conn = sqlite3.connect({str(db)!r})
+conn.execute("PRAGMA journal_mode = WAL")
+conn.execute("PRAGMA synchronous = NORMAL")
+conn.execute("PRAGMA busy_timeout = 5000")
+# the old migration's first two statements, each autocommitted
+conn.execute("ALTER TABLE receipts RENAME TO receipts_prev_backup")
+conn.execute({_V3_CREATE!r})
+os.kill(os.getpid(), signal.SIGKILL)  # the OOM lands before the copy commits
+"""
+        proc = subprocess.run([sys.executable, "-c", script], capture_output=True, timeout=60)
+        assert proc.returncode == -signal.SIGKILL  # killed, not a clean exit
+        with caplog.at_level(logging.WARNING):
+            index = ReceiptIndex(sqlite_path=db)
+        assert _RECOVERY_LOG_MARKER in caplog.text
+        assert index.count() == 4
+        version = index._conn.execute("PRAGMA user_version").fetchone()[0]
+        assert version == 3
+        assert "receipts_prev_backup" not in self._tables(index)
+
+    def test_kill_inside_migration_leaves_no_artifact(self, tmp_path, caplog):
+        """The new invariant: the migration runs as one transaction, so a
+        SIGKILL at its first schema change rolls the file back to the
+        pristine pre-migration state; the next boot re-runs the migration
+        cleanly (no recovery branch, no crash-loop, no lost rows)."""
+        db = tmp_path / "atomic.sqlite"
+        self._v2_file(db, n=4)
+        repo_root = Path(__file__).resolve().parents[1]
+        script = f"""
+import os, signal, sqlite3, sys, types
+sys.path.insert(0, {str(repo_root)!r})
+import raucle.receipt_index as ri
+
+
+class KilledMidMigration:
+    def __init__(self, conn):
+        object.__setattr__(self, "_conn", conn)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __setattr__(self, name, value):
+        setattr(self._conn, name, value)
+
+    def execute(self, sql, *args):
+        rows = self._conn.execute(sql, *args)
+        if sql.strip().upper().startswith("ALTER TABLE RECEIPTS RENAME"):
+            os.kill(os.getpid(), signal.SIGKILL)
+        return rows
+
+
+ri.sqlite3 = types.SimpleNamespace(
+    connect=lambda *a, **k: KilledMidMigration(sqlite3.connect(*a, **k)),
+    Row=sqlite3.Row,
+)
+ri.ReceiptIndex(sqlite_path={str(db)!r})
+"""
+        proc = subprocess.run([sys.executable, "-c", script], capture_output=True, timeout=60)
+        assert proc.returncode == -signal.SIGKILL
+        with caplog.at_level(logging.WARNING):
+            index = ReceiptIndex(sqlite_path=db)
+        assert _RECOVERY_LOG_MARKER not in caplog.text  # nothing to recover
+        assert index.count() == 4  # the rows survived the rollback
+        version = index._conn.execute("PRAGMA user_version").fetchone()[0]
+        assert version == 3
+        assert "receipts_prev_backup" not in self._tables(index)
 
 
 # ---------------------------------------------------------------------------

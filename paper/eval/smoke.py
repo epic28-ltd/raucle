@@ -21,13 +21,14 @@ from agentdojo.task_suite import get_suites
 # ---------------------------------------------------------------------------
 
 suites = get_suites("v1")
-print(f"\n=== Suite counts (paper claims 629 attack tasks at v1) ===")
+print("\n=== Suite counts (paper claims 629 attack tasks at v1) ===")
 total = 0
 for name, s in suites.items():
     pairs = len(s.user_tasks) * len(s.injection_tasks)
     total += pairs
     print(
-        f"  {name:12s} user={len(s.user_tasks):3d}  inj={len(s.injection_tasks):3d}  pairs={pairs:4d}"
+        f"  {name:12s} user={len(s.user_tasks):3d}"
+        f"  inj={len(s.injection_tasks):3d}  pairs={pairs:4d}"
     )
 print(f"  {'TOTAL':12s}                                pairs={total:4d}")
 assert total == 629, f"Expected 629 attack-task pairs, got {total}"
@@ -37,8 +38,8 @@ print("  ✓ matches paper")
 # 2. Pipeline construction with suite + user_task scope
 # ---------------------------------------------------------------------------
 
-print(f"\n=== Pipeline construction (suite-scoped) ===")
-from paper.eval.agentdojo_adapter import _build_pipeline
+print("\n=== Pipeline construction (suite-scoped) ===")
+from paper.eval.agentdojo_adapter import _build_pipeline  # noqa: E402
 
 # Non-VCD configurations don't need suite/user_task
 for defence in ["none", "spotlight"]:
@@ -67,10 +68,11 @@ except ValueError as exc:
 # 3. Per-task policy discrimination
 # ---------------------------------------------------------------------------
 
-print(f"\n=== Per-task policy discrimination ===")
-from paper.eval.gated_executor import build_gated_executor
-from agentdojo.types import text_content_block_from_string
-from agentdojo.functions_runtime import FunctionCall, EmptyEnv, FunctionsRuntime
+print("\n=== Per-task policy discrimination ===")
+from agentdojo.functions_runtime import EmptyEnv, FunctionCall, FunctionsRuntime  # noqa: E402
+from agentdojo.types import text_content_block_from_string  # noqa: E402
+
+from paper.eval.gated_executor import build_gated_executor  # noqa: E402
 
 ATTACKER_IBAN = "US133000000121212121212"  # also legitimate landlord in user_task_15
 FRIEND_IBAN = "GB29NWBK60161331926819"

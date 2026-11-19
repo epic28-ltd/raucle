@@ -5,8 +5,10 @@ path `POST /api/policy/simulate/apply`. The operator question this answers:
 *"What would THIS candidate policy have done to the traffic we actually
 served?"* — answered deterministically, receipted, and appliable.
 
-The panel tab (simulate UI) is the named follow-up; this slice is the API
-everything else hangs off.
+The panel tab shipped as X6 slice 2 (K2): the `Policy simulate` tab in the
+admin panel drives this surface (paste a candidate policy over this
+deployment's own window) and the demo preset plane over the same engine.
+This document describes the API every UI hangs off.
 
 ## Surface
 

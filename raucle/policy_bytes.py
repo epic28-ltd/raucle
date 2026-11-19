@@ -92,6 +92,13 @@ class PolicyBytesVerifier:
     revocations_path: str = ""
     emitter: Emitter | None = None
     actor: str = "operator"
+    # EPIC Q lane Q-2: additional enforcement files the gate consults (every
+    # loaded policy file beyond the primary, so session-rule-bearing files in
+    # policy_dir mode ride the seal too). Their digests ride the seal record
+    # under "extra_files"; a verifier configured with extra paths the seal
+    # never covered reports a named divergence (fail-closed, re-seal to
+    # cover). Empty = the pre-Q2 shape, byte-identical seals.
+    extra_paths: tuple[str, ...] = ()
 
     _digest_cache: dict[str, tuple[int, int, str]] = field(
         default_factory=dict, init=False, repr=False
@@ -169,6 +176,22 @@ class PolicyBytesVerifier:
                 f"{verdict} receipt emission failed; seal refused: {exc}"
             ) from exc
 
+    def _extra_file_digests(self) -> list[dict[str, str]]:
+        """Digests of the additional enforcement files (EPIC Q lane Q-2).
+
+        A missing file refuses the seal: the gate consults it, so sealing
+        an absent file would record fiction.
+        """
+        out: list[dict[str, str]] = []
+        for path in self.extra_paths:
+            digest = self._digest_file(path)
+            if digest is None:
+                raise PolicyBytesError(
+                    f"extra enforcement file '{path}' does not exist; nothing to seal"
+                )
+            out.append({"path": path, "sha256": digest})
+        return out
+
     def _build_record(
         self, actor: str, *, reason: str, verdict: str, require_receipt: bool
     ) -> dict[str, Any]:
@@ -186,6 +209,7 @@ class PolicyBytesVerifier:
                 rev_bytes = b""
             revocations_digest = _sha256_bytes(rev_bytes)
             revocations_len = len(rev_bytes)
+        extra_files = self._extra_file_digests()
         receipt_id = self._receipt(
             verdict,
             {
@@ -197,6 +221,7 @@ class PolicyBytesVerifier:
                 "actor": actor,
                 "reason": reason,
                 "sealed_at": _now_iso(),
+                **({"extra_files": extra_files} if extra_files else {}),
             },
         )
         if require_receipt and self.emitter is not None and not receipt_id:
@@ -213,6 +238,7 @@ class PolicyBytesVerifier:
             "receipt_id": receipt_id,
             "sealed_at_epoch": int(time.time()),
             "sealed_at": _now_iso(),
+            **({"extra_files": extra_files} if extra_files else {}),
         }
 
     @staticmethod
@@ -341,6 +367,42 @@ class PolicyBytesVerifier:
             divergence = self._revocations_divergence(seal)
             if divergence:
                 out.append(divergence)
+        out.extend(self._extra_files_divergences(seal))
+        return out
+
+    def _extra_files_divergences(self, seal: dict[str, Any]) -> list[str]:
+        """Extra enforcement files must be covered by the seal AND byte
+        identical to their receipted digests (EPIC Q lane Q-2).
+
+        The paths come from THIS verifier's configuration, never from the
+        seal file's contents (same trust rule as the policy path above).
+        """
+        sealed: dict[str, str] = {
+            str(entry.get("path", "")): str(entry.get("sha256", ""))
+            for entry in seal.get("extra_files", [])
+            if isinstance(entry, dict)
+        }
+        out: list[str] = []
+        for path in self.extra_paths:
+            if path not in sealed:
+                out.append(
+                    f"extra enforcement file '{path}' is not covered by the "
+                    "activation seal (re-seal to cover the files the gate consults)"
+                )
+                continue
+            current = self._digest_file(path)
+            if current is None:
+                out.append(
+                    f"extra enforcement file '{path}' has vanished since "
+                    "activation (receipted activation digest: "
+                    f"{sealed[path][:16]}...)"
+                )
+            elif current != sealed[path]:
+                out.append(
+                    f"extra enforcement file '{path}' diverges from the "
+                    f"receipted activation digest: on-disk sha256 {current} "
+                    f"!= sealed {sealed[path]}"
+                )
         return out
 
     def _revocations_divergence(self, seal: dict[str, Any]) -> str:

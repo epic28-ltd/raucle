@@ -24,20 +24,30 @@ from raucle.capability import CapabilityGate, CapabilityIssuer
 from raucle.integrations.langgraph import RaucleToolNode, set_in_force_token
 
 issuer = CapabilityIssuer.generate(issuer="acme.platform")
-gate   = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
-sink   = HashChainSink("receipts.jsonl", signer=Ed25519Signer.generate())
+gate = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
+sink = HashChainSink("receipts.jsonl", signer=Ed25519Signer.generate())
 
 builder = StateGraph(MessagesState)
-builder.add_node("agent", call_model)          # your model node — never wrapped
-builder.add_node("tools", RaucleToolNode(      # gated tool node
-    my_tools, gate=gate, sink=sink, agent_id="agent-1",
-))
+builder.add_node("agent", call_model)  # your model node, never wrapped
+builder.add_node(
+    "tools",
+    RaucleToolNode(  # gated tool node
+        my_tools,
+        gate=gate,
+        sink=sink,
+        agent_id="agent-1",
+    ),
+)
 
 # Per session: bind a token scoped to what THIS task may do.
-set_in_force_token(issuer.mint(
-    agent_id="agent-1", tool="transfer_funds",
-    constraints={"max_value": {"amount": 100}}, ttl_seconds=60,
-))
+set_in_force_token(
+    issuer.mint(
+        agent_id="agent-1",
+        tool="transfer_funds",
+        constraints={"max_value": {"amount": 100}},
+        ttl_seconds=60,
+    )
+)
 ```
 
 For `create_react_agent(model, tools=tools)`:
@@ -45,8 +55,7 @@ For `create_react_agent(model, tools=tools)`:
 ```python
 from raucle.integrations.langgraph import gate_tools
 
-agent = create_react_agent(model, tools=gate_tools(tools, gate=gate,
-                                                   sink=sink, agent_id="agent-1"))
+agent = create_react_agent(model, tools=gate_tools(tools, gate=gate, sink=sink, agent_id="agent-1"))
 ```
 
 ## What the gate does to a call

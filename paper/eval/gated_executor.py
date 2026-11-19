@@ -111,11 +111,15 @@ class GatedToolsExecutor(ToolsExecutor):
         self,
         query: str,
         runtime: FunctionsRuntime,
-        env=EmptyEnv(),
+        env=None,
         messages: Sequence[ChatMessage] = (),
-        extra_args: dict = {},
+        extra_args: dict | None = None,
     ):
         """Gate each tool call in the last assistant message; delegate the rest."""
+        if env is None:
+            env = EmptyEnv()
+        if extra_args is None:
+            extra_args = {}
         if not messages or messages[-1]["role"] != "assistant":
             return super().query(query, runtime, env, messages, extra_args)
         tool_calls = messages[-1].get("tool_calls") or []

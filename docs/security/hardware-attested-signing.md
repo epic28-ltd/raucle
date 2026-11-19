@@ -95,7 +95,7 @@ from raucle.tee import SimulatedNitroEnclave, TEESigner
 signer = SimulatedNitroEnclave().signer()  # mock boundary, labelled simulated
 # or, with a real enclave signing service behind sign_fn:
 signer = TEESigner(
-    sign_fn=enclave_dispatch,          # bytes in, 64-byte signature out
+    sign_fn=enclave_dispatch,  # bytes in, 64-byte signature out
     public_key_pem=enclave_public_pem,
     attestation_provider=enclave_provider,  # attestation_document(user_data, nonce)
 )

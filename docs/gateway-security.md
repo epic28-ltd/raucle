@@ -209,6 +209,69 @@ receipt's content hash: hand it to `raucle provenance verify` or the MCP
 - `X-Trace-Id` threads a caller-supplied trace through every receipt
   (`x_gate.trace_id`); absent header generates one and the response echoes
   it so callers can correlate.
+- `session_id` (optional on `/gate` requests) binds a call to a caller
+  declared agent run: present it and `x_gate.session_id` appears in the
+  signed receipt, allow and deny alike, and the projection indexes it
+  (schema v3, composite `(session_id, iat)` query). A bounded identifier
+  (1-128 chars, letters/digits/dot/underscore/hyphen); absent means **no
+  continuity recorded** - there is no trace-id fallback, the gateway never
+  fabricates a session.
+- `acting_for` (the B1 pair principal) rides `x_gate` inside the signed
+  receipt and is likewise captured by the projection from schema v3;
+  session-scoped queries ride the `(session_id, iat)` index, `acting_for`
+  is stored but not individually indexed.
+
+### Session behavioural rules
+
+With `session_id` declared, the gate evaluates deterministic session
+rules from the policy file in its deny-only pre-check tier - before any
+decision that could widen authority, after the policy tamper check.
+
+Every ordinary `PolicyRule` and every session rule accepts an optional
+`participant` matcher with two observable values: `tool_call` (the
+default; the gate's own decision surface) and `tool_response_taint`
+(the rule additionally evaluates only when the gateway holds recorded
+chain taint for that tool from `record_chain_output`). Unknown values
+fail the policy load closed with a named error. Only these two
+participants exist at the gate: user and assistant message content and
+tool definitions never pass through the enforcement path, so the DSL
+deliberately offers no matcher for them - assistant-side observation is
+the middleware advisory lane, not a gate rule.
+Five rule kinds ship in v1:
+
+- `repeated_deny_storm`: N or more denies for the same tool pattern
+  within the window.
+- `runaway_tool_loop`: N or more calls of the same tool within the
+  window with no receipted success between them.
+- `gradual_extraction`: N or more decisions touching destinations of a
+  given `destination_class` within the window (classification rides the
+  existing `destination_class` field; content is never scanned).
+- `forbidden_tool_chain`: the last K tools in the window exactly match
+  a declared ordered sequence.
+- `scope_drift`: calls to tools outside the rule's declared known set
+  for the agent, N strikes within the window.
+
+Semantics and limits, stated plainly:
+
+- A session rule can only **deny** in v1 (and the denial emits a
+  receipted `session-monitor` finding citing the triggering gate
+  receipt, so the whole attack sequence verifies offline). Escalation
+  to approval is a named follow-up, not shipped.
+- Rules never see content: windows hold decision summaries only
+  (decision, tool, timestamp, trace id, destination class). Absent
+  `session_id` means no session evaluation at all.
+- Window state is process memory, config-bounded
+  (`RAUCLE_SESSION_WINDOW_TTL_SECONDS`, `..._MAX_KEYS`, `..._MAX_ENTRIES`)
+  and replayed from the receipt index on boot within the TTL window.
+  A restart mid-session resets counters; the replay bounds the gap, and
+  replayed rows lack `destination_class` (not indexed), so
+  `gradual_extraction` can undercount after a restart - it never
+  fabricates a deny.
+- Session-rule files ride the policy-bytes tamper seal: an out-of-band
+  edit fails closed (`policy_tampered`), and each session-rule deny
+  binds the rule content digest as its ruleset hash.
+- Evaluation is deterministic and declared-first-wins when several
+  rules match one call.
 - Fail-closed accountability: if a receipt cannot be written, the decision
   is downgraded to deny. An action without its receipt is unauthorised.
 - Receipts are signed by the persistent gateway identity (`agent:gate`),
@@ -425,6 +488,15 @@ agent's gateway credential and writes an `x_stop` receipt recording
 who stopped the agent, when, and why. Revocation propagates to
 enforcement on the next call; the receipt means the containment
 itself is attributable evidence in the incident review.
+
+### Content DLP scan receipts
+
+`emit_dlp_finding` mints a signed receipt with the `x_dlp` extension
+for an in-path content scanner (the enterprise LLM endpoint proxy is a
+client that scans; the gateway does not scan content itself). The
+extension carries digests, bounded pattern classes and span counts
+only - never content - and verifies offline like every other extension
+receipt ([spec](provenance/v1.2/content-dlp.md)).
 
 ## Trust boundary: outbound URL fetching
 

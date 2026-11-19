@@ -41,9 +41,7 @@ from typing import Any, Literal
 import agentdojo.task_suite  # noqa: F401
 
 from paper.eval import agentdojo_patches  # noqa: F401 — model registry
-
 from raucle.capability import (
-    Capability,
     CapabilityGate,
     CapabilityIssuer,
 )
@@ -264,6 +262,7 @@ def run_faithful(
     Requires ANTHROPIC_API_KEY or OPENAI_API_KEY.
     """
     import os
+
     from anthropic import Anthropic
 
     if not os.getenv("ANTHROPIC_API_KEY"):

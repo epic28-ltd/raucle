@@ -245,6 +245,100 @@ _MAX_SAFE_INT = 2**53 - 1
 _MIN_SAFE_INT = -(2**53 - 1)
 _SHA256_PREFIX = "sha256:"
 
+_DLP_ACTIONS = frozenset({"blocked", "redacted", "allowed_with_findings"})
+_DLP_DIRECTIONS = frozenset({"egress_to_model", "ingress_from_model", "egress_to_tool"})
+# Bounded, versioned matched-class vocabulary (v1.2 content DLP spec,
+# docs/spec/provenance/v1.2/content-dlp.md). The list grows only with a
+# schema-version bump so older verifiers fail closed on unknown classes
+# instead of silently widening the disclosure boundary.
+_DLP_MATCHED_CLASSES = frozenset(
+    {"pii_card", "pii_email", "pci_pan", "secret_bearer", "pii_national_id"}
+)
+# Content-like field names that must never appear in a signed x_dlp block:
+# counts, digests, class names and route identifiers only (bounded
+# disclosure), so a leaky emitter cannot hide matched values in evidence.
+_DLP_FORBIDDEN_CONTENT_FIELDS = frozenset(
+    {"matched_value", "content", "snippet", "match_text", "excerpt", "sample", "verbatim"}
+)
+_DLP_REQUIRED_FIELDS = (
+    "action",
+    "scan_id",
+    "route",
+    "direction",
+    "content_sha256",
+    "matched_classes",
+    "span_counts",
+    "rule_id",
+)
+
+# Receipts v1.2 (K3): the shared bounded-disclosure sweep for the two new
+# signed surfaces (x_gate.counterfactual and the v1.2 x_revocation kind).
+# The DLP set is the historical core; the additions name the argument and
+# token material those surfaces must never carry. Content-like field names
+# fail with a named error wherever they appear, so a leaky emitter cannot
+# hide values inside signed evidence.
+_FORBIDDEN_FIELD_NAMES = frozenset(
+    _DLP_FORBIDDEN_CONTENT_FIELDS
+    | {
+        "args",
+        "arguments",
+        "call_args",
+        "constraint_values",
+        "constraints",
+        "credentials",
+        "secret",
+        "token",
+        "token_bytes",
+    }
+)
+# Receipts v1.2 (K3): the counterfactual block's version anchor and the
+# closed decision vocabulary. Spec: docs/spec/provenance/v1.2/
+# counterfactual-evidence.md.
+_COUNTERFACTUAL_VERSION = "counterfactual/v1"
+_COUNTERFACTUAL_DECISIONS = frozenset({"allow", "deny"})
+_COUNTERFACTUAL_FIELDS = frozenset(
+    {"version", "ruleset_hash", "decision", "rule_id", "rule_kind", "session", "evaluated_at"}
+)
+_COUNTERFACTUAL_SESSION_FIELDS = frozenset(
+    {"session_id", "window_seconds", "participant", "window_evidence"}
+)
+# Receipts v1.2 (K3): the v1.2 revocation-kind block's version anchor, the
+# closed kind and reason-class vocabularies and the closed field set.
+# Spec: docs/spec/provenance/v1.2/revocation-receipts.md.
+_REVOCATION_VERSION = "revocation/v1"
+_REVOCATION_KINDS = frozenset({"capability", "lease", "receipt"})
+_REVOCATION_REASON_CLASSES = frozenset(
+    {
+        "compromise",
+        "owner_departure",
+        "scope_correction",
+        "policy_change",
+        "operational",
+    }
+)
+_REVOCATION_V12_FIELDS = frozenset(
+    {
+        "version",
+        "kind",
+        "revoked_ids",
+        "revoked_hashes",
+        "root",
+        "actor",
+        "reason_class",
+        "reason",
+        "revoked_at",
+    }
+)
+
+
+def _is_sha256_digest(value: Any) -> bool:
+    """Whether *value* carries the sha256:<64 hex> digest shape."""
+    return (
+        isinstance(value, str)
+        and value.startswith(_SHA256_PREFIX)
+        and re.fullmatch(r"[0-9a-f]{64}", value[len(_SHA256_PREFIX) :]) is not None
+    )
+
 
 def _reject_floats(obj: Any) -> None:
     """Raise if *obj* contains a float, an integer outside the safe range, or a
@@ -1454,9 +1548,15 @@ class VerificationReport:
     unauthorised_sanitisations: int = 0
     tampered_receipts: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    # Receipts v1.2 (K3): one row per counterfactual block that passed its
+    # structural re-check, stating honestly whether the recorded decision
+    # was re-run. A chain verifier holds neither the alternative ruleset
+    # (named only by digest) nor the stored input, so the row says not
+    # re-run rather than guessing or upgrading the claim.
+    counterfactual_evidence: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "valid": self.valid,
             "receipt_count": self.receipt_count,
             "signature_failures": self.signature_failures,
@@ -1467,6 +1567,14 @@ class VerificationReport:
             "tampered_receipts": self.tampered_receipts,
             "errors": self.errors,
         }
+        # Receipts v1.2 (K3): the row set is OPTIONAL evidence. Emitting
+        # the key on a chain with no v1.2 blocks would change the report
+        # body shape for every existing consumer (pack reproducibility,
+        # bundles, fixture digests), so when empty the key is omitted
+        # and the v1.0 shape is byte-preserved.
+        if self.counterfactual_evidence:
+            d["counterfactual_evidence"] = self.counterfactual_evidence
+        return d
 
 
 class ProvenanceVerifier:
@@ -1721,6 +1829,7 @@ class ProvenanceVerifier:
         lease_grants: dict[str, dict[str, Any]],
         receipts_by_hash: dict[str, ProvenanceReceipt],
         raw_lines_by_hash: dict[str, str],
+        intent_constraint_values: set[str],
     ) -> None:
         """v1.1/v1.2 extension re-checks for one receipt (extracted from
         verify_chain): one helper per extension family, called in the
@@ -1732,12 +1841,21 @@ class ProvenanceVerifier:
         self._verify_delegated_authority_digest(x_gate_payload, line_no, report)
         self._verify_lease_extension(decoded, line_no, report, lease_grants)
         self._verify_cascade_revocation(
-            x_gate_payload, decoded, line_no, report, revoked_ids, revocation_lines
+            x_gate_payload,
+            decoded,
+            line_no,
+            report,
+            revoked_ids,
+            revocation_lines,
+            receipts_by_hash,
+            intent_constraint_values,
         )
-        self._verify_task_intent(x_gate_payload, receipt, line_no, report)
+        self._verify_task_intent(x_gate_payload, receipt, line_no, report, intent_constraint_values)
         self._verify_harness_finding(decoded, line_no, report, receipts_by_hash)
         self._verify_time_anchor(decoded, line_no, report, receipts_by_hash, raw_lines_by_hash)
         self._verify_bilateral(decoded, line_no, receipt, report)
+        self._verify_x_dlp(decoded, line_no, report, receipts_by_hash)
+        self._verify_counterfactual(decoded, x_gate_payload, receipt, line_no, report)
 
     def _verify_bilateral(
         self,
@@ -1821,6 +1939,441 @@ class ProvenanceVerifier:
                     f"executor {executor_key_id!r})"
                 )
                 report.valid = False
+
+    def _verify_x_dlp(
+        self,
+        decoded: Any,
+        line_no: int,
+        report: VerificationReport,
+        receipts_by_hash: dict[str, ProvenanceReceipt],
+    ) -> None:
+        """Invariant (EPIC Q, lane Q-7a): a content-scanner DLP receipt
+        (x_dlp) carries digests, class names and counts only, never
+        content. Offline re-check with no scanner present: required
+        fields, closed action/direction vocabularies, sha256-shaped
+        digests, non-negative span counts agreeing with matched_classes,
+        redaction/action consistency, the bounded matched-class
+        vocabulary, and chain membership of any cited receipt. A payload
+        carrying a content-like field (matched_value, snippet, ...) fails
+        with a named error, so a leaky emitter cannot hide matched values
+        inside signed evidence. Receipts without the block are untouched
+        (additive extension, historical order preserved). Mutates *report*
+        in place."""
+        x_dlp = decoded.get("x_dlp") if isinstance(decoded, dict) else None
+        if x_dlp is None:
+            return
+        if not isinstance(x_dlp, dict):
+            report.errors.append(
+                f"line {line_no}: x_dlp must be an object, got {type(x_dlp).__name__}"
+            )
+            report.valid = False
+            return
+
+        # Structural validity first: every required field present.
+        for required in _DLP_REQUIRED_FIELDS:
+            if x_dlp.get(required) is None:
+                report.errors.append(f"line {line_no}: x_dlp missing field {required!r}")
+                report.valid = False
+
+        action = x_dlp.get("action")
+        if action not in _DLP_ACTIONS:
+            report.errors.append(
+                f"line {line_no}: x_dlp action {action!r} outside the closed "
+                f"vocabulary {sorted(_DLP_ACTIONS)}"
+            )
+            report.valid = False
+
+        direction = x_dlp.get("direction")
+        if direction not in _DLP_DIRECTIONS:
+            report.errors.append(
+                f"line {line_no}: x_dlp direction {direction!r} outside the closed "
+                f"vocabulary {sorted(_DLP_DIRECTIONS)}"
+            )
+            report.valid = False
+
+        # Digests are sha256-shaped: prefix plus 64 hex characters. The
+        # verifier never sees content, only these digests.
+        for digest_field in ("content_sha256", "redacted_content_sha256"):
+            digest = x_dlp.get(digest_field)
+            if digest is None:
+                continue
+            shape_ok = (
+                isinstance(digest, str)
+                and digest.startswith(_SHA256_PREFIX)
+                and re.fullmatch(r"[0-9a-f]{64}", digest[len(_SHA256_PREFIX) :]) is not None
+            )
+            if not shape_ok:
+                report.errors.append(
+                    f"line {line_no}: x_dlp {digest_field} is not a sha256 digest "
+                    f"of the form sha256:<64 hex characters>"
+                )
+                report.valid = False
+
+        # Action/redaction consistency: the post-redaction digest is
+        # present if and only if the action is redacted.
+        redacted_digest = x_dlp.get("redacted_content_sha256")
+        if action == "redacted" and not redacted_digest:
+            report.errors.append(
+                f"line {line_no}: x_dlp action 'redacted' carries no redacted_content_sha256"
+            )
+            report.valid = False
+        if action != "redacted" and redacted_digest is not None:
+            report.errors.append(
+                f"line {line_no}: x_dlp action {action!r} carries a "
+                f"redacted_content_sha256 (present only when action='redacted')"
+            )
+            report.valid = False
+
+        # Bounded class vocabulary, versioned: an unknown class fails
+        # closed rather than widening disclosure.
+        matched_classes = x_dlp.get("matched_classes")
+        classes: set[str] = set()
+        if not isinstance(matched_classes, list) or not matched_classes:
+            report.errors.append(f"line {line_no}: x_dlp matched_classes must be a non-empty list")
+            report.valid = False
+        else:
+            for mclass in matched_classes:
+                if not isinstance(mclass, str) or mclass not in _DLP_MATCHED_CLASSES:
+                    report.errors.append(
+                        f"line {line_no}: x_dlp unknown class {mclass!r} outside the "
+                        f"bounded vocabulary {sorted(_DLP_MATCHED_CLASSES)}"
+                    )
+                    report.valid = False
+                else:
+                    classes.add(mclass)
+
+        # Span counts: non-negative integers, keys in the same bounded
+        # vocabulary, and every counted class listed in matched_classes.
+        span_counts = x_dlp.get("span_counts")
+        if not isinstance(span_counts, dict):
+            report.errors.append(f"line {line_no}: x_dlp span_counts must be an object")
+            report.valid = False
+        else:
+            for spclass, count in span_counts.items():
+                if not isinstance(spclass, str) or spclass not in _DLP_MATCHED_CLASSES:
+                    report.errors.append(
+                        f"line {line_no}: x_dlp span_counts unknown class {spclass!r} "
+                        f"outside the bounded vocabulary {sorted(_DLP_MATCHED_CLASSES)}"
+                    )
+                    report.valid = False
+                    continue
+                if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                    report.errors.append(
+                        f"line {line_no}: x_dlp span_counts for {spclass!r} is not a "
+                        f"non-negative integer"
+                    )
+                    report.valid = False
+                if (
+                    isinstance(spclass, str)
+                    and spclass in _DLP_MATCHED_CLASSES
+                    and spclass not in classes
+                ):
+                    report.errors.append(
+                        f"line {line_no}: x_dlp span_counts names class {spclass!r} "
+                        f"absent from matched_classes"
+                    )
+                    report.valid = False
+
+        # Bounded disclosure: no content-like field anywhere in the block.
+        for leak_field in _DLP_FORBIDDEN_CONTENT_FIELDS:
+            if leak_field in x_dlp:
+                report.errors.append(
+                    f"line {line_no}: x_dlp carries content-like field "
+                    f"{leak_field!r} (bounded disclosure: counts, digests and "
+                    f"class names only, never content)"
+                )
+                report.valid = False
+
+        # Chain membership of any cited receipt, like every other
+        # extension citation.
+        cited = str(x_dlp.get("cited_receipt", ""))
+        if cited and cited not in receipts_by_hash:
+            report.errors.append(f"line {line_no}: x_dlp cites receipt {cited!r} not in the chain")
+            report.valid = False
+
+    def _forbidden_field_sweep(
+        self, block: Any, surface: str, line_no: int, report: VerificationReport
+    ) -> None:
+        """Receipts v1.2 (K3): the shared bounded-disclosure sweep. A
+        content-like field name anywhere inside a signed block (any
+        depth, object key or list element) fails with a named error, so
+        a leaky emitter cannot hide argument or token material inside
+        evidence. Mutates *report* in place."""
+        stack = [block]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key in _FORBIDDEN_FIELD_NAMES:
+                        report.errors.append(
+                            f"line {line_no}: {surface} carries content-like field "
+                            f"{key!r} (bounded disclosure: identifiers, digests and "
+                            f"counts only, never content)"
+                        )
+                        report.valid = False
+                    stack.append(value)
+            elif isinstance(node, (list, tuple)):
+                stack.extend(node)
+
+    @staticmethod
+    def _session_rule_kinds() -> frozenset[str]:
+        """The closed session-rule kind vocabulary (lazy import: the
+        check runs per receipt, not at module load)."""
+        from raucle.policy import SESSION_RULE_KINDS
+
+        return frozenset(SESSION_RULE_KINDS)
+
+    def _verify_counterfactual(
+        self,
+        decoded: Any,
+        x_gate_payload: dict[str, Any],
+        receipt: ProvenanceReceipt,
+        line_no: int,
+        report: VerificationReport,
+    ) -> None:
+        """Invariant (receipts v1.2, K3): a receipt's optional
+        counterfactual block re-checks structurally offline - the version
+        gate, the closed field set, the closed decision and rule-kind
+        vocabularies, the sha256-shaped ruleset digest, evaluated_at
+        never later than the receipt's own iat, session coherence with
+        the receipt's own session id, and the exact two-key
+        window_evidence shape. The recorded decision is not re-run: this
+        verifier holds neither the alternative ruleset (named only by
+        digest) nor the stored input, so a structurally valid block earns
+        one evidence row that says not re-run, honestly, and the chain
+        stays valid. Receipts without the block are untouched (additive
+        extension). Mutates *report* in place."""
+        cf = x_gate_payload.get("counterfactual")
+        if cf is None:
+            return
+        if not isinstance(cf, dict):
+            report.errors.append(
+                f"line {line_no}: counterfactual must be an object, got {type(cf).__name__}"
+            )
+            report.valid = False
+            return
+
+        errors_before = len(report.errors)
+        self._forbidden_field_sweep(cf, "counterfactual", line_no, report)
+
+        # Closed field set: the block names a hypothetical decision,
+        # never an open-ended payload.
+        for key in cf:
+            if key not in _COUNTERFACTUAL_FIELDS:
+                report.errors.append(
+                    f"line {line_no}: counterfactual carries unknown field {key!r} "
+                    f"(closed set: {sorted(_COUNTERFACTUAL_FIELDS)})"
+                )
+                report.valid = False
+
+        for required in ("version", "ruleset_hash", "decision", "evaluated_at"):
+            if cf.get(required) is None:
+                report.errors.append(f"line {line_no}: counterfactual missing field {required!r}")
+                report.valid = False
+
+        version = cf.get("version")
+        if version is not None and version != _COUNTERFACTUAL_VERSION:
+            report.errors.append(
+                f"line {line_no}: counterfactual version {version!r} is unknown "
+                f"(supported: {_COUNTERFACTUAL_VERSION}); the block is refused, "
+                f"never skipped"
+            )
+            report.valid = False
+
+        decision = cf.get("decision")
+        if decision is not None and decision not in _COUNTERFACTUAL_DECISIONS:
+            report.errors.append(
+                f"line {line_no}: counterfactual decision {decision!r} outside the "
+                f"closed vocabulary {sorted(_COUNTERFACTUAL_DECISIONS)}"
+            )
+            report.valid = False
+
+        if not _is_sha256_digest(cf.get("ruleset_hash")):
+            report.errors.append(
+                f"line {line_no}: counterfactual ruleset_hash is not a sha256 "
+                f"digest of the form sha256:<64 hex characters>"
+            )
+            report.valid = False
+
+        # A post-dated block is editorial, not evidence.
+        evaluated_at = cf.get("evaluated_at")
+        iat = decoded.get("iat") if isinstance(decoded, dict) else None
+        if not isinstance(evaluated_at, int) or isinstance(evaluated_at, bool):
+            report.errors.append(f"line {line_no}: counterfactual evaluated_at is not an integer")
+            report.valid = False
+        elif isinstance(iat, int) and evaluated_at > iat:
+            report.errors.append(
+                f"line {line_no}: counterfactual evaluated_at {evaluated_at} is "
+                f"later than the receipt's own iat {iat}"
+            )
+            report.valid = False
+
+        # rule_id is present if and only if the alternative rule fired
+        # (decision deny); an allow that carries rule fields claims a rule
+        # that did not fire.
+        rule_kind = cf.get("rule_kind")
+        if decision == "allow":
+            for absent_field in ("rule_id", "rule_kind", "session"):
+                if cf.get(absent_field) is not None:
+                    report.errors.append(
+                        f"line {line_no}: counterfactual decision 'allow' carries "
+                        f"{absent_field!r} (rule fields are present only when the "
+                        f"alternative rule fired)"
+                    )
+                    report.valid = False
+        elif decision == "deny":
+            for required_field in ("rule_id", "rule_kind"):
+                if cf.get(required_field) is None:
+                    report.errors.append(
+                        f"line {line_no}: counterfactual decision 'deny' carries no "
+                        f"{required_field!r} (the firing alternative rule is named)"
+                    )
+                    report.valid = False
+
+        # The closed rule-kind vocabulary: a policy rule or a session rule
+        # may back a counterfactual; anything else (advisory detection,
+        # classifier verdicts) is detection, not this surface.
+        session_kinds = self._session_rule_kinds()
+        if rule_kind is not None:
+            if rule_kind not in {"policy_rule"} | session_kinds:
+                report.errors.append(
+                    f"line {line_no}: counterfactual rule_kind {rule_kind!r} "
+                    f"outside the closed vocabulary (policy_rule or a session "
+                    f"rule kind {sorted(session_kinds)})"
+                )
+                report.valid = False
+            else:
+                session = cf.get("session")
+                if rule_kind in session_kinds and session is None:
+                    report.errors.append(
+                        f"line {line_no}: counterfactual rule_kind {rule_kind!r} "
+                        f"carries no session block (a session rule names the window "
+                        f"it fired over)"
+                    )
+                    report.valid = False
+                if rule_kind == "policy_rule" and session is not None:
+                    report.errors.append(
+                        f"line {line_no}: counterfactual rule_kind 'policy_rule' "
+                        f"carries a session block (a policy rule fires on the call, "
+                        f"not over a session window)"
+                    )
+                    report.valid = False
+
+        # Session coherence: the block cites the receipt's own session, and
+        # the window evidence is exactly the closed two-key shape.
+        session = cf.get("session")
+        if session is not None:
+            self._verify_counterfactual_session(session, x_gate_payload, line_no, report)
+
+        if len(report.errors) == errors_before:
+            report.counterfactual_evidence.append(
+                {
+                    "receipt": receipt.receipt_hash,
+                    "decision": decision,
+                    "re_run": False,
+                    "note": (
+                        "counterfactual recorded at decision time by the gate "
+                        "machinery; not re-run at verification (the alternative "
+                        "ruleset is named only by digest and the stored input is "
+                        "not held)"
+                    ),
+                }
+            )
+
+    def _verify_counterfactual_session(
+        self,
+        session: Any,
+        x_gate_payload: dict[str, Any],
+        line_no: int,
+        report: VerificationReport,
+    ) -> None:
+        """Receipts v1.2 (K3): the counterfactual session block re-check -
+        closed field set, the receipt's own session id, a positive integer
+        window, the closed participant vocabulary and the exact two-key
+        window_evidence shape (non-negative integer counters, string tool
+        names). Mutates *report* in place."""
+        if not isinstance(session, dict):
+            report.errors.append(
+                f"line {line_no}: counterfactual session must be an object, "
+                f"got {type(session).__name__}"
+            )
+            report.valid = False
+            return
+
+        for key in session:
+            if key not in _COUNTERFACTUAL_SESSION_FIELDS:
+                report.errors.append(
+                    f"line {line_no}: counterfactual session carries unknown "
+                    f"field {key!r} (closed set: {sorted(_COUNTERFACTUAL_SESSION_FIELDS)})"
+                )
+                report.valid = False
+
+        for required in ("session_id", "window_seconds", "participant", "window_evidence"):
+            if session.get(required) is None:
+                report.errors.append(
+                    f"line {line_no}: counterfactual session missing field {required!r}"
+                )
+                report.valid = False
+
+        own_session_id = x_gate_payload.get("session_id") or ""
+        cited_session_id = session.get("session_id")
+        if cited_session_id is not None and cited_session_id != own_session_id:
+            report.errors.append(
+                f"line {line_no}: counterfactual session cites session id "
+                f"{cited_session_id!r}, not the receipt's own session id "
+                f"{own_session_id!r}"
+            )
+            report.valid = False
+
+        window_seconds = session.get("window_seconds")
+        if (
+            not isinstance(window_seconds, int)
+            or isinstance(window_seconds, bool)
+            or window_seconds < 1
+        ):
+            report.errors.append(
+                f"line {line_no}: counterfactual session window_seconds is not a positive integer"
+            )
+            report.valid = False
+
+        participant = session.get("participant")
+        if participant is not None:
+            from raucle.policy import PARTICIPANTS
+
+            if participant not in PARTICIPANTS:
+                report.errors.append(
+                    f"line {line_no}: counterfactual session participant "
+                    f"{participant!r} outside the closed vocabulary "
+                    f"{list(PARTICIPANTS)}"
+                )
+                report.valid = False
+
+        evidence = session.get("window_evidence")
+        if not isinstance(evidence, dict) or set(evidence) != {"counters", "tools"}:
+            report.errors.append(
+                f"line {line_no}: counterfactual window_evidence must be exactly "
+                f"the two-key shape {{'counters', 'tools'}}"
+            )
+            report.valid = False
+            return
+        counters = evidence.get("counters")
+        if not isinstance(counters, dict) or any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in counters.values()
+        ):
+            report.errors.append(
+                f"line {line_no}: counterfactual window_evidence counters must "
+                f"map names to non-negative integers"
+            )
+            report.valid = False
+        tools = evidence.get("tools")
+        if not isinstance(tools, list) or any(
+            not isinstance(tool, str) or not tool for tool in tools
+        ):
+            report.errors.append(
+                f"line {line_no}: counterfactual window_evidence tools must be a list of tool names"
+            )
+            report.valid = False
 
     def _decode_gate_payload(self, raw: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         """Invariant: x_gate lives INSIDE the signed JWS payload, not in the
@@ -1944,11 +2497,20 @@ class ProvenanceVerifier:
         report: VerificationReport,
         revoked_ids: set[str],
         revocation_lines: dict[str, int],
+        receipts_by_hash: dict[str, ProvenanceReceipt],
+        intent_constraint_values: set[str],
     ) -> None:
         """Invariant (A3): temporal cascade, single pass - a receipt minted
         AFTER a revocation of its cited authority is invalid; one minted
         BEFORE it remains valid evidence. Revocation events collect as the
-        walk proceeds, so they only bite later lines. Mutates *report*,
+        walk proceeds, so they only bite later lines. Receipts v1.2 (K3):
+        a block carrying ``version`` is the v1.2 kind and takes the full
+        structural re-check first (closed field set, kind and reason-class
+        vocabularies, chain-linkage digests, the revoked_at binding, the
+        shared bounded-disclosure sweep and the reason's class-level
+        rule); a block without ``version`` is the shipped v1.0 shape and
+        takes no v1.2 check (rule 4: revocations minted before this
+        document are valid and stay valid). Mutates *report*,
         *revoked_ids* and *revocation_lines* in place."""
         auth_block_now = x_gate_payload.get("authorization") or {}
         cited_now = {
@@ -1968,9 +2530,155 @@ class ProvenanceVerifier:
         if isinstance(decoded, dict):
             revocation = decoded.get("x_revocation")
         if revocation and isinstance(revocation, dict):
+            if "version" in revocation:
+                self._verify_v12_revocation_block(
+                    revocation,
+                    decoded,
+                    line_no,
+                    report,
+                    receipts_by_hash,
+                    intent_constraint_values,
+                )
             for rid in revocation.get("revoked_ids") or []:
                 revoked_ids.add(rid)
                 revocation_lines[rid] = line_no
+
+    def _verify_v12_revocation_block(
+        self,
+        revocation: dict[str, Any],
+        decoded: Any,
+        line_no: int,
+        report: VerificationReport,
+        receipts_by_hash: dict[str, ProvenanceReceipt],
+        intent_constraint_values: set[str],
+    ) -> None:
+        """Invariant (receipts v1.2, K3): the versioned revocation block
+        re-checks structurally offline - the version gate, the closed
+        field set, the closed kind and reason-class vocabularies, the
+        chain linkage (revoked_hashes keys exactly equal the revoked ids,
+        every value a sha256 digest), revoked_at never later than the
+        receipt's own iat, receipt-kind citations resolving in this chain,
+        the shared bounded-disclosure sweep, and the reason staying at
+        class level (never quoting a constraint value the chain's intent
+        receipts disclose). Fail-closed: an unknown version, kind or
+        reason class refuses with a named error, never a skip. Mutates
+        *report* in place."""
+        self._forbidden_field_sweep(revocation, "x_revocation", line_no, report)
+
+        # Closed field set: the block names a revocation event, never an
+        # open-ended payload.
+        for key in revocation:
+            if key not in _REVOCATION_V12_FIELDS:
+                report.errors.append(
+                    f"line {line_no}: x_revocation carries unknown field {key!r} "
+                    f"(closed set: {sorted(_REVOCATION_V12_FIELDS)})"
+                )
+                report.valid = False
+
+        for required in (
+            "version",
+            "kind",
+            "revoked_ids",
+            "revoked_hashes",
+            "actor",
+            "reason_class",
+            "revoked_at",
+        ):
+            if revocation.get(required) is None:
+                report.errors.append(f"line {line_no}: x_revocation missing field {required!r}")
+                report.valid = False
+
+        version = revocation.get("version")
+        if version is not None and version != _REVOCATION_VERSION:
+            report.errors.append(
+                f"line {line_no}: x_revocation version {version!r} is unknown "
+                f"(supported: {_REVOCATION_VERSION}); the block is refused, "
+                f"never skipped"
+            )
+            report.valid = False
+
+        kind = revocation.get("kind")
+        if kind is not None and kind not in _REVOCATION_KINDS:
+            report.errors.append(
+                f"line {line_no}: x_revocation kind {kind!r} outside the closed "
+                f"vocabulary {sorted(_REVOCATION_KINDS)}"
+            )
+            report.valid = False
+
+        reason_class = revocation.get("reason_class")
+        if reason_class is not None and reason_class not in _REVOCATION_REASON_CLASSES:
+            report.errors.append(
+                f"line {line_no}: x_revocation reason_class {reason_class!r} "
+                f"outside the closed vocabulary {sorted(_REVOCATION_REASON_CLASSES)}"
+            )
+            report.valid = False
+
+        # Chain linkage: keys exactly equal the revoked ids, every value a
+        # sha256 digest a third party holding the revoked material re-derives.
+        revoked_ids = revocation.get("revoked_ids")
+        revoked_hashes = revocation.get("revoked_hashes")
+        ids_ok = isinstance(revoked_ids, list) and all(isinstance(rid, str) for rid in revoked_ids)
+        if not ids_ok:
+            report.errors.append(f"line {line_no}: x_revocation revoked_ids must be a list of ids")
+            report.valid = False
+        if not isinstance(revoked_hashes, dict):
+            report.errors.append(
+                f"line {line_no}: x_revocation revoked_hashes must map ids to digests"
+            )
+            report.valid = False
+        elif ids_ok:
+            if set(revoked_hashes) != set(revoked_ids):
+                report.errors.append(
+                    f"line {line_no}: x_revocation revoked_hashes keys must equal "
+                    f"the revoked ids exactly (chain linkage)"
+                )
+                report.valid = False
+            for rid, digest in revoked_hashes.items():
+                if not _is_sha256_digest(digest):
+                    report.errors.append(
+                        f"line {line_no}: x_revocation revoked_hashes for {rid!r} "
+                        f"is not a sha256 digest of the form "
+                        f"sha256:<64 hex characters>"
+                    )
+                    report.valid = False
+
+        # A post-dated revocation timestamp is editorial, not evidence.
+        revoked_at = revocation.get("revoked_at")
+        iat = decoded.get("iat") if isinstance(decoded, dict) else None
+        if not isinstance(revoked_at, int) or isinstance(revoked_at, bool):
+            report.errors.append(f"line {line_no}: x_revocation revoked_at is not an integer")
+            report.valid = False
+        elif isinstance(iat, int) and revoked_at > iat:
+            report.errors.append(
+                f"line {line_no}: x_revocation revoked_at {revoked_at} is later "
+                f"than the receipt's own iat {iat}"
+            )
+            report.valid = False
+
+        # Bounded disclosure: the reason stays at class level. A revocation
+        # receipt is retained for the life of the archive, so it must never
+        # quote a constraint value the chain's intent receipts disclose.
+        reason = revocation.get("reason")
+        if isinstance(reason, str) and reason:
+            for value in intent_constraint_values:
+                if value and value in reason:
+                    report.errors.append(
+                        f"line {line_no}: x_revocation reason quotes a constraint "
+                        f"value the chain's receipts disclose (bounded disclosure: "
+                        f"the reason stays at class level)"
+                    )
+                    report.valid = False
+                    break
+
+        # kind = receipt: the same membership rule every extension citation
+        # obeys - every cited receipt must exist in this chain.
+        if kind == "receipt" and ids_ok:
+            for rid in revoked_ids:
+                if rid not in receipts_by_hash:
+                    report.errors.append(
+                        f"line {line_no}: x_revocation cites receipt {rid!r} not in the chain"
+                    )
+                    report.valid = False
 
     def _verify_task_intent(
         self,
@@ -1978,13 +2686,19 @@ class ProvenanceVerifier:
         receipt: ProvenanceReceipt,
         line_no: int,
         report: VerificationReport,
+        intent_constraint_values: set[str],
     ) -> None:
         """Invariant (v1.2, defence-in-depth): an ALLOW receipt must fall
         inside the approved tool scope and satisfy the intent constraints,
         re-checked deterministically over the bounded disclosure. A DENY
         for an out-of-intent attempt is the enforcement working, not a
-        violation. Mutates *report* in place."""
+        violation. The block's disclosed constraint values are collected
+        for the revocation reason's class-level rule (a revocation
+        receipt retained for the life of the archive must never quote
+        them). Mutates *report* in place."""
         intent = x_gate_payload.get("intent")
+        if intent is not None:
+            self._collect_intent_constraint_values(x_gate_payload, intent_constraint_values)
         if intent is not None and x_gate_payload.get("decision") == "allow":
             gate_tool = x_gate_payload.get("tool") or receipt.tool
             intent_tools = intent.get("tools")
@@ -2006,6 +2720,40 @@ class ProvenanceVerifier:
                         f"line {line_no}: ALLOW receipt violates intent constraint ({why})"
                     )
                     report.valid = False
+
+    def _collect_intent_constraint_values(
+        self, x_gate_payload: dict[str, Any], intent_constraint_values: set[str]
+    ) -> None:
+        """Receipts v1.2 (K3): collect the constraint VALUES an intent
+        receipt discloses - the intent's declared constraint values and
+        the intent check's satisfied field values - so the revocation
+        reason's class-level rule can refuse a reason that quotes them.
+        Values only, never field names: a reason naming a field names the
+        schema, not the chain's disclosed material. Mutates
+        *intent_constraint_values* in place."""
+        intent = x_gate_payload.get("intent")
+        if isinstance(intent, dict):
+            constraints = intent.get("constraints")
+            if isinstance(constraints, dict):
+                self._collect_string_values(constraints, intent_constraint_values)
+        check = x_gate_payload.get("intent_check")
+        if isinstance(check, dict):
+            satisfied = check.get("satisfied_fields")
+            if isinstance(satisfied, dict):
+                self._collect_string_values(satisfied, intent_constraint_values)
+
+    @staticmethod
+    def _collect_string_values(node: Any, out: set[str]) -> None:
+        """Every non-empty string value anywhere in *node*, at any depth."""
+        stack = [node]
+        while stack:
+            current = stack.pop()
+            if isinstance(current, dict):
+                stack.extend(current.values())
+            elif isinstance(current, (list, tuple)):
+                stack.extend(current)
+            elif isinstance(current, str) and current:
+                out.add(current)
 
     def _verify_harness_finding(
         self,
@@ -2162,6 +2910,10 @@ class ProvenanceVerifier:
         revoked_ids: set[str] = set()
         revocation_lines: dict[str, int] = {}
         lease_grants: dict[str, dict[str, Any]] = {}
+        # Receipts v1.2 (K3): the constraint values intent receipts disclose
+        # across the whole chain, collected line by line so a later
+        # revocation's reason can be refused for quoting them.
+        intent_constraint_values: set[str] = set()
 
         with open(path, encoding="utf-8") as fh:
             for line_no, line in enumerate(fh, start=1):
@@ -2194,6 +2946,7 @@ class ProvenanceVerifier:
                     lease_grants,
                     receipts_by_hash,
                     raw_lines_by_hash,
+                    intent_constraint_values,
                 )
 
                 receipts_by_hash[receipt.receipt_hash] = receipt

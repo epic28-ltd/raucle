@@ -135,6 +135,11 @@ class PolicyRule:
     # evidence quality the authority depends on, and the narrowing-side
     # behaviour when the evidence is degraded. See :class:`raucle.eqr.EQR`.
     eqr: Any = None
+    # Participant matcher (EPIC Q lane Q-3): which observable participant
+    # the rule scopes to, one of ``tool_call`` (default, the gate's own
+    # decision surface) or ``tool_response_taint``. Empty string keeps the
+    # historical behaviour byte-compatibly.
+    participant: str = ""
     # Source/destination matching: the policy only applies when the
     # inbound source and outbound destination match these patterns.
     # Empty string or "*" means "match anything".
@@ -204,6 +209,220 @@ def _load_eqr_class() -> Any:
     return EQR
 
 
+# ---------------------------------------------------------------------------
+# Session behavioural rules (EPIC Q lane Q-2)
+# ---------------------------------------------------------------------------
+
+#: The closed v1 rule-kind vocabulary: deterministic rules evaluated over
+#: the gateway's session window state (bounded decision summaries). v1
+#: actions are deny-only; escalation is a named v1.1 follow-up.
+SESSION_RULE_KINDS = (
+    "repeated_deny_storm",
+    "runaway_tool_loop",
+    "gradual_extraction",
+    "forbidden_tool_chain",
+    "scope_drift",
+)
+
+# ---------------------------------------------------------------------------
+# Participant matchers (EPIC Q lane Q-3): per-participant traffic tagging
+# ---------------------------------------------------------------------------
+
+#: The closed participant vocabulary: the two participants whose traffic
+#: the gate actually observes. ``tool_call`` is the gate's own decision
+#: surface (the default; semantics unchanged when omitted).
+#: ``tool_response_taint`` marks rules that additionally consider the
+#: recorded chain taint (``record_chain_output`` state) for the rule's
+#: tool. User, assistant and tool-definition participants deliberately do
+#: not exist here: the gateway never sees that content, and the DSL must
+#: not pretend to match it. Unknown values fail closed at load with a
+#: named error, never a silently skipped rule.
+PARTICIPANTS = ("tool_call", "tool_response_taint")
+
+
+def _validate_participant(value: Any, *, context: str) -> str:
+    """Validate one ``participant`` matcher value; empty means the default."""
+    if value is None:
+        return ""
+    if not isinstance(value, str) or value not in ("",) + PARTICIPANTS:
+        raise ValueError(
+            f"{context}: unknown participant {value!r}; use one of "
+            + ", ".join(PARTICIPANTS)
+            + " (unknown participants fail closed at load; the gateway "
+            "observes only tool calls and recorded tool-response taint)"
+        )
+    return value
+
+
+_KINDS_NEEDING_THRESHOLD = frozenset(
+    {"repeated_deny_storm", "runaway_tool_loop", "gradual_extraction", "scope_drift"}
+)
+
+
+def _session_rule_int(data: dict[str, Any], key: str, *, minimum: int = 1) -> int:
+    value = data.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"session rule field '{key}' must be an integer >= {minimum}")
+    return value
+
+
+def _session_rule_str_list(data: dict[str, Any], key: str) -> list[str]:
+    value = data.get(key)
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"session rule field '{key}' must be a non-empty list")
+    if any(not isinstance(v, str) or not v for v in value):
+        raise ValueError(f"session rule field '{key}' must be non-empty strings")
+    return list(value)
+
+
+@dataclass
+class SessionRule:
+    """One deterministic session rule (EPIC Q lane Q-2).
+
+    Rules are evaluated over the session window state: bounded, content-free
+    summaries of the session's RECEIPTED decisions (see
+    :class:`raucle.gateway.SessionWindowState`). A rule never sees tool
+    arguments or any content, only decision, tool name, timestamps, trace
+    and the caller-declared destination_class.
+
+    v1 actions are deny-only: a session rule participates in the gate's
+    only-ever-DENY pre-check tier. Escalation to approval is a named v1.1
+    follow-up and is refused at parse time for now.
+    """
+
+    id: str
+    kind: str
+    window_seconds: int
+    threshold: int = 0
+    tools: list[str] = field(default_factory=list)
+    sequence: list[str] = field(default_factory=list)
+    destination_class: str = ""
+    tool_patterns: list[str] = field(default_factory=list)
+    # Participant matcher (EPIC Q lane Q-3): one of ``tool_call`` or
+    # ``tool_response_taint``; empty means the default (tool_call). A
+    # ``tool_response_taint`` session rule counts only window entries whose
+    # trace has recorded chain taint (``record_chain_output`` state).
+    participant: str = ""
+    action: str = "deny"
+    description: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SessionRule:
+        if not isinstance(data, dict):
+            raise ValueError("a session rule must be a mapping")
+        rule_id = data.get("id", "")
+        if not isinstance(rule_id, str) or not rule_id:
+            raise ValueError("session rule field 'id' is required")
+        kind = data.get("kind", "")
+        if kind not in SESSION_RULE_KINDS:
+            raise ValueError(
+                f"unknown session rule kind {kind!r}; use one of " + ", ".join(SESSION_RULE_KINDS)
+            )
+        action = data.get("action", "deny") or "deny"
+        if action != "deny":
+            raise ValueError(
+                f"session rule action {action!r} is not supported in v1; only 'deny' is allowed"
+            )
+        window_seconds = _session_rule_int(data, "window_seconds")
+        threshold = 0
+        if kind in _KINDS_NEEDING_THRESHOLD:
+            threshold = _session_rule_int(data, "threshold")
+        tools: list[str] = []
+        if kind == "scope_drift":
+            tools = _session_rule_str_list(data, "tools")
+        sequence: list[str] = []
+        if kind == "forbidden_tool_chain":
+            sequence = _session_rule_str_list(data, "sequence")
+        destination_class = ""
+        if kind == "gradual_extraction":
+            destination_class = data.get("destination_class", "")
+            if not isinstance(destination_class, str) or not destination_class:
+                raise ValueError(
+                    "session rule field 'destination_class' is required for gradual_extraction"
+                )
+        patterns_raw = data.get("tool_patterns", [])
+        if patterns_raw is None:
+            patterns_raw = []
+        if not isinstance(patterns_raw, list) or any(
+            not isinstance(p, str) or not p for p in patterns_raw
+        ):
+            raise ValueError(
+                "session rule field 'tool_patterns' must be a list of non-empty strings"
+            )
+        description = data.get("description", "")
+        if not isinstance(description, str):
+            raise ValueError("session rule field 'description' must be a string")
+        participant = _validate_participant(
+            data.get("participant"), context="session rule field 'participant'"
+        )
+        return cls(
+            id=rule_id,
+            kind=kind,
+            window_seconds=window_seconds,
+            threshold=threshold,
+            tools=tools,
+            sequence=sequence,
+            destination_class=destination_class,
+            tool_patterns=list(patterns_raw),
+            participant=participant,
+            action=action,
+            description=description,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """The canonical dict form: round-trips through :meth:`from_dict`
+        and is the content the gateway binds into a session-rule deny
+        receipt's ruleset_hash."""
+        data: dict[str, Any] = {
+            "id": self.id,
+            "kind": self.kind,
+            "window_seconds": self.window_seconds,
+        }
+        if self.threshold:
+            data["threshold"] = self.threshold
+        if self.tools:
+            data["tools"] = list(self.tools)
+        if self.sequence:
+            data["sequence"] = list(self.sequence)
+        if self.destination_class:
+            data["destination_class"] = self.destination_class
+        if self.tool_patterns:
+            data["tool_patterns"] = list(self.tool_patterns)
+        if self.participant:
+            data["participant"] = self.participant
+        if self.action != "deny":
+            data["action"] = self.action
+        if self.description:
+            data["description"] = self.description
+        return data
+
+
+def _parse_session_rules(raw: Any) -> tuple[list[SessionRule], list[str]]:
+    """Parse the optional ``session_rules:`` block, capturing named errors.
+
+    Never raises and never silently skips: a malformed rule is returned as
+    a NAMED error so the gateway can deny fail-closed. A session rule that
+    cannot be evaluated must not become an unenforced rule.
+    """
+    rules: list[SessionRule] = []
+    errors: list[str] = []
+    if raw is None:
+        return rules, errors
+    if not isinstance(raw, list):
+        return [], ["session_rules must be a list of rule mappings"]
+    for i, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            errors.append(f"session rule {i}: expected a mapping")
+            continue
+        named = entry.get("id")
+        label = named if isinstance(named, str) and named else "unnamed"
+        try:
+            rules.append(SessionRule.from_dict(entry))
+        except ValueError as exc:
+            errors.append(f"session rule {i} ({label}): {exc}")
+    return rules, errors
+
+
 def compile_constraint_dsl(constraints: dict[str, Any]) -> dict[str, Any]:
     """Compile DSL constraint syntax to the gate's native format.
 
@@ -251,6 +470,12 @@ class PolicyFile:
     version: int
     issuer: str
     policies: list[PolicyRule] = field(default_factory=list)
+    # Session behavioural rules (EPIC Q lane Q-2): deterministic, deny-only
+    # rules the gateway evaluates over its session window state. Parsing
+    # captures a malformed rule as a NAMED error instead of raising, so a
+    # bad session rule can never silently vanish from enforcement.
+    session_rules: list[SessionRule] = field(default_factory=list)
+    session_rule_errors: list[str] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: str | Path) -> PolicyFile:
@@ -292,6 +517,9 @@ class PolicyFile:
                 ),
                 source=rule_data.get("source", ""),
                 destination=rule_data.get("destination", ""),
+                participant=_validate_participant(
+                    rule_data.get("participant"), context=f"Policy rule {i}"
+                ),
             )
             if not rule.id:
                 rule.id = f"{rule.tool}/{rule.agent_id}/{i}"
@@ -303,13 +531,25 @@ class PolicyFile:
             rule.to_mint_kwargs()  # raises on invalid
             policies.append(rule)
 
-        return cls(version=version, issuer=issuer, policies=policies)
+        session_rules, session_rule_errors = _parse_session_rules(data.get("session_rules"))
+        return cls(
+            version=version,
+            issuer=issuer,
+            policies=policies,
+            session_rules=session_rules,
+            session_rule_errors=session_rule_errors,
+        )
 
     def to_yaml(self) -> str:
         """Serialise back to YAML (round-trip for editing)."""
         data = {
             "version": self.version,
             "issuer": self.issuer,
+            **(
+                {"session_rules": [r.to_dict() for r in self.session_rules]}
+                if self.session_rules
+                else {}
+            ),
             "policies": [
                 {
                     "tool": r.tool,
@@ -330,6 +570,7 @@ class PolicyFile:
                     **({"eqr": r.eqr.to_dict()} if r.eqr is not None else {}),
                     **({"source": r.source} if r.source else {}),
                     **({"destination": r.destination} if r.destination else {}),
+                    **({"participant": r.participant} if r.participant else {}),
                 }
                 for r in self.policies
             ],
@@ -538,6 +779,7 @@ __all__ = [
     "PolicyFile",
     "PolicyRule",
     "ChainTaintDeny",
+    "PARTICIPANTS",
     "compile_constraint_dsl",
     "ApprovalThreshold",
     "mint_from_policy",

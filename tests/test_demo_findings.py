@@ -235,8 +235,12 @@ class TestPanelIntegration:
         assert section.count("textContent") >= 3
 
     def test_tour_covers_the_three_screens(self):
-        for tab in ("dlp", "injection", "shadow"):
-            assert f"tab:'{tab}'" in ADMIN_PANEL_HTML
+        # D17 re-arc: DLP stays in the tour; injection and shadow are
+        # reachable tabs deliberately off the walkthrough.
+        assert "tab:'dlp'" in ADMIN_PANEL_HTML
+        for tab in ("injection", "shadow"):
+            assert f'data-tab-id="{tab}"' in ADMIN_PANEL_HTML
+            assert f"showTab('{tab}',this)" in ADMIN_PANEL_HTML
 
     def test_demo_only_script_is_csp_hashed(self):
         # _panel_csp hashes the shipped script blocks; adding code must not

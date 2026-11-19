@@ -1,15 +1,15 @@
-"""Tracks K, L, M — gap-closing weekend extension.
+"""Tracks K, L, M - gap-closing weekend extension.
 
-K: v4-pro × {none, vcd_full} × {slack, travel, workspace}  — cross-suite for prestige model
-L: v3.2   × {none, vcd_full} × {slack, travel, workspace}  — cross-suite for dramatic-delta model
-M: v4-flash banking × {spotlight, vcd_text, vcd_cap_only} × {direct, ignore_previous}  — Track H expansion
+K: v4-pro × {none, vcd_full} × {slack, travel, workspace}  - cross-suite for prestige model
+L: v3.2   × {none, vcd_full} × {slack, travel, workspace}  - cross-suite for dramatic-delta model
+M: v4-flash banking × {spotlight, vcd_text, vcd_cap_only} × {direct, ignore_previous}
+M (cont.)  - Track H expansion
 
 Each cell as a fresh subprocess (per-cell memory reset). Shields excluded from K/L because
 travel/workspace shields data on v4-flash is enough to establish the shields-collapse pattern
 across suites, and shields × cross-suite OOMs reliably at our hardware tier.
 """
 
-import json
 import os
 import subprocess
 import sys
@@ -78,7 +78,8 @@ def run_cell(track, suite, model, defence, attack, parallel):
     elapsed = time.time() - t0
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     print(
-        f"[{stamp}] {track}/{suite}/{model_short}/{defence}/{attack} END rc={proc.returncode} wall={elapsed:.0f}s",
+        f"[{stamp}] {track}/{suite}/{model_short}/{defence}/{attack} "
+        f"END rc={proc.returncode} wall={elapsed:.0f}s",
         flush=True,
     )
     if proc.returncode != 0:

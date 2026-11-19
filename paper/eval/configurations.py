@@ -6,18 +6,18 @@ that wraps a base agent in the appropriate defence stack.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from paper.eval.defences import (
     no_defence,
+    prompt_shields,
     spotlighting,
     struq,
-    prompt_shields,
-    vcd_text_only,
-    vcd_full_stack,
     vcd_capability_only,
+    vcd_full_stack,
     vcd_proof_only,
+    vcd_text_only,
 )
 
 

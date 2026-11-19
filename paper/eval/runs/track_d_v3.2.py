@@ -4,14 +4,16 @@ This is the dramatic-delta row: baseline ASR is ~77.8% so VCD shows
 visible improvement of ~70+ percentage points.
 """
 
-import json, logging, time
+import json
+import logging
+import time
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 log = logging.getLogger("track_d")
 
 from paper.eval import agentdojo_patches  # noqa
-from paper.eval.agentdojo_adapter import run
+from paper.eval.agentdojo_adapter import run  # noqa: E402
 
 MODEL = "deepseek-v3.2"
 ROOT = Path("/root/raucle-paper/raucle/runs")
@@ -49,7 +51,9 @@ for defence in DEFENCES:
             }
             all_results.append(row)
             log.info(
-                f"  RESULT  {defence}/{r.suite}: ASR={100 * r.asr:.1f}% benign={100 * r.benign_completion:.1f}% n={r.total_tasks} wall={elapsed:.0f}s"
+                f"  RESULT  {defence}/{r.suite}: ASR={100 * r.asr:.1f}%"
+                f" benign={100 * r.benign_completion:.1f}% n={r.total_tasks}"
+                f" wall={elapsed:.0f}s"
             )
         (logdir / "aggregate.json").write_text(
             json.dumps([row for row in all_results if row["defence"] == defence], indent=2)
