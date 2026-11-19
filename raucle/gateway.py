@@ -279,6 +279,11 @@ class GatewayConfig:
     # boot self-test drives the gate with hostile types at startup.
     fault_counter_path: str = ""
     boot_selftest: bool = True
+    # Boot memory ceiling (J1): the boot RSS projection over the mapped
+    # stores (audit chain, receipt store, index) must stay under this many
+    # MB or the boot refuses with a named error naming the rotate command.
+    # 0 = derive from detected memory minus headroom.
+    boot_mem_ceiling_mb: int = 0
 
     # Compliance
     compliance_framework: str = "eu-ai-act"  # eu-ai-act, iso-42001, soc2
@@ -359,6 +364,7 @@ class GatewayConfig:
             fault_counter_path=os.environ.get("RAUCLE_FAULT_COUNTER", "").strip(),
             boot_selftest=os.environ.get("RAUCLE_BOOT_SELFTEST", "1").lower()
             not in ("0", "false", "no"),
+            boot_mem_ceiling_mb=int(os.environ.get("RAUCLE_BOOT_MEM_CEILING_MB", "0") or "0"),
             compliance_framework=os.environ.get("RAUCLE_COMPLIANCE_FRAMEWORK", "eu-ai-act"),
             registry_path=os.environ.get("RAUCLE_REGISTRY_PATH", "/data/registry.jsonl"),
             approval_ttl_seconds=int(os.environ.get("RAUCLE_APPROVAL_TTL", "300")),
@@ -1269,6 +1275,13 @@ class RaucleGateway:
 
     def __init__(self, config: GatewayConfig) -> None:
         self.config = config
+        # Boot memory preflight (J1): stat the unbounded stores BEFORE any of
+        # them is loaded. A boot that would map more than the ceiling refuses
+        # here with a named error naming the rotate command, so a bounded box
+        # never meets an unbounded store inside a silent ballooning boot.
+        from raucle.chain_rotation import boot_memory_preflight
+
+        self.boot_preflight = boot_memory_preflight(config)
         self.stats = GatewayStats()
         self.siem = SIEMForwarder(config)
         self.users = UserManager()

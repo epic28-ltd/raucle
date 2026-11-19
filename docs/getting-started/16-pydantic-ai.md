@@ -23,24 +23,28 @@ from raucle.capability import CapabilityGate, CapabilityIssuer
 from raucle.integrations.pydantic_ai import guard_tool, set_in_force_token
 
 issuer = CapabilityIssuer.generate(issuer="acme.platform")
-gate   = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
-sink   = HashChainSink("receipts.jsonl", signer=Ed25519Signer.generate())
+gate = CapabilityGate(trusted_issuers={issuer.key_id: issuer.public_key_pem})
+sink = HashChainSink("receipts.jsonl", signer=Ed25519Signer.generate())
 
-def transfer_funds(ctx: RunContext, to: str, amount: int) -> str:
-    ...
+
+def transfer_funds(ctx: RunContext, to: str, amount: int) -> str: ...
+
 
 # agent_id binds the acting identity; an unattributed call denies.
 # (With no agent_id pinned, the identity comes from the Agent the tool is
 # registered on: give it a raucle-scheme name, Agent(..., name="agent:billing").)
 agent = Agent("openai:gpt-4o", name="agent:billing")
-agent.tool(guard_tool(transfer_funds, gate=gate, sink=sink,
-                      agent_id="agent:billing"))
+agent.tool(guard_tool(transfer_funds, gate=gate, sink=sink, agent_id="agent:billing"))
 
 # Per session: bind a token scoped to what THIS task may do.
-set_in_force_token(issuer.mint(
-    agent_id="agent:billing", tool="transfer_funds",
-    constraints={"max_value": {"amount": 100}}, ttl_seconds=60,
-))
+set_in_force_token(
+    issuer.mint(
+        agent_id="agent:billing",
+        tool="transfer_funds",
+        constraints={"max_value": {"amount": 100}},
+        ttl_seconds=60,
+    )
+)
 
 result = agent.run_sync("pay the invoice")
 ```
