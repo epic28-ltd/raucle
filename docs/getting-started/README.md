@@ -92,4 +92,7 @@ The gate and capability layer need only the standard library + the `cryptography
 
 ---
 
-Ready? Start with **[1. Hello, receipt](01-hello-receipt.md)**.
+Operators run the gateway somewhere that matters. The ops track lives in
+[docs/ops/chain-rotation.md](../ops/chain-rotation.md): when and how to
+rotate the boot stores (`raucle rotate-chain`), the boot memory preflight,
+and the worked example behind it. Start with **[1. Hello, receipt](01-hello-receipt.md)**.
