@@ -69,6 +69,36 @@ jobs:
       - name: Run integration suites (openai-agents + pydantic-ai + google-adk)
         run: python -m pytest tests/test_attribution_audit.py tests/test_openai_agents_integration.py tests/test_pydantic_ai_integration.py tests/test_google_adk_integration.py tests/test_integrations_contract.py -v --tb=short
 
+  changelog-hygiene:
+    name: Changelog lane hygiene
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+      - name: Lanes add entry files but must not add lines to CHANGELOG.md
+        run: |
+          # docs/changelog-entries/README.md: builder lanes write
+          # docs/changelog-entries/<branch>.md and never edit CHANGELOG.md
+          # directly; tools/assemble_changelog.py runs at merge. The rule
+          # enforced here: a PR that adds changelog entry files must not
+          # ADD lines to CHANGELOG.md (removals are allowed - that is the
+          # assembly and the one-off migration path).
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          if ! git diff --name-only "$base"..."$head" | grep -q "^docs/changelog-entries/.*\.md$"; then
+            echo "No changelog entry files in this PR; nothing to check."
+            exit 0
+          fi
+          added=$(git diff "$base"..."$head" -- CHANGELOG.md | grep -c "^+[^+]" || true)
+          if [ "$added" -gt 0 ]; then
+            echo "FAIL: this PR adds changelog entry files AND adds $added line(s) to CHANGELOG.md."
+            echo "Lanes write docs/changelog-entries/<branch>.md and never add to CHANGELOG.md directly."
+            exit 1
+          fi
+          echo "OK: entry-file PR adds no lines to CHANGELOG.md."
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
