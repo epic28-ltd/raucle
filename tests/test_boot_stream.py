@@ -1106,3 +1106,66 @@ class TestEmptyAuditChainConfig:
         assert snap["chain_scan"]["state"] == "idle"
         assert snap["receipt_index"]["state"] == "ready"
         assert client.get("/health").json()["status"] == "ok"
+
+
+class TestFrontierRebuildFromTheBootScan:
+    """D2 close: the completed chain scan rebuilds the Merkle frontier and
+    attaches it to the audit sink (sidecar persists); a scan that never
+    completes attaches nothing."""
+
+    def test_completed_scan_attaches_a_matching_frontier(self, tmp_path):
+        from raucle.audit import HashChainSink, MerkleFrontier, _merkle_root
+        from raucle.boot_stream import BootCompactor, BootReadiness, BootWatchdog
+        from raucle.receipt_index import ReceiptIndex
+
+        chain = tmp_path / "audit-chain.jsonl"
+        hashes = []
+        sink = HashChainSink(chain, signer=None)
+        try:
+            for i in range(7):
+                sink.append({"op": "write", "n": i})
+        finally:
+            sink.close()
+        for line in chain.read_text(encoding="utf-8").splitlines():
+            import json as _json
+
+            rec = _json.loads(line)
+            if not (rec.get("checkpoint") or rec.get("chain_meta")):
+                hashes.append(rec["hash"])
+        attached = {}
+        compactor = BootCompactor(
+            ReceiptIndex(sqlite_path=str(tmp_path / "index.sqlite")),
+            audit_chain=chain,
+            readiness=BootReadiness(),
+            watchdog=BootWatchdog(),
+            frontier_attach=lambda f: attached.setdefault("frontier", f),
+        )
+        compactor.run_phases()
+        assert "frontier" in attached
+        rebuilt = attached["frontier"]
+        assert rebuilt.leaf_count == len(hashes)
+        expected = MerkleFrontier()
+        for h in hashes:
+            expected.add(h)
+        assert rebuilt.root() == expected.root()
+        assert rebuilt.root() == _merkle_root(hashes)
+
+    def test_scan_without_an_attach_hook_still_passes(self, tmp_path):
+        from raucle.audit import HashChainSink
+        from raucle.boot_stream import BootCompactor, BootReadiness, BootWatchdog
+        from raucle.receipt_index import ReceiptIndex
+
+        chain = tmp_path / "audit-chain.jsonl"
+        sink = HashChainSink(chain, signer=None)
+        try:
+            sink.append({"op": "write"})
+        finally:
+            sink.close()
+        compactor = BootCompactor(
+            ReceiptIndex(sqlite_path=str(tmp_path / "index.sqlite")),
+            audit_chain=chain,
+            readiness=BootReadiness(),
+            watchdog=BootWatchdog(),
+        )
+        compactor.run_phases()
+        assert compactor.readiness.snapshot()["chain_scan"]["state"] == "done"

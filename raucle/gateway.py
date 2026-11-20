@@ -1293,6 +1293,20 @@ class SessionWindowState:
             entries.popleft()
 
 
+def _attach_rebuilt_frontier_to_sink(audit_path, frontier) -> None:
+    """Hand the boot scan's rebuilt Merkle frontier to the audit sink.
+    The sink's sidecar is file-backed, so attaching on a fresh instance
+    persists it for every later append; the frontier is disposable state
+    and a persistence failure degrades anchoring by name, never blocks."""
+    from raucle.audit import HashChainSink
+
+    sink = HashChainSink(audit_path)
+    try:
+        sink.attach_frontier(frontier)
+    finally:
+        sink.close()
+
+
 class RaucleGateway:
     """The gateway core: policy engine + gate + receipt store + stats.
 
@@ -1493,6 +1507,13 @@ class RaucleGateway:
                 session_replay=self._replay_session_windows,
                 audit_chain=(
                     audit_chain if audit_chain is not None and audit_chain.exists() else None
+                ),
+                frontier_attach=(
+                    lambda frontier: (
+                        _attach_rebuilt_frontier_to_sink(audit_chain, frontier)
+                        if audit_chain is not None and audit_chain.exists()
+                        else None
+                    )
                 ),
             )
             if self._receipt_index.get_state(BOOT_COMPACTOR_DONE_KEY) == "1":

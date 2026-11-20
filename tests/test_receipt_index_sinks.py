@@ -74,10 +74,14 @@ class TestFlatFileSink:
         first.check_tool_call("pay", {"account": "ACC-001"}, agent_id="agent:bot")
 
         # Drop the projection, then start again: the chain is the truth.
+        # Streaming boot: the index is rebuilt by the background compactor,
+        # so drive it to completion before asserting the indexed rows.
         ReceiptIndex(sqlite_path=str(tmp_path / "index.sqlite")).close()
         (tmp_path / "index.sqlite").unlink()
         second = RaucleGateway(cfg)
         assert second._receipt_index is not None
+        second._boot_compactor.join(timeout=60)
+        assert second.boot_readiness.snapshot()["receipt_index"]["state"] == "ready"
         assert second._receipt_index.count() == 1
 
     def test_index_write_failure_never_breaks_the_chain(self, tmp_path, monkeypatch):
@@ -100,6 +104,10 @@ class TestSegmentedSinkStillWorks:
         gateway = RaucleGateway(_config(tmp_path, segmented=True))
         gateway.check_tool_call("pay", {"account": "ACC-001"}, agent_id="agent:bot")
         assert gateway._receipt_index is not None
+        # Streaming boot: the segmented store builds via the background
+        # compactor; drive it to completion before asserting the rows.
+        gateway._boot_compactor.join(timeout=60)
+        assert gateway.boot_readiness.snapshot()["receipt_index"]["state"] == "ready"
         assert gateway._receipt_index.count() == 1
 
 

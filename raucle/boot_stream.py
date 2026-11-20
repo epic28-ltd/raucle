@@ -210,6 +210,7 @@ class BootCompactor:
         scan_window_bytes: int = DEFAULT_SCAN_WINDOW_BYTES,
         session_replay: Callable[[], None] | None = None,
         audit_chain: str | Path | None = None,
+        frontier_attach: Callable[[Any], None] | None = None,
     ) -> None:
         self.index = index
         self.store = store
@@ -221,6 +222,7 @@ class BootCompactor:
         self.scan_window_bytes = max(1024, int(scan_window_bytes))
         self.session_replay = session_replay
         self.audit_chain = Path(audit_chain) if audit_chain else None
+        self.frontier_attach = frontier_attach
         self._thread: threading.Thread | None = None
 
     # ------------------------------------------------------------------
@@ -517,6 +519,11 @@ class BootCompactor:
         expected_index = 0
         consumed = 0
         last_check_mb = 0
+        frontier: Any | None = None
+        if self.frontier_attach is not None:
+            from raucle.audit import MerkleFrontier
+
+            frontier = MerkleFrontier()
         with open(path, encoding="utf-8") as fh:
             for line_no, line in enumerate(fh, start=1):
                 offset = consumed
@@ -573,9 +580,34 @@ class BootCompactor:
                     return
                 prev_hash = stored_hash or prev_hash
                 expected_index += 1
+                if stored_hash is not None and frontier is not None:
+                    frontier.add(stored_hash)
                 self.readiness.set_chain_scan(
                     state="scanning",
                     verified_through=consumed,
                     progress=min(1.0, consumed / size),
                 )
         self.readiness.set_chain_scan(state="done", verified_through=consumed, progress=1.0)
+        self._attach_rebuilt_frontier(frontier, consumed)
+
+    def _attach_rebuilt_frontier(self, frontier: Any, consumed: int) -> None:
+        """D2 close (checker 20 Nov): the completed scan rebuilds the
+        Merkle frontier and hands it to the audit sink, so the promised
+        anchoring recovery actually runs instead of staying degraded by
+        name. Only a COMPLETED scan attaches: a refused or broken scan
+        leaves anchoring degraded, which is the fail-closed posture. A
+        sidecar failure here is named and swallowed - anchoring is
+        disposable state and must never fail the boot."""
+        if frontier is None or self.frontier_attach is None:
+            return
+        try:
+            self.frontier_attach(frontier)
+            logger.info(
+                "frontier rebuilt by the boot chain scan: %d leaves attached",
+                frontier.leaf_count,
+            )
+        except Exception as exc:  # noqa: BLE001 - sidecar state, named + non-fatal
+            logger.warning(
+                "frontier attach after the boot scan failed (named, anchoring stays degraded): %s",
+                exc,
+            )

@@ -109,7 +109,7 @@ Readings, honestly:
 - **The scan is W-independent and store-proportional in time only**:
   peak RSS is flat (58-68 MB) across the W matrix because the scan is
   line-streamed; W bounds the tail resume, not the scan. Throughput is
-  ~5.5 us per event (18.3 MB/s), so at the incident's 12.2 GB the scan
+  ~54.7 us per event (7.5 MB/s), so at the incident's 12.2 GB the scan
   is an extrapolated ~30 minutes (NOT measured; the incident-scale leg
   exists for exactly this number).
 - **W_replay is a real budget term with a measured multiplier**: the
