@@ -1907,7 +1907,9 @@ class ProvenanceVerifier:
         *report*."""
         decoded, x_gate_payload = self._decode_gate_payload(raw)
         self._verify_delegated_authority_digest(x_gate_payload, line_no, report)
-        self._verify_lease_extension(decoded, line_no, report, lease_grants)
+        self._verify_lease_extension(
+            decoded, line_no, report, lease_grants, revoked_ids, revocation_lines
+        )
         self._verify_cascade_revocation(
             x_gate_payload,
             decoded,
@@ -2942,22 +2944,43 @@ class ProvenanceVerifier:
         line_no: int,
         report: VerificationReport,
         lease_grants: dict[str, dict[str, Any]],
+        revoked_ids: set[str],
+        revocation_lines: dict[str, int],
     ) -> None:
         """Invariant (C1): a lease redemption cites a prior grant in the same
         chain, falls inside that grant's TTL window (the receipt's own iat
-        is the redemption moment), and never widens the granted scopes.
-        Grants collect into *lease_grants* by lease id. Mutates *report*
-        and *lease_grants* in place."""
+        is the redemption moment), never widens the granted scopes, and
+        answers for the lease's revocation state at the moment of use: a
+        revocation collected from an earlier line stops later redemptions
+        (the temporal doctrine of A3). Grants and revocations collect as
+        the walk proceeds, so both only bite later lines; the lease's own
+        ``revoked`` event feeds the shared revocation collector, so an
+        ``x_lease`` revoked event and an ``x_revocation`` block citing the
+        lease id are the same revocation evidence. Mutates *report*,
+        *lease_grants*, *revoked_ids* and *revocation_lines* in place."""
         # (x_lease rides the payload root, like x_revocation.)
         lease = decoded.get("x_lease") if isinstance(decoded, dict) else None
         if isinstance(lease, dict):
+            # Bounded disclosure: the block carries handles, the grant
+            # pairing, scope names and digests only, never content.
+            self._forbidden_field_sweep(lease, "x_lease", line_no, report)
             action = lease.get("action")
             lid = str(lease.get("lease_id", ""))
             if action == "granted":
                 lease_grants[lid] = lease
+            elif action == "revoked":
+                revoked_ids.add(lid)
+                revocation_lines[lid] = line_no
             elif action == "redeemed":
                 self._verify_lease_redemption(
-                    decoded, line_no, report, lease, lid, lease_grants.get(lid)
+                    decoded,
+                    line_no,
+                    report,
+                    lease,
+                    lid,
+                    lease_grants.get(lid),
+                    revoked_ids,
+                    revocation_lines,
                 )
 
     def _verify_lease_redemption(
@@ -2968,21 +2991,34 @@ class ProvenanceVerifier:
         lease: dict[str, Any],
         lid: str,
         grant: dict[str, Any] | None,
+        revoked_ids: set[str],
+        revocation_lines: dict[str, int],
     ) -> None:
         """Invariant (C1, redemption leg): a redemption must cite a grant
         collected from an EARLIER line, fall inside that grant's TTL
-        window (the receipt's own iat is the redemption moment), and
-        never widen the granted scopes. Mutates *report* in place."""
+        window (the receipt's own iat is the redemption moment), never
+        widen the granted scopes, and not follow the lease's revocation.
+        Every refusal is named - pairing_absent, lease_revoked,
+        lease_expired, scope_exceeded - so a failure names its class.
+        Mutates *report* in place."""
         if grant is None:
-            report.errors.append(f"line {line_no}: lease {lid!r} redeemed with no lease grant")
+            report.errors.append(
+                f"line {line_no}: lease {lid!r} redeemed with no lease grant (pairing_absent)"
+            )
             report.valid = False
             return
+        if lid in revoked_ids:
+            report.errors.append(
+                f"line {line_no}: lease {lid!r} redeemed after revocation at "
+                f"line {revocation_lines[lid]} (lease_revoked)"
+            )
+            report.valid = False
         redeemed_at = int(decoded.get("iat", 0))
         window_end = int(grant.get("granted_at", 0)) + int(grant.get("ttl_seconds", 0))
         if redeemed_at > window_end:
             report.errors.append(
                 f"line {line_no}: lease {lid!r} redeemed after "
-                f"lease expired (window ended {window_end})"
+                f"lease expired (lease_expired, window ended {window_end})"
             )
             report.valid = False
         grant_scopes = grant.get("scopes") or {}
@@ -2994,7 +3030,8 @@ class ProvenanceVerifier:
                 _assert_narrowing(grant_scopes, redeem_scopes)
             except ValueError as exc:
                 report.errors.append(
-                    f"line {line_no}: lease {lid!r} redeemed beyond its granted scope ({exc})"
+                    f"line {line_no}: lease {lid!r} redeemed beyond its "
+                    f"granted scope (scope_exceeded: {exc})"
                 )
                 report.valid = False
 
