@@ -85,13 +85,14 @@ jobs:
           # enforced here: a PR that adds changelog entry files must not
           # ADD lines to CHANGELOG.md (removals are allowed - that is the
           # assembly and the one-off migration path).
-          base="${{ github.event.pull_request.base.sha }}"
-          head="${{ github.event.pull_request.head.sha }}"
-          if ! git diff --name-only "$base"..."$head" | grep -q "^docs/changelog-entries/.*\.md$"; then
+          # Compare against the CURRENT main tip: the PR-open base sha goes
+          # stale and would count lines main itself added since opening.
+          git fetch origin main --quiet
+          if ! git diff --name-only origin/main...HEAD | grep -q "^docs/changelog-entries/.*\.md$"; then
             echo "No changelog entry files in this PR; nothing to check."
             exit 0
           fi
-          added=$(git diff "$base"..."$head" -- CHANGELOG.md | grep -c "^+[^+]" || true)
+          added=$(git diff origin/main...HEAD -- CHANGELOG.md | grep "^+" | grep -cv "^+++" || true)
           if [ "$added" -gt 0 ]; then
             echo "FAIL: this PR adds changelog entry files AND adds $added line(s) to CHANGELOG.md."
             echo "Lanes write docs/changelog-entries/<branch>.md and never add to CHANGELOG.md directly."

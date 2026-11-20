@@ -67,17 +67,38 @@ def test_entry_files_are_deleted_after_assembly(tmp_path: Path) -> None:
     assert not (tmp_path / "docs" / "changelog-entries" / "a-lane.md").exists()
 
 
-def test_duplicate_bullet_exits_non_zero_and_changes_nothing(tmp_path: Path) -> None:
+def test_duplicate_bullet_skips_safely_without_duplicating(tmp_path: Path) -> None:
+    """The checker's defect close (20 Nov): a populated Unreleased never
+    loses content and a re-run never duplicates. The already-live bullet
+    is skipped with a named notice; the entry file is consumed."""
     write_changelog(
         tmp_path,
-        "# Changelog\n\n## Unreleased\n\n## 0.23.6\n\n- Alpha bullet\n",
+        "# Changelog\n\n## Unreleased\n\n- Alpha bullet\n\n## 0.23.6\n\n- Beta\n",
     )
     write_entry(tmp_path, "a-lane.md", "- Alpha bullet\n")
     result = run(tmp_path)
-    assert result.returncode != 0
-    # The changelog is untouched and the entry file survives for the lane to fix.
-    assert "- Alpha bullet" in read_changelog(tmp_path)
-    assert (tmp_path / "docs" / "changelog-entries" / "a-lane.md").exists()
+    assert result.returncode == 0
+    assert "skip a-lane.md" in result.stdout
+    text = read_changelog(tmp_path)
+    assert text.count("- Alpha bullet") == 1  # live, not duplicated
+    assert not (tmp_path / "docs" / "changelog-entries" / "a-lane.md").exists()
+
+
+def test_populated_unreleased_never_loses_content(tmp_path: Path) -> None:
+    """The checker's content-loss scenario: assembling over a populated
+    Unreleased keeps every pre-existing bullet and adds the new ones."""
+    pre = "- Live bullet one\n- Live bullet two\n"
+    write_changelog(
+        tmp_path,
+        f"# Changelog\n\n## Unreleased\n\n{pre}\n## 0.23.6\n",
+    )
+    write_entry(tmp_path, "a-lane.md", "- New bullet\n- Live bullet one\n")
+    result = run(tmp_path)
+    assert result.returncode == 0
+    text = read_changelog(tmp_path)
+    assert "- Live bullet one" in text and text.count("- Live bullet one") == 1
+    assert "- Live bullet two" in text
+    assert "- New bullet" in text
 
 
 def test_missing_unreleased_heading_exits_non_zero(tmp_path: Path) -> None:

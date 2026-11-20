@@ -57,18 +57,38 @@ def load_entries(entries_dir: Path) -> dict[str, str]:
 def guard_duplicates(
     changelog_text: str,
     entries: dict[str, str],
-) -> None:
-    """Refuse any entry bullet that duplicates a changelog bullet line."""
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Drop entry bullets already present in CHANGELOG.md, per file.
+
+    A bullet that already exists is treated as assembled (skip, not fail):
+    the safe re-run posture. A file whose bullets are ALL already present
+    disappears from the run entirely (its content is live), so a populated
+    Unreleased never loses an entry and never seeds duplicates."""
     existing = set(bullet_lines(changelog_text))
+    skipped: dict[str, str] = {}
+    kept: dict[str, str] = {}
     for name, text in entries.items():
-        for bullet in bullet_lines(text):
-            if bullet in existing:
-                raise AssembleError(
-                    f"duplicate bullet in entry file {name}: a line identical "
-                    f"to '{bullet[:80]}...' already exists in CHANGELOG.md; "
-                    "assembling would duplicate it - remove the duplicate "
-                    "from the entry file and re-run"
-                )
+        filtered = _filter_lines(text, existing)
+        if not filtered.strip():
+            skipped[name] = "all bullets already in CHANGELOG.md"
+            continue
+        kept[name] = filtered
+    for name, why in skipped.items():
+        print(f"skip {name}: {why} (already assembled; entry file removed)")
+    return kept, skipped
+
+
+def _filter_lines(text: str, existing: set[str]) -> str:
+    """Drop bullet lines (and their now-orphan sub-lines? no: only exact
+    duplicate bullets) already present in the changelog."""
+    keep: list[str] = []
+    for raw in text.splitlines():
+        if raw.lstrip().startswith("- ") and raw.strip() in existing:
+            # the bullet is live; its sub-lines belong to it, so skip the
+            # whole wrapped paragraph (indentation >= 2 continues it)
+            continue
+        keep.append(raw)
+    return "\n".join(keep)
 
 
 def build_insert_block(entries: dict[str, str]) -> str:
@@ -88,17 +108,23 @@ def assemble(changelog_path: Path, entries_dir: Path) -> int:
     if not entries:
         print("no changelog entry files to assemble; nothing to do")
         return 0
-    guard_duplicates(changelog_text, entries)
+    entries, guard_skipped = guard_duplicates(changelog_text, entries)
+    entries = {k: v for k, v in entries.items() if v.strip()}
+    if not entries:
+        # Every entry was already assembled (safe re-run): consume the
+        # entry files and never touch CHANGELOG.md - adding even a blank
+        # line would break the lane-hygiene rule.
+        for name in list(guard_skipped):
+            print(f"consumed skip {name}: already assembled, entry file removed")
+            (entries_dir / name).unlink(missing_ok=True)
+        print("no new changelog content to assemble; nothing changed")
+        return 0
     lines = changelog_text.splitlines(keepends=True)
     heading_index = find_unreleased_index(lines)
     # Insert directly after the heading, then a blank line between the
     # assembled block and whatever section followed the heading.
     insert_block = build_insert_block(entries) + "\n"
-    new_lines = (
-        lines[: heading_index + 1]
-        + [insert_block]
-        + lines[heading_index + 1 :]
-    )
+    new_lines = lines[: heading_index + 1] + [insert_block] + lines[heading_index + 1 :]
     changelog_path.write_text("".join(new_lines), encoding="utf-8")
     for name in entries:
         (entries_dir / name).unlink()
