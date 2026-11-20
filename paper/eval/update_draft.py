@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
             subs[ia_tbd] = fmt_pct(row["injecagent"]["asr"])
 
     # Ablation rows
-    for cfg, tag in [
+    for cfg, _label in [
         ("vcd_cap_only", "Capability gate only"),
         ("vcd_proof_only", "SMT proof only"),
     ]:

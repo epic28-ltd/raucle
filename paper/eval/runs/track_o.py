@@ -14,7 +14,6 @@ Per model: banking × {none, shields, vcd_full} = 3 cells.
 Total: 9 cells. Per-cell subprocess isolation; shields at RAUCLE_PARALLEL=2.
 """
 
-import json
 import os
 import subprocess
 import sys

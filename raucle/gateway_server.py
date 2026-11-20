@@ -21,6 +21,7 @@ from pathlib import Path
 
 import uvicorn
 
+from raucle.errors import BootMemoryCeilingExceeded
 from raucle.gateway import GatewayConfig, RaucleGateway, UserManager
 from raucle.gateway_app import create_admin_app, create_gateway_app
 
@@ -78,7 +79,14 @@ def main() -> None:
 
     # Initialise gateway
     logger.info("Initialising Raucle Gateway...")
-    gateway = RaucleGateway(config)
+    try:
+        gateway = RaucleGateway(config)
+    except BootMemoryCeilingExceeded as exc:
+        # J1: refuse the boot with the named error rather than balloon into
+        # an OOM kill loop under restart:always. The message names the
+        # projected size, the ceiling and the rotate command.
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     # Initialise user management (A3: persisted to disk beside the data)
     users_file = os.environ.get(

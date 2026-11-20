@@ -7,12 +7,11 @@ configurations wire the actual raucle runtime.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 from raucle import Scanner
 from raucle.capability import CapabilityGate, CapabilityIssuer
 from raucle.prove import JSONSchemaProver
-
 
 # ---------------------------------------------------------------------------
 # Stubs — fill in with the upstream reference implementations

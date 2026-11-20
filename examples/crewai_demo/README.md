@@ -19,12 +19,15 @@ python examples/crewai_demo/demo.py
 
 ## How it works
 
-`guard_tools([...], gate=gate, sink=sink)` wraps each CrewAI `BaseTool` in a
-tool with an **identical** `name` / `description` / `args_schema`, so the agent
-sees no difference. On every call the wrapper:
+`guard_tools([...], gate=gate, sink=sink, agent_id="agent:demo.invoice-bot")`
+wraps each CrewAI `BaseTool` in a tool with an **identical** `name` /
+`description` / `args_schema`, so the agent sees no difference. On every call
+the wrapper:
 
 1. resolves the in-force capability token (`set_in_force_token(...)`),
-2. asks the gate to ALLOW/DENY the call **with these arguments**,
+2. asks the gate to ALLOW/DENY the call **with these arguments** (a call
+   with no bound caller identity denies: bearer mode is closed, so the
+   `agent_id` you pass at wrap time is what makes calls attributable),
 3. emits a signed receipt,
 4. delegates to the real tool on ALLOW, or raises `CapabilityDenied` on DENY.
 

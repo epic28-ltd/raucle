@@ -114,7 +114,11 @@ class GateRequest(BaseModel):
 # safe charset, validated fail-closed at the HTTP edge before any policy
 # evaluation. The value is a correlation key: no filesystem, shell or URL
 # characters, so it can be bound into receipts, indexes and logs verbatim.
-_SESSION_ID_PATTERN = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+# Receipts v1.2 (lane K3): the scoped-identifier colon joins the charset
+# so a behavioural session may be named the way every other raucle id is
+# ("session:sess-1", the same form agent:svc uses). It is still not a
+# path separator, a quote or shell metacharacter.
+_SESSION_ID_PATTERN = _re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
 
 def _validate_session_id(session_id: str) -> str:
@@ -125,7 +129,7 @@ def _validate_session_id(session_id: str) -> str:
             status_code=400,
             detail=(
                 "session_id must be 1-128 characters from "
-                "[A-Za-z0-9._-] starting alphanumeric (EPIC Q bounded identifier)"
+                "[A-Za-z0-9._:-] starting alphanumeric (EPIC Q bounded identifier)"
             ),
         )
     return session_id
@@ -165,18 +169,56 @@ class ApprovalDecisionRequest(BaseModel):
 
 
 class SuspendRequest(BaseModel):
-    """Kill-switch request body: why an agent is being suspended."""
+    """Kill-switch request body: why an agent is being suspended.
+
+    Receipts v1.2 (lane K3): ``kind``/``reason_class`` carry the v1.2
+    revocation-receipt request (also the body of /revoke-chains). Left
+    empty, the shipped v1.0 block shape is minted.
+    """
 
     reason: str = Field(..., description="Why the agent is being suspended")
+    kind: str = Field(
+        default="",
+        description=(
+            "Receipts v1.2: requested revocation receipt kind "
+            "(capability, lease or receipt; empty = the shipped v1.0 block)"
+        ),
+    )
+    reason_class: str = Field(
+        default="",
+        description=(
+            "Receipts v1.2: closed reason class "
+            "(compromise, owner_departure, scope_correction, policy_change, operational)"
+        ),
+    )
 
 
 class RevokeRequest(BaseModel):
-    """A3: cascade-revocation request body."""
+    """A3: cascade-revocation request body.
+
+    Receipts v1.2 (lane K3): ``kind``/``reason_class`` request the
+    versioned v1.2 block; left empty the shipped v1.0 shape is minted
+    (byte-compat with the 30 October emitter).
+    """
 
     token_id: str = Field(
         ..., description="The capability id to revoke (its whole subtree cascades)"
     )
     reason: str = Field(..., description="Why the authority is being revoked")
+    kind: str = Field(
+        default="",
+        description=(
+            "Receipts v1.2: requested revocation receipt kind "
+            "(capability, lease or receipt; empty = the shipped v1.0 block)"
+        ),
+    )
+    reason_class: str = Field(
+        default="",
+        description=(
+            "Receipts v1.2: closed reason class "
+            "(compromise, owner_departure, scope_correction, policy_change, operational)"
+        ),
+    )
 
 
 class PolicySimulateRequest(BaseModel):
@@ -242,6 +284,11 @@ class ConfigUpdateRequest(BaseModel):
     policy_dir: str | None = None
     policy_seal_file: str | None = None
     policy_ledger_path: str | None = None
+    # Receipts v1.2 (lane K3): the alternative ruleset that mints the
+    # signed counterfactual block. It feeds evidence, so it is guarded
+    # like every other evidence path (EVIDENCE_PATH_FIELDS).
+    counterfactual_ruleset_file: str | None = None
+    tool_schema_manifest: str | None = None
     receipt_store: str | None = None
     receipt_store_dir: str | None = None
     receipt_index_path: str | None = None
@@ -259,6 +306,11 @@ class ConfigUpdateRequest(BaseModel):
     registry_path: str | None = None
     gate_auth: str | None = None
     health_check_token: str | None = None
+    # Session behavioural windows (EPIC Q lane Q-2): the bounded knobs the
+    # gateway reads (TTL, live key cap, per-key entry cap).
+    session_window_ttl_seconds: int | None = None
+    session_window_max_keys: int | None = None
+    session_window_max_entries: int | None = None
 
 
 class SIEMConfigRequest(BaseModel):
@@ -351,6 +403,54 @@ def _build_intent_hint(
     }
 
 
+def _demo_dlp_advisory_scan(
+    gateway: RaucleGateway,
+    req: GateRequest,
+    agent_id: str,
+    trace_id: str,
+    response: dict[str, Any],
+) -> None:
+    """D2: run the OSS advisory redaction engine over one demo gate call.
+
+    Demo-plane only. When ``RAUCLE_DEMO_MODE`` is on, the gate route runs
+    the call's arguments through the real advisory redaction middleware
+    (``raucle.middleware``, wired pattern classes) and mints an
+    ``x_dlp`` receipt citing the gate receipt for the decision. The
+    scanned values are the canned synthetic patterns the demo agents
+    generate; production gate traffic is never content-scanned here
+    (the ``x_dlp`` emitter surface belongs to the enterprise content
+    proxy, per docs/spec/provenance/v1.2/content-dlp.md). Advisory and
+    fail-open by contract: this layer never changes the already-made
+    decision and never raises into the gate path.
+    """
+    receipt_id = str(response.get("receipt_id") or "")
+    if not receipt_id:
+        # No receipted decision to cite: the offline verifier refuses
+        # uncited findings, so nothing is minted. Never fabricate.
+        return
+    from raucle.demo_session import _demo_mode_on, run_demo_dlp_scan
+
+    if not _demo_mode_on():
+        return
+    try:
+        run_demo_dlp_scan(
+            gateway,
+            tool=req.tool,
+            args=req.args,
+            agent_id=agent_id,
+            destination=str(req.destination or ""),
+            session_id=_validate_session_id(req.session_id),
+            trace_id=trace_id,
+            gate_receipt_id=receipt_id,
+            gate_decision=str(response.get("decision") or ""),
+        )
+    except Exception:
+        logger.warning(
+            "demo DLP advisory scan failed open (advisory layer, the gate decision is unchanged)",
+            exc_info=True,
+        )
+
+
 def _handle_gate_tool_call(
     gateway: RaucleGateway,
     _request: Request,  # kept for call-site symmetry; unused (S1172)
@@ -432,6 +532,10 @@ def _handle_gate_tool_call(
     response.pop("_trace_id", None)
     response.pop("_args", None)
     response.pop("_authorization_hint", None)
+    # D2: the demo plane's advisory redaction scan. Runs only in demo
+    # mode, only for receipted decisions, and never touches the
+    # response already computed for the caller.
+    _demo_dlp_advisory_scan(gateway, req, agent_id, trace_id, response)
     return response
 
 
@@ -606,6 +710,46 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
                 raise HTTPException(status_code=401, detail="Health check unauthorized")
         return {"status": "ok"}
 
+    @app.post(
+        "/api/revoke",
+        responses={
+            "401": {"description": "Admin API key missing, incorrect, or not configured"},
+        },
+    )
+    def revoke(
+        req: RevokeRequest,
+        authorization: str | None = Header(None),
+    ) -> dict[str, Any]:
+        """Receipts v1.2 (lane K3): programmatic revocation on the
+        agent-facing surface, receipted.
+
+        Fail-closed against the configured admin API key (constant-time
+        comparison, the health-check pattern): a gateway with no
+        admin_api_key refuses every caller rather than serving the
+        revocation surface unauthenticated. There is no admin users
+        manager on this port, so the key IS the authority and the
+        receipt records the operator as actor="admin".
+        """
+        key = authorization or ""
+        if key.startswith(_BEARER_PREFIX):
+            key = key[len(_BEARER_PREFIX) :]
+        import hmac as _hmac
+
+        if not gateway.config.admin_api_key or not _hmac.compare_digest(
+            key, gateway.config.admin_api_key
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail="Admin API key required (Authorization: Bearer <admin_api_key>)",
+            )
+        return gateway.revoke_capability(
+            req.token_id,
+            reason=req.reason,
+            actor="admin",
+            kind=req.kind,
+            reason_class=req.reason_class,
+        )
+
     _register_deployment_intake_routes(app, gateway)
 
     @app.get(
@@ -719,7 +863,9 @@ def _validate_policy_content(content: str) -> dict[str, Any]:
 
 # Fields that decide WHERE evidence lands. Redirecting one changes the audit
 # story, so an operator may not move it and the target must sit inside the
-# data root (RED-035).
+# data root (RED-035). Receipts v1.2 (lane K3): the counterfactual ruleset
+# names the alternative policy the signed block speaks about, so it is
+# guarded like the rest: it decides what the evidence can claim.
 EVIDENCE_PATH_FIELDS = (
     "policy_file",
     "policy_dir",
@@ -734,6 +880,10 @@ EVIDENCE_PATH_FIELDS = (
     "policy_seal_file",
     "policy_ledger_path",
     "signer_key_path",
+    "counterfactual_ruleset_file",
+    # EPIC W lane W2: the manifest the definition digest binds against
+    # feeds evidence exactly as the counterfactual ruleset does.
+    "tool_schema_manifest",
 )
 
 
@@ -961,6 +1111,12 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     from raucle.demo_coverage import register_demo_coverage_routes
 
     register_demo_coverage_routes(app, gateway, check_auth, check_access)
+    # D16: the session behaviour views - live session-rules configuration,
+    # per-session windows from the real receipt index (v3), and the
+    # session-monitor findings with their cited gate receipts (read-only).
+    from raucle.demo_session import register_demo_session_routes
+
+    register_demo_session_routes(app, gateway, check_auth, check_access)
     _register_ui_routes(app)
 
     return app
@@ -1310,6 +1466,24 @@ def _register_policy_routes(
         return gateway.reload_policies()
 
     @app.post(
+        "/api/tool-schemas/reload",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+        },
+    )
+    def reload_tool_schemas(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        """EPIC W lane W2: re-read the configured tool schema manifest and
+        receipt every observed definition drift (the same operator plane
+        as the policy reload)."""
+        user = check_auth(authorization, x_totp)
+        check_access(user, "policies")
+        return gateway.reload_tool_schemas()
+
+    @app.post(
         "/api/policies/validate",
         responses={
             "401": {"description": "MFA required or missing Authorization header"},
@@ -1631,11 +1805,20 @@ def _register_authority_routes(
         authorization: str | None = Header(None),
         x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
-        """A3: revoke a capability and its whole subtree, receipted."""
+        """A3: revoke a capability and its whole subtree, receipted.
+
+        Receipts v1.2 (lane K3): ``kind``/``reason_class`` pass through
+        to the receipted revocation (validated fail-closed by the
+        emitter; empty keeps the shipped v1.0 block).
+        """
         user = check_auth(authorization, x_totp)
         check_access(user, "users")
         return gateway.revoke_capability(
-            req.token_id, reason=req.reason, actor=user.name or user.role
+            req.token_id,
+            reason=req.reason,
+            actor=user.name or user.role,
+            kind=req.kind,
+            reason_class=req.reason_class,
         )
 
     @app.post(
@@ -1652,11 +1835,20 @@ def _register_authority_routes(
         x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
         """A3 owner-departure: revoke every delegated chain of an identity in
-        one receipted operation (the lifecycle audit trail)."""
+        one receipted operation (the lifecycle audit trail).
+
+        Receipts v1.2 (lane K3): ``kind``/``reason_class`` pass through
+        to the receipted revocation (validated fail-closed by the
+        emitter; empty keeps the shipped v1.0 block).
+        """
         user = check_auth(authorization, x_totp)
         check_access(user, "users")
         return gateway.revoke_agent_chains(
-            agent_id, reason=req.reason, actor=user.name or user.role
+            agent_id,
+            reason=req.reason,
+            actor=user.name or user.role,
+            kind=req.kind,
+            reason_class=req.reason_class,
         )
 
 
@@ -2831,7 +3023,7 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Raucle Gateway</title>
+<title>Raucle Enterprise console</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -2867,6 +3059,24 @@ ADMIN_PANEL_HTML = """<!DOCTYPE html>
   .sidenav .tab:hover { color: #fff; background: rgba(124,143,240,0.10); }
   .sidenav .tab.active { color: #fff; background: rgba(124,143,240,0.18); border-left-color: var(--rc-blue); }
   .sidenav .tab:focus-visible { outline: 2px solid var(--rc-blue); outline-offset: -2px; color: #fff; }
+  /* === D14: truth-class badges + the persistent honesty banner ======== */
+  .truth-badge { display: inline-block; font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+    padding: 2px 8px; border-radius: 999px; margin-left: 8px; vertical-align: middle; white-space: nowrap; }
+  .truth-oss-live { background: #eaf7ee; color: #14532d; border: 1px solid #b7e4c0; }
+  .truth-oss-machinery { background: #eef1fd; color: #26317d; border: 1px solid #ccd5f8; }
+  .truth-ee-only { background: #fdf3e7; color: #7c4a03; border: 1px solid #f3d9b3; }
+  .honesty-banner { display: flex; align-items: center; gap: 10px; margin: 0 0 16px;
+    padding: 10px 16px; font-size: 0.82rem; color: #26317d;
+    background: #eef1fd; border: 1px solid #ccd5f8; border-radius: 12px; }
+  .honesty-banner .honesty-mark { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--rc-blue); }
+  /* === D15: the enterprise overview capability grid =================== */
+  .ov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .ov-card { border: 1px solid #e5e7ec; border-radius: 12px; padding: 16px;
+    display: flex; flex-direction: column; gap: 8px; background: #fff; }
+  .ov-title { font-size: 14px; font-weight: 600; color: #171717; }
+  .ov-desc { font-size: 0.8rem; color: #525252; line-height: 1.45; flex: 1; }
+  .ov-card .btn { align-self: flex-start; padding: 4px 12px; font-size: 11px; }
   #demoBanner { display: none; align-items: center; gap: 10px; flex-wrap: wrap; margin-left: auto;
     padding: 6px 14px; background: #f8f9fb; border: 1px solid #e5e7ec; border-radius: 12px; }
   body.demo #demoBanner { display: flex; }
@@ -2994,6 +3204,7 @@ body:not(.demo) #demoUsersCard, body:not(.demo) #demoSiemCard, body:not(.demo) #
 body.demo .btn-primary{display:none}
 /* Demo-only screens: hidden outside demo mode */
 body:not(.demo) [data-tab-id="dlp"], body:not(.demo) [data-tab-id="injection"], body:not(.demo) [data-tab-id="shadow"]{display:none}
+body:not(.demo) [data-tab-id="session"]{display:none}
 body:not(.demo) [data-tab-id="capdemo"]{display:none}
 body:not(.demo) [data-tab-id="assure"]{display:none}
 body:not(.demo) [data-tab-id="stop"], body:not(.demo) #simDemoCard{display:none}
@@ -3056,7 +3267,7 @@ body.demo #policyEditorCard{display:none}
   <div class="header-left">
     <img src="/assets/logo-mark.png" alt="Raucle" class="logo-mark" width="30" height="34">
     <div class="logo">Raucle</div>
-    <span class="badge">Gateway</span>
+    <span class="badge">Enterprise console</span>
   </div>
   <div id="demoBanner" class="hidden" style="margin:0">
     <span style="display:inline-flex;align-items:center;gap:6px;font-size:0.78rem;font-weight:600;color:#fff;background:#22c55e;padding:3px 10px;border-radius:999px">
@@ -3090,6 +3301,7 @@ body.demo #policyEditorCard{display:none}
 
 <div id="main" class="hidden">
   <div id="tourHost"></div>
+  <div id="honestyBanner" class="honesty-banner" role="note"><span class="honesty-mark" aria-hidden="true"></span><span>This demo shows the Enterprise Edition operator surface. Enforcement, receipts and verification run on the Apache-2.0 open-source raucle gateway beneath it. EE-only surfaces are labelled.</span></div>
   <div class="layout">
   <nav class="sidenav" id="sidenav" aria-label="Panel sections">
     <div class="nav-group" data-nav-group="trust">
@@ -3097,6 +3309,7 @@ body.demo #policyEditorCard{display:none}
       <div class="tab active" tabindex="0" data-hi="showTab('dashboard',this)">Dashboard</div>
       <div class="tab" tabindex="0" data-hi="showTab('connections',this)">Connections</div>
       <div class="tab" tabindex="0" data-hi="showTab('policies',this)" data-tab-id="policies">Policies</div>
+      <div class="tab" tabindex="0" data-hi="showTab('simulate',this)" data-tab-id="simulate">Policy simulate</div>
       <div class="tab" tabindex="0" data-hi="showTab('capdemo',this)" data-tab-id="capdemo">Capability tokens</div>
       <div class="tab" tabindex="0" data-hi="showTab('receipts',this)">Receipts</div>
       <div class="tab" tabindex="0" data-hi="showTab('learn',this)" data-tab-id="learn">Learn</div>
@@ -3109,6 +3322,7 @@ body.demo #policyEditorCard{display:none}
       <div class="nav-heading">Raucle Agent Assurance</div>
       <div class="tab" tabindex="0" data-hi="showTab('dlp',this)" data-tab-id="dlp">Data Protection</div>
       <div class="tab" tabindex="0" data-hi="showTab('injection',this)" data-tab-id="injection">Prompt Injection</div>
+      <div class="tab" tabindex="0" data-hi="showTab('session',this)" data-tab-id="session">Session behaviour</div>
       <div class="tab" tabindex="0" data-hi="showTab('shadow',this)" data-tab-id="shadow">Shadow AI</div>
       <div class="tab" tabindex="0" data-hi="showTab('mcp',this)" data-tab-id="mcp">MCP Scanner</div>
       <div class="tab" tabindex="0" data-hi="showTab('assure',this)" data-tab-id="assure">Cross-org proof</div>
@@ -3123,23 +3337,91 @@ body.demo #policyEditorCard{display:none}
   </nav>
   <div class="content">
 
-    <div id="tab-dashboard">
+    <div id="tab-dashboard" data-truth-class="OSS LIVE">
       <div class="card"><div class="card-title">Gate Decisions</div>
         <div class="stats-grid" id="statsGrid"></div>
       </div>
-      <div class="card" id="enterpriseStrip"><div class="card-title">Enterprise capabilities in this demo</div>
-        <p class="screen-note">This demo runs on simulated traffic with the same enforcement code paths as a live deployment. The screens below cover the suite's capability areas; each one opens its tab. The receipts capability includes offline verification of the demo's receipts, without contacting the operator.</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('connections',this)">AI gateway</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('policies',this)">Policy editor</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('learn',this)">Learn mode</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('dlp',this)">Data loss prevention</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('injection',this)">Prompt injection detection</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('shadow',this)">Shadow AI discovery</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('mcp',this)">MCP tool scanning</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('receipts',this)">Receipts with offline verification</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('siem',this)">SIEM forwarding</button>
-          <button class="btn btn-secondary" style="padding:4px 10px;font-size:11px" data-hi="showTab('users',this)">Users and MFA</button>
+      <div class="card" id="enterpriseOverview"><div class="card-title">Enterprise overview <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span></div>
+        <p class="screen-note">This console is the Enterprise Edition operator surface drawn over the open-source raucle gateway. Every card names its capability, its truth class, and opens the screen that demonstrates it. The cards describe; the screens demonstrate.</p>
+        <div class="ov-grid" id="overviewGrid">
+          <div class="ov-card" data-truth-class="OSS LIVE">
+            <div class="ov-title">Decision receipts + offline verify</div>
+            <div class="ov-desc">Every gate decision leaves a signed, content-addressed receipt; the offline verifier re-checks signatures and hash linkage on your machine with no operator contact.</div>
+            <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span>
+            <button class="btn btn-secondary" data-hi="showTab('receipts',this)">Open Receipts</button>
+          </div>
+          <div class="ov-card" data-truth-class="OSS LIVE">
+            <div class="ov-title">Coverage: receipted share</div>
+            <div class="ov-desc">The receipted_share metric computed over this gateway's own receipt stream, with the buckets the assurance service serves cross-vantage.</div>
+            <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span>
+            <button class="btn btn-secondary" data-hi="navCoverage()">Open Coverage</button>
+          </div>
+          <div class="ov-card" data-truth-class="OSS LIVE">
+            <div class="ov-title">Session behavioural rules</div>
+            <div class="ov-desc">Deterministic, deny-only session rules over live session windows; every catch is a signed session-monitor finding citing the gate receipt it cut off.</div>
+            <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span>
+            <button class="btn btn-secondary" data-hi="showTab('session',this)">Open Session behaviour</button>
+          </div>
+          <div class="ov-card" data-truth-class="OSS LIVE">
+            <div class="ov-title">Capability tokens + PQ receipts</div>
+            <div class="ov-desc">The real capability issuer mints attenuated tokens live, and receipts can carry post-quantum hybrid signing under the enrolled key model.</div>
+            <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span>
+            <button class="btn btn-secondary" data-hi="showTab('capdemo',this)">Open Capability tokens</button>
+          </div>
+          <div class="ov-card" data-truth-class="OSS LIVE">
+            <div class="ov-title">Data loss prevention</div>
+            <div class="ov-desc">The advisory redaction engine collars sensitive spans in live demo tool calls, and every scan lands as a signed x_dlp receipt citing the gate receipt for the call. Digests and counts only, never content.</div>
+            <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span>
+            <button class="btn btn-secondary" data-hi="showTab('dlp',this)">Open Data Protection</button>
+          </div>
+          <div class="ov-card" data-truth-class="OSS MACHINERY + EE VIEW">
+            <div class="ov-title">Prompt injection detection</div>
+            <div class="ov-desc">The heuristic classifier scores demo traffic in the gate's own decision bands. The EE classifier surface is simulated, labelled as such.</div>
+            <span class="truth-badge truth-oss-machinery" data-truth="OSS MACHINERY + EE VIEW">OSS MACHINERY + EE VIEW</span>
+            <button class="btn btn-secondary" data-hi="showTab('injection',this)">Open Prompt Injection</button>
+          </div>
+          <div class="ov-card" data-truth-class="OSS LIVE">
+            <div class="ov-title">AI gateway</div>
+            <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span>
+            <div class="ov-desc">Live tool-call gating: every agent call hits the gate before execution, with connection views and live topology.</div>
+            <button class="btn btn-secondary" data-hi="showTab('connections',this)">Open AI gateway</button>
+          </div>
+          <div class="ov-card" data-truth-class="OSS LIVE">
+            <div class="ov-title">Policy editor + simulate</div>
+            <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span>
+            <div class="ov-desc">Inspect and edit policies, then simulate a change deterministically before deploy: the proof-status engine shows PROVEN, REFUTED or UNDECIDED per rule.</div>
+            <button class="btn btn-secondary" data-hi="showTab('policies',this)">Open Policy editor</button>
+          </div>
+          <div class="ov-card" data-truth-class="OSS LIVE">
+            <div class="ov-title">Compliance: EU AI Act pack</div>
+            <div class="ov-desc">The assurance packet builder produces a sha-pinned evidence pack from this deployment's receipt chain; EU AI Act crosswalk rows map to the framework and never claim conformance.</div>
+            <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span>
+            <button class="btn btn-secondary" data-hi="navEvidencePack()">Open Evidence pack</button>
+          </div>
+          <div class="ov-card" data-truth-class="EE-ONLY">
+            <div class="ov-title">Fleet + SIEM targets</div>
+            <div class="ov-desc">Multi-organisation fleet views and SIEM target management are Enterprise Edition surfaces. This demo shows their shape with simulated data, labelled as such.</div>
+            <span class="truth-badge truth-ee-only" data-truth="EE-ONLY">EE-ONLY</span>
+            <button class="btn btn-secondary" data-hi="showTab('siem',this)">Open SIEM</button>
+          </div>
+          <div class="ov-card" data-truth-class="OSS LIVE">
+            <div class="ov-title">Kill switch: operator stop</div>
+            <div class="ov-desc">The receipted emergency authority stop story: M-of-N quorum approvals, signed transitions, byte-exact resume, produced by the real containment machinery.</div>
+            <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span>
+            <button class="btn btn-secondary" data-hi="showTab('stop',this)">Open Emergency authority stop</button>
+          </div>
+          <div class="ov-card" data-truth-class="OSS LIVE">
+            <div class="ov-title">MCP tool scanner</div>
+            <div class="ov-desc">The real static analysis engine runs live over seeded or pasted manifests: prompt injection, hidden instructions, planted keys, rug-pull wording and SSRF targets. Findings carry severity, location and evidence class, never payload text. Agent Red tradecraft is closed-core and not part of this demo.</div>
+            <span class="truth-badge truth-oss-live" data-truth="OSS LIVE">OSS LIVE</span>
+            <button class="btn btn-secondary" data-hi="showTab('mcp',this)">Open MCP Scanner</button>
+          </div>
+          <div class="ov-card" data-truth-class="OSS MACHINERY + EE VIEW">
+            <div class="ov-title">Shadow AI discovery</div>
+            <div class="ov-desc">Attempts to reach unapproved model suppliers, checked by the gateway shadow-AI path over simulated demo traffic; the discovery sensors are an EE surface and are labelled as such.</div>
+            <span class="truth-badge truth-oss-machinery" data-truth="OSS MACHINERY + EE VIEW">OSS MACHINERY + EE VIEW</span>
+            <button class="btn btn-secondary" data-hi="showTab('shadow',this)">Open Shadow AI</button>
+          </div>
         </div>
       </div>
       <div class="card"><div class="card-title">By Tool</div>
@@ -3148,17 +3430,21 @@ body.demo #policyEditorCard{display:none}
       </div>
     </div>
 
-    <div id="tab-dlp" class="hidden">
-      <div class="card"><div class="card-title"><span class="live-dot"></span>Data Loss Prevention</div>
-        <span class="findings-label">Simulated demo traffic</span>
-        <p class="screen-note">Every finding below was produced by the same pattern engine that screens live traffic, run over the simulated demo calls. Counts are grouped by data category, and each call shows the redaction action the policy applied and the rule responsible. No real personal data is shown anywhere on this screen.</p>
+    <div id="tab-dlp" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
+      <div class="card"><div class="card-title"><span class="live-dot"></span>Data Protection</div>
+        <span class="findings-label">OSS LIVE - the advisory redaction engine over live demo traffic</span>
+        <p class="screen-note">Every demo tool call is screened by the OSS advisory redaction engine: matched spans are collared with [REDACTED:class] markers, and every scan with a match lands as a signed x_dlp receipt citing the gate receipt for that call. The values are never shown: each row pairs the original content digest with the redacted digest, alongside bounded pattern classes and span counts only. The demo agents generate the canned patterns themselves (a test card number, a reserved-domain email, an example national id, an obviously-demo bearer token); nothing here is customer data.</p>
         <div class="stats-grid" id="dlpSummary"></div>
-        <table><thead><tr><th>Agent</th><th>Tool</th><th>Where</th><th>Rule</th><th>Category</th><th>Action</th></tr></thead>
+        <div class="ov-grid" style="margin-bottom:12px">
+          <div class="ov-card" id="dlpFindingsCard"><div class="ov-title">Collared spans by pattern class</div><p class="screen-note" id="dlpFindingsBody" style="margin-top:8px"></p></div>
+        </div>
+        <table><thead><tr><th>Scan</th><th>Route</th><th>Classes (spans)</th><th>Action</th><th>Rule</th><th>Content digest</th><th>Redacted digest</th><th>Cited receipt</th><th>Receipt</th></tr></thead>
         <tbody id="dlpTableBody"></tbody></table>
+        <p class="screen-note">Honest limits: the advisory engine wires a declared subset of the x_dlp vocabulary (pii_card, pii_email, pii_national_id, secret_bearer); pci_pan is deliberately not wired, because issuer-aware PAN heuristics belong to the enterprise scanner. The action is always redacted in this demo: block classes belong to the enterprise runtime and are never claimed here. The demo scan runs only when demo mode is on; production gate traffic is never content-scanned by the gateway.</p>
       </div>
     </div>
 
-    <div id="tab-injection" class="hidden">
+    <div id="tab-injection" data-truth-class="OSS MACHINERY + EE VIEW" class="hidden"><span class="truth-badge" data-truth="OSS MACHINERY + EE VIEW">OSS MACHINERY + EE VIEW</span>
       <div class="card"><div class="card-title"><span class="live-dot"></span>Prompt Injection</div>
         <span class="findings-label">Simulated demo traffic</span>
         <p class="screen-note">Injected payloads inside the simulated tool outputs and agent text, scored live by the heuristic classifier (with the machine learning classifier when it is active) in the same decision bands the gate uses. Each event shows its score, category, and the receipted decision with its reason.</p>
@@ -3168,7 +3454,20 @@ body.demo #policyEditorCard{display:none}
       </div>
     </div>
 
-    <div id="tab-shadow" class="hidden">
+        <div id="tab-session" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
+      <div class="card"><div class="card-title"><span class="live-dot"></span>Session behaviour</div>
+        <span class="findings-label">OSS LIVE - real windows, real findings</span>
+        <p class="screen-note">Deterministic session rules enforced by the gateway over tool-call sequences (Q1). Calls that declare a session id are bound to signed receipts; this tab reads the live demo gateway state. Honest limits printed below.</p>
+        <div class="ov-grid" style="margin-bottom:12px">
+          <div class="ov-card" id="sessionRulesCard"><div class="ov-title">Shipped session rules</div><p class="screen-note" id="sessionRulesBody" style="margin-top:8px"></p></div>
+          <div class="ov-card" id="sessionWindowsCard"><div class="ov-title">Live session windows</div><p class="screen-note" id="sessionWindowsBody" style="margin-top:8px"></p></div>
+          <div class="ov-card" id="sessionFindingsCard"><div class="ov-title">Session-monitor findings</div><p class="screen-note" id="sessionFindingsBody" style="margin-top:8px"></p><button class="btn btn-secondary" data-hi="sessionFindingVerify(event)">Verify offline</button></div>
+        </div>
+        <p class="screen-note">Honest limits: deny-only in v1, a session rule can refuse a call and never widen authority. Window state is process memory, rebuilt from the receipt index on boot within the configured TTL. Replayed rows lack destination_class, so gradual_extraction can undercount after a restart: it never fabricates a deny. Coverage exists only where the caller declares a session id.</p>
+      </div>
+    </div>
+
+    <div id="tab-shadow" data-truth-class="OSS MACHINERY + EE VIEW" class="hidden"><span class="truth-badge" data-truth="OSS MACHINERY + EE VIEW">OSS MACHINERY + EE VIEW</span>
       <div class="card"><div class="card-title"><span class="live-dot"></span>Shadow AI</div>
         <span class="findings-label">Simulated demo traffic</span>
         <p class="screen-note">Attempts by simulated agents to reach unapproved model suppliers: unknown model headers, endpoints outside the approved egress list, and bring-your-own-key attempts. Each finding is checked against the scenario's approved supplier policy by the gateway's shadow-AI detection path, with the policy response recorded.</p>
@@ -3179,7 +3478,7 @@ body.demo #policyEditorCard{display:none}
     </div>
 
     <!-- CAPABILITY TOKENS - real issuer minted, real gate verified (E1) -->
-    <div id="tab-capdemo" class="hidden">
+    <div id="tab-capdemo" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
       <div class="card"><div class="card-title">Capability tokens</div>
         <span class="findings-label">Simulated capability chains</span>
         <p class="screen-note">Pick a simulated capability call: the envelope below is minted live by the gateway's own capability issuer, and every verify verdict is the real capability gate deciding the call. Nothing here delegates or enforces beyond this screen.</p>
@@ -3193,7 +3492,7 @@ body.demo #policyEditorCard{display:none}
     </div>
 
     <!-- CONNECTIONS - Netbird-style flow graph -->
-    <div id="tab-connections" class="hidden">
+    <div id="tab-connections" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
       <div class="card">
         <div class="card-title"><span class="live-dot"></span>Live Topology</div>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
@@ -3284,7 +3583,7 @@ body.demo #policyEditorCard{display:none}
       </div>
     </div>
 
-    <div id="tab-policies" class="hidden">
+    <div id="tab-policies" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
       <div class="card hidden" id="simDemoCard"><div class="card-title"><span class="live-dot"></span>Test a change before you deploy</div>
         <span class="findings-label">Simulated demo window</span>
         <p class="screen-note">Pick a demo policy tweak and the panel runs the gateway's real policy simulation over a simulated served-traffic window: the outcome is deterministic and the receipt below it is the real signed machine output. In a live deployment the operator deploys a validated change through the editor's Save &amp; Deploy path, which re-verifies the signed receipt before anything lands.</p>
@@ -3304,7 +3603,31 @@ body.demo #policyEditorCard{display:none}
         <div class="actions"><button class="btn" data-hi="validatePolicy()">Validate</button><button class="btn" data-hi="savePolicy()">Save & Deploy</button><button class="btn btn-secondary" data-hi="reloadPolicy()">Reload</button></div>
       </div>
     </div>
-    <div id="tab-stop" class="hidden">
+    <div id="tab-simulate" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
+      <div class="card" id="simTabCard"><div class="card-title"><span class="live-dot"></span>Policy simulate: test a change before you deploy</div>
+        <span class="findings-label">Deterministic, signed, flippable</span>
+        <p class="screen-note">The operator question this screen answers: what would THIS candidate policy have done to the traffic we actually served? Pick a preset tweak and the real simulate engine replays a simulated served window; paste a candidate policy YAML and name the historical window, and it replays every recorded decision from this deployment's own store. Either way the outcome is deterministic and signed: what the candidate would have allowed and denied, and every decision that flips. The rows below stay bounded to tools, agents, decisions and hashes: never argument values, never denial reasons. The signed receipt binds the candidate policy and the window by hash. This screen applies nothing; deploying a validated change is the policy editor's Save &amp; Deploy path, which re-verifies the signed receipt before anything lands. The paste path needs an operator key: the demo key holds the auditor role, and the refusal it gets is named below, not hidden.</p>
+        <div style="font-size:0.75rem;color:#a3a3a3;margin-bottom:8px">Choose a preset tweak, or paste a candidate policy YAML. Pasting simulates over this deployment's own recorded window; picking a preset runs the same real engine over the simulated window.</div>
+        <div class="file-list" id="simTabPresetList"></div>
+        <textarea class="editor" id="simTabCandidate" style="height:180px" spellcheck="false" placeholder="candidate policy YAML"></textarea>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;max-width:560px">
+          <input class="input" id="simTabWindow" placeholder="window: receipt-chain JSONL path (operator, optional)">
+          <input class="input" id="simTabStore" placeholder="input store JSONL path (operator, optional)">
+        </div>
+        <div class="actions">
+          <button class="btn" data-hi="simTabRun()">Run simulation</button>
+          <button class="btn btn-secondary" data-hi="simTabClear()">Clear</button>
+          <span style="font-size:0.75rem;color:#a3a3a3;align-self:center">Read-only: one run at a time; pasted policies over 256 KiB are refused.</span>
+        </div>
+      </div>
+      <div class="card" id="simTabResultCard" style="margin-top:14px"><div class="card-title">Simulation outcome</div>
+        <div id="simTabSummary" class="screen-note">No simulation yet: choose a preset tweak or paste a candidate policy, then run. The outcome renders here.</div>
+        <table class="hidden" id="simTabChangesTable"><thead><tr><th>Tool</th><th>Agent</th><th>Current</th><th>Candidate</th><th>Evidence depth</th><th>Receipt</th></tr></thead>
+        <tbody id="simTabChangesBody"></tbody></table>
+        <div id="simTabHashes" style="font-family:ui-monospace,monospace;font-size:11px;color:#737373;word-break:break-all;margin-top:8px"></div>
+      </div>
+    </div>
+    <div id="tab-stop" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
       <div class="card">
         <div class="card-title"><span class="live-dot"></span>Emergency authority stop — the operator story</div>
         <span class="findings-label">Simulated containment state</span>
@@ -3319,7 +3642,7 @@ body.demo #policyEditorCard{display:none}
         <tbody id="stopReceiptsBody"></tbody></table>
       </div>
     </div>
-    <div id="tab-assure" class="hidden">
+    <div id="tab-assure" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
       <div class="card">
         <div class="card-title">Cross-organisation receipt verification</div>
         <span class="findings-label">Simulated two-organisation story</span>
@@ -3340,7 +3663,7 @@ body.demo #policyEditorCard{display:none}
         <pre id="assurancePacketView" style="margin-top:10px;font-size:11px;max-height:340px;overflow:auto;background:#f8f9fb;border:1px solid #e5e7ec;border-radius:10px;padding:14px"></pre>
       </div>
     </div>
-    <div id="tab-learn" class="hidden">
+    <div id="tab-learn" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
       <div class="card">
         <div class="card-title">Learn Mode — draft policies from observed traffic</div>
         <p style="font-size:0.85rem;color:#8b919e;margin-bottom:14px">
@@ -3360,7 +3683,7 @@ body.demo #policyEditorCard{display:none}
         <pre id="learnDraft" style="margin-top:10px;max-height:420px;overflow:auto;background:#f8f9fb;border:1px solid #e5e7ec;border-radius:10px;padding:14px;font-size:0.78rem">No observations yet.</pre>
       </div>
     </div>
-    <div id="tab-receipts" class="hidden">
+    <div id="tab-receipts" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
       <div class="card"><div class="card-title">Receipts</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
           <input id="rcpt-filter-tool" class="input" style="width:150px" placeholder="tool">
@@ -3436,14 +3759,19 @@ body.demo #policyEditorCard{display:none}
         <p class="screen-note" style="margin-top:6px;white-space:pre-line" id="demoCoverageFlagsNote"></p>
       </div>
     </div>
-    <div id="tab-mcp" class="hidden">
+    <div id="tab-mcp" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
       <div class="card">
         <div class="card-title">MCP Tool Scanner</div>
         <p style="font-size:0.85rem;color:#8b919e;margin-bottom:14px">
           Static analysis of MCP tool manifests for prompt injection, hidden
           instructions, exposed credentials, rug-pull wording and SSRF targets.
-          Findings are produced by the gateway's real scanner engine; the demo
-          manifests are simulated samples, labelled as such.
+          Pick a seeded demo manifest or paste your own manifest JSON: either
+          way the scan runs the gateway's real scanner engine live, and every
+          finding below is its genuine output. A static scan does not cross
+          the gate's decision path, so it mints no receipt and enters nothing
+          into the receipt chain; findings carry the rule, its location and
+          the evidence class, never the payload text. The demo manifests are
+          simulated samples, labelled as such.
         </p>
         <div style="font-size:0.75rem;color:#a3a3a3;margin-bottom:8px">Choose a simulated demo manifest, or paste your own manifest JSON below.</div>
         <div class="file-list" id="mcpManifestList"></div>
@@ -3451,7 +3779,7 @@ body.demo #policyEditorCard{display:none}
         <div class="actions">
           <button class="btn" data-hi="mcpScan()">Scan manifest</button>
           <button class="btn btn-secondary" data-hi="mcpClear()">Clear</button>
-          <span style="font-size:0.75rem;color:#a3a3a3;align-self:center">Read-only: scanning has no side effects on the gate.</span>
+          <span style="font-size:0.75rem;color:#a3a3a3;align-self:center">Stateless one-shot scan: it mutates nothing and persists nothing. Pasted manifests over 256 KiB are refused.</span>
         </div>
         <div style="display:flex;gap:8px;margin-top:8px;font-size:0.78rem;color:#737373" id="mcpSummary"></div>
       </div>
@@ -3463,7 +3791,7 @@ body.demo #policyEditorCard{display:none}
         </div>
       </div>
     </div>
-    <div id="tab-siem" class="hidden"><div class="card" id="siemConfigCard"><div class="card-title">SIEM Forwarding</div>
+    <div id="tab-siem" data-truth-class="OSS MACHINERY + EE VIEW" class="hidden"><span class="truth-badge" data-truth="OSS MACHINERY + EE VIEW">OSS MACHINERY + EE VIEW</span><div class="card" id="siemConfigCard"><div class="card-title">SIEM Forwarding</div>
       <label class="toggle" style="margin-bottom:16px"><input type="checkbox" id="siemEnabled"> Enabled</label>
       <div style="display:flex;flex-direction:column;gap:8px;max-width:400px">
         <input class="input" id="siemBackend" placeholder="splunk / elastic / sentinel"><input class="input" id="siemUrl" placeholder="SIEM endpoint URL"><input class="input" id="siemToken" type="password" placeholder="SIEM token">
@@ -3482,7 +3810,7 @@ body.demo #policyEditorCard{display:none}
         <pre id="demoSiemSample" style="font-size:11px;max-height:220px;overflow:auto"></pre>
       </div>
     </div>
-    <div id="tab-users" class="hidden">
+    <div id="tab-users" data-truth-class="OSS MACHINERY + EE VIEW" class="hidden"><span class="truth-badge" data-truth="OSS MACHINERY + EE VIEW">OSS MACHINERY + EE VIEW</span>
       <div class="card" id="usersAddCard"><div class="card-title">Add User</div>
         <div style="display:flex;flex-direction:column;gap:8px;max-width:400px">
           <input class="input" id="newKey" placeholder="API Key"><input class="input" id="newRole" placeholder="admin / operator / auditor"><input class="input" id="newName" placeholder="Name">
@@ -3509,7 +3837,7 @@ body.demo #policyEditorCard{display:none}
         </div>
       </div>
     </div>
-    <div id="tab-config" class="hidden">
+    <div id="tab-config" data-truth-class="OSS LIVE" class="hidden"><span class="truth-badge" data-truth="OSS LIVE">OSS LIVE</span>
       <div class="card" id="configEditCard"><div class="card-title">Gateway Configuration</div>
         <div id="configForm" style="display:grid;grid-template-columns:1fr 1fr;gap:12px 24px;max-width:700px">
           <div><label style="font-size:12px;color:#737373;display:block;margin-bottom:4px">Host</label><input class="input" id="cfg-host" style="width:100%"></div>
@@ -3597,9 +3925,11 @@ function showTab(t,el) {
   document.querySelectorAll('[id^=tab-]').forEach(x=>x.classList.add('hidden'));
   el.classList.add('active'); document.getElementById('tab-'+t).classList.remove('hidden');
   if(t==='dashboard')loadStats(); if(t==='connections'){demoExample();updatePathTail();if(!pathPollId)pathPollId=setInterval(updatePathTail,3000);startConnPolling();}else if(pathPollId){clearInterval(pathPollId);pathPollId=null;} else stopConnPolling();
-  if(t==='policies'){loadPolicy();loadSimPanel();} if(t==='stop')loadStopPanel(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();if(typeof demoMode!=='undefined'&&demoMode)loadCoverage();} if(t==='capdemo')capDemoLoad(); if(t==='mcp')loadMcpPanel(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
+  if(t==='policies'){loadPolicy();loadSimPanel();} if(t==='simulate')loadSimTab(); if(t==='stop')loadStopPanel(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();if(typeof demoMode!=='undefined'&&demoMode)loadCoverage();} if(t==='capdemo')capDemoLoad(); if(t==='mcp')loadMcpPanel(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
   if(t==='policies')loadPolicy(); if(t==='assure')loadAssure(); if(t==='learn')loadLearn(); if(t==='receipts'){loadReceipts();loadKeyFamily();loadKeyModel();if(typeof demoMode!=='undefined'&&demoMode)loadCoverage();} if(t==='capdemo')capDemoLoad(); if(t==='siem')loadSIEM(); if(t==='users')loadUsers(); if(t==='config')loadConfig();
-  if(t==='dlp'||t==='injection'||t==='shadow')loadDemoFindings();
+  if(t==='dlp')loadDlpPanel();
+  if(t==='injection'||t==='shadow')loadDemoFindings();
+  if(t==='session')loadSessionPanel();
 }
 function api(p,o){const h={'Authorization':key,...((o||{}).headers||{})};if(totpCode)h['X-TOTP']=totpCode;return fetch(p,{...(o||{}),headers:h});}
 function loadAll(){loadStats();}
@@ -4419,10 +4749,10 @@ function loadDemoFindings() {
   const p = demoScenarioFilter && demoScenarioFilter !== 'all' ? demoScenarioFilter : 'all';
   api('/api/demo-findings?scenario=' + encodeURIComponent(p)).then(r => r.json()).then(d => {
     demoFindings = d;
-    renderDlpScreen(d);renderInjectionScreen(d);renderShadowScreen(d);
+    renderInjectionScreen(d);renderShadowScreen(d);
   }).catch(() => {});
 }
-function findingsRows(tbodyId, headers, rowsGetter) {
+function findingsRows(tbodyId, headers, rowsGetter, emptyLabel) {
   // shared textContent table builder for the findings screens
   const tb = document.getElementById(tbodyId);
   if (!tb) return;
@@ -4432,7 +4762,7 @@ function findingsRows(tbodyId, headers, rowsGetter) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
     td.colSpan = headers.length;
-    td.textContent = 'No findings for this scenario';
+    td.textContent = emptyLabel || 'No findings for this scenario';
     td.style.color = '#8b919e';
     tr.appendChild(td);tb.appendChild(tr);return;
   }
@@ -4458,10 +4788,6 @@ function findingsStats(gridId, entries) {
   });
 }
 function whereLabel(f) { return f.kind === 'agent_text' ? 'Agent text' : 'Tool output'; }
-function renderDlpScreen(d) {
-  findingsStats('dlpSummary', [['Findings', (d.dlp || {}).total], ['Blocked', ((d.dlp || {}).by_action || {}).block || 0], ['Redacted', ((d.dlp || {}).by_action || {}).redact || 0], ['Masked', ((d.dlp || {}).by_action || {}).mask || 0]]);
-  findingsRows('dlpTableBody', 6, () => ((d.dlp || {}).findings || []).map(f => [f.agent, f.tool, whereLabel(f), f.rule_id + (f.rule_name ? ' · ' + f.rule_name : ''), f.category, f.action]));
-}
 function renderInjectionScreen(d) {
   const fs = (d.injection || {}).findings || [];
   findingsStats('injSummary', [['Findings', fs.length], ['Denied', fs.filter(f => f.decision === 'deny').length], ['Escalated', fs.filter(f => f.decision === 'escalate').length]]);
@@ -4486,6 +4812,112 @@ function demoToolMap(){
     health:['read_patient_record','write_patient_note','prescribe_medication','prescribe_controlled','order_imaging','view_imaging_result','order_lab_test','review_lab_results','triage_assessment','export_patient_summary','book_appointment','cancel_appointment'],
     capability:['redact_document','classify_text','check_dlp_policy','export_analytics','bulk_export_records','screen_user_message','flag_injection_attempt','execute_shell','send_email','audit_ai_usage','list_approved_models','invoke_unapproved_model','forward_external_llm','list_mcp_tools','invoke_mcp_tool','fetch_mcp_manifest']
   };
+}
+// ================= SESSION BEHAVIOUR (Q2 demo plane) =================
+// Renderers over the read-only /api/demo/session-* endpoints: every
+// response-sourced value passes through esc/escn into innerHTML, so
+// hostile strings can never become markup.
+function loadSessionPanel(){loadSessionRules();loadSessionWindows();loadSessionFindings();}
+function loadSessionRules(){
+  api('/api/demo/session-rules').then(function(r){
+    if(r.status===404){document.getElementById('sessionRulesBody').innerHTML=esc('Demo mode is not configured on this deployment.');return null;}
+    return r.json();
+  }).then(function(d){
+    if(!d)return;
+    let out='';
+    if(d.config_error){out+='<div>'+esc('CONFIG ERROR (fail-closed): '+d.config_error)+'</div>';}
+    (d.session_rules||[]).forEach(function(rl){
+      out+='<div>'+esc(rl.id+' - '+rl.kind+' ('+(rl.threshold!==undefined&&rl.threshold!==null?'threshold '+rl.threshold+', ':'')+'window '+rl.window_seconds+'s'+((rl.tool_patterns&&rl.tool_patterns.length)?', tools '+rl.tool_patterns.join(','):'')+') '+(d.deny_only?'deny-only (v1)':'')+')')+'</div>';
+    });
+    if(d.window){out+='<div>'+esc('window state bound: ttl '+d.window.ttl_seconds+'s, max keys '+d.window.max_keys+', max entries '+d.window.max_entries)+'</div>';}
+    (d.limits||[]).forEach(function(l){out+='<div>'+esc('honest limit: '+l)+'</div>';});
+    document.getElementById('sessionRulesBody').innerHTML=out;
+  }).catch(function(){document.getElementById('sessionRulesBody').innerHTML=esc('unavailable');});
+}
+function loadSessionWindows(){
+  api('/api/demo/session-windows').then(function(r){
+    if(r.status===404){document.getElementById('sessionWindowsBody').innerHTML=esc('Demo mode is not configured on this deployment.');return null;}
+    return r.json();
+  }).then(function(d){
+    if(!d)return;
+    if(d.available===false){
+      document.getElementById('sessionWindowsBody').innerHTML='<div>'+esc(d.unavailable_note||'receipt index unavailable; windows are never fabricated')+'</div>';
+      return;
+    }
+    let out='';
+    const wins=d.sessions||[];
+    if(!wins.length){out+='<div>'+esc('no active windows (available only after demo traffic declares a session id)')+'</div>';}
+    wins.forEach(function(w){
+      const agents=(w.agents||[]).join(',')||'-';
+      out+='<div>'+esc(String(w.session_id).slice(0,18)+' - agents '+agents+' - receipts '+w.receipts+' (allows '+w.allows+', denies '+w.denies+', escalates '+w.escalates+')')+'</div>';
+    });
+    document.getElementById('sessionWindowsBody').innerHTML=out;
+  }).catch(function(){document.getElementById('sessionWindowsBody').innerHTML=esc('unavailable');});
+}
+function loadSessionFindings(){
+  api('/api/demo/session-findings').then(function(r){
+    if(r.status===404){document.getElementById('sessionFindingsBody').innerHTML=esc('Demo mode is not configured on this deployment.');return null;}
+    return r.json();
+  }).then(function(d){
+    if(!d)return;
+    let out='';
+    const fs=d.findings||[];
+    if(!fs.length){out+='<div>'+esc('no session-monitor findings yet')+'</div>';}
+    fs.forEach(function(f){
+      out+='<div>'+esc(f.test_id+' - '+f.verdict+' - tool '+f.tool+' - cited receipt '+(f.cited_receipt||'')+' - '+(f.receipt_hash||''))+' <button class="btn btn-secondary" data-hi="sessionFindingVerify(event)" data-receipt="'+esc(f.receipt_hash||'')+'" data-cited="'+esc(f.cited_receipt||'')+'">Verify offline</button></div>';
+    });
+    document.getElementById('sessionFindingsBody').innerHTML=out;
+  }).catch(function(){document.getElementById('sessionFindingsBody').innerHTML=esc('unavailable');});
+}
+function sessionFindingVerify(ev, el){
+  const body=document.getElementById('sessionFindingsBody');
+  const hash=(el&&el.getAttribute)?(el.getAttribute('data-receipt')||''):'';
+  const cited=el&&el.getAttribute?el.getAttribute('data-cited'):null;
+  if(!hash){body.innerHTML+='<div>'+esc('no receipt selected; use a finding row button')+'</div>';return;}
+  body.innerHTML+='<div>'+esc('offline verify running for '+(cited||hash))+'</div>';
+  api('/api/demo/session-findings/'+encodeURIComponent(hash)+'/offline-verify',{method:'POST'}).then(function(r){
+    const status=r.status;
+    return r.json().then(function(d){return {status:status, d:d};});
+  }).then(function(res){
+    let line='verifier responded '+res.status+'; disclosed rather than fabricated.';
+    if(res.status===200 && res.d && res.d.verdict==='valid'){
+      line='VERIFIED OFFLINE: the finding and its cited gate receipt verify through the real ProvenanceVerifier.';
+    } else if(res.status===422){
+      line='VERIFICATION FAILED (honest): the verifier rejected the chain; disclosed, never hidden.';
+    } else if(res.status===404){
+      line='UNAVAILABLE: the finding or its cited receipt is not in this chain.';
+    } else if(res.status===401||res.status===403){
+      line='AUTH REQUIRED: the verifier needs a signed-in session; the offline-verify card on the Receipts tab shows the same mechanism.';
+    }
+    body.innerHTML+='<div>'+esc(line)+'</div>';
+  }).catch(function(){
+    body.innerHTML+='<div>'+esc('verifier unreachable; nothing was claimed verified.')+'</div>';
+  });
+}
+// ================= DATA PROTECTION (D2 demo plane) =================
+// Renderers over the read-only /api/demo/dlp-findings endpoint: every
+// response-sourced value rides esc() into innerHTML or the shared
+// textContent-only table builder, so hostile strings can never become
+// markup. The rows show digests, class names and counts only: the
+// values behind them never reach this surface.
+function loadDlpPanel(){loadDlpFindings();}
+function dshort(v){v=String(v||'');return v.length>22?v.slice(0,22)+'...':v;}
+function collarSpans(f){return (f.matched_classes||[]).map(function(c){return '[REDACTED:'+c+'] x'+((f.span_counts||{})[c]||0);}).join(', ');}
+function loadDlpFindings(){
+  api('/api/demo/dlp-findings').then(function(r){
+    if(r.status===404){document.getElementById('dlpFindingsBody').innerHTML=esc('Demo mode is not configured on this deployment.');return null;}
+    return r.json();
+  }).then(function(d){
+    if(!d)return;
+    if(d.available===false){document.getElementById('dlpFindingsBody').innerHTML='<div>'+esc(d.unavailable_note||'x_dlp findings unavailable; never fabricated')+'</div>';return;}
+    findingsStats('dlpSummary', [['Scans', d.count], ['Advisory findings', d.advisory_findings||0], ['Pattern classes', Object.keys(d.by_class||{}).length]]);
+    let out='';
+    const byClass=d.by_class||{};
+    Object.keys(byClass).sort().forEach(function(cls){out+='<div>'+esc('[REDACTED:'+cls+'] x'+byClass[cls])+'</div>';});
+    if(!out){out='<div>'+esc(d.empty_note||'no x_dlp receipts yet')+'</div>';}
+    document.getElementById('dlpFindingsBody').innerHTML=out;
+    findingsRows('dlpTableBody', 9, () => (d.findings||[]).map(f => [dshort(f.scan_id), dshort((f.route||{}).source)+' -> '+dshort((f.route||{}).destination), collarSpans(f), f.action, f.rule_id, dshort(f.content_sha256), dshort(f.redacted_content_sha256), dshort(f.cited_receipt), dshort(f.receipt_hash)]), 'No x_dlp receipts yet: findings appear when demo traffic carries the canned patterns.');
+  }).catch(function(){document.getElementById('dlpFindingsBody').innerHTML=esc('unavailable');});
 }
 // The threats lens (D6, cross-cutting): keep only the attack-relevant
 // decisions - denied and escalated calls - across every scenario.
@@ -4557,32 +4989,42 @@ function showMainDemo() {
 const TOUR_SEEN_KEY = 'raucle_demo_tour_done_v1';
 let tourStep = 0, tourBox = null, tourTimer = null;
 const TOUR_STEPS = [
-  // Narrative arc (G7): live traffic, what the gate caught, the policy
-  // behind it, the evidence it leaves, then what an auditor takes away.
-  {tab:'connections', target:'#liveMode', title:'This is live traffic',
-   body:'Real agent tool calls, gated in real time. Green lines are allowed calls; red ones were denied by policy. Use the scenario buttons to focus on banking, government or health.'},
-  {tab:'connections', target:'#topoDecisionFilter', title:'Filter what you watch',
-   body:'Narrow the flow to allows, denies or escalations. Click any node in the topology to filter the whole view to that agent or tool.'},
-  {tab:'dlp', target:'[data-tab-id="dlp"].tab', title:'What the gate caught: sensitive data',
-   body:'Findings from the simulated demo calls, scored by the same pattern engine used on live traffic: grouped by data category, with the redaction action and the rule responsible on every call.'},
-  {tab:'injection', target:'[data-tab-id="injection"].tab', title:'What the gate caught: injected instructions',
-   body:'The classifier scoring simulated tool outputs and agent text in real time. Each event shows its score, category and the receipted decision, so nothing here is an afterthought.'},
-  {tab:'shadow', target:'[data-tab-id="shadow"].tab', title:'What the gate caught: unapproved AI',
-   body:'Attempts by agents to reach model suppliers the policy does not approve: unknown models, off-list endpoints and caller-supplied keys.'},
-  {tab:'policies', target:'#simDemoCard', title:'The policy that did it',
-   body:'Denies and escalations come from rules you can inspect and change here. Pick a demo policy tweak and the panel runs the real simulation engine over a simulated window: a deterministic outcome plus a signed receipt, before anything is deployed. In a live deployment the operator deploys through Save & Deploy, which re-verifies the signed receipt.'},
-  {tab:'receipts', target:'#receiptsView', title:'Evidence: every decision leaves a receipt',
-   body:'Each receipt is signed and content-addressed at the moment of the decision, so the record cannot quietly change afterwards.'},
-  {tab:'capdemo', target:'#capDemoList', title:'Evidence: capability tokens',
-   body:'Pick a simulated capability call and the gateway real issuer mints and attenuates the token envelope for you: issuer, agent binding, tool scope, constraints, parent-to-child narrowing and the expiry. Verify runs the real capability gate, so the allows and denies are its actual decisions.'},
-  {tab:'receipts', target:'#rcpt-keymodel', title:'The key model: enrolled, never exported',
-   body:'Read from the live signer configuration, like the key-family card above: the backend in force, the key id, the key-material type, and the enrolment checks re-run from the statement bytes. The rotation story names the rotation functions the code actually runs; no private key material is shown on this screen or returned by any panel route.'},
-  {tab:'receipts', target:'#tab-receipts', title:'What an auditor takes away',
-   body:'The receipts cards also carry the key model: which key family signed this deployment\u2019s receipts, and the offline verifier that re-checks signatures and hash linkage on this machine with no contact with the operator or any vendor.'},
-  {tab:'assure', target:'#assurancePacketView', title:'The assurance packet, built live',
-   body:"One click builds a real audit pack from this deployment signed receipt chain in a disposable sandbox: every member content-addressed by its sha256, the manifest sha-pinning its inputs, and the pack verified offline in the panel. This is what the gateway itself produces; framework crosswalks over a packet are the agent-assurance product export."},
-  {tab:'assure', target:'#tab-assure', title:'Proof across organisations',
-   body:'Two assurance stories, both real machinery. Organisation B verifies Organisation A receipts against the pinned published key with no contact with the issuing operator; and a policy constraint is re-checked over a commitment to the call arguments while every other value stays hidden.'},
+  // Narrative arc (D17): enterprise overview, what the EE console shows
+  // over OSS raucle, session monitoring catching a real runaway loop, DLP
+  // receipts, receipt -> offline verify -> coverage, capability tokens
+  // and PQ, compliance, then the honest EE-limits close.
+  {tab:'dashboard', target:'#overviewGrid', title:'The enterprise overview',
+   body:'One grid of everything the console manages. Every card carries a truth badge: OSS LIVE means real code running in this demo, OSS MACHINERY + EE VIEW means real OSS data shown through the Enterprise Edition shape, EE-ONLY means simulated and labelled because that surface is not built.'},
+  {tab:'dashboard', target:'#enterpriseOverview', title:'EE running on raucle',
+   body:'The stack underneath is the Apache-2.0 open-source raucle gateway: the enforcement, receipts and verifier you will see in these steps are the same code any buyer self-hosts. The console is the operator surface that sits on top.'},
+  {tab:'session', target:'#sessionRulesCard', title:'Session monitoring: the runaway catch',
+   body:'Demo traffic declares a session id, so multi-turn behaviour is provable: this rule set stops a runaway tool loop inside one session window, by threshold and window, deterministically and deny-only.'},
+  {tab:'session', target:'#sessionFindingsCard', title:'The catch is receipted, verified offline',
+   body:'Every session deny leaves a signed session-monitor finding citing the gate receipt that triggered it. The verify button runs the real ProvenanceVerifier over the minimal honest chain, with no contact with any operator.'},
+  {tab:'dlp', target:'[data-tab-id="dlp"].tab', title:'DLP receipts from the real pattern engine',
+   body:'Demo tool calls run through the OSS advisory redaction engine: when the canned synthetic patterns appear in a call, the matched spans are collared and the scan lands as a signed x_dlp receipt citing the gate receipt for that call.'},
+  {tab:'dlp', target:'#dlpFindingsCard', title:'Bounded disclosure: digests, never values',
+   body:'Each row pairs the original content digest with the redacted digest, so a third party can prove the outbound content differed without either side ever holding the values. Class names and span counts only: the scanned content never enters the receipt.'},
+  {tab:'simulate', target:'[data-tab-id="simulate"].tab', title:'Policy simulate: test a change before you deploy',
+   body:'The operator question the demo answers: what would THIS policy have done to the traffic actually served? Pick a preset tweak or paste a candidate, and the real engine replays the recorded window deterministically, with no wall clock in the signed result.'},
+  {tab:'simulate', target:'#simTabResultCard', title:'The flippable diff, signed',
+   body:'Current against candidate decisions, bounded to tools, agents and hashes: never argument values, never denial reasons. The receipt binds the candidate policy and the window by hash, and a validated change deploys through the editor path that re-verifies the signature.'},
+  {tab:'receipts', target:'#rcptTable', title:'Every decision leaves a signed receipt',
+   body:'Allows, denies, escalations and session findings alike: signed and content-addressed at the moment of decision, so the record cannot quietly change afterwards.'},
+  {tab:'receipts', target:'#rcpt-offline', title:'Offline verify: no operator contact',
+   body:'A receipt verifies here with no phone home: signatures and hash linkage re-checked on this machine. This is the property that makes the evidence portable and the trust path vendor-free.'},
+  {tab:'receipts', target:'#rcptCoverageCard', title:'Coverage: the receipted-share metric',
+   body:'One honest number over the demo receipt stream: what ran inside the gate plane versus disclosed gaps and pending windows. Gaps are disclosed, never folded into a claimed zero.'},
+  {tab:'capdemo', target:'#capDemoList', title:'Capability tokens, attenuated live',
+   body:'Pick a simulated capability call and the real issuer mints and narrows the token envelope; the verify button runs the genuine capability gate, so the outcomes are its actual decisions.'},
+  {tab:'receipts', target:'#rcpt-keymodel', title:'The signing keys: enrolled, never exported',
+   body:'Read from the live signer configuration: the backend, the key family, and the enrolment checks. Self-custody keys, post-quantum receipts, and private material never leaves the boundary.'},
+  {tab:'assure', target:'#assurancePacketView', title:'Compliance: the assurance packet',
+   body:'One click builds a real audit pack from the signed receipt chain, sha-pinned and verified offline. Framework crosswalks land where the regulation names them, in mapped-to language, never as compliance claims.'},
+  {tab:'mcp', target:'#mcpManifestText', title:'Tool poisoning, caught before it runs',
+   body:'Pick the seeded poisoned manifest or paste your own tool JSON and the real static analysis engine runs live: hidden instructions, injection phrases, rug-pull wording, planted keys and SSRF targets, each finding carrying its severity, location and evidence class. A static scan mints no receipt, and the findings never echo the payload.'},
+  {tab:'dashboard', target:'#honestyBanner', title:'The honest close: what is EE-only',
+   body:'Everything labelled EE-ONLY is simulated here because that surface is not built yet: the fleet multi-org view, SIEM targets and the classifier layer. What you watched catch a runaway loop was real raucle, today.'},
 ];
 function tourShow(){
   const s=TOUR_STEPS[tourStep];
@@ -5133,6 +5575,143 @@ function simRun(){
   }).then(d=>{ if(d) renderSimOutcome(d); }).catch(()=>{ sum.textContent='Simulation request failed.'; });
 }
 
+// ================= X6 POLICY SIMULATE TAB (K2) =================
+// The panel tab over the shipped X6 surface: pick a preset tweak (the
+// D10 demo plane, real engine over the simulated window) or paste a
+// candidate policy (the operator plane, POST /api/policy/simulate).
+// textContent-only rendering; no apply path lives in this tab.
+let simTabPresets = [], simTabPreset = '', simTabBusy = false;
+const SIM_TAB_MAX_ROWS = 200;
+function loadSimTab(){
+  const bar=document.getElementById('simTabPresetList');
+  if(!bar)return;
+  api('/api/demo/policy-simulate/presets').then(r=>{ if(r.ok) return r.json(); throw 0; }).then(d=>{
+    simTabPresets=d.presets||[];
+    bar.textContent='';
+    simTabPresets.forEach(p=>{
+      const chip=document.createElement('div');
+      chip.className='file-chip'+(simTabPreset===p.name?' active':'');
+      chip.setAttribute('data-sim-tab-name',p.name);
+      chip.setAttribute('data-hi','simTabPick(event)');
+      chip.title=p.description||'';
+      chip.textContent=p.label+' (simulated window)';
+      bar.appendChild(chip);
+    });
+  }).catch(()=>{ bar.textContent='Demo mode is not configured on this deployment: preset tweaks are unavailable here.'; });
+}
+function simTabPick(ev){
+  const el=ev.currentTarget||ev.target.closest('[data-sim-tab-name]');
+  const name=el?el.dataset.simTabName:null; if(!name)return;
+  simTabPreset=name;
+  document.querySelectorAll('#simTabPresetList .file-chip').forEach(c=>c.classList.toggle('active',c.dataset.simTabName===name));
+}
+function simTabNotice(text){
+  const sum=document.getElementById('simTabSummary');
+  if(sum)sum.textContent=text;
+}
+function simTabClear(){
+  simTabPreset='';
+  document.querySelectorAll('#simTabPresetList .file-chip').forEach(c=>c.classList.remove('active'));
+  ['simTabCandidate','simTabWindow','simTabStore'].forEach(id=>{const f=document.getElementById(id);if(f)f.value='';});
+  const tb=document.getElementById('simTabChangesBody'); if(tb)tb.textContent='';
+  const table=document.getElementById('simTabChangesTable'); if(table)table.classList.add('hidden');
+  const hs=document.getElementById('simTabHashes'); if(hs)hs.textContent='';
+  simTabNotice('No simulation yet: choose a preset tweak or paste a candidate policy, then run. The outcome renders here.');
+}
+function renderSimTab(d){
+  // both response shapes end in the same bounded view: the demo plane
+  // carries d.outcome, the operator plane carries d.result.gate
+  const gate=d.outcome||((d.result||{}).gate)||{};
+  const root=d.outcome||d.result||{};
+  const sum=document.getElementById('simTabSummary');
+  sum.textContent='';
+  const parts=[
+    'Recorded actions replayed: '+(gate.actions_replayed||0)+(gate.actions_unreplayable?(' (unreplayable: '+gate.actions_unreplayable+', never guessed)'):''),
+    'Under the current policy: allow '+((gate.current||{}).allow||0)+' / deny '+((gate.current||{}).deny||0),
+    'Under the candidate: allow '+((gate.candidate||{}).allow||0)+' / deny '+((gate.candidate||{}).deny||0),
+    'Decisions that flip: '+((gate.changed_decisions||[]).length),
+    'Verdict: '+(gate.verdict||''),
+    'Evidence depth behind the verdict (chain depth): '+(gate.chain_depth||0)
+  ];
+  parts.forEach(t=>{ const p=document.createElement('div'); p.textContent=t; sum.appendChild(p); });
+  const tb=document.getElementById('simTabChangesBody');
+  tb.textContent='';
+  const table=document.getElementById('simTabChangesTable');
+  const changed=gate.changed_decisions||[];
+  if(changed.length)table.classList.remove('hidden');
+  changed.slice(0,SIM_TAB_MAX_ROWS).forEach(c=>{
+    const tr=document.createElement('tr');
+    [c.tool,c.agent_id,c.current_decision,c.candidate_decision,String(c.evidence_depth==null?'':c.evidence_depth),c.receipt_hash].forEach(v=>{
+      const tdEl=document.createElement('td'); tdEl.textContent=v==null?'':String(v); tr.appendChild(tdEl);
+    });
+    tb.appendChild(tr);
+  });
+  if(changed.length>SIM_TAB_MAX_ROWS){
+    const tr=document.createElement('tr');
+    const tdEl=document.createElement('td');
+    tdEl.colSpan=6;
+    tdEl.textContent='Display bounded to the first '+SIM_TAB_MAX_ROWS+' of '+changed.length+' flipping decisions.';
+    tr.appendChild(tdEl);
+    tb.appendChild(tr);
+  }
+  const hs=document.getElementById('simTabHashes');
+  hs.textContent='';
+  const hlines=[
+    'Candidate policy hash: '+(root.candidate_policy_hash||''),
+    'Window hash: '+(root.window_hash||''),
+    'Simulation receipt hash: '+(d.receipt_hash||''),
+    'Signed receipt (EdDSA JWS): '+(d.jws||'')
+  ];
+  if(d.note)hlines.push(d.note);
+  hlines.forEach(t=>{ const p=document.createElement('div'); p.textContent=t; hs.appendChild(p); });
+}
+function simTabRequest(r){
+  if(r.ok)return r.json();
+  if(r.status===404){ simTabNotice('Demo mode is not configured on this deployment: preset tweaks are unavailable here.'); return null; }
+  return r.json().catch(()=>({})).then(det=>{
+    const detail=det&&det.detail!==undefined?det.detail:det;
+    let text='';
+    if(Array.isArray(detail)){ text=detail.map(x=>(x&&(x.msg||x))||'').join('; '); }
+    else if(detail){ text=String(detail); }
+    if(r.status===403){ text='Simulation refused: '+(text||'insufficient role')+'. The key in use holds the auditor role; simulation over a live deployment window needs an operator key.'; }
+    else if(r.status===422){ text='The request was refused as malformed (422): '+(text||'validation failed'); }
+    else if(r.status===400){ text='The simulation was refused named: '+text; }
+    else { text='The simulation request failed (HTTP '+r.status+').'; }
+    simTabNotice(text);
+    return null;
+  });
+}
+function simTabRun(){
+  if(simTabBusy){ simTabNotice('A simulation is already running: one run at a time.'); return; }
+  const cEl=document.getElementById('simTabCandidate');
+  const yaml=cEl&&cEl.value?cEl.value.trim():'';
+  let url='', body=null;
+  if(yaml){
+    // client-side size cap: refuse oversize pasted policies before any
+    // request leaves the panel (the MCP manifest precedent)
+    if(yaml.length>256*1024){ simTabNotice('The pasted candidate policy is over 256 KiB: the panel refuses it before any request leaves.'); return; }
+    body={candidate_policy_yaml:yaml};
+    const w=document.getElementById('simTabWindow');
+    if(w&&w.value.trim())body.window_ref=w.value.trim();
+    const st=document.getElementById('simTabStore');
+    if(st&&st.value.trim())body.input_store_ref=st.value.trim();
+    url='/api/policy/simulate';
+  } else if(simTabPreset){
+    url='/api/demo/policy-simulate';
+    body={preset:simTabPreset};
+  } else {
+    simTabNotice('Choose a preset policy tweak or paste a candidate policy YAML first: nothing has been simulated yet.');
+    return;
+  }
+  simTabBusy=true;
+  simTabNotice('Running the real simulation engine...');
+  api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+    .then(simTabRequest)
+    .then(d=>{ if(d)renderSimTab(d); })
+    .catch(()=>{ simTabNotice('The simulation request failed.'); })
+    .finally(()=>{ simTabBusy=false; });
+}
+
 // ================= EMERGENCY AUTHORITY STOP SCREEN (D9) =================
 // Read-only display of the operator-control story: receipted transitions
 // rendered as textContent; nothing here arms or applies anything.
@@ -5246,15 +5825,15 @@ function renderMcpFindings(list){
     badge.style.cssText='font-size:11px;font-weight:600;padding:2px 10px;border-radius:999px;color:#fff;background:'+(MCP_SEV_COLOUR[f.severity]||'#a3a3a3');
     badge.textContent=f.severity;
     sev.appendChild(badge);
-    const evidence=f.evidence?(f.evidence.length>60?f.evidence.slice(0,60)+'\u2026':f.evidence):'';
     tr.appendChild(sev);
     tr.appendChild(td(f.rule_id));
     tr.appendChild(td(f.tool));
     tr.appendChild(td(f.field));
     tr.appendChild(td(f.message));
     const ev=document.createElement('td');
-    ev.style.cssText='font-family:ui-monospace,monospace;font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis';
-    ev.textContent=evidence;
+    ev.style.cssText='font-family:ui-monospace,monospace;font-size:11px';
+    // evidence class only: the raw excerpt is payload and never reaches a cell
+    ev.textContent=f.category||'';
     tr.appendChild(ev);
     body.appendChild(tr);
   });
@@ -5266,6 +5845,8 @@ function td(html){const el=document.createElement('td');el.textContent=html==nul
 function mcpScan(){
   const raw=document.getElementById('mcpManifestText').value.trim();
   if(!raw){alert('Choose a demo manifest or paste manifest JSON first.');return;}
+  // client-side size cap, mirroring the server's 256 KiB refusal
+  if(raw.length>256*1024){alert('The pasted manifest is over 256 KiB: the demo refuses oversize manifests.');return;}
   let manifest;
   try{ manifest=JSON.parse(raw); }catch(e){ alert('The manifest is not valid JSON: '+e.message); return; }
   const sum=document.getElementById('mcpSummary');
@@ -5276,7 +5857,7 @@ function mcpScan(){
   }).then(d=>{ if(d) renderMcpFindings(d.findings||[]); }).catch(()=>{ sum.textContent='Scan request failed.'; });
 }
 
-if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();}function navEvidencePack(el){showTab('assure',el);setTimeout(function(){var t=document.getElementById('assurancePacketView');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navKeyModel(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcpt-keymodel');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navCoverage(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcptCoverageCard');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadAssure()":(ev,el)=>loadAssure(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('assure',this)":(ev,el)=>showTab('assure',el),"showTab('capdemo',this)":(ev,el)=>showTab('capdemo',el),"navEvidencePack()":(ev,el)=>navEvidencePack(el),"navKeyModel()":(ev,el)=>navKeyModel(el),"navCoverage()":(ev,el)=>navCoverage(el),"capDemoPick(event)":(ev,el)=>capDemoPick(ev),"capDemoVerify()":(ev,el)=>capDemoVerify(),"loadAssurancePacket()":(ev,el)=>loadAssurancePacket(),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
+if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();}function navEvidencePack(el){showTab('assure',el);setTimeout(function(){var t=document.getElementById('assurancePacketView');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navKeyModel(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcpt-keymodel');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navCoverage(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcptCoverageCard');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadAssure()":(ev,el)=>loadAssure(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('assure',this)":(ev,el)=>showTab('assure',el),"showTab('capdemo',this)":(ev,el)=>showTab('capdemo',el),"navEvidencePack()":(ev,el)=>navEvidencePack(el),"navKeyModel()":(ev,el)=>navKeyModel(el),"navCoverage()":(ev,el)=>navCoverage(el),"capDemoPick(event)":(ev,el)=>capDemoPick(ev),"capDemoVerify()":(ev,el)=>capDemoVerify(),"loadAssurancePacket()":(ev,el)=>loadAssurancePacket(),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"sessionFindingVerify(event)":(ev,el)=>sessionFindingVerify(ev),"showTab('session',this)":(ev,el)=>showTab('session',el),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev),"simTabPick(event)":(ev,el)=>simTabPick(ev),"simTabRun()":(ev,el)=>simTabRun(),"simTabClear()":(ev,el)=>simTabClear(),"showTab('simulate',this)":(ev,el)=>showTab('simulate',el)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
 </script>
 </body>
 </html>"""

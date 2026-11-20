@@ -278,7 +278,9 @@ class TestPanelIntegration:
         assert "policy-simulate/apply" not in ADMIN_PANEL_HTML
 
     def test_tour_covers_both_new_screens(self) -> None:
-        # G7 re-arc: the simulated policy tweak stays in the tour; the stop
-        # screen is demo-visible but no longer a tour step.
-        assert "target:'#simDemoCard'" in ADMIN_PANEL_HTML
+        # D17 re-arc: the simulated policy tweak is reachable from the
+        # policies tab and toured only insofar as the buyer arc needs it;
+        # the stop screen is demo-visible but no longer a tour step.
+        assert "target:'#simDemoCard'" not in ADMIN_PANEL_HTML
         assert 'data-tab-id="stop"' in ADMIN_PANEL_HTML
+        assert 'data-hi="showTab(' + chr(39) + "policies" + chr(39) + ",this)" in ADMIN_PANEL_HTML

@@ -772,16 +772,24 @@ def gate_call(
     agent_id: str,
     source: str,
     destination: str,
+    session_id: str = "",
 ) -> dict:
-    payload = json.dumps(
-        {
-            "tool": tool,
-            "args": args,
-            "agent_id": agent_id,
-            "source": source,
-            "destination": destination,
-        }
-    ).encode()
+    """POST one tool call to the gate.
+
+    ``session_id`` rides the request only when the caller declares one:
+    the gateway never fabricates session continuity, and callers that do
+    not declare a session are never touched by session rules.
+    """
+    body = {
+        "tool": tool,
+        "args": args,
+        "agent_id": agent_id,
+        "source": source,
+        "destination": destination,
+    }
+    if session_id:
+        body["session_id"] = session_id
+    payload = json.dumps(body).encode()
     req = urllib.request.Request(
         gateway.rstrip("/") + "/gate",
         data=payload,
@@ -798,6 +806,135 @@ def gate_call(
             return {"decision": "ERROR", "status": e.code}
     except Exception as e:
         return {"decision": "ERROR", "error": str(e)}
+
+
+# ---------------------------------------------------------------------
+# Scripted PII/DLP burst (EPIC D item D2): the demo agents generate
+# synthetic, obviously-canned sensitive values (a Luhn-valid test card
+# number, a reserved-documentation email domain, the canonical example
+# national id, an obviously-demo bearer token and API key) and drive
+# them through the real gate. In demo mode the gateway's advisory
+# redaction engine scans each call, collars the matched spans and mints
+# an x_dlp receipt citing the gate receipt; the Data Protection screen
+# reads those receipts. Nothing here is or resembles customer data.
+# ---------------------------------------------------------------------
+
+DLP_DEMO_AGENT = {
+    "agent_id": "agent:dlp-demo-analyst",
+    "source": "agent:dlp-demo-analyst",
+    "name": "DLP Demo Analyst",
+}
+
+DLP_DEMO_CALLS = [
+    (
+        "screen_user_message",
+        {
+            "ticket_ref": "TCK-DLP-0001",
+            "channel": "web-form",
+            "body": (
+                "Demo card 4111111111111111 on file, contact "
+                "demo.person@example.test, national id AB123456C, header "
+                "Authorization: Bearer RAUCLE-DEMO-TOKEN-000000000000"
+            ),
+        },
+        "inbound-screener",
+    ),
+    (
+        "send_email",
+        {
+            "mailbox": "dlp-demo",
+            "recipient": "demo.person@example.test",
+            "body": "Credentials attached: api_key=raucle-demo-synthetic-key-000000",
+        },
+        "mail-relay",
+    ),
+]
+
+
+def run_dlp_pii_burst(gateway: str, cycle: int, quiet: bool = False) -> dict:
+    """Drive the scripted canned-pattern burst through the real gate.
+
+    Returns a per-burst stats dict. Gate decisions are counted, not
+    asserted: the burst's product is the advisory redaction evidence
+    (collared spans plus x_dlp receipts), which mints whatever the
+    policy decided for the call.
+    """
+    stats = {"calls": 0, "allows": 0, "denies": 0}
+    for tool, args, destination in DLP_DEMO_CALLS:
+        result = gate_call(
+            gateway,
+            tool,
+            args,
+            DLP_DEMO_AGENT["agent_id"],
+            DLP_DEMO_AGENT["source"],
+            destination,
+        )
+        stats["calls"] += 1
+        decision = str(result.get("decision", "ERROR")).upper()
+        if decision == "ALLOW":
+            stats["allows"] += 1
+        elif decision == "DENY":
+            stats["denies"] += 1
+        if not quiet:
+            print(f"  [dlp] burst {cycle}: {tool} -> {decision}", flush=True)
+    return stats
+
+
+# ---------------------------------------------------------------------
+# Scripted runaway-loop scenario (EPIC D item D16): an agent retries a
+# failing batch export inside one declared session until the session
+# rule cuts the loop. The tool carries no allow rule, so every attempt
+# is denied by policy first; once the window holds threshold-1 denied
+# attempts, the runaway_tool_loop rule denies the next call and the
+# gateway receipts a session-monitor finding citing that deny.
+# ---------------------------------------------------------------------
+
+SESSION_RUNAWAY_AGENT = {
+    "agent_id": "agent:report-scheduler",
+    "source": "agent:report-scheduler",
+    "name": "Report Scheduler",
+}
+SESSION_RUNAWAY_TOOL = "batch_report_export"
+SESSION_RUNAWAY_RULE = "demo-runaway-batch-export"
+SESSION_RUNAWAY_MAX_CALLS = 8
+
+
+def run_session_runaway(gateway: str, cycle: int, quiet: bool = False) -> dict:
+    """Drive one scripted runaway loop through the real gate.
+
+    Uses a fresh session id per burst so every burst replays the whole
+    story (policy denies, then the session rule deny). Stops as soon as
+    the session rule fires. Returns a per-burst stats dict.
+    """
+    session_id = f"sess-demo-runaway-{cycle:04d}"
+    stats = {"calls": 0, "policy_denies": 0, "session_rule_denies": 0}
+    for attempt in range(1, SESSION_RUNAWAY_MAX_CALLS + 1):
+        result = gate_call(
+            gateway,
+            SESSION_RUNAWAY_TOOL,
+            {"batch_ref": f"RPT-{cycle:04d}-{attempt:02d}", "format": "csv"},
+            SESSION_RUNAWAY_AGENT["agent_id"],
+            SESSION_RUNAWAY_AGENT["source"],
+            "report-warehouse",
+            session_id=session_id,
+        )
+        stats["calls"] += 1
+        decision = str(result.get("decision", "ERROR")).upper()
+        rule_id = str(result.get("rule_id", ""))
+        if rule_id == SESSION_RUNAWAY_RULE:
+            stats["session_rule_denies"] += 1
+            if not quiet:
+                reason = str(result.get("reason", ""))[:70]
+                print(
+                    f"  [session] {session_id} runaway loop cut by "
+                    f"{SESSION_RUNAWAY_RULE} on call {attempt}: {reason}",
+                    flush=True,
+                )
+            break
+        if decision == "DENY":
+            stats["policy_denies"] += 1
+        time.sleep(0.05)
+    return stats
 
 
 def main() -> None:
@@ -822,6 +959,24 @@ def main() -> None:
         type=float,
         default=0.1,
         help="Lower bound on the inter-call sleep, in seconds",
+    )
+    parser.add_argument(
+        "--session-every",
+        type=int,
+        default=25,
+        help=(
+            "Run the scripted runaway-loop session burst every N cycles "
+            "(0 disables; the demo session tab rides this traffic)"
+        ),
+    )
+    parser.add_argument(
+        "--dlp-every",
+        type=int,
+        default=40,
+        help=(
+            "Run the scripted PII/DLP burst every N cycles "
+            "(0 disables; the Data Protection tab rides this traffic)"
+        ),
     )
     parser.add_argument("--quiet", action="store_true", help="Only log errors")
     args = parser.parse_args()
@@ -887,6 +1042,32 @@ def main() -> None:
                 stats[key] += 1
                 s = scenario_totals.setdefault(scenario, {"allow": 0, "deny": 0, "error": 0})
                 s[key if key in s else "error"] += 1
+
+            # Scripted runaway-loop burst (D16): every --session-every
+            # cycles, one declared session retries a failing export until
+            # the session rule cuts it. Real gate calls, real receipts.
+            if args.session_every and this_cycle % args.session_every == 0:
+                burst = run_session_runaway(args.gateway, this_cycle, quiet=args.quiet)
+                with stats_lock:
+                    stats["deny"] += burst["policy_denies"] + burst["session_rule_denies"]
+                if burst["session_rule_denies"] and not args.quiet:
+                    print(
+                        f"  [session] burst {this_cycle}: {burst['calls']} calls, "
+                        f"{burst['policy_denies']} policy denies, "
+                        f"{burst['session_rule_denies']} session-rule deny",
+                        flush=True,
+                    )
+
+            # Scripted PII/DLP burst (D2): every --dlp-every cycles, the
+            # demo agents drive the canned synthetic patterns through the
+            # real gate so the advisory redaction engine leaves x_dlp
+            # receipts for the Data Protection screen. Real gate calls,
+            # synthetic values, real evidence.
+            if args.dlp_every and this_cycle % args.dlp_every == 0:
+                burst = run_dlp_pii_burst(args.gateway, this_cycle, quiet=args.quiet)
+                with stats_lock:
+                    stats["allow"] += burst["allows"]
+                    stats["deny"] += burst["denies"]
 
             if not args.quiet:
                 reason = str(result.get("reason", ""))[:50]

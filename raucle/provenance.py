@@ -271,6 +271,117 @@ _DLP_REQUIRED_FIELDS = (
     "rule_id",
 )
 
+# Receipts v1.2 (K3): the shared bounded-disclosure sweep for the two new
+# signed surfaces (x_gate.counterfactual and the v1.2 x_revocation kind).
+# The DLP set is the historical core; the additions name the argument and
+# token material those surfaces must never carry. Content-like field names
+# fail with a named error wherever they appear, so a leaky emitter cannot
+# hide values inside signed evidence.
+_FORBIDDEN_FIELD_NAMES = frozenset(
+    _DLP_FORBIDDEN_CONTENT_FIELDS
+    | {
+        "args",
+        "arguments",
+        "call_args",
+        "constraint_values",
+        "constraints",
+        "credentials",
+        "secret",
+        "token",
+        "token_bytes",
+    }
+)
+# Receipts v1.2 (K3): the counterfactual block's version anchor and the
+# closed decision vocabulary. Spec: docs/spec/provenance/v1.2/
+# counterfactual-evidence.md.
+_COUNTERFACTUAL_VERSION = "counterfactual/v1"
+_COUNTERFACTUAL_DECISIONS = frozenset({"allow", "deny"})
+_COUNTERFACTUAL_FIELDS = frozenset(
+    {"version", "ruleset_hash", "decision", "rule_id", "rule_kind", "session", "evaluated_at"}
+)
+_COUNTERFACTUAL_SESSION_FIELDS = frozenset(
+    {"session_id", "window_seconds", "participant", "window_evidence"}
+)
+# Receipts v1.2 (EPIC W lane W2): the tool_definition block's version
+# anchor, the closed field set and the closed vantage vocabulary. Spec:
+# docs/spec/provenance/v1.2/definition-drift.md. The vantage stays a
+# single honest value ("none": the gate sees requests, not served
+# definitions) until the in-path MCP gateway exists; anything else is
+# detection theatre, not this surface.
+_TOOL_DEFINITION_VERSION = "tool-definition/v1"
+_TOOL_DEFINITION_FIELDS = frozenset(
+    {"version", "definition_digest", "definition_manifest", "definition_vantage"}
+)
+_TOOL_DEFINITION_VANTAGES = frozenset({"none"})
+# The reload-drift finding's harness and test id: the gateway's reload
+# path emits definition_changed findings, and the verifier's chain-end
+# pin pass accepts a receipted transition as the signed evidence that
+# observed drift was recorded, never silently applied.
+_TOOL_SCHEMA_HARNESS = "tool-schema"
+_DEFINITION_CHANGED_TEST_ID = "definition_changed"
+# Receipts v1.2 (EPIC W lane W1): the x_state extension's version
+# anchor, the closed field set and the literal absent sentinel. Spec:
+# docs/spec/provenance/v1.2/state-verification.md. Evidence-at-mint from
+# adapters: the runtime hashes the read-back (raw bytes sha256) and the
+# gateway binds the digest to the write's receipt id; absence is the
+# literal sentinel, never a fake digest. Content never rides the block:
+# the shared forbidden-field sweep covers this surface too.
+_STATE_EVIDENCE_VERSION = "state-evidence/v1"
+_X_STATE_FIELDS = frozenset(
+    {
+        "version",
+        "pairing_id",
+        "read_tool",
+        "evidence_digest",
+        "handle",
+        "field_classes",
+        "state_evidence",
+        "cited_receipt",
+    }
+)
+_STATE_ABSENT_SENTINEL = "absent"
+# The missing-evidence advisory finding's harness and test id: the
+# middleware's fail-open lane emits state_evidence_missing findings
+# whenever a covered write's read-back failed or was skipped.
+_STATE_VERIFICATION_HARNESS = "state-verification"
+_STATE_EVIDENCE_MISSING_TEST_ID = "state_evidence_missing"
+# Receipts v1.2 (K3): the v1.2 revocation-kind block's version anchor, the
+# closed kind and reason-class vocabularies and the closed field set.
+# Spec: docs/spec/provenance/v1.2/revocation-receipts.md.
+_REVOCATION_VERSION = "revocation/v1"
+_REVOCATION_KINDS = frozenset({"capability", "lease", "receipt"})
+_REVOCATION_REASON_CLASSES = frozenset(
+    {
+        "compromise",
+        "owner_departure",
+        "scope_correction",
+        "policy_change",
+        "operational",
+    }
+)
+_REVOCATION_V12_FIELDS = frozenset(
+    {
+        "version",
+        "kind",
+        "revoked_ids",
+        "revoked_hashes",
+        "root",
+        "actor",
+        "reason_class",
+        "reason",
+        "revoked_at",
+    }
+)
+
+
+def _is_sha256_digest(value: Any) -> bool:
+    """Whether *value* carries the sha256:<64 hex> digest shape."""
+    return (
+        isinstance(value, str)
+        and value.startswith(_SHA256_PREFIX)
+        and re.fullmatch(r"[0-9a-f]{64}", value[len(_SHA256_PREFIX) :]) is not None
+    )
+
 
 def _reject_floats(obj: Any) -> None:
     """Raise if *obj* contains a float, an integer outside the safe range, or a
@@ -1480,9 +1591,15 @@ class VerificationReport:
     unauthorised_sanitisations: int = 0
     tampered_receipts: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    # Receipts v1.2 (K3): one row per counterfactual block that passed its
+    # structural re-check, stating honestly whether the recorded decision
+    # was re-run. A chain verifier holds neither the alternative ruleset
+    # (named only by digest) nor the stored input, so the row says not
+    # re-run rather than guessing or upgrading the claim.
+    counterfactual_evidence: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "valid": self.valid,
             "receipt_count": self.receipt_count,
             "signature_failures": self.signature_failures,
@@ -1493,6 +1610,14 @@ class VerificationReport:
             "tampered_receipts": self.tampered_receipts,
             "errors": self.errors,
         }
+        # Receipts v1.2 (K3): the row set is OPTIONAL evidence. Emitting
+        # the key on a chain with no v1.2 blocks would change the report
+        # body shape for every existing consumer (pack reproducibility,
+        # bundles, fixture digests), so when empty the key is omitted
+        # and the v1.0 shape is byte-preserved.
+        if self.counterfactual_evidence:
+            d["counterfactual_evidence"] = self.counterfactual_evidence
+        return d
 
 
 class ProvenanceVerifier:
@@ -1531,6 +1656,15 @@ class ProvenanceVerifier:
         co-signs outcomes. Receipts carrying x_bilateral that name a key
         id absent here or whose co-signature does not verify FAIL (v1.2
         bilateral-outcomes); receipts without the block are untouched.
+    state_pairings : dict[str, dict[str, Any]], optional
+        Mapping ``pairing_id -> bounded pairing row`` for the x_state
+        extension (v1.2 state-verification): the deployment's
+        write-to-read pairing registry, the same constructor-carried
+        state pattern as ``executor_keys``. When provided, the chain-end
+        pass re-checks pairing linkage and coverage: a covered write
+        receipt with neither evidence nor the absent sentinel marks
+        INVALID with a named reason. Without it the x_state blocks stay
+        structural (the off-deployment residual, nothing fabricated).
     """
 
     def __init__(
@@ -1540,6 +1674,7 @@ class ProvenanceVerifier:
         pq_public_keys: dict[str, bytes | str] | None = None,
         require_pq: bool = False,
         executor_keys: dict[str, bytes] | None = None,
+        state_pairings: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         from cryptography.hazmat.primitives import serialization
 
@@ -1577,6 +1712,16 @@ class ProvenanceVerifier:
         # require_pq in their index; verification enforces the pack's
         # own statement about itself.
         self._require_pq = bool(require_pq)
+        # EPIC W lane W1: the deployment's pairing registry (pairing_id
+        # -> bounded row) and the covered write tools derived from it.
+        # Constructor-carried state, like executor_keys: without it the
+        # x_state checks are structural only.
+        self._state_pairings: dict[str, dict[str, Any]] = dict(state_pairings or {})
+        self._state_write_tools: set[str] = {
+            str(row.get("write_tool") or "")
+            for row in self._state_pairings.values()
+            if row.get("write_tool")
+        }
 
     @staticmethod
     def _parse_chain_line(
@@ -1747,6 +1892,12 @@ class ProvenanceVerifier:
         lease_grants: dict[str, dict[str, Any]],
         receipts_by_hash: dict[str, ProvenanceReceipt],
         raw_lines_by_hash: dict[str, str],
+        intent_constraint_values: set[str],
+        tool_definition_latest: dict[str, dict[str, Any]],
+        tool_definition_drift: dict[str, int],
+        state_evidence_by_write: dict[str, dict[str, Any]],
+        covered_writes: dict[str, dict[str, Any]],
+        gate_tools_by_hash: dict[str, str],
     ) -> None:
         """v1.1/v1.2 extension re-checks for one receipt (extracted from
         verify_chain): one helper per extension family, called in the
@@ -1758,13 +1909,210 @@ class ProvenanceVerifier:
         self._verify_delegated_authority_digest(x_gate_payload, line_no, report)
         self._verify_lease_extension(decoded, line_no, report, lease_grants)
         self._verify_cascade_revocation(
-            x_gate_payload, decoded, line_no, report, revoked_ids, revocation_lines
+            x_gate_payload,
+            decoded,
+            line_no,
+            report,
+            revoked_ids,
+            revocation_lines,
+            receipts_by_hash,
+            intent_constraint_values,
         )
-        self._verify_task_intent(x_gate_payload, receipt, line_no, report)
+        self._verify_task_intent(x_gate_payload, receipt, line_no, report, intent_constraint_values)
         self._verify_harness_finding(decoded, line_no, report, receipts_by_hash)
         self._verify_time_anchor(decoded, line_no, report, receipts_by_hash, raw_lines_by_hash)
         self._verify_bilateral(decoded, line_no, receipt, report)
         self._verify_x_dlp(decoded, line_no, report, receipts_by_hash)
+        self._verify_counterfactual(decoded, x_gate_payload, receipt, line_no, report)
+        self._verify_tool_definition(
+            decoded, x_gate_payload, line_no, report, tool_definition_latest
+        )
+        self._collect_tool_definition_drift(decoded, line_no, tool_definition_drift)
+        self._verify_x_state(decoded, line_no, report, receipts_by_hash, state_evidence_by_write)
+        self._collect_state_coverage(
+            x_gate_payload, receipt, line_no, covered_writes, gate_tools_by_hash
+        )
+
+    def _collect_tool_definition_drift(
+        self,
+        decoded: Any,
+        line_no: int,
+        tool_definition_drift: dict[str, int],
+    ) -> None:
+        """Receipts v1.2 (EPIC W lane W2): record where each tool's last
+        receipted ``definition_changed`` finding sits in the chain (last
+        write wins: lines verify in chain order). The chain-end pin pass
+        uses the position to tell a receipted transition from silent
+        drift. Mutates *tool_definition_drift* in place."""
+        finding = decoded.get("x_finding") if isinstance(decoded, dict) else None
+        if not isinstance(finding, dict):
+            return
+        if (
+            finding.get("harness") != _TOOL_SCHEMA_HARNESS
+            or finding.get("test_id") != _DEFINITION_CHANGED_TEST_ID
+        ):
+            return
+        repro = finding.get("repro")
+        tool = str(repro.get("tool") or "") if isinstance(repro, dict) else ""
+        if tool:
+            tool_definition_drift[tool] = line_no
+
+    def _verify_tool_definition(
+        self,
+        decoded: Any,
+        x_gate_payload: dict[str, Any],
+        line_no: int,
+        report: VerificationReport,
+        tool_definition_latest: dict[str, dict[str, Any]],
+    ) -> None:
+        """Invariant (receipts v1.2, EPIC W lane W2): a gate receipt's
+        optional tool_definition block re-checks offline - the version
+        gate, the closed field set, the closed vantage vocabulary and
+        the sha256-shaped digest, all per line. The pin discipline is a
+        CHAIN-END pass (see _verify_tool_definition_pins): only the
+        LATEST block per tool must re-derive from the on-disk manifest
+        (the deployment's registry state), because a changed definition
+        legitimately leaves superseded digests on earlier receipts -
+        that is the drift evidence the reload path receipts. No content:
+        the block is swept by the shared forbidden-field sweep. Receipts
+        without the block are untouched (additive extension). Mutates
+        *report* and *tool_definition_latest* in place."""
+        block = x_gate_payload.get("tool_definition") if isinstance(x_gate_payload, dict) else None
+        if block is None:
+            return
+        if not isinstance(block, dict):
+            report.errors.append(
+                f"line {line_no}: tool_definition must be an object, got {type(block).__name__}"
+            )
+            report.valid = False
+            return
+
+        self._forbidden_field_sweep(block, "tool_definition", line_no, report)
+
+        # Closed field set: the block names a definition, never an
+        # open-ended payload.
+        for key in block:
+            if key not in _TOOL_DEFINITION_FIELDS:
+                report.errors.append(
+                    f"line {line_no}: tool_definition carries unknown field {key!r} "
+                    f"(closed set: {sorted(_TOOL_DEFINITION_FIELDS)})"
+                )
+                report.valid = False
+        for required in _TOOL_DEFINITION_FIELDS:
+            if block.get(required) is None:
+                report.errors.append(f"line {line_no}: tool_definition missing field {required!r}")
+                report.valid = False
+
+        version = block.get("version")
+        if version is not None and version != _TOOL_DEFINITION_VERSION:
+            report.errors.append(
+                f"line {line_no}: tool_definition version {version!r} is unknown "
+                f"(supported: {_TOOL_DEFINITION_VERSION}); the block is refused, "
+                "never skipped"
+            )
+            report.valid = False
+
+        vantage = block.get("definition_vantage")
+        if vantage is not None and vantage not in _TOOL_DEFINITION_VANTAGES:
+            report.errors.append(
+                f"line {line_no}: tool_definition vantage {vantage!r} outside the "
+                f"closed vocabulary {sorted(_TOOL_DEFINITION_VANTAGES)}"
+            )
+            report.valid = False
+
+        digest = block.get("definition_digest")
+        if digest is not None and not _is_sha256_digest(digest):
+            report.errors.append(
+                f"line {line_no}: tool_definition definition_digest is not a sha256 "
+                "digest of the form sha256:<64 hex characters>"
+            )
+            report.valid = False
+
+        # Record the LATEST block per tool for the chain-end pin pass
+        # (last write wins: lines verify in chain order). A structurally
+        # broken block still records what it claims, so the pin pass
+        # names the line where the registry state stops answering for
+        # the receipts.
+        manifest = str(block.get("definition_manifest") or "")
+        tool = str(x_gate_payload.get("tool") or "") if isinstance(x_gate_payload, dict) else ""
+        if tool:
+            tool_definition_latest[tool] = {
+                "line_no": line_no,
+                "digest": digest,
+                "manifest": manifest,
+            }
+
+    def _verify_tool_definition_pins(
+        self,
+        tool_definition_latest: dict[str, dict[str, Any]],
+        tool_definition_drift: dict[str, int],
+        report: VerificationReport,
+    ) -> None:
+        """Invariant (receipts v1.2, EPIC W lane W2, chain-end pass): the
+        LATEST tool_definition block per tool must re-derive from the
+        on-disk manifest it names, and a readable manifest must declare
+        the tool - that is the deployment's registry state answering for
+        the chain's final decisions. Earlier blocks may carry superseded
+        digests: definition drift is exactly what the reload path
+        receipts, and a verifier that recomputed HISTORICAL blocks
+        against the CURRENT manifest would refute its own drift
+        evidence. One exception, fail-closed in both directions: when
+        the chain carries a receipted ``definition_changed`` finding for
+        the tool AFTER the latest block, the digest divergence is signed
+        evidence of an observed, recorded transition (a reload with no
+        gate call since), so the recompute is excused; a diverging
+        manifest with NO receipted transition is silent drift and fails
+        with a named error. An unreadable manifest is the documented
+        off-deployment residual: no recompute, the blocks stay
+        structural, never a fabricated result. Mutates *report* in
+        place."""
+        for tool in sorted(tool_definition_latest):
+            record = tool_definition_latest[tool]
+            manifest = str(record["manifest"] or "")
+            digest = record["digest"]
+            line_no = int(record["line_no"])
+            if not manifest or digest is None:
+                continue
+            entries = self._read_definition_manifest(manifest)
+            if not isinstance(entries, list):
+                continue
+            row = next(
+                (r for r in entries if isinstance(r, dict) and r.get("name") == tool),
+                None,
+            )
+            if row is None:
+                report.errors.append(
+                    f"line {line_no}: tool_definition manifest {manifest!r} "
+                    f"does not declare the receipt's tool {tool!r}"
+                )
+                report.valid = False
+                continue
+            finding_line = tool_definition_drift.get(tool)
+            if finding_line is not None and finding_line > line_no:
+                # The divergence is receipted: a definition_changed finding
+                # later in the chain records the observed transition, so
+                # the manifest's newer state is signed evidence, never
+                # silent drift.
+                continue
+            if isinstance(row.get("inputSchema"), dict):
+                from raucle.tool_schema import _definition_digest
+
+                if _definition_digest(row["inputSchema"]) != digest:
+                    report.errors.append(
+                        f"line {line_no}: tool_definition digest does not re-derive "
+                        f"from the manifest's registered schema for tool {tool!r}"
+                    )
+                    report.valid = False
+
+    @staticmethod
+    def _read_definition_manifest(manifest: str) -> Any:
+        """The manifest's parsed entries when the file reads as JSON,
+        else None (no recompute is possible; the off-deployment
+        residual, never a crash)."""
+        try:
+            return json.loads(Path(manifest).read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - unreadable manifest: residual, not a failure
+            return None
 
     def _verify_bilateral(
         self,
@@ -2000,6 +2348,542 @@ class ProvenanceVerifier:
             report.errors.append(f"line {line_no}: x_dlp cites receipt {cited!r} not in the chain")
             report.valid = False
 
+    def _verify_x_state(
+        self,
+        decoded: Any,
+        line_no: int,
+        report: VerificationReport,
+        receipts_by_hash: dict[str, ProvenanceReceipt],
+        state_evidence_by_write: dict[str, dict[str, Any]],
+    ) -> None:
+        """Invariant (receipts v1.2, EPIC W lane W1): a state-verified
+        write receipt (x_state) carries digests, a handle and
+        field-presence names only, never read-back content. Offline
+        re-check with no runtime present: the version gate, the closed
+        field set, the literal absent sentinel, the sha256 digest
+        shapes, the sentinel/evidence consistency and the cited write
+        receipt's existence EARLIER in the chain (evidence follows the
+        write, never pre-dates it). Digest-blind by design: the
+        transport carries digests, never bytes, so no recompute
+        exists to perform - the binding is the verifiable claim.
+        Receipts without the block are untouched (additive extension,
+        historical byte shapes preserved). Mutates *report* and
+        *state_evidence_by_write* in place."""
+        x_state = decoded.get("x_state") if isinstance(decoded, dict) else None
+        if x_state is None:
+            return
+        if not isinstance(x_state, dict):
+            report.errors.append(
+                f"line {line_no}: x_state must be an object, got {type(x_state).__name__}"
+            )
+            report.valid = False
+            return
+
+        # Bounded disclosure: no content-like field anywhere in the block.
+        self._forbidden_field_sweep(x_state, "x_state", line_no, report)
+
+        # Closed field set: the block names a state claim, never an
+        # open-ended payload.
+        for key in x_state:
+            if key not in _X_STATE_FIELDS:
+                report.errors.append(
+                    f"line {line_no}: x_state carries unknown field {key!r} "
+                    f"(closed set: {sorted(_X_STATE_FIELDS)})"
+                )
+                report.valid = False
+        for required in ("version", "cited_receipt"):
+            if x_state.get(required) is None:
+                report.errors.append(f"line {line_no}: x_state missing field {required!r}")
+                report.valid = False
+
+        version = x_state.get("version")
+        if version is not None and version != _STATE_EVIDENCE_VERSION:
+            report.errors.append(
+                f"line {line_no}: x_state version {version!r} is unknown "
+                f"(supported: {_STATE_EVIDENCE_VERSION}); the block is refused, "
+                "never skipped"
+            )
+            report.valid = False
+
+        # The cited write receipt: sha256-shaped and present EARLIER in
+        # the chain, like every other extension citation.
+        cited = str(x_state.get("cited_receipt") or "")
+        if cited and not _is_sha256_digest(cited):
+            report.errors.append(
+                f"line {line_no}: x_state cited_receipt is not a sha256 receipt "
+                "hash of the form sha256:<64 hex characters>"
+            )
+            report.valid = False
+        if cited and cited not in receipts_by_hash:
+            report.errors.append(
+                f"line {line_no}: x_state cites receipt {cited!r} not in the chain"
+            )
+            report.valid = False
+
+        # Sentinel semantics: absence is the literal sentinel, never a
+        # fake digest; a block carrying neither states nothing.
+        sentinel = x_state.get("state_evidence")
+        has_digest = x_state.get("evidence_digest") is not None
+        state = "invalid"
+        if sentinel is not None and sentinel != _STATE_ABSENT_SENTINEL:
+            report.errors.append(
+                f"line {line_no}: x_state state_evidence {sentinel!r} is not the "
+                f"literal sentinel {_STATE_ABSENT_SENTINEL!r}"
+            )
+            report.valid = False
+        if sentinel == _STATE_ABSENT_SENTINEL:
+            if (
+                has_digest
+                or x_state.get("handle") is not None
+                or x_state.get("field_classes") is not None
+            ):
+                report.errors.append(
+                    f"line {line_no}: x_state state_evidence {_STATE_ABSENT_SENTINEL!r} "
+                    "never carries evidence fields (absence is stated, never a "
+                    "fake digest)"
+                )
+                report.valid = False
+            state = "absent"
+        elif has_digest:
+            state = "evidence"
+            for required in ("pairing_id", "read_tool", "handle", "field_classes"):
+                if x_state.get(required) is None:
+                    report.errors.append(f"line {line_no}: x_state missing field {required!r}")
+                    report.valid = False
+        else:
+            report.errors.append(
+                f"line {line_no}: x_state carries neither evidence nor the absent "
+                "sentinel (a receipt for a pairing-covered tool must state one)"
+            )
+            report.valid = False
+
+        digest = x_state.get("evidence_digest")
+        if digest is not None and not _is_sha256_digest(digest):
+            report.errors.append(
+                f"line {line_no}: x_state evidence_digest is not a sha256 digest "
+                "of the form sha256:<64 hex characters>"
+            )
+            report.valid = False
+
+        handle = x_state.get("handle")
+        if handle is not None and (not isinstance(handle, str) or not handle):
+            report.errors.append(
+                f"line {line_no}: x_state handle must be a non-empty string "
+                "(the object handle extracted per the pairing's id_pointer)"
+            )
+            report.valid = False
+
+        field_classes = x_state.get("field_classes")
+        if field_classes is not None and (
+            not isinstance(field_classes, list)
+            or not field_classes
+            or any(not isinstance(c, str) or not c for c in field_classes)
+        ):
+            report.errors.append(
+                f"line {line_no}: x_state field_classes must be a non-empty "
+                "list of field-presence names (names only, never content)"
+            )
+            report.valid = False
+
+        # Chain-end collector: the state claim bound to this write
+        # receipt (last write wins, lines verify in chain order).
+        if cited:
+            state_evidence_by_write[cited] = {
+                "line_no": line_no,
+                "state": state,
+                "pairing_id": str(x_state.get("pairing_id") or ""),
+                "read_tool": str(x_state.get("read_tool") or ""),
+                "field_classes": (
+                    [str(c) for c in field_classes] if isinstance(field_classes, list) else []
+                ),
+            }
+
+    def _collect_state_coverage(
+        self,
+        x_gate_payload: dict[str, Any],
+        receipt: ProvenanceReceipt,
+        line_no: int,
+        covered_writes: dict[str, dict[str, Any]],
+        gate_tools_by_hash: dict[str, str],
+    ) -> None:
+        """Receipts v1.2 (EPIC W lane W1): record every gate receipt's
+        tool, and every ALLOWED receipt for a pairing-covered write
+        tool, so the chain-end pass can name the write receipts that
+        claimed success with no state evidence. Denied calls never
+        executed, so no read-back is owed. Mutates the collectors in
+        place."""
+        if not isinstance(x_gate_payload, dict):
+            return
+        tool = str(x_gate_payload.get("tool") or "")
+        if not tool:
+            return
+        gate_tools_by_hash[receipt.receipt_hash] = tool
+        if (
+            self._state_write_tools
+            and tool in self._state_write_tools
+            and str(receipt.guardrail_verdict) == "allow"
+        ):
+            covered_writes[receipt.receipt_hash] = {"tool": tool, "line_no": line_no}
+
+    def _verify_state_evidence_pins(
+        self,
+        state_evidence_by_write: dict[str, dict[str, Any]],
+        covered_writes: dict[str, dict[str, Any]],
+        gate_tools_by_hash: dict[str, str],
+        report: VerificationReport,
+    ) -> None:
+        """Invariant (receipts v1.2, EPIC W lane W1, chain-end pass):
+        with the deployment's pairing registry, every ALLOWED gate
+        receipt for a covered write tool must have a bound x_state
+        receipt carrying evidence or the absent sentinel - neither
+        present marks the write receipt INVALID with a named reason
+        (the false-success class, checkable). Every x_state receipt
+        with a pairing_id re-checks the linkage: the pairing exists,
+        the cited write receipt's tool is the pairing's write tool,
+        the block's read tool is the pairing's read tool, and every
+        require_field_classes name is present in field_classes (a
+        presence re-check, deliberately dumb). Without the registry
+        this pass is the documented off-deployment residual: nothing
+        is fabricated, linkage simply cannot be re-checked. Mutates
+        *report* in place."""
+        if not self._state_pairings:
+            return
+        for write_hash in sorted(state_evidence_by_write):
+            bound = state_evidence_by_write[write_hash]
+            pairing_id = str(bound.get("pairing_id") or "")
+            if not pairing_id:
+                continue
+            row = self._state_pairings.get(pairing_id)
+            if row is None:
+                report.errors.append(
+                    f"line {bound['line_no']}: x_state cites pairing {pairing_id!r} "
+                    "not in the pairing registry"
+                )
+                report.valid = False
+                continue
+            cited_tool = gate_tools_by_hash.get(write_hash)
+            row_write_tool = str(row.get("write_tool") or "")
+            if cited_tool is None or row_write_tool != cited_tool:
+                report.errors.append(
+                    f"line {bound['line_no']}: x_state pairing {pairing_id!r} binds "
+                    f"write tool {row_write_tool!r}, but the cited receipt's tool "
+                    f"is {cited_tool!r}"
+                )
+                report.valid = False
+            read_tool = str(bound.get("read_tool") or "")
+            row_read_tool = str(row.get("read_tool") or "")
+            if read_tool and row_read_tool != read_tool:
+                report.errors.append(
+                    f"line {bound['line_no']}: x_state read tool {read_tool!r} is not "
+                    f"the pairing's read tool {row_read_tool!r}"
+                )
+                report.valid = False
+            if bound.get("state") == "evidence":
+                present = set(bound.get("field_classes") or [])
+                for required_class in row.get("require_field_classes") or []:
+                    if required_class not in present:
+                        report.errors.append(
+                            f"line {bound['line_no']}: x_state field_classes is "
+                            f"missing required class {required_class!r} (presence "
+                            "re-check, digest-blind)"
+                        )
+                        report.valid = False
+        for write_hash in sorted(covered_writes):
+            if write_hash in state_evidence_by_write:
+                continue
+            record = covered_writes[write_hash]
+            report.errors.append(
+                f"line {record['line_no']}: state evidence missing for "
+                f"pairing-covered write receipt {write_hash} (tool "
+                f"{record['tool']!r}): neither evidence nor the absent sentinel "
+                "is present"
+            )
+            report.valid = False
+
+    def _forbidden_field_sweep(
+        self, block: Any, surface: str, line_no: int, report: VerificationReport
+    ) -> None:
+        """Receipts v1.2 (K3): the shared bounded-disclosure sweep. A
+        content-like field name anywhere inside a signed block (any
+        depth, object key or list element) fails with a named error, so
+        a leaky emitter cannot hide argument or token material inside
+        evidence. Mutates *report* in place."""
+        stack = [block]
+        while stack:
+            node = stack.pop()
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key in _FORBIDDEN_FIELD_NAMES:
+                        report.errors.append(
+                            f"line {line_no}: {surface} carries content-like field "
+                            f"{key!r} (bounded disclosure: identifiers, digests and "
+                            f"counts only, never content)"
+                        )
+                        report.valid = False
+                    stack.append(value)
+            elif isinstance(node, (list, tuple)):
+                stack.extend(node)
+
+    @staticmethod
+    def _session_rule_kinds() -> frozenset[str]:
+        """The closed session-rule kind vocabulary (lazy import: the
+        check runs per receipt, not at module load)."""
+        from raucle.policy import SESSION_RULE_KINDS
+
+        return frozenset(SESSION_RULE_KINDS)
+
+    def _verify_counterfactual(
+        self,
+        decoded: Any,
+        x_gate_payload: dict[str, Any],
+        receipt: ProvenanceReceipt,
+        line_no: int,
+        report: VerificationReport,
+    ) -> None:
+        """Invariant (receipts v1.2, K3): a receipt's optional
+        counterfactual block re-checks structurally offline - the version
+        gate, the closed field set, the closed decision and rule-kind
+        vocabularies, the sha256-shaped ruleset digest, evaluated_at
+        never later than the receipt's own iat, session coherence with
+        the receipt's own session id, and the exact two-key
+        window_evidence shape. The recorded decision is not re-run: this
+        verifier holds neither the alternative ruleset (named only by
+        digest) nor the stored input, so a structurally valid block earns
+        one evidence row that says not re-run, honestly, and the chain
+        stays valid. Receipts without the block are untouched (additive
+        extension). Mutates *report* in place."""
+        cf = x_gate_payload.get("counterfactual")
+        if cf is None:
+            return
+        if not isinstance(cf, dict):
+            report.errors.append(
+                f"line {line_no}: counterfactual must be an object, got {type(cf).__name__}"
+            )
+            report.valid = False
+            return
+
+        errors_before = len(report.errors)
+        self._forbidden_field_sweep(cf, "counterfactual", line_no, report)
+
+        # Closed field set: the block names a hypothetical decision,
+        # never an open-ended payload.
+        for key in cf:
+            if key not in _COUNTERFACTUAL_FIELDS:
+                report.errors.append(
+                    f"line {line_no}: counterfactual carries unknown field {key!r} "
+                    f"(closed set: {sorted(_COUNTERFACTUAL_FIELDS)})"
+                )
+                report.valid = False
+
+        for required in ("version", "ruleset_hash", "decision", "evaluated_at"):
+            if cf.get(required) is None:
+                report.errors.append(f"line {line_no}: counterfactual missing field {required!r}")
+                report.valid = False
+
+        version = cf.get("version")
+        if version is not None and version != _COUNTERFACTUAL_VERSION:
+            report.errors.append(
+                f"line {line_no}: counterfactual version {version!r} is unknown "
+                f"(supported: {_COUNTERFACTUAL_VERSION}); the block is refused, "
+                f"never skipped"
+            )
+            report.valid = False
+
+        decision = cf.get("decision")
+        if decision is not None and decision not in _COUNTERFACTUAL_DECISIONS:
+            report.errors.append(
+                f"line {line_no}: counterfactual decision {decision!r} outside the "
+                f"closed vocabulary {sorted(_COUNTERFACTUAL_DECISIONS)}"
+            )
+            report.valid = False
+
+        if not _is_sha256_digest(cf.get("ruleset_hash")):
+            report.errors.append(
+                f"line {line_no}: counterfactual ruleset_hash is not a sha256 "
+                f"digest of the form sha256:<64 hex characters>"
+            )
+            report.valid = False
+
+        # A post-dated block is editorial, not evidence.
+        evaluated_at = cf.get("evaluated_at")
+        iat = decoded.get("iat") if isinstance(decoded, dict) else None
+        if not isinstance(evaluated_at, int) or isinstance(evaluated_at, bool):
+            report.errors.append(f"line {line_no}: counterfactual evaluated_at is not an integer")
+            report.valid = False
+        elif isinstance(iat, int) and evaluated_at > iat:
+            report.errors.append(
+                f"line {line_no}: counterfactual evaluated_at {evaluated_at} is "
+                f"later than the receipt's own iat {iat}"
+            )
+            report.valid = False
+
+        # rule_id is present if and only if the alternative rule fired
+        # (decision deny); an allow that carries rule fields claims a rule
+        # that did not fire.
+        rule_kind = cf.get("rule_kind")
+        if decision == "allow":
+            for absent_field in ("rule_id", "rule_kind", "session"):
+                if cf.get(absent_field) is not None:
+                    report.errors.append(
+                        f"line {line_no}: counterfactual decision 'allow' carries "
+                        f"{absent_field!r} (rule fields are present only when the "
+                        f"alternative rule fired)"
+                    )
+                    report.valid = False
+        elif decision == "deny":
+            for required_field in ("rule_id", "rule_kind"):
+                if cf.get(required_field) is None:
+                    report.errors.append(
+                        f"line {line_no}: counterfactual decision 'deny' carries no "
+                        f"{required_field!r} (the firing alternative rule is named)"
+                    )
+                    report.valid = False
+
+        # The closed rule-kind vocabulary: a policy rule or a session rule
+        # may back a counterfactual; anything else (advisory detection,
+        # classifier verdicts) is detection, not this surface.
+        session_kinds = self._session_rule_kinds()
+        if rule_kind is not None:
+            if rule_kind not in {"policy_rule"} | session_kinds:
+                report.errors.append(
+                    f"line {line_no}: counterfactual rule_kind {rule_kind!r} "
+                    f"outside the closed vocabulary (policy_rule or a session "
+                    f"rule kind {sorted(session_kinds)})"
+                )
+                report.valid = False
+            else:
+                session = cf.get("session")
+                if rule_kind in session_kinds and session is None:
+                    report.errors.append(
+                        f"line {line_no}: counterfactual rule_kind {rule_kind!r} "
+                        f"carries no session block (a session rule names the window "
+                        f"it fired over)"
+                    )
+                    report.valid = False
+                if rule_kind == "policy_rule" and session is not None:
+                    report.errors.append(
+                        f"line {line_no}: counterfactual rule_kind 'policy_rule' "
+                        f"carries a session block (a policy rule fires on the call, "
+                        f"not over a session window)"
+                    )
+                    report.valid = False
+
+        # Session coherence: the block cites the receipt's own session, and
+        # the window evidence is exactly the closed two-key shape.
+        session = cf.get("session")
+        if session is not None:
+            self._verify_counterfactual_session(session, x_gate_payload, line_no, report)
+
+        if len(report.errors) == errors_before:
+            report.counterfactual_evidence.append(
+                {
+                    "receipt": receipt.receipt_hash,
+                    "decision": decision,
+                    "re_run": False,
+                    "note": (
+                        "counterfactual recorded at decision time by the gate "
+                        "machinery; not re-run at verification (the alternative "
+                        "ruleset is named only by digest and the stored input is "
+                        "not held)"
+                    ),
+                }
+            )
+
+    def _verify_counterfactual_session(
+        self,
+        session: Any,
+        x_gate_payload: dict[str, Any],
+        line_no: int,
+        report: VerificationReport,
+    ) -> None:
+        """Receipts v1.2 (K3): the counterfactual session block re-check -
+        closed field set, the receipt's own session id, a positive integer
+        window, the closed participant vocabulary and the exact two-key
+        window_evidence shape (non-negative integer counters, string tool
+        names). Mutates *report* in place."""
+        if not isinstance(session, dict):
+            report.errors.append(
+                f"line {line_no}: counterfactual session must be an object, "
+                f"got {type(session).__name__}"
+            )
+            report.valid = False
+            return
+
+        for key in session:
+            if key not in _COUNTERFACTUAL_SESSION_FIELDS:
+                report.errors.append(
+                    f"line {line_no}: counterfactual session carries unknown "
+                    f"field {key!r} (closed set: {sorted(_COUNTERFACTUAL_SESSION_FIELDS)})"
+                )
+                report.valid = False
+
+        for required in ("session_id", "window_seconds", "participant", "window_evidence"):
+            if session.get(required) is None:
+                report.errors.append(
+                    f"line {line_no}: counterfactual session missing field {required!r}"
+                )
+                report.valid = False
+
+        own_session_id = x_gate_payload.get("session_id") or ""
+        cited_session_id = session.get("session_id")
+        if cited_session_id is not None and cited_session_id != own_session_id:
+            report.errors.append(
+                f"line {line_no}: counterfactual session cites session id "
+                f"{cited_session_id!r}, not the receipt's own session id "
+                f"{own_session_id!r}"
+            )
+            report.valid = False
+
+        window_seconds = session.get("window_seconds")
+        if (
+            not isinstance(window_seconds, int)
+            or isinstance(window_seconds, bool)
+            or window_seconds < 1
+        ):
+            report.errors.append(
+                f"line {line_no}: counterfactual session window_seconds is not a positive integer"
+            )
+            report.valid = False
+
+        participant = session.get("participant")
+        if participant is not None:
+            from raucle.policy import PARTICIPANTS
+
+            if participant not in PARTICIPANTS:
+                report.errors.append(
+                    f"line {line_no}: counterfactual session participant "
+                    f"{participant!r} outside the closed vocabulary "
+                    f"{list(PARTICIPANTS)}"
+                )
+                report.valid = False
+
+        evidence = session.get("window_evidence")
+        if not isinstance(evidence, dict) or set(evidence) != {"counters", "tools"}:
+            report.errors.append(
+                f"line {line_no}: counterfactual window_evidence must be exactly "
+                f"the two-key shape {{'counters', 'tools'}}"
+            )
+            report.valid = False
+            return
+        counters = evidence.get("counters")
+        if not isinstance(counters, dict) or any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in counters.values()
+        ):
+            report.errors.append(
+                f"line {line_no}: counterfactual window_evidence counters must "
+                f"map names to non-negative integers"
+            )
+            report.valid = False
+        tools = evidence.get("tools")
+        if not isinstance(tools, list) or any(
+            not isinstance(tool, str) or not tool for tool in tools
+        ):
+            report.errors.append(
+                f"line {line_no}: counterfactual window_evidence tools must be a list of tool names"
+            )
+            report.valid = False
+
     def _decode_gate_payload(self, raw: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         """Invariant: x_gate lives INSIDE the signed JWS payload, not in the
         envelope (the envelope carries only {receipt_hash, jws}); an absent
@@ -2122,11 +3006,20 @@ class ProvenanceVerifier:
         report: VerificationReport,
         revoked_ids: set[str],
         revocation_lines: dict[str, int],
+        receipts_by_hash: dict[str, ProvenanceReceipt],
+        intent_constraint_values: set[str],
     ) -> None:
         """Invariant (A3): temporal cascade, single pass - a receipt minted
         AFTER a revocation of its cited authority is invalid; one minted
         BEFORE it remains valid evidence. Revocation events collect as the
-        walk proceeds, so they only bite later lines. Mutates *report*,
+        walk proceeds, so they only bite later lines. Receipts v1.2 (K3):
+        a block carrying ``version`` is the v1.2 kind and takes the full
+        structural re-check first (closed field set, kind and reason-class
+        vocabularies, chain-linkage digests, the revoked_at binding, the
+        shared bounded-disclosure sweep and the reason's class-level
+        rule); a block without ``version`` is the shipped v1.0 shape and
+        takes no v1.2 check (rule 4: revocations minted before this
+        document are valid and stay valid). Mutates *report*,
         *revoked_ids* and *revocation_lines* in place."""
         auth_block_now = x_gate_payload.get("authorization") or {}
         cited_now = {
@@ -2146,9 +3039,155 @@ class ProvenanceVerifier:
         if isinstance(decoded, dict):
             revocation = decoded.get("x_revocation")
         if revocation and isinstance(revocation, dict):
+            if "version" in revocation:
+                self._verify_v12_revocation_block(
+                    revocation,
+                    decoded,
+                    line_no,
+                    report,
+                    receipts_by_hash,
+                    intent_constraint_values,
+                )
             for rid in revocation.get("revoked_ids") or []:
                 revoked_ids.add(rid)
                 revocation_lines[rid] = line_no
+
+    def _verify_v12_revocation_block(
+        self,
+        revocation: dict[str, Any],
+        decoded: Any,
+        line_no: int,
+        report: VerificationReport,
+        receipts_by_hash: dict[str, ProvenanceReceipt],
+        intent_constraint_values: set[str],
+    ) -> None:
+        """Invariant (receipts v1.2, K3): the versioned revocation block
+        re-checks structurally offline - the version gate, the closed
+        field set, the closed kind and reason-class vocabularies, the
+        chain linkage (revoked_hashes keys exactly equal the revoked ids,
+        every value a sha256 digest), revoked_at never later than the
+        receipt's own iat, receipt-kind citations resolving in this chain,
+        the shared bounded-disclosure sweep, and the reason staying at
+        class level (never quoting a constraint value the chain's intent
+        receipts disclose). Fail-closed: an unknown version, kind or
+        reason class refuses with a named error, never a skip. Mutates
+        *report* in place."""
+        self._forbidden_field_sweep(revocation, "x_revocation", line_no, report)
+
+        # Closed field set: the block names a revocation event, never an
+        # open-ended payload.
+        for key in revocation:
+            if key not in _REVOCATION_V12_FIELDS:
+                report.errors.append(
+                    f"line {line_no}: x_revocation carries unknown field {key!r} "
+                    f"(closed set: {sorted(_REVOCATION_V12_FIELDS)})"
+                )
+                report.valid = False
+
+        for required in (
+            "version",
+            "kind",
+            "revoked_ids",
+            "revoked_hashes",
+            "actor",
+            "reason_class",
+            "revoked_at",
+        ):
+            if revocation.get(required) is None:
+                report.errors.append(f"line {line_no}: x_revocation missing field {required!r}")
+                report.valid = False
+
+        version = revocation.get("version")
+        if version is not None and version != _REVOCATION_VERSION:
+            report.errors.append(
+                f"line {line_no}: x_revocation version {version!r} is unknown "
+                f"(supported: {_REVOCATION_VERSION}); the block is refused, "
+                f"never skipped"
+            )
+            report.valid = False
+
+        kind = revocation.get("kind")
+        if kind is not None and kind not in _REVOCATION_KINDS:
+            report.errors.append(
+                f"line {line_no}: x_revocation kind {kind!r} outside the closed "
+                f"vocabulary {sorted(_REVOCATION_KINDS)}"
+            )
+            report.valid = False
+
+        reason_class = revocation.get("reason_class")
+        if reason_class is not None and reason_class not in _REVOCATION_REASON_CLASSES:
+            report.errors.append(
+                f"line {line_no}: x_revocation reason_class {reason_class!r} "
+                f"outside the closed vocabulary {sorted(_REVOCATION_REASON_CLASSES)}"
+            )
+            report.valid = False
+
+        # Chain linkage: keys exactly equal the revoked ids, every value a
+        # sha256 digest a third party holding the revoked material re-derives.
+        revoked_ids = revocation.get("revoked_ids")
+        revoked_hashes = revocation.get("revoked_hashes")
+        ids_ok = isinstance(revoked_ids, list) and all(isinstance(rid, str) for rid in revoked_ids)
+        if not ids_ok:
+            report.errors.append(f"line {line_no}: x_revocation revoked_ids must be a list of ids")
+            report.valid = False
+        if not isinstance(revoked_hashes, dict):
+            report.errors.append(
+                f"line {line_no}: x_revocation revoked_hashes must map ids to digests"
+            )
+            report.valid = False
+        elif ids_ok:
+            if set(revoked_hashes) != set(revoked_ids):
+                report.errors.append(
+                    f"line {line_no}: x_revocation revoked_hashes keys must equal "
+                    f"the revoked ids exactly (chain linkage)"
+                )
+                report.valid = False
+            for rid, digest in revoked_hashes.items():
+                if not _is_sha256_digest(digest):
+                    report.errors.append(
+                        f"line {line_no}: x_revocation revoked_hashes for {rid!r} "
+                        f"is not a sha256 digest of the form "
+                        f"sha256:<64 hex characters>"
+                    )
+                    report.valid = False
+
+        # A post-dated revocation timestamp is editorial, not evidence.
+        revoked_at = revocation.get("revoked_at")
+        iat = decoded.get("iat") if isinstance(decoded, dict) else None
+        if not isinstance(revoked_at, int) or isinstance(revoked_at, bool):
+            report.errors.append(f"line {line_no}: x_revocation revoked_at is not an integer")
+            report.valid = False
+        elif isinstance(iat, int) and revoked_at > iat:
+            report.errors.append(
+                f"line {line_no}: x_revocation revoked_at {revoked_at} is later "
+                f"than the receipt's own iat {iat}"
+            )
+            report.valid = False
+
+        # Bounded disclosure: the reason stays at class level. A revocation
+        # receipt is retained for the life of the archive, so it must never
+        # quote a constraint value the chain's intent receipts disclose.
+        reason = revocation.get("reason")
+        if isinstance(reason, str) and reason:
+            for value in intent_constraint_values:
+                if value and value in reason:
+                    report.errors.append(
+                        f"line {line_no}: x_revocation reason quotes a constraint "
+                        f"value the chain's receipts disclose (bounded disclosure: "
+                        f"the reason stays at class level)"
+                    )
+                    report.valid = False
+                    break
+
+        # kind = receipt: the same membership rule every extension citation
+        # obeys - every cited receipt must exist in this chain.
+        if kind == "receipt" and ids_ok:
+            for rid in revoked_ids:
+                if rid not in receipts_by_hash:
+                    report.errors.append(
+                        f"line {line_no}: x_revocation cites receipt {rid!r} not in the chain"
+                    )
+                    report.valid = False
 
     def _verify_task_intent(
         self,
@@ -2156,13 +3195,19 @@ class ProvenanceVerifier:
         receipt: ProvenanceReceipt,
         line_no: int,
         report: VerificationReport,
+        intent_constraint_values: set[str],
     ) -> None:
         """Invariant (v1.2, defence-in-depth): an ALLOW receipt must fall
         inside the approved tool scope and satisfy the intent constraints,
         re-checked deterministically over the bounded disclosure. A DENY
         for an out-of-intent attempt is the enforcement working, not a
-        violation. Mutates *report* in place."""
+        violation. The block's disclosed constraint values are collected
+        for the revocation reason's class-level rule (a revocation
+        receipt retained for the life of the archive must never quote
+        them). Mutates *report* in place."""
         intent = x_gate_payload.get("intent")
+        if intent is not None:
+            self._collect_intent_constraint_values(x_gate_payload, intent_constraint_values)
         if intent is not None and x_gate_payload.get("decision") == "allow":
             gate_tool = x_gate_payload.get("tool") or receipt.tool
             intent_tools = intent.get("tools")
@@ -2184,6 +3229,40 @@ class ProvenanceVerifier:
                         f"line {line_no}: ALLOW receipt violates intent constraint ({why})"
                     )
                     report.valid = False
+
+    def _collect_intent_constraint_values(
+        self, x_gate_payload: dict[str, Any], intent_constraint_values: set[str]
+    ) -> None:
+        """Receipts v1.2 (K3): collect the constraint VALUES an intent
+        receipt discloses - the intent's declared constraint values and
+        the intent check's satisfied field values - so the revocation
+        reason's class-level rule can refuse a reason that quotes them.
+        Values only, never field names: a reason naming a field names the
+        schema, not the chain's disclosed material. Mutates
+        *intent_constraint_values* in place."""
+        intent = x_gate_payload.get("intent")
+        if isinstance(intent, dict):
+            constraints = intent.get("constraints")
+            if isinstance(constraints, dict):
+                self._collect_string_values(constraints, intent_constraint_values)
+        check = x_gate_payload.get("intent_check")
+        if isinstance(check, dict):
+            satisfied = check.get("satisfied_fields")
+            if isinstance(satisfied, dict):
+                self._collect_string_values(satisfied, intent_constraint_values)
+
+    @staticmethod
+    def _collect_string_values(node: Any, out: set[str]) -> None:
+        """Every non-empty string value anywhere in *node*, at any depth."""
+        stack = [node]
+        while stack:
+            current = stack.pop()
+            if isinstance(current, dict):
+                stack.extend(current.values())
+            elif isinstance(current, (list, tuple)):
+                stack.extend(current)
+            elif isinstance(current, str) and current:
+                out.add(current)
 
     def _verify_harness_finding(
         self,
@@ -2340,6 +3419,27 @@ class ProvenanceVerifier:
         revoked_ids: set[str] = set()
         revocation_lines: dict[str, int] = {}
         lease_grants: dict[str, dict[str, Any]] = {}
+        # Receipts v1.2 (K3): the constraint values intent receipts disclose
+        # across the whole chain, collected line by line so a later
+        # revocation's reason can be refused for quoting them.
+        intent_constraint_values: set[str] = set()
+        # Receipts v1.2 (EPIC W lane W2): the LATEST tool_definition block
+        # per tool, collected line by line; the pin discipline runs as a
+        # chain-end pass (the newest block is the one the deployment's
+        # registry state must answer for). The drift map records where
+        # each tool's last receipted definition_changed finding sits in
+        # the chain, so the pin pass can tell receipted drift from silent
+        # drift.
+        tool_definition_latest: dict[str, dict[str, Any]] = {}
+        tool_definition_drift: dict[str, int] = {}
+        # Receipts v1.2 (EPIC W lane W1): the x_state claim bound to
+        # each write receipt, every gate receipt's tool, and the
+        # ALLOWED receipts for pairing-covered write tools; the
+        # coverage and linkage pass runs at chain end (the registry is
+        # the deployment state answering for the chain's claims).
+        state_evidence_by_write: dict[str, dict[str, Any]] = {}
+        covered_writes: dict[str, dict[str, Any]] = {}
+        gate_tools_by_hash: dict[str, str] = {}
 
         with open(path, encoding="utf-8") as fh:
             for line_no, line in enumerate(fh, start=1):
@@ -2372,6 +3472,12 @@ class ProvenanceVerifier:
                     lease_grants,
                     receipts_by_hash,
                     raw_lines_by_hash,
+                    intent_constraint_values,
+                    tool_definition_latest,
+                    tool_definition_drift,
+                    state_evidence_by_write,
+                    covered_writes,
+                    gate_tools_by_hash,
                 )
 
                 receipts_by_hash[receipt.receipt_hash] = receipt
@@ -2379,6 +3485,14 @@ class ProvenanceVerifier:
 
         # Second pass: DAG integrity + taint monotonicity
         self._verify_dag_and_taint(receipts_by_hash, report)
+        # Receipts v1.2 (EPIC W lane W2): pin the LATEST definition block
+        # per tool against the on-disk manifest (the registry state).
+        self._verify_tool_definition_pins(tool_definition_latest, tool_definition_drift, report)
+        # Receipts v1.2 (EPIC W lane W1): pairing coverage and linkage
+        # (the registry state answers for the chain's write claims).
+        self._verify_state_evidence_pins(
+            state_evidence_by_write, covered_writes, gate_tools_by_hash, report
+        )
 
         return report
 

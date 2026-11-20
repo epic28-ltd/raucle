@@ -125,6 +125,10 @@ async def test_no_token_in_force_denies(gate, captured_events):
     receipt = events[0]["receipt"]
     assert receipt["decision"] == "DENY"
     assert "no capability token in force" in receipt["decision_reason"]
+    # Honest-null contract: the deny receipt carries the caller's agent_id
+    # verbatim when declared, or None when it is not - never a fabricated
+    # placeholder string ("<unknown>" here would fail).
+    assert receipt["agent_id"] is None
     # Refusal must be attached to context.result so downstream code sees it
     assert context.result is not None
 
