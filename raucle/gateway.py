@@ -341,6 +341,13 @@ class GatewayConfig:
     # (receipts keep their v1.1 byte-shape). A malformed file mints no
     # block, never a fabricated one.
     counterfactual_ruleset_file: str = ""
+    # EPIC W lane W2 (definition drift): the operator-fed tool schema
+    # manifest (an MCP tools/list-shaped JSON file). When set, the gate
+    # is schema-bound at construction (X1) and every gate receipt for a
+    # schema-registered tool carries the definition digest. A manifest
+    # the deployment cannot interpret refuses the boot with a named
+    # error. Empty = no registry (existing deployments unaffected).
+    tool_schema_manifest: str = ""
 
     @classmethod
     def from_env(cls) -> GatewayConfig:
@@ -415,6 +422,7 @@ class GatewayConfig:
                 1, int(os.environ.get("RAUCLE_SESSION_WINDOW_MAX_ENTRIES", "10000"))
             ),
             counterfactual_ruleset_file=os.environ.get("RAUCLE_COUNTERFACTUAL_RULESET_FILE", ""),
+            tool_schema_manifest=os.environ.get("RAUCLE_TOOL_SCHEMA_MANIFEST", ""),
         )
 
     @classmethod
@@ -1365,6 +1373,15 @@ class RaucleGateway:
         else:  # unreachable: validated above
             raise ValueError(self._gate_auth_mode)
 
+        # EPIC W lane W2: load the tool schema manifest BEFORE the gate is
+        # created, so the gate is schema-bound at construction (X1) and
+        # receipts can bind the definition digest. A malformed manifest
+        # refuses the boot with a named error, never a silent empty
+        # registry. _last_tool_receipt anchors the drift finding's
+        # citation to the last gate receipt minted for a tool.
+        self._tool_schemas = self._load_tool_schemas()
+        self._last_tool_receipt: dict[str, tuple[str, str]] = {}
+
         # Bootstrap from config
         self._init_signer()
         self._init_gate_identity()
@@ -1695,7 +1712,8 @@ class RaucleGateway:
         from raucle.capability import CapabilityGate
 
         self._gate = CapabilityGate(
-            trusted_issuers={self._issuer.key_id: self._issuer.public_key_pem}
+            trusted_issuers={self._issuer.key_id: self._issuer.public_key_pem},
+            tool_schemas=self._tool_schemas,
         )
 
     def _load_or_create_local_signer(self, key_path: Path):
@@ -1923,9 +1941,25 @@ class RaucleGateway:
             payload["x_gate"]["intent_check"] = ctx.intent_block["intent_check"]
         if counterfactual is not None:  # receipts v1.2: the not-taken decision
             payload["x_gate"]["counterfactual"] = counterfactual
+        # Receipts v1.2 (EPIC W lane W2): the definition the decision was
+        # made against, bound as a versioned block for schema-registered
+        # tools; a tool with no registered schema mints no block,
+        # byte-identical to its pre-W2 shape.
+        tool_definition = self._tool_definition_block(ctx.tool)
+        if tool_definition is not None:
+            payload["x_gate"]["tool_definition"] = tool_definition
         # Header + JWS signing + store append are shared with the other
         # authority receipt emitters (PR-E extraction).
         receipt_hash = self._sign_and_store_receipt(payload)
+        # EPIC W lane W2: the reload path cites the last gate receipt
+        # minted for a schema-registered tool, so the drift finding
+        # anchors to real evidence in the chain.
+        if (
+            receipt_hash
+            and self._tool_schemas is not None
+            and self._tool_schemas.has_schema(ctx.tool)
+        ):
+            self._last_tool_receipt[ctx.tool] = (receipt_hash, ctx.decision)
         # Session window recording (EPIC Q lane Q-2): maintained at receipt
         # emission time for every decision that carries a session_id, allow
         # and deny alike. The summary is content-free by construction. No
@@ -4449,6 +4483,148 @@ class RaucleGateway:
     def get_connections(self, limit: int = 50) -> list[dict[str, Any]]:
         """Return recent connections (most recent first)."""
         return list(reversed(self._connection_log[-limit:]))
+
+    def _tool_definition_block(self, tool: str) -> dict[str, Any] | None:
+        """Receipts v1.2 (EPIC W lane W2): the versioned definition block
+        bound into x_gate for schema-registered tools - the digest over
+        the registered inputSchema, the manifest path it was pinned
+        from, and the honest vantage (none: the gate sees requests, not
+        served definitions; call-time diffing against a LIVE served
+        definition waits for the in-path MCP gateway). None when the
+        tool has no registered schema."""
+        if self._tool_schemas is None or not self._tool_schemas.has_schema(tool):
+            return None
+        from raucle.provenance import _TOOL_DEFINITION_VERSION
+
+        return {
+            "version": _TOOL_DEFINITION_VERSION,
+            "definition_digest": self._tool_schemas.definition_digest(tool),
+            "definition_manifest": self._tool_schemas.definition_manifest(tool),
+            "definition_vantage": "none",
+        }
+
+    def _read_tool_manifest(self, manifest: str) -> list[dict[str, Any]]:
+        """Read and parse the configured tool schema manifest (an MCP
+        tools/list-shaped JSON file). A manifest the deployment cannot
+        read or interpret is a named load-time error, never a silent
+        empty registry."""
+        import json as _json
+
+        from raucle.tool_schema import SchemaPolicyLoadError
+
+        path = Path(manifest)
+        try:
+            raw = _json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 - named refusal, never a partial boot
+            raise SchemaPolicyLoadError(
+                f"tool schema manifest {manifest!r} is unusable ({type(exc).__name__}: {exc})"
+            ) from exc
+        if not isinstance(raw, list):
+            raise SchemaPolicyLoadError(
+                f"tool schema manifest {manifest!r} must be a JSON array of "
+                '{"name", "inputSchema"} entries'
+            )
+        return raw
+
+    def _load_tool_schemas(self) -> Any:
+        """Build the schema-bound registry from the configured manifest
+        (EPIC W lane W2, riding X1's load-time path). None when no
+        manifest is configured: existing deployments keep today's
+        behaviour exactly."""
+        manifest = self.config.tool_schema_manifest
+        if not manifest:
+            return None
+        from raucle.tool_schema import ToolSchemaRegistry
+
+        registry = ToolSchemaRegistry()
+        registry.register_from_mcp_tools(self._read_tool_manifest(manifest), manifest=manifest)
+        logger.info(
+            "tool schema manifest loaded: %d tool(s) bound from %s",
+            len(registry.registered_tools()),
+            manifest,
+        )
+        return registry
+
+    def reload_tool_schemas(self) -> dict[str, Any]:
+        """EPIC W lane W2: re-read the configured tool schema manifest
+        and receipt every observed definition drift.
+
+        A changed digest is not refused here (the load-time bind keeps
+        X1's refusal): the reload supersedes the definition and emits a
+        receipted ``definition_changed`` finding citing the last gate
+        receipt minted for that tool, old and new digests only. With no
+        prior gate receipt there is no citable evidence, so the finding
+        is skipped with a named reason rather than minted against a
+        ghost citation; the registry still updates and the next receipt
+        carries the new digest.
+
+        Named errors: no manifest configured; a manifest configured
+        after construction (restart required, the split-brain guard:
+        the enforcement path holds the registry bound at boot).
+        """
+        from raucle.provenance import _DEFINITION_CHANGED_TEST_ID, _TOOL_SCHEMA_HARNESS
+        from raucle.tool_schema import SchemaPolicyLoadError
+
+        manifest = self.config.tool_schema_manifest
+        if not manifest:
+            return {"status": "error", "message": "no tool schema manifest configured"}
+        if self._tool_schemas is None:
+            # Split-brain guard: the CapabilityGate holds the registry
+            # bound at construction, so a manifest configured AFTER boot
+            # cannot be rebound here without receipts and the gate's
+            # enforcement diverging. Name the restart instead of rebinding.
+            return {
+                "status": "error",
+                "message": (
+                    "the tool schema manifest is bound at gateway construction; "
+                    "restart the gateway to bind it (a post-boot reload would "
+                    "split receipts from the gate's enforcement)"
+                ),
+            }
+        try:
+            tools = self._read_tool_manifest(manifest)
+        except SchemaPolicyLoadError as exc:
+            return {"status": "error", "message": str(exc)}
+        drift = self._tool_schemas.reload_from_mcp_tools(tools, manifest=manifest)
+        for record in drift:
+            cited = self._last_tool_receipt.get(record["tool"])
+            if cited is None:
+                record["finding"] = "skipped_no_prior_receipt"
+                logger.warning(
+                    "definition drift for %s observed with no prior gate receipt; "
+                    "no citation, no finding (the x_finding contract forbids "
+                    "ghost citations)",
+                    record["tool"],
+                )
+                continue
+            receipt_hash, decision = cited
+            try:
+                finding_id = self.emit_finding(
+                    harness=_TOOL_SCHEMA_HARNESS,
+                    test_id=_DEFINITION_CHANGED_TEST_ID,
+                    verdict="confirmed",
+                    cited_receipt=receipt_hash,
+                    expected_decision=decision,
+                    actual_decision=decision,
+                    tool=record["tool"],
+                    args_digest="",
+                    note=(
+                        f"tool definition changed: {record['old_definition_digest']} -> "
+                        f"{record['new_definition_digest']}; manifest={record['manifest']}; "
+                        "bounded disclosure: digests only, never schema content"
+                    ),
+                )
+                record["finding"] = finding_id if finding_id else "emission_disabled"
+            except Exception:
+                logger.exception(
+                    "definition_changed finding emission failed for %s", record["tool"]
+                )
+                record["finding"] = "emission_failed"
+        return {
+            "status": "ok",
+            "tools": len(self._tool_schemas.registered_tools()),
+            "drift": drift,
+        }
 
     def reload_policies(self) -> dict[str, Any]:
         """Hot-reload policies from the config file or directory."""

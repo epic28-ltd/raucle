@@ -302,6 +302,23 @@ _COUNTERFACTUAL_FIELDS = frozenset(
 _COUNTERFACTUAL_SESSION_FIELDS = frozenset(
     {"session_id", "window_seconds", "participant", "window_evidence"}
 )
+# Receipts v1.2 (EPIC W lane W2): the tool_definition block's version
+# anchor, the closed field set and the closed vantage vocabulary. Spec:
+# docs/spec/provenance/v1.2/definition-drift.md. The vantage stays a
+# single honest value ("none": the gate sees requests, not served
+# definitions) until the in-path MCP gateway exists; anything else is
+# detection theatre, not this surface.
+_TOOL_DEFINITION_VERSION = "tool-definition/v1"
+_TOOL_DEFINITION_FIELDS = frozenset(
+    {"version", "definition_digest", "definition_manifest", "definition_vantage"}
+)
+_TOOL_DEFINITION_VANTAGES = frozenset({"none"})
+# The reload-drift finding's harness and test id: the gateway's reload
+# path emits definition_changed findings, and the verifier's chain-end
+# pin pass accepts a receipted transition as the signed evidence that
+# observed drift was recorded, never silently applied.
+_TOOL_SCHEMA_HARNESS = "tool-schema"
+_DEFINITION_CHANGED_TEST_ID = "definition_changed"
 # Receipts v1.2 (K3): the v1.2 revocation-kind block's version anchor, the
 # closed kind and reason-class vocabularies and the closed field set.
 # Spec: docs/spec/provenance/v1.2/revocation-receipts.md.
@@ -1830,6 +1847,8 @@ class ProvenanceVerifier:
         receipts_by_hash: dict[str, ProvenanceReceipt],
         raw_lines_by_hash: dict[str, str],
         intent_constraint_values: set[str],
+        tool_definition_latest: dict[str, dict[str, Any]],
+        tool_definition_drift: dict[str, int],
     ) -> None:
         """v1.1/v1.2 extension re-checks for one receipt (extracted from
         verify_chain): one helper per extension family, called in the
@@ -1856,6 +1875,191 @@ class ProvenanceVerifier:
         self._verify_bilateral(decoded, line_no, receipt, report)
         self._verify_x_dlp(decoded, line_no, report, receipts_by_hash)
         self._verify_counterfactual(decoded, x_gate_payload, receipt, line_no, report)
+        self._verify_tool_definition(
+            decoded, x_gate_payload, line_no, report, tool_definition_latest
+        )
+        self._collect_tool_definition_drift(decoded, line_no, tool_definition_drift)
+
+    def _collect_tool_definition_drift(
+        self,
+        decoded: Any,
+        line_no: int,
+        tool_definition_drift: dict[str, int],
+    ) -> None:
+        """Receipts v1.2 (EPIC W lane W2): record where each tool's last
+        receipted ``definition_changed`` finding sits in the chain (last
+        write wins: lines verify in chain order). The chain-end pin pass
+        uses the position to tell a receipted transition from silent
+        drift. Mutates *tool_definition_drift* in place."""
+        finding = decoded.get("x_finding") if isinstance(decoded, dict) else None
+        if not isinstance(finding, dict):
+            return
+        if (
+            finding.get("harness") != _TOOL_SCHEMA_HARNESS
+            or finding.get("test_id") != _DEFINITION_CHANGED_TEST_ID
+        ):
+            return
+        repro = finding.get("repro")
+        tool = str(repro.get("tool") or "") if isinstance(repro, dict) else ""
+        if tool:
+            tool_definition_drift[tool] = line_no
+
+    def _verify_tool_definition(
+        self,
+        decoded: Any,
+        x_gate_payload: dict[str, Any],
+        line_no: int,
+        report: VerificationReport,
+        tool_definition_latest: dict[str, dict[str, Any]],
+    ) -> None:
+        """Invariant (receipts v1.2, EPIC W lane W2): a gate receipt's
+        optional tool_definition block re-checks offline - the version
+        gate, the closed field set, the closed vantage vocabulary and
+        the sha256-shaped digest, all per line. The pin discipline is a
+        CHAIN-END pass (see _verify_tool_definition_pins): only the
+        LATEST block per tool must re-derive from the on-disk manifest
+        (the deployment's registry state), because a changed definition
+        legitimately leaves superseded digests on earlier receipts -
+        that is the drift evidence the reload path receipts. No content:
+        the block is swept by the shared forbidden-field sweep. Receipts
+        without the block are untouched (additive extension). Mutates
+        *report* and *tool_definition_latest* in place."""
+        block = x_gate_payload.get("tool_definition") if isinstance(x_gate_payload, dict) else None
+        if block is None:
+            return
+        if not isinstance(block, dict):
+            report.errors.append(
+                f"line {line_no}: tool_definition must be an object, got {type(block).__name__}"
+            )
+            report.valid = False
+            return
+
+        self._forbidden_field_sweep(block, "tool_definition", line_no, report)
+
+        # Closed field set: the block names a definition, never an
+        # open-ended payload.
+        for key in block:
+            if key not in _TOOL_DEFINITION_FIELDS:
+                report.errors.append(
+                    f"line {line_no}: tool_definition carries unknown field {key!r} "
+                    f"(closed set: {sorted(_TOOL_DEFINITION_FIELDS)})"
+                )
+                report.valid = False
+        for required in _TOOL_DEFINITION_FIELDS:
+            if block.get(required) is None:
+                report.errors.append(f"line {line_no}: tool_definition missing field {required!r}")
+                report.valid = False
+
+        version = block.get("version")
+        if version is not None and version != _TOOL_DEFINITION_VERSION:
+            report.errors.append(
+                f"line {line_no}: tool_definition version {version!r} is unknown "
+                f"(supported: {_TOOL_DEFINITION_VERSION}); the block is refused, "
+                "never skipped"
+            )
+            report.valid = False
+
+        vantage = block.get("definition_vantage")
+        if vantage is not None and vantage not in _TOOL_DEFINITION_VANTAGES:
+            report.errors.append(
+                f"line {line_no}: tool_definition vantage {vantage!r} outside the "
+                f"closed vocabulary {sorted(_TOOL_DEFINITION_VANTAGES)}"
+            )
+            report.valid = False
+
+        digest = block.get("definition_digest")
+        if digest is not None and not _is_sha256_digest(digest):
+            report.errors.append(
+                f"line {line_no}: tool_definition definition_digest is not a sha256 "
+                "digest of the form sha256:<64 hex characters>"
+            )
+            report.valid = False
+
+        # Record the LATEST block per tool for the chain-end pin pass
+        # (last write wins: lines verify in chain order). A structurally
+        # broken block still records what it claims, so the pin pass
+        # names the line where the registry state stops answering for
+        # the receipts.
+        manifest = str(block.get("definition_manifest") or "")
+        tool = str(x_gate_payload.get("tool") or "") if isinstance(x_gate_payload, dict) else ""
+        if tool:
+            tool_definition_latest[tool] = {
+                "line_no": line_no,
+                "digest": digest,
+                "manifest": manifest,
+            }
+
+    def _verify_tool_definition_pins(
+        self,
+        tool_definition_latest: dict[str, dict[str, Any]],
+        tool_definition_drift: dict[str, int],
+        report: VerificationReport,
+    ) -> None:
+        """Invariant (receipts v1.2, EPIC W lane W2, chain-end pass): the
+        LATEST tool_definition block per tool must re-derive from the
+        on-disk manifest it names, and a readable manifest must declare
+        the tool - that is the deployment's registry state answering for
+        the chain's final decisions. Earlier blocks may carry superseded
+        digests: definition drift is exactly what the reload path
+        receipts, and a verifier that recomputed HISTORICAL blocks
+        against the CURRENT manifest would refute its own drift
+        evidence. One exception, fail-closed in both directions: when
+        the chain carries a receipted ``definition_changed`` finding for
+        the tool AFTER the latest block, the digest divergence is signed
+        evidence of an observed, recorded transition (a reload with no
+        gate call since), so the recompute is excused; a diverging
+        manifest with NO receipted transition is silent drift and fails
+        with a named error. An unreadable manifest is the documented
+        off-deployment residual: no recompute, the blocks stay
+        structural, never a fabricated result. Mutates *report* in
+        place."""
+        for tool in sorted(tool_definition_latest):
+            record = tool_definition_latest[tool]
+            manifest = str(record["manifest"] or "")
+            digest = record["digest"]
+            line_no = int(record["line_no"])
+            if not manifest or digest is None:
+                continue
+            entries = self._read_definition_manifest(manifest)
+            if not isinstance(entries, list):
+                continue
+            row = next(
+                (r for r in entries if isinstance(r, dict) and r.get("name") == tool),
+                None,
+            )
+            if row is None:
+                report.errors.append(
+                    f"line {line_no}: tool_definition manifest {manifest!r} "
+                    f"does not declare the receipt's tool {tool!r}"
+                )
+                report.valid = False
+                continue
+            finding_line = tool_definition_drift.get(tool)
+            if finding_line is not None and finding_line > line_no:
+                # The divergence is receipted: a definition_changed finding
+                # later in the chain records the observed transition, so
+                # the manifest's newer state is signed evidence, never
+                # silent drift.
+                continue
+            if isinstance(row.get("inputSchema"), dict):
+                from raucle.tool_schema import _definition_digest
+
+                if _definition_digest(row["inputSchema"]) != digest:
+                    report.errors.append(
+                        f"line {line_no}: tool_definition digest does not re-derive "
+                        f"from the manifest's registered schema for tool {tool!r}"
+                    )
+                    report.valid = False
+
+    @staticmethod
+    def _read_definition_manifest(manifest: str) -> Any:
+        """The manifest's parsed entries when the file reads as JSON,
+        else None (no recompute is possible; the off-deployment
+        residual, never a crash)."""
+        try:
+            return json.loads(Path(manifest).read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - unreadable manifest: residual, not a failure
+            return None
 
     def _verify_bilateral(
         self,
@@ -2914,6 +3118,15 @@ class ProvenanceVerifier:
         # across the whole chain, collected line by line so a later
         # revocation's reason can be refused for quoting them.
         intent_constraint_values: set[str] = set()
+        # Receipts v1.2 (EPIC W lane W2): the LATEST tool_definition block
+        # per tool, collected line by line; the pin discipline runs as a
+        # chain-end pass (the newest block is the one the deployment's
+        # registry state must answer for). The drift map records where
+        # each tool's last receipted definition_changed finding sits in
+        # the chain, so the pin pass can tell receipted drift from silent
+        # drift.
+        tool_definition_latest: dict[str, dict[str, Any]] = {}
+        tool_definition_drift: dict[str, int] = {}
 
         with open(path, encoding="utf-8") as fh:
             for line_no, line in enumerate(fh, start=1):
@@ -2947,6 +3160,8 @@ class ProvenanceVerifier:
                     receipts_by_hash,
                     raw_lines_by_hash,
                     intent_constraint_values,
+                    tool_definition_latest,
+                    tool_definition_drift,
                 )
 
                 receipts_by_hash[receipt.receipt_hash] = receipt
@@ -2954,6 +3169,9 @@ class ProvenanceVerifier:
 
         # Second pass: DAG integrity + taint monotonicity
         self._verify_dag_and_taint(receipts_by_hash, report)
+        # Receipts v1.2 (EPIC W lane W2): pin the LATEST definition block
+        # per tool against the on-disk manifest (the registry state).
+        self._verify_tool_definition_pins(tool_definition_latest, tool_definition_drift, report)
 
         return report
 
