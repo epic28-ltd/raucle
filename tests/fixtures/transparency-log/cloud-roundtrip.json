@@ -1,0 +1,92 @@
+{
+  "consistency_proof": {
+    "entries": [
+      {
+        "entry_hash": "sha256:daaa0cb09dbc11f221f774343153f5a7161d134b06ea412abbd5c99fd2b1c670",
+        "org": "fixtureco",
+        "payload_digest": "sha256:1dcb0ea8c6e918ead74f08603000abd242de543722b49ff7b0e843a8edc5a2a1",
+        "prev_hash": "sha256:f2ea7b9af5682b83e18a6e9e2a8a772d8a9973bb51a3c4e58b18435440a36e79",
+        "receipt_digest": "sha256:d515a2d01e3eee433554756f08e4eaf90390eb04309c40f45d5457d0f6b9fc6f",
+        "registered_at": 1795096780,
+        "sequence": 2
+      },
+      {
+        "entry_hash": "sha256:047d24609c7738a4a83fda6dca6f50a4282e3d361dbbc048c9c304416d720783",
+        "org": "fixtureco",
+        "payload_digest": null,
+        "prev_hash": "sha256:daaa0cb09dbc11f221f774343153f5a7161d134b06ea412abbd5c99fd2b1c670",
+        "receipt_digest": "sha256:6ac644cd7a94fe5b282203c6d1f58823770f171b4641c0feb019746f021daa4a",
+        "registered_at": 1795096780,
+        "sequence": 3
+      }
+    ],
+    "from_checkpoint_jws": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsicmF1Y2xlL3YxIl0sImtpZCI6InJhdWNsZS1wb3J0YWwtZGU3M2VmMmRiM2Q2OWZhYyIsInJhdWNsZS92MSI6InRyYW5zcGFyZW5jeSIsInR5cCI6InRyYW5zcGFyZW5jeS1lcG9jaC92MSJ9.eyJlcG9jaCI6MSwiaGVhZF9oYXNoIjoic2hhMjU2OmYyZWE3YjlhZjU2ODJiODNlMThhNmU5ZTJhOGE3NzJkOGE5OTczYmI1MWEzYzRlNThiMTg0MzU0NDBhMzZlNzkiLCJpYXQiOjE3OTUwOTY3ODAsImlzcyI6InJhdWNsZS1wb3J0YWwiLCJub25jZSI6IjQyOGU4MGIzYWYwODQ0NDJhMGM0YTc3YmM4NjhlZjY2Iiwib3JnIjoiZml4dHVyZWNvIiwic2l6ZSI6MX0.xlipqDGGMTC3A1uOUZIssK9r_wfdiQ4lY1rf2s9ispAeNheeFyWHYxWrI8htpvcOXY2DBHHy00e2wftYqKpjDw",
+    "from_size": 1,
+    "key_id": "raucle-portal-de73ef2db3d69fac",
+    "operator_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAbHMs5uri/tCkDEB71rJ3jUK/56uYoRrMHh1+5hJmuO0=\n-----END PUBLIC KEY-----\n",
+    "org": "fixtureco",
+    "to_checkpoint_jws": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsicmF1Y2xlL3YxIl0sImtpZCI6InJhdWNsZS1wb3J0YWwtZGU3M2VmMmRiM2Q2OWZhYyIsInJhdWNsZS92MSI6InRyYW5zcGFyZW5jeSIsInR5cCI6InRyYW5zcGFyZW5jeS1lcG9jaC92MSJ9.eyJlcG9jaCI6MywiaGVhZF9oYXNoIjoic2hhMjU2OjA0N2QyNDYwOWM3NzM4YTRhODNmZGE2ZGNhNmY1MGE0MjgyZTNkMzYxZGJiYzA0OGM5YzMwNDQxNmQ3MjA3ODMiLCJpYXQiOjE3OTUwOTY3ODAsImlzcyI6InJhdWNsZS1wb3J0YWwiLCJub25jZSI6IjJlNzdlOTM0OTk0NzQzYzdhODAzOGE1YmUwNGRkZDM5Iiwib3JnIjoiZml4dHVyZWNvIiwic2l6ZSI6M30.Bv5EoV-s9W-xT6Pxe44O-zRMlmIk_rQy1YyYzCetfi4g3NVG2jbGh0EcjzlMzkG7Dal9o_hGLHY474Pft906DQ",
+    "to_size": 3
+  },
+  "inclusion_proof": {
+    "checkpoint_jws": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsicmF1Y2xlL3YxIl0sImtpZCI6InJhdWNsZS1wb3J0YWwtZGU3M2VmMmRiM2Q2OWZhYyIsInJhdWNsZS92MSI6InRyYW5zcGFyZW5jeSIsInR5cCI6InRyYW5zcGFyZW5jeS1lcG9jaC92MSJ9.eyJlcG9jaCI6MywiaGVhZF9oYXNoIjoic2hhMjU2OjA0N2QyNDYwOWM3NzM4YTRhODNmZGE2ZGNhNmY1MGE0MjgyZTNkMzYxZGJiYzA0OGM5YzMwNDQxNmQ3MjA3ODMiLCJpYXQiOjE3OTUwOTY3ODAsImlzcyI6InJhdWNsZS1wb3J0YWwiLCJub25jZSI6IjJlNzdlOTM0OTk0NzQzYzdhODAzOGE1YmUwNGRkZDM5Iiwib3JnIjoiZml4dHVyZWNvIiwic2l6ZSI6M30.Bv5EoV-s9W-xT6Pxe44O-zRMlmIk_rQy1YyYzCetfi4g3NVG2jbGh0EcjzlMzkG7Dal9o_hGLHY474Pft906DQ",
+    "entries": [
+      {
+        "entry_hash": "sha256:f2ea7b9af5682b83e18a6e9e2a8a772d8a9973bb51a3c4e58b18435440a36e79",
+        "org": "fixtureco",
+        "payload_digest": null,
+        "prev_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "receipt_digest": "sha256:3d1cd44b5a80e2d3fcf00d9c7b01d2921264031746b089590fede1eaa18552e8",
+        "registered_at": 1795096780,
+        "sequence": 1
+      },
+      {
+        "entry_hash": "sha256:daaa0cb09dbc11f221f774343153f5a7161d134b06ea412abbd5c99fd2b1c670",
+        "org": "fixtureco",
+        "payload_digest": "sha256:1dcb0ea8c6e918ead74f08603000abd242de543722b49ff7b0e843a8edc5a2a1",
+        "prev_hash": "sha256:f2ea7b9af5682b83e18a6e9e2a8a772d8a9973bb51a3c4e58b18435440a36e79",
+        "receipt_digest": "sha256:d515a2d01e3eee433554756f08e4eaf90390eb04309c40f45d5457d0f6b9fc6f",
+        "registered_at": 1795096780,
+        "sequence": 2
+      },
+      {
+        "entry_hash": "sha256:047d24609c7738a4a83fda6dca6f50a4282e3d361dbbc048c9c304416d720783",
+        "org": "fixtureco",
+        "payload_digest": null,
+        "prev_hash": "sha256:daaa0cb09dbc11f221f774343153f5a7161d134b06ea412abbd5c99fd2b1c670",
+        "receipt_digest": "sha256:6ac644cd7a94fe5b282203c6d1f58823770f171b4641c0feb019746f021daa4a",
+        "registered_at": 1795096780,
+        "sequence": 3
+      }
+    ],
+    "epoch": 3,
+    "head_hash": "sha256:047d24609c7738a4a83fda6dca6f50a4282e3d361dbbc048c9c304416d720783",
+    "key_id": "raucle-portal-de73ef2db3d69fac",
+    "operator_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAbHMs5uri/tCkDEB71rJ3jUK/56uYoRrMHh1+5hJmuO0=\n-----END PUBLIC KEY-----\n",
+    "org": "fixtureco",
+    "payload_digest": null,
+    "receipt_digest": "sha256:3d1cd44b5a80e2d3fcf00d9c7b01d2921264031746b089590fede1eaa18552e8",
+    "sequence": 1,
+    "size": 3
+  },
+  "latest": {
+    "checkpoint_jws": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsicmF1Y2xlL3YxIl0sImtpZCI6InJhdWNsZS1wb3J0YWwtZGU3M2VmMmRiM2Q2OWZhYyIsInJhdWNsZS92MSI6InRyYW5zcGFyZW5jeSIsInR5cCI6InRyYW5zcGFyZW5jeS1lcG9jaC92MSJ9.eyJlcG9jaCI6MywiaGVhZF9oYXNoIjoic2hhMjU2OjA0N2QyNDYwOWM3NzM4YTRhODNmZGE2ZGNhNmY1MGE0MjgyZTNkMzYxZGJiYzA0OGM5YzMwNDQxNmQ3MjA3ODMiLCJpYXQiOjE3OTUwOTY3ODAsImlzcyI6InJhdWNsZS1wb3J0YWwiLCJub25jZSI6IjJlNzdlOTM0OTk0NzQzYzdhODAzOGE1YmUwNGRkZDM5Iiwib3JnIjoiZml4dHVyZWNvIiwic2l6ZSI6M30.Bv5EoV-s9W-xT6Pxe44O-zRMlmIk_rQy1YyYzCetfi4g3NVG2jbGh0EcjzlMzkG7Dal9o_hGLHY474Pft906DQ",
+    "entry_hash": "sha256:047d24609c7738a4a83fda6dca6f50a4282e3d361dbbc048c9c304416d720783",
+    "epoch": 3,
+    "head_hash": "sha256:047d24609c7738a4a83fda6dca6f50a4282e3d361dbbc048c9c304416d720783",
+    "key_id": "raucle-portal-de73ef2db3d69fac",
+    "operator_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAbHMs5uri/tCkDEB71rJ3jUK/56uYoRrMHh1+5hJmuO0=\n-----END PUBLIC KEY-----\n",
+    "org": "fixtureco",
+    "size": 3,
+    "status": "ok"
+  },
+  "operator_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAbHMs5uri/tCkDEB71rJ3jUK/56uYoRrMHh1+5hJmuO0=\n-----END PUBLIC KEY-----\n",
+  "org": "fixtureco",
+  "profile": "raucle-x2-transparency-log-v1",
+  "registered_digests": [
+    "sha256:3d1cd44b5a80e2d3fcf00d9c7b01d2921264031746b089590fede1eaa18552e8",
+    "sha256:d515a2d01e3eee433554756f08e4eaf90390eb04309c40f45d5457d0f6b9fc6f",
+    "sha256:6ac644cd7a94fe5b282203c6d1f58823770f171b4641c0feb019746f021daa4a"
+  ],
+  "source": "generated by raucle-cloud feat/x2-transparency-log (X2 slice 2); the OSS verify path must accept it"
+}
