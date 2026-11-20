@@ -89,6 +89,12 @@ spec:
               value: {{ .Values.config.sessionWindowMaxKeys | quote }}
             - name: RAUCLE_SESSION_WINDOW_MAX_ENTRIES
               value: {{ .Values.config.sessionWindowMaxEntries | quote }}
+            - name: RAUCLE_BOOT_MEM_CEILING_MB
+              value: {{ .Values.config.bootMemCeilingMb | quote }}
+            - name: RAUCLE_BOOT_SCAN_WINDOW_MB
+              value: {{ .Values.config.bootScanWindowMb | quote }}
+            - name: RAUCLE_INDEX_CACHE_MB
+              value: {{ .Values.config.indexCacheMb | quote }}
             - name: RAUCLE_SIGNER_KEY_PATH
               value: {{ .Values.config.signerKeyPath | quote }}
             - name: RAUCLE_POLICY_FILE

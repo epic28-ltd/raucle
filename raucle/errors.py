@@ -75,3 +75,16 @@ class RotationRefusedError(Exception):
 
     The refusal is all-or-nothing: no file is renamed when it raises.
     """
+
+
+class ChainTailMalformed(Exception):
+    """The bounded reverse tail read refused to recover a chain tail (L1).
+
+    Raised by :class:`raucle.audit.HashChainSink` construction when the
+    final window of a chain file is torn, unparsable or internally
+    unlinked. The whole-scan resume this replaces silently skipped
+    unparsable lines and chained onto whatever came next; the bounded
+    resume fails closed instead and names the file, the line number, the
+    byte offset and the operator path (``raucle rotate-chain``, which
+    archives the broken chain verifiably and starts a fresh one).
+    """

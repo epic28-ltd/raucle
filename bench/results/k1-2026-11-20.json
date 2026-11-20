@@ -1,0 +1,90 @@
+{
+  "bench": "k1-boot-streaming",
+  "env": {
+    "python_path": "/home/craigamcw/ln-worktrees/l1-bootstream/.venv/bin/python",
+    "scale": "demo",
+    "fixture": {
+      "audit_chain_bytes": 536871318,
+      "audit_events": 1305311,
+      "receipts": 150000,
+      "store_bytes": 44751936,
+      "store_segments": 11
+    },
+    "indexed_rows_end_to_end": 150000,
+    "rss_mb_at_start": 108.7
+  },
+  "results": {
+    "time_to_bind": {
+      "elapsed_s": 0.016,
+      "peak_rss_mb": 27.3
+    },
+    "tail_resume": {
+      "w16": {
+        "elapsed_s": 0.558,
+        "peak_rss_mb": 70.9
+      },
+      "w64": {
+        "elapsed_s": 2.103,
+        "peak_rss_mb": 249.3
+      },
+      "w256": {
+        "elapsed_s": 8.91,
+        "peak_rss_mb": 923.4
+      }
+    },
+    "chain_scan": {
+      "w16": {
+        "elapsed_s": 71.588,
+        "peak_rss_mb": 68.3
+      },
+      "w64": {
+        "elapsed_s": 71.37,
+        "peak_rss_mb": 58.5
+      },
+      "w256": {
+        "elapsed_s": 79.299,
+        "peak_rss_mb": 58.5
+      }
+    },
+    "index_migration": {
+      "elapsed_s": 1.081,
+      "peak_rss_mb": 110.7
+    },
+    "index_rebuild_batched": {
+      "b1000": {
+        "tail_window": {
+          "elapsed_s": 0.165,
+          "peak_rss_mb": 110.7
+        },
+        "sweep": {
+          "elapsed_s": 8.936,
+          "peak_rss_mb": 110.9
+        }
+      },
+      "b10000": {
+        "tail_window": {
+          "elapsed_s": 0.155,
+          "peak_rss_mb": 110.9
+        },
+        "sweep": {
+          "elapsed_s": 8.144,
+          "peak_rss_mb": 111.7
+        }
+      },
+      "b50000": {
+        "tail_window": {
+          "elapsed_s": 0.118,
+          "peak_rss_mb": 108.7
+        },
+        "sweep": {
+          "elapsed_s": 7.934,
+          "peak_rss_mb": 108.7
+        }
+      }
+    },
+    "boot_end_to_end": {
+      "elapsed_s": 76.864,
+      "peak_rss_mb": 108.7
+    }
+  }
+}

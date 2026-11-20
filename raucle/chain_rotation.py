@@ -37,7 +37,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
 import os
 import time
 from datetime import datetime, timezone
@@ -58,14 +57,25 @@ ROTATE_COMMAND = "raucle rotate-chain"
 #: default from detected memory minus headroom).
 ENV_BOOT_MEM_CEILING_MB = "RAUCLE_BOOT_MEM_CEILING_MB"
 
-#: Documented RSS projection multiplier. Measured on the demo box (18 Nov):
-#: a boot over a 12.2 GB audit chain plus a 15 GB receipt index reached
-#: 23.4 GB RSS, so the boot-time cost of the mapped stores lands at roughly
-#: TWICE their on-disk bytes (per-record Python string overhead in the
-#: chain's in-memory leaf list plus the SQLite index cache). The preflight
-#: plans with 2.0 as a deliberately conservative factor: it refuses early
-#: rather than precisely at the wall.
+#: Historical RSS projection multiplier (J1): a boot over a 12.2 GB
+#: audit chain plus a 15 GB receipt index reached 23.4 GB RSS, so the
+#: whole-store boot cost landed at roughly twice the on-disk bytes. The
+#: L1 boot streams its stores through bounded windows, so the preflight
+#: projects the WINDOW BUDGET (below) instead; this constant stays as
+#: the incident's recorded decomposition until the X5 bench replaces it
+#: with measured terms (spec section 5).
 BOOT_MEM_RSS_MULTIPLIER = 2.0
+
+#: Baseline gateway resident cost (baseline_gateway + C_misc folded in):
+#: policy, trust, identity and request buffers, bounded as today. A
+#: conservative starting default, honestly labelled pending the X5
+#: bench's measured decomposition of the incident's 23.4 GB (spec 3.1).
+BASELINE_GATEWAY_MB = 256
+
+#: Env vars for the window budget (spec 3.8): defaults are starting
+#: points for the bench, not decisions.
+ENV_BOOT_SCAN_WINDOW_MB = "RAUCLE_BOOT_SCAN_WINDOW_MB"
+ENV_INDEX_CACHE_MB = "RAUCLE_INDEX_CACHE_MB"
 
 #: Default headroom: a quarter of the detected memory, never below 2 GB.
 _HEADROOM_FRACTION = 4
@@ -190,12 +200,25 @@ def boot_memory_preflight(config: GatewayConfig) -> dict[str, Any]:
     """
     stores = resolve_boot_stores(config)
     on_disk = sum(entry["bytes"] for entry in stores)
-    projected_mb = math.ceil(on_disk * BOOT_MEM_RSS_MULTIPLIER / _MB)
+    # L1 re-derivation (spec 3.1, AC6): the projection is the boot's
+    # bounded-window budget, not the store's bytes. Every store-consuming
+    # boot path fits one of the budget terms or waits behind a readiness
+    # gate, so a store may grow without bound while the projection does
+    # not move; shrinking the windows lowers the effective ceiling for
+    # the same refusal guarantee.
+    scan_window_mb = max(1, int(getattr(config, "boot_scan_window_mb", 64) or 64))
+    index_cache_mb = max(0, int(getattr(config, "index_cache_mb", 64) or 0))
+    budget: dict[str, int] = {
+        "baseline_gateway_mb": BASELINE_GATEWAY_MB,
+        "scan_window_mb": scan_window_mb,
+        "index_cache_mb": index_cache_mb,
+    }
+    projected_mb = sum(budget.values())
     ceiling_mb = _effective_ceiling_mb(config)
     report: dict[str, Any] = {
         "projected_mb": projected_mb,
+        "budget": budget,
         "on_disk_bytes": on_disk,
-        "multiplier": BOOT_MEM_RSS_MULTIPLIER,
         "ceiling_mb": ceiling_mb,
         "stores": stores,
     }
@@ -210,14 +233,17 @@ def boot_memory_preflight(config: GatewayConfig) -> dict[str, Any]:
         return report
     if projected_mb > ceiling_mb:
         raise BootMemoryCeilingExceeded(
-            f"boot memory ceiling exceeded: the boot stores project to "
-            f"{projected_mb} MB RSS ({on_disk // _MB} MB on disk x "
-            f"{BOOT_MEM_RSS_MULTIPLIER} documented multiplier), over the "
-            f"{ceiling_mb} MB ceiling ({ENV_BOOT_MEM_CEILING_MB}, or detected "
-            f"memory minus headroom). The gateway refuses to boot rather "
-            f"than be OOM-killed. Archive the stores with "
-            f"'{ROTATE_COMMAND}' (it never deletes; prior links stay "
-            f"verifiable offline inside the archives), then start the gateway."
+            f"boot memory ceiling exceeded: the boot's bounded-window budget "
+            f"projects {projected_mb} MB RSS (baseline "
+            f"{BASELINE_GATEWAY_MB} + scan window {scan_window_mb} "
+            f"({ENV_BOOT_SCAN_WINDOW_MB}) + index cache {index_cache_mb} "
+            f"({ENV_INDEX_CACHE_MB})), over the {ceiling_mb} MB ceiling "
+            f"({ENV_BOOT_MEM_CEILING_MB}, or detected memory minus "
+            f"headroom). The gateway refuses to boot rather than be "
+            f"OOM-killed. Shrinking the windows lowers the projection; "
+            f"archive the stores with '{ROTATE_COMMAND}' (it never deletes; "
+            f"prior links stay verifiable offline inside the archives), "
+            f"then start the gateway."
         )
     logger.info(
         "boot memory preflight: projected %d MB RSS under the %d MB ceiling",

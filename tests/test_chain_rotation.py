@@ -337,7 +337,7 @@ class TestBootMemoryPreflight:
         assert kinds == {"audit_chain", "audit_log", "receipt_store"}
 
     def test_passes_and_reports_the_projection(self, tmp_path):
-        from raucle.chain_rotation import BOOT_MEM_RSS_MULTIPLIER, boot_memory_preflight
+        from raucle.chain_rotation import BASELINE_GATEWAY_MB, boot_memory_preflight
 
         config = _receipt_store_config(tmp_path)
         _seed_stores(config)
@@ -345,15 +345,13 @@ class TestBootMemoryPreflight:
 
         report = boot_memory_preflight(config)
         assert report["ceiling_mb"] == 4096
-        assert report["multiplier"] == BOOT_MEM_RSS_MULTIPLIER
+        # L1 (AC6): the projection is re-derived from the bounded-window
+        # budget, not the store's on-disk bytes. A store may grow without
+        # bound; the boot's projection no longer moves with it.
+        budget = report["budget"]
+        assert budget["baseline_gateway_mb"] == BASELINE_GATEWAY_MB
+        assert report["projected_mb"] == sum(budget.values())
         assert report["projected_mb"] > 0
-        on_disk = sum(
-            Path(f).stat().st_size
-            for entry in report["stores"]
-            for f in entry["files"]
-            if Path(f).exists()
-        )
-        assert report["projected_mb"] >= (on_disk * BOOT_MEM_RSS_MULTIPLIER) / (1024 * 1024)
 
     def test_default_ceiling_derived_from_detected_memory(self):
         from raucle.chain_rotation import default_boot_ceiling_mb, detected_total_memory_mb
