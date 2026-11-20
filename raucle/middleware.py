@@ -12,6 +12,8 @@ inputs, LLM outputs, and tool calls.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -27,6 +29,12 @@ _DEFAULT_SESSION_TTL = 3600  # seconds — idle sessions older than this are evi
 
 #: Harness label on every advisory finding this middleware emits.
 ADVISORY_HARNESS = "middleware-advisory"
+
+#: EPIC W lane W1: harness label and test id for the state-verification
+#: lane's missing-evidence advisory finding (the absent sentinel rides
+#: the signed x_state receipt; the finding names WHY evidence is absent).
+STATE_VERIFICATION_HARNESS = "state-verification"
+STATE_EVIDENCE_MISSING_TEST_ID = "state_evidence_missing"
 
 
 def _fail_open_result(_scanned_text: str) -> ScanResult:
@@ -93,7 +101,12 @@ class RaucleMiddleware:
         A gateway client reference exposing ``emit_finding(**kwargs)``.
         When wired, the middleware emits bounded-disclosure advisory
         findings (harness ``middleware-advisory``) through it, best
-        effort: emission failures are logged and swallowed. Default
+        effort: emission failures are logged and swallowed. The W1
+        state-verification lane rides the same reference when it also
+        exposes ``state_pairings()`` and ``emit_state_evidence(**kwargs)``:
+        ``submit_state_evidence`` then mines the read-back evidence
+        (digest, handle, field names, never content) and mints the
+        signed ``x_state`` receipt citing the write receipt. Default
         ``None`` — no findings are emitted. A finding is emitted only
         when a receipt citation is bound for the call (see
         ``record_trace_receipt``): the offline verifier refuses findings
@@ -335,6 +348,146 @@ class RaucleMiddleware:
                 exc_info=True,
             )
             return arg_text
+
+    def submit_state_evidence(
+        self,
+        tool_name: str,
+        *,
+        read_response: bytes | None,
+        trace_id: str | None,
+        reason: str = "",
+    ) -> None:
+        """EPIC W (lane W1): submit read-back evidence for a receipted write.
+
+        The mint-time path: the runtime executed the write (receipted
+        through the gate, the citation bound via
+        ``record_trace_receipt``) and the paired read, and hands the
+        RAW response bytes here. The middleware hashes the bytes
+        (sha256), extracts the handle per the pairing's id_pointer and
+        records the field-presence names observed, then submits through
+        ``gateway.emit_state_evidence`` - digests, handles and names
+        only, never content. A missing or unusable read yields the
+        literal absent sentinel PLUS an advisory finding (harness
+        ``state-verification``, test id ``state_evidence_missing``)
+        citing the write receipt: adapter-missing evidence is a
+        receipted advisory, never a folded zero.
+
+        Best effort and fail-open like every hook here (the advisory
+        layer never holds gate authority): an uncited call mints
+        nothing (the verifier refuses ghost citations) and an emission
+        failure is logged, never raised into the agent loop.
+        """
+        if self._gateway is None:
+            return
+        citation = self._resolve_citation(trace_id)
+        if citation is None:
+            logger.info(
+                "state-verification submission without a trace citation: no "
+                "receipt minted (the verifier refuses findings that cite a "
+                "receipt not in the chain)"
+            )
+            return
+        receipt_id, decision = citation
+        try:
+            self._submit_state_evidence(
+                tool_name,
+                read_response=read_response,
+                receipt_id=receipt_id,
+                decision=decision,
+                reason=reason,
+            )
+        except Exception:
+            logger.warning(
+                "state-verification submission failed open (advisory layer, "
+                "no enforcement authority)",
+                exc_info=True,
+            )
+
+    def _submit_state_evidence(
+        self,
+        tool_name: str,
+        *,
+        read_response: bytes | None,
+        receipt_id: str,
+        decision: str,
+        reason: str,
+    ) -> None:
+        """Resolve the pairing, mine the evidence fields and emit."""
+        pairing = self._state_pairing_for(tool_name)
+        evidence: dict[str, Any] = {}
+        if read_response is not None and pairing is not None:
+            parsed = self._parse_read_response(read_response)
+            handle = parsed.get(str(pairing["id_pointer"])) if isinstance(parsed, dict) else None
+            if isinstance(handle, str) and handle:
+                evidence = {
+                    "pairing_id": str(pairing["pairing_id"]),
+                    "read_tool": str(pairing["read_tool"]),
+                    "evidence_digest": "sha256:" + hashlib.sha256(read_response).hexdigest(),
+                    "handle": handle,
+                    "field_classes": sorted(parsed),
+                }
+        if evidence:
+            self._gateway.emit_state_evidence(cited_receipt=receipt_id, **evidence)
+            return
+        # Absent: the literal sentinel, never a fake digest. With a
+        # pairing the skip is a named advisory finding; without one the
+        # uncovered tool honestly says absent with no pairing_id.
+        absent: dict[str, Any] = {"cited_receipt": receipt_id}
+        if pairing is not None:
+            absent["pairing_id"] = str(pairing["pairing_id"])
+            absent["read_tool"] = str(pairing["read_tool"])
+        self._gateway.emit_state_evidence(**absent)
+        if pairing is not None:
+            self._emit_state_evidence_missing(
+                tool_name,
+                receipt_id=receipt_id,
+                decision=decision,
+                why=reason or "read-back produced no usable evidence",
+            )
+
+    def _state_pairing_for(self, tool_name: str) -> dict[str, Any] | None:
+        """The pairing row bound to this write tool, best effort: no
+        gateway registry accessor means no pairings (uncovered
+        territory, never an exception)."""
+        getter = getattr(self._gateway, "state_pairings", None)
+        if not callable(getter):
+            return None
+        for row in (getter() or {}).values():
+            if isinstance(row, dict) and row.get("write_tool") == tool_name:
+                return row
+        return None
+
+    @staticmethod
+    def _parse_read_response(raw: bytes) -> Any:
+        """The read-back's parsed top-level object, or None when the
+        response is not a JSON object (v1: no dotted-path traversal,
+        the id_pointer names a top-level field)."""
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _emit_state_evidence_missing(
+        self, tool_name: str, *, receipt_id: str, decision: str, why: str
+    ) -> None:
+        """The advisory missing-evidence finding, bounded disclosure: a
+        digest over the tool identity only, never content."""
+        self._gateway.emit_finding(
+            harness=STATE_VERIFICATION_HARNESS,
+            test_id=STATE_EVIDENCE_MISSING_TEST_ID,
+            verdict="confirmed",
+            cited_receipt=receipt_id,
+            expected_decision="allow",
+            actual_decision=decision,
+            tool=tool_name,
+            args_digest="sha256:" + hashlib.sha256(tool_name.encode("utf-8")).hexdigest(),
+            note=(
+                f"state verification: read-back evidence missing ({why}); the "
+                "write receipt carries the absent sentinel; bounded "
+                "disclosure: no content"
+            ),
+        )
 
     def _resolve_citation(self, trace_id: str | None) -> tuple[str, str] | None:
         """Return (receipt_id, decision) bound to *trace_id*, else None.

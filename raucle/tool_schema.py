@@ -33,6 +33,14 @@ JSON), gate receipts for schema-registered tools carry it, and the
 explicit reload path supersedes a changed definition while returning
 the drift (old and new digests only, never schema content) for the
 gateway to receipt as evidence.
+
+W1 (state verification, EPIC W) adds the write-to-read pairing
+registry: operator-declared ``state_pairings`` entries bind each
+write tool to the read tool that reads the state back, validated
+fail-closed at config load against this same schema registry. A
+pairing referencing an unknown tool or an undeclared id field
+raises a ``SchemaPolicyLoadError``-class error at config load, never
+at call time.
 """
 
 from __future__ import annotations
@@ -49,6 +57,8 @@ __all__ = [
     "SchemaPolicyLoadError",
     "ToolSchema",
     "ToolSchemaRegistry",
+    "StatePairing",
+    "StatePairingRegistry",
     "extract_rule_fields",
 ]
 
@@ -409,6 +419,14 @@ class ToolSchemaRegistry:
         ts = self._schemas.get(tool)
         return ts.manifest if ts is not None else ""
 
+    def declared_fields(self, tool: str) -> set[str] | None:
+        """The tool's declared input field names, or None when the tool
+        has no registered schema (EPIC W lane W1: the pairing registry
+        validates its id_pointer against the read tool's declared
+        fields, the same load-time bind as ``bind_policy``)."""
+        ts = self._schemas.get(tool)
+        return set(ts.properties) if ts is not None else None
+
     def registered_tools(self) -> list[str]:
         """Every tool with a registered schema, sorted for stable output."""
         return sorted(self._schemas)
@@ -473,3 +491,123 @@ def _type_conflict(declared: str, value: Any) -> str | None:
     if ok:
         return None
     return f"is declared {declared!r} but value is {_describe_type(value)!r}"
+
+
+class StatePairing:
+    """EPIC W lane W1: one operator-declared write-to-read pairing.
+
+    The entry binds the write tool whose state a read-back verifies,
+    the read tool that performs it, the id pointer naming the field
+    the read carries (and the handle is extracted through), and the
+    optional field-presence names the read response must show. The
+    entry id is derived deterministically as
+    ``<write_tool>:<read_tool>``, so receipts cite a stable, nameable
+    pairing across restarts and hosts. Names only: an entry never
+    carries schema content.
+    """
+
+    def __init__(
+        self,
+        *,
+        write_tool: str,
+        read_tool: str,
+        id_pointer: str,
+        require_field_classes: list[str] | tuple[str, ...] = (),
+    ) -> None:
+        for field_name, value in (
+            ("write_tool", write_tool),
+            ("read_tool", read_tool),
+            ("id_pointer", id_pointer),
+        ):
+            if not isinstance(value, str) or not value:
+                raise SchemaPolicyLoadError(
+                    f"state_pairings entry field {field_name!r} must be a non-empty string"
+                )
+        classes = list(require_field_classes or [])
+        for cls in classes:
+            if not isinstance(cls, str) or not cls:
+                raise SchemaPolicyLoadError(
+                    "state_pairings require_field_classes entries must be non-empty strings"
+                )
+        self.write_tool = write_tool
+        self.read_tool = read_tool
+        self.id_pointer = id_pointer
+        self.require_field_classes = tuple(classes)
+        self.pairing_id = f"{write_tool}:{read_tool}"
+
+    def row(self) -> dict[str, Any]:
+        """The bounded-disclosure row: identifiers and field names
+        only, never content."""
+        return {
+            "pairing_id": self.pairing_id,
+            "write_tool": self.write_tool,
+            "read_tool": self.read_tool,
+            "id_pointer": self.id_pointer,
+            "require_field_classes": list(self.require_field_classes),
+        }
+
+
+class StatePairingRegistry:
+    """EPIC W lane W1: the write-to-read pairing registry, bound at
+    config load against the :class:`ToolSchemaRegistry`.
+
+    ``register`` follows the tool_schema load-time doctrine: refuse
+    configs the gate could silently under-enforce. A pairing
+    referencing an unknown tool or an undeclared id field raises a
+    ``SchemaPolicyLoadError``-class error at config load, never at
+    call time. One pairing per write tool keeps the paired read
+    deterministic; a second entry for the same write tool refuses
+    the config.
+    """
+
+    def __init__(self, schemas: ToolSchemaRegistry) -> None:
+        self._schemas = schemas
+        self._by_id: dict[str, StatePairing] = {}
+        self._by_write: dict[str, StatePairing] = {}
+
+    def register(self, entry: dict[str, Any]) -> StatePairing:
+        """Validate and bind one pairing entry (fail-closed at load)."""
+        if not isinstance(entry, dict):
+            raise SchemaPolicyLoadError("state_pairings entry must be a JSON object")
+        pairing = StatePairing(
+            write_tool=str(entry.get("write_tool") or ""),
+            read_tool=str(entry.get("read_tool") or ""),
+            id_pointer=str(entry.get("id_pointer") or ""),
+            require_field_classes=list(entry.get("require_field_classes") or []),
+        )
+        for role, tool in (("write", pairing.write_tool), ("read", pairing.read_tool)):
+            if not self._schemas.has_schema(tool):
+                raise SchemaPolicyLoadError(
+                    f"state_pairings entry {pairing.pairing_id!r} references unknown "
+                    f"{role} tool {tool!r} (register the inputSchema first)"
+                )
+        declared = self._schemas.declared_fields(pairing.read_tool)
+        if declared is None or pairing.id_pointer not in declared:
+            raise SchemaPolicyLoadError(
+                f"state_pairings entry {pairing.pairing_id!r} names id field "
+                f"{pairing.id_pointer!r}, which the read tool {pairing.read_tool!r} "
+                "does not declare (the read must be parameterisable by the handle)"
+            )
+        existing = self._by_write.get(pairing.write_tool)
+        if existing is not None:
+            raise SchemaPolicyLoadError(
+                f"state_pairings: write tool {pairing.write_tool!r} is already "
+                f"paired with {existing.read_tool!r} (the paired read must be "
+                "deterministic)"
+            )
+        self._by_id[pairing.pairing_id] = pairing
+        self._by_write[pairing.write_tool] = pairing
+        return pairing
+
+    def pairing_for_write(self, tool: str) -> StatePairing | None:
+        """The pairing bound to a write tool, or None when uncovered."""
+        return self._by_write.get(tool)
+
+    def pairing(self, pairing_id: str) -> StatePairing | None:
+        """The pairing with this entry id, or None."""
+        return self._by_id.get(pairing_id)
+
+    def rows(self) -> dict[str, dict[str, Any]]:
+        """Every pairing's bounded row, keyed by entry id (sorted for
+        stable output)."""
+        return {pid: pairing.row() for pid, pairing in sorted(self._by_id.items())}

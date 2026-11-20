@@ -319,6 +319,32 @@ _TOOL_DEFINITION_VANTAGES = frozenset({"none"})
 # observed drift was recorded, never silently applied.
 _TOOL_SCHEMA_HARNESS = "tool-schema"
 _DEFINITION_CHANGED_TEST_ID = "definition_changed"
+# Receipts v1.2 (EPIC W lane W1): the x_state extension's version
+# anchor, the closed field set and the literal absent sentinel. Spec:
+# docs/spec/provenance/v1.2/state-verification.md. Evidence-at-mint from
+# adapters: the runtime hashes the read-back (raw bytes sha256) and the
+# gateway binds the digest to the write's receipt id; absence is the
+# literal sentinel, never a fake digest. Content never rides the block:
+# the shared forbidden-field sweep covers this surface too.
+_STATE_EVIDENCE_VERSION = "state-evidence/v1"
+_X_STATE_FIELDS = frozenset(
+    {
+        "version",
+        "pairing_id",
+        "read_tool",
+        "evidence_digest",
+        "handle",
+        "field_classes",
+        "state_evidence",
+        "cited_receipt",
+    }
+)
+_STATE_ABSENT_SENTINEL = "absent"
+# The missing-evidence advisory finding's harness and test id: the
+# middleware's fail-open lane emits state_evidence_missing findings
+# whenever a covered write's read-back failed or was skipped.
+_STATE_VERIFICATION_HARNESS = "state-verification"
+_STATE_EVIDENCE_MISSING_TEST_ID = "state_evidence_missing"
 # Receipts v1.2 (K3): the v1.2 revocation-kind block's version anchor, the
 # closed kind and reason-class vocabularies and the closed field set.
 # Spec: docs/spec/provenance/v1.2/revocation-receipts.md.
@@ -1630,6 +1656,15 @@ class ProvenanceVerifier:
         co-signs outcomes. Receipts carrying x_bilateral that name a key
         id absent here or whose co-signature does not verify FAIL (v1.2
         bilateral-outcomes); receipts without the block are untouched.
+    state_pairings : dict[str, dict[str, Any]], optional
+        Mapping ``pairing_id -> bounded pairing row`` for the x_state
+        extension (v1.2 state-verification): the deployment's
+        write-to-read pairing registry, the same constructor-carried
+        state pattern as ``executor_keys``. When provided, the chain-end
+        pass re-checks pairing linkage and coverage: a covered write
+        receipt with neither evidence nor the absent sentinel marks
+        INVALID with a named reason. Without it the x_state blocks stay
+        structural (the off-deployment residual, nothing fabricated).
     """
 
     def __init__(
@@ -1639,6 +1674,7 @@ class ProvenanceVerifier:
         pq_public_keys: dict[str, bytes | str] | None = None,
         require_pq: bool = False,
         executor_keys: dict[str, bytes] | None = None,
+        state_pairings: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         from cryptography.hazmat.primitives import serialization
 
@@ -1676,6 +1712,16 @@ class ProvenanceVerifier:
         # require_pq in their index; verification enforces the pack's
         # own statement about itself.
         self._require_pq = bool(require_pq)
+        # EPIC W lane W1: the deployment's pairing registry (pairing_id
+        # -> bounded row) and the covered write tools derived from it.
+        # Constructor-carried state, like executor_keys: without it the
+        # x_state checks are structural only.
+        self._state_pairings: dict[str, dict[str, Any]] = dict(state_pairings or {})
+        self._state_write_tools: set[str] = {
+            str(row.get("write_tool") or "")
+            for row in self._state_pairings.values()
+            if row.get("write_tool")
+        }
 
     @staticmethod
     def _parse_chain_line(
@@ -1849,6 +1895,9 @@ class ProvenanceVerifier:
         intent_constraint_values: set[str],
         tool_definition_latest: dict[str, dict[str, Any]],
         tool_definition_drift: dict[str, int],
+        state_evidence_by_write: dict[str, dict[str, Any]],
+        covered_writes: dict[str, dict[str, Any]],
+        gate_tools_by_hash: dict[str, str],
     ) -> None:
         """v1.1/v1.2 extension re-checks for one receipt (extracted from
         verify_chain): one helper per extension family, called in the
@@ -1879,6 +1928,10 @@ class ProvenanceVerifier:
             decoded, x_gate_payload, line_no, report, tool_definition_latest
         )
         self._collect_tool_definition_drift(decoded, line_no, tool_definition_drift)
+        self._verify_x_state(decoded, line_no, report, receipts_by_hash, state_evidence_by_write)
+        self._collect_state_coverage(
+            x_gate_payload, receipt, line_no, covered_writes, gate_tools_by_hash
+        )
 
     def _collect_tool_definition_drift(
         self,
@@ -2293,6 +2346,258 @@ class ProvenanceVerifier:
         cited = str(x_dlp.get("cited_receipt", ""))
         if cited and cited not in receipts_by_hash:
             report.errors.append(f"line {line_no}: x_dlp cites receipt {cited!r} not in the chain")
+            report.valid = False
+
+    def _verify_x_state(
+        self,
+        decoded: Any,
+        line_no: int,
+        report: VerificationReport,
+        receipts_by_hash: dict[str, ProvenanceReceipt],
+        state_evidence_by_write: dict[str, dict[str, Any]],
+    ) -> None:
+        """Invariant (receipts v1.2, EPIC W lane W1): a state-verified
+        write receipt (x_state) carries digests, a handle and
+        field-presence names only, never read-back content. Offline
+        re-check with no runtime present: the version gate, the closed
+        field set, the literal absent sentinel, the sha256 digest
+        shapes, the sentinel/evidence consistency and the cited write
+        receipt's existence EARLIER in the chain (evidence follows the
+        write, never pre-dates it). Digest-blind by design: the
+        transport carries digests, never bytes, so no recompute
+        exists to perform - the binding is the verifiable claim.
+        Receipts without the block are untouched (additive extension,
+        historical byte shapes preserved). Mutates *report* and
+        *state_evidence_by_write* in place."""
+        x_state = decoded.get("x_state") if isinstance(decoded, dict) else None
+        if x_state is None:
+            return
+        if not isinstance(x_state, dict):
+            report.errors.append(
+                f"line {line_no}: x_state must be an object, got {type(x_state).__name__}"
+            )
+            report.valid = False
+            return
+
+        # Bounded disclosure: no content-like field anywhere in the block.
+        self._forbidden_field_sweep(x_state, "x_state", line_no, report)
+
+        # Closed field set: the block names a state claim, never an
+        # open-ended payload.
+        for key in x_state:
+            if key not in _X_STATE_FIELDS:
+                report.errors.append(
+                    f"line {line_no}: x_state carries unknown field {key!r} "
+                    f"(closed set: {sorted(_X_STATE_FIELDS)})"
+                )
+                report.valid = False
+        for required in ("version", "cited_receipt"):
+            if x_state.get(required) is None:
+                report.errors.append(f"line {line_no}: x_state missing field {required!r}")
+                report.valid = False
+
+        version = x_state.get("version")
+        if version is not None and version != _STATE_EVIDENCE_VERSION:
+            report.errors.append(
+                f"line {line_no}: x_state version {version!r} is unknown "
+                f"(supported: {_STATE_EVIDENCE_VERSION}); the block is refused, "
+                "never skipped"
+            )
+            report.valid = False
+
+        # The cited write receipt: sha256-shaped and present EARLIER in
+        # the chain, like every other extension citation.
+        cited = str(x_state.get("cited_receipt") or "")
+        if cited and not _is_sha256_digest(cited):
+            report.errors.append(
+                f"line {line_no}: x_state cited_receipt is not a sha256 receipt "
+                "hash of the form sha256:<64 hex characters>"
+            )
+            report.valid = False
+        if cited and cited not in receipts_by_hash:
+            report.errors.append(
+                f"line {line_no}: x_state cites receipt {cited!r} not in the chain"
+            )
+            report.valid = False
+
+        # Sentinel semantics: absence is the literal sentinel, never a
+        # fake digest; a block carrying neither states nothing.
+        sentinel = x_state.get("state_evidence")
+        has_digest = x_state.get("evidence_digest") is not None
+        state = "invalid"
+        if sentinel is not None and sentinel != _STATE_ABSENT_SENTINEL:
+            report.errors.append(
+                f"line {line_no}: x_state state_evidence {sentinel!r} is not the "
+                f"literal sentinel {_STATE_ABSENT_SENTINEL!r}"
+            )
+            report.valid = False
+        if sentinel == _STATE_ABSENT_SENTINEL:
+            if (
+                has_digest
+                or x_state.get("handle") is not None
+                or x_state.get("field_classes") is not None
+            ):
+                report.errors.append(
+                    f"line {line_no}: x_state state_evidence {_STATE_ABSENT_SENTINEL!r} "
+                    "never carries evidence fields (absence is stated, never a "
+                    "fake digest)"
+                )
+                report.valid = False
+            state = "absent"
+        elif has_digest:
+            state = "evidence"
+            for required in ("pairing_id", "read_tool", "handle", "field_classes"):
+                if x_state.get(required) is None:
+                    report.errors.append(f"line {line_no}: x_state missing field {required!r}")
+                    report.valid = False
+        else:
+            report.errors.append(
+                f"line {line_no}: x_state carries neither evidence nor the absent "
+                "sentinel (a receipt for a pairing-covered tool must state one)"
+            )
+            report.valid = False
+
+        digest = x_state.get("evidence_digest")
+        if digest is not None and not _is_sha256_digest(digest):
+            report.errors.append(
+                f"line {line_no}: x_state evidence_digest is not a sha256 digest "
+                "of the form sha256:<64 hex characters>"
+            )
+            report.valid = False
+
+        handle = x_state.get("handle")
+        if handle is not None and (not isinstance(handle, str) or not handle):
+            report.errors.append(
+                f"line {line_no}: x_state handle must be a non-empty string "
+                "(the object handle extracted per the pairing's id_pointer)"
+            )
+            report.valid = False
+
+        field_classes = x_state.get("field_classes")
+        if field_classes is not None and (
+            not isinstance(field_classes, list)
+            or not field_classes
+            or any(not isinstance(c, str) or not c for c in field_classes)
+        ):
+            report.errors.append(
+                f"line {line_no}: x_state field_classes must be a non-empty "
+                "list of field-presence names (names only, never content)"
+            )
+            report.valid = False
+
+        # Chain-end collector: the state claim bound to this write
+        # receipt (last write wins, lines verify in chain order).
+        if cited:
+            state_evidence_by_write[cited] = {
+                "line_no": line_no,
+                "state": state,
+                "pairing_id": str(x_state.get("pairing_id") or ""),
+                "read_tool": str(x_state.get("read_tool") or ""),
+                "field_classes": (
+                    [str(c) for c in field_classes] if isinstance(field_classes, list) else []
+                ),
+            }
+
+    def _collect_state_coverage(
+        self,
+        x_gate_payload: dict[str, Any],
+        receipt: ProvenanceReceipt,
+        line_no: int,
+        covered_writes: dict[str, dict[str, Any]],
+        gate_tools_by_hash: dict[str, str],
+    ) -> None:
+        """Receipts v1.2 (EPIC W lane W1): record every gate receipt's
+        tool, and every ALLOWED receipt for a pairing-covered write
+        tool, so the chain-end pass can name the write receipts that
+        claimed success with no state evidence. Denied calls never
+        executed, so no read-back is owed. Mutates the collectors in
+        place."""
+        if not isinstance(x_gate_payload, dict):
+            return
+        tool = str(x_gate_payload.get("tool") or "")
+        if not tool:
+            return
+        gate_tools_by_hash[receipt.receipt_hash] = tool
+        if (
+            self._state_write_tools
+            and tool in self._state_write_tools
+            and str(receipt.guardrail_verdict) == "allow"
+        ):
+            covered_writes[receipt.receipt_hash] = {"tool": tool, "line_no": line_no}
+
+    def _verify_state_evidence_pins(
+        self,
+        state_evidence_by_write: dict[str, dict[str, Any]],
+        covered_writes: dict[str, dict[str, Any]],
+        gate_tools_by_hash: dict[str, str],
+        report: VerificationReport,
+    ) -> None:
+        """Invariant (receipts v1.2, EPIC W lane W1, chain-end pass):
+        with the deployment's pairing registry, every ALLOWED gate
+        receipt for a covered write tool must have a bound x_state
+        receipt carrying evidence or the absent sentinel - neither
+        present marks the write receipt INVALID with a named reason
+        (the false-success class, checkable). Every x_state receipt
+        with a pairing_id re-checks the linkage: the pairing exists,
+        the cited write receipt's tool is the pairing's write tool,
+        the block's read tool is the pairing's read tool, and every
+        require_field_classes name is present in field_classes (a
+        presence re-check, deliberately dumb). Without the registry
+        this pass is the documented off-deployment residual: nothing
+        is fabricated, linkage simply cannot be re-checked. Mutates
+        *report* in place."""
+        if not self._state_pairings:
+            return
+        for write_hash in sorted(state_evidence_by_write):
+            bound = state_evidence_by_write[write_hash]
+            pairing_id = str(bound.get("pairing_id") or "")
+            if not pairing_id:
+                continue
+            row = self._state_pairings.get(pairing_id)
+            if row is None:
+                report.errors.append(
+                    f"line {bound['line_no']}: x_state cites pairing {pairing_id!r} "
+                    "not in the pairing registry"
+                )
+                report.valid = False
+                continue
+            cited_tool = gate_tools_by_hash.get(write_hash)
+            row_write_tool = str(row.get("write_tool") or "")
+            if cited_tool is None or row_write_tool != cited_tool:
+                report.errors.append(
+                    f"line {bound['line_no']}: x_state pairing {pairing_id!r} binds "
+                    f"write tool {row_write_tool!r}, but the cited receipt's tool "
+                    f"is {cited_tool!r}"
+                )
+                report.valid = False
+            read_tool = str(bound.get("read_tool") or "")
+            row_read_tool = str(row.get("read_tool") or "")
+            if read_tool and row_read_tool != read_tool:
+                report.errors.append(
+                    f"line {bound['line_no']}: x_state read tool {read_tool!r} is not "
+                    f"the pairing's read tool {row_read_tool!r}"
+                )
+                report.valid = False
+            if bound.get("state") == "evidence":
+                present = set(bound.get("field_classes") or [])
+                for required_class in row.get("require_field_classes") or []:
+                    if required_class not in present:
+                        report.errors.append(
+                            f"line {bound['line_no']}: x_state field_classes is "
+                            f"missing required class {required_class!r} (presence "
+                            "re-check, digest-blind)"
+                        )
+                        report.valid = False
+        for write_hash in sorted(covered_writes):
+            if write_hash in state_evidence_by_write:
+                continue
+            record = covered_writes[write_hash]
+            report.errors.append(
+                f"line {record['line_no']}: state evidence missing for "
+                f"pairing-covered write receipt {write_hash} (tool "
+                f"{record['tool']!r}): neither evidence nor the absent sentinel "
+                "is present"
+            )
             report.valid = False
 
     def _forbidden_field_sweep(
@@ -3127,6 +3432,14 @@ class ProvenanceVerifier:
         # drift.
         tool_definition_latest: dict[str, dict[str, Any]] = {}
         tool_definition_drift: dict[str, int] = {}
+        # Receipts v1.2 (EPIC W lane W1): the x_state claim bound to
+        # each write receipt, every gate receipt's tool, and the
+        # ALLOWED receipts for pairing-covered write tools; the
+        # coverage and linkage pass runs at chain end (the registry is
+        # the deployment state answering for the chain's claims).
+        state_evidence_by_write: dict[str, dict[str, Any]] = {}
+        covered_writes: dict[str, dict[str, Any]] = {}
+        gate_tools_by_hash: dict[str, str] = {}
 
         with open(path, encoding="utf-8") as fh:
             for line_no, line in enumerate(fh, start=1):
@@ -3162,6 +3475,9 @@ class ProvenanceVerifier:
                     intent_constraint_values,
                     tool_definition_latest,
                     tool_definition_drift,
+                    state_evidence_by_write,
+                    covered_writes,
+                    gate_tools_by_hash,
                 )
 
                 receipts_by_hash[receipt.receipt_hash] = receipt
@@ -3172,6 +3488,11 @@ class ProvenanceVerifier:
         # Receipts v1.2 (EPIC W lane W2): pin the LATEST definition block
         # per tool against the on-disk manifest (the registry state).
         self._verify_tool_definition_pins(tool_definition_latest, tool_definition_drift, report)
+        # Receipts v1.2 (EPIC W lane W1): pairing coverage and linkage
+        # (the registry state answers for the chain's write claims).
+        self._verify_state_evidence_pins(
+            state_evidence_by_write, covered_writes, gate_tools_by_hash, report
+        )
 
         return report
 

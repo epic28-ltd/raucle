@@ -1386,6 +1386,12 @@ class RaucleGateway:
         self._init_signer()
         self._init_gate_identity()
         self._load_policies()
+        # EPIC W lane W1: bind the policy file's state_pairings section
+        # against the tool schema registry AFTER both are loaded, so a
+        # pairing referencing an unknown tool or an undeclared id field
+        # refuses the boot with a named error (the X1 load-time
+        # doctrine, never at call time).
+        self._state_pairings = self._load_state_pairings()
 
         # Authority attribution (PR-E): human approval workflow + policy
         # change ledger. Approvals live in memory (receipts are the durable
@@ -4213,6 +4219,123 @@ class RaucleGateway:
             extension=extension,
         )
 
+    def state_pairings(self) -> dict[str, dict[str, Any]]:
+        """EPIC W lane W1: the pairing registry's bounded rows
+        (pairing_id -> row), for verifier construction and the
+        middleware evidence lane. An empty mapping when no pairings are
+        configured: no coverage claims, uncovered tools stay
+        absent-sentinel territory."""
+        return self._state_pairings.rows() if self._state_pairings is not None else {}
+
+    def _require_state_pairing(self, pairing_id: str, read_tool: str) -> Any:
+        """Resolve a pairing id fail-closed at mint: unknown ids and
+        read-tool mismatches refuse the emission, never mint an
+        unbound claim."""
+        if self._state_pairings is None:
+            raise ValueError(
+                "the gateway has no state pairings configured; state evidence "
+                "must bind a registry entry"
+            )
+        pairing = self._state_pairings.pairing(pairing_id)
+        if pairing is None:
+            raise ValueError(
+                f"unknown state pairing {pairing_id!r}; use one of "
+                f"{sorted(self._state_pairings.rows())}"
+            )
+        if read_tool and pairing.read_tool != read_tool:
+            raise ValueError(
+                f"state pairing {pairing_id!r} reads with {pairing.read_tool!r}, got {read_tool!r}"
+            )
+        return pairing
+
+    def emit_state_evidence(
+        self,
+        *,
+        cited_receipt: str,
+        pairing_id: str = "",
+        read_tool: str = "",
+        evidence_digest: str | None = None,
+        handle: str | None = None,
+        field_classes: list[str] | None = None,
+    ) -> str | None:
+        """EPIC W (lane W1): mint a state-verified write receipt as a
+        signed authority receipt carrying an ``x_state`` extension
+        (v1.2, see docs/spec/provenance/v1.2/state-verification.md).
+
+        The caller is the adapter or runtime that executed the write
+        and the paired read (the mint-time path): the gateway performs
+        no read itself and never receives read-back content, only the
+        already-mined extension fields - the digest over the raw
+        response bytes, the handle extracted per the pairing's
+        id_pointer, and the field-presence names observed (bounded
+        disclosure). Evidence is registry-bound and fail-closed here;
+        the offline verifier remains the enforcement point for
+        structure, sentinel semantics, linkage and coverage. Absence
+        is minted as the literal sentinel ``state_evidence: absent``,
+        never a fake digest."""
+        from raucle.provenance import _STATE_EVIDENCE_VERSION, _is_sha256_digest
+
+        if not _is_sha256_digest(cited_receipt):
+            raise ValueError(
+                "cited_receipt must be a sha256 receipt hash of the form sha256:<64 hex characters>"
+            )
+        extension: dict[str, Any] = {
+            "version": _STATE_EVIDENCE_VERSION,
+            "cited_receipt": cited_receipt,
+        }
+        if evidence_digest is not None:
+            if not _is_sha256_digest(evidence_digest):
+                raise ValueError(
+                    "evidence_digest must be a sha256 digest over the read-back's "
+                    "raw response bytes"
+                )
+            if not isinstance(handle, str) or not handle:
+                raise ValueError(
+                    "state evidence requires a handle (the object handle extracted "
+                    "per the pairing's id_pointer)"
+                )
+            if not field_classes or any(not isinstance(c, str) or not c for c in field_classes):
+                raise ValueError(
+                    "state evidence requires field_classes: non-empty "
+                    "field-presence names, digests never content"
+                )
+            if not pairing_id:
+                raise ValueError("state evidence must bind a pairing_id from the registry")
+            pairing = self._require_state_pairing(pairing_id, read_tool)
+            extension.update(
+                {
+                    "pairing_id": pairing.pairing_id,
+                    "read_tool": pairing.read_tool,
+                    "evidence_digest": evidence_digest,
+                    "handle": handle,
+                    "field_classes": list(field_classes),
+                }
+            )
+            return self._emit_authority_receipt(
+                verdict="state_verified",
+                extension_key="x_state",
+                extension=extension,
+            )
+        # The absent path: the literal sentinel, never a fake digest.
+        if handle is not None or field_classes:
+            raise ValueError(
+                "state evidence requires evidence_digest: handle and "
+                "field_classes without a digest mint nothing (absence is the "
+                "literal sentinel, never a fake digest)"
+            )
+        if pairing_id:
+            pairing = self._require_state_pairing(pairing_id, read_tool)
+            extension["pairing_id"] = pairing.pairing_id
+            extension["read_tool"] = pairing.read_tool
+        elif read_tool:
+            extension["read_tool"] = read_tool
+        extension["state_evidence"] = "absent"
+        return self._emit_authority_receipt(
+            verdict="state_absent",
+            extension_key="x_state",
+            extension=extension,
+        )
+
     def _v12_revocation_extension(
         self,
         ids: list[str],
@@ -4542,6 +4665,52 @@ class RaucleGateway:
             "tool schema manifest loaded: %d tool(s) bound from %s",
             len(registry.registered_tools()),
             manifest,
+        )
+        return registry
+
+    def _load_state_pairings(self) -> Any:
+        """EPIC W lane W1: build the write-to-read pairing registry from
+        the policy file's state_pairings section, bound fail-closed
+        against the tool schema registry (a pairing referencing an
+        unknown tool or an undeclared id field raises at config load).
+        None when no section is configured: existing deployments keep
+        today's behaviour exactly. The registry binds at boot; a section
+        changed after construction requires a restart, the same
+        split-brain guard as the schema manifest (receipts must never
+        split from the registry state the gate enforces)."""
+        from raucle.policy import _parse_state_pairings
+        from raucle.tool_schema import StatePairingRegistry, ToolSchemaRegistry
+
+        # Parse the section DIRECTLY (never the whole file through
+        # PolicyFile.from_dict): the pairing section's validity is judged
+        # on its own, fail-closed, while the rest of the file's rules
+        # stay the policy loader's business. An unreadable or
+        # non-mapping file is the pre-existing load-noise class (the
+        # policy loader already logged it and skipped its rules); the
+        # pairing section from the same file is skipped the same way.
+        entries: list[dict[str, Any]] = []
+        for path in self._policy_files():
+            try:
+                data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+            except (OSError, yaml.YAMLError):
+                logger.warning(
+                    "state pairings: policy file %s is unreadable; its pairing "
+                    "section is skipped (the policy loader handles its rules)",
+                    path,
+                )
+                continue
+            if not isinstance(data, dict):
+                continue
+            entries.extend(_parse_state_pairings(data.get("state_pairings")))
+        if not entries:
+            return None
+        registry = StatePairingRegistry(self._tool_schemas or ToolSchemaRegistry())
+        for entry in entries:
+            registry.register(entry)
+        logger.info(
+            "state pairings loaded: %d pairing(s) bound from %d policy file(s)",
+            len(registry.rows()),
+            len(self._policy_files()),
         )
         return registry
 
