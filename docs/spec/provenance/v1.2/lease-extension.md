@@ -40,19 +40,37 @@ x_lease = {
 
 ## Verification rules (offline, no vault access required)
 
-The verifier collects grants by `lease_id` as it walks the chain, then:
+The verifier collects grants and revocations by `lease_id` as it walks
+the chain, then:
 
-1. A `redeemed` receipt must cite a grant present in the chain ("redeemed
-   with no lease grant" otherwise).
+1. A `redeemed` receipt must cite a grant from an EARLIER line in the
+   chain (`pairing_absent` otherwise).
 2. The redemption's iat must not exceed `granted_at + ttl_seconds`
-   ("redeemed after lease expired" otherwise).
+   (`lease_expired` otherwise).
 3. The redemption's scopes must be a subset of the grant's, checked with
-   the standard narrowing rules - a wider scope is "redeemed beyond its
-   granted scope".
+   the standard narrowing rules - a wider scope is `scope_exceeded`.
+4. A redemption whose lease was revoked at an EARLIER line is invalid
+   (`lease_revoked`), whatever its TTL window: revocation stops later
+   use, on the same temporal doctrine as the A3 cascade. Both sources
+   count as revocation evidence: an `x_lease` `revoked` event and an
+   `x_revocation` block citing the lease id.
+
+Every refusal is named - `pairing_absent`, `lease_revoked`,
+`lease_expired`, `scope_exceeded` - so a revoked, late or widened use
+fails on its specific class, never a generic invalid.
 
 A third party can therefore prove: which chain leased which secret (by
 hash), when, for how long, with what scope, how many redemptions, and that
 revocation stopped them - without ever seeing the secret.
+
+## Bounded disclosure
+
+The `x_lease` block carries no content: lease and capability handles,
+the grant pairing, scope names and digests only (`secret_ref_hash` is a
+hash of the vault reference, never the secret). The shared
+forbidden-field sweep rejects a content-like field anywhere inside the
+block with a named error, the same bounded-disclosure rule every other
+signed v1.2 surface answers to.
 
 ## Homes (the 16.3 split)
 
@@ -66,4 +84,8 @@ revocation stopped them - without ever seeing the secret.
 
 tests/test_lease_receipts.py: grant + redemption verify; redemption after
 expiry invalid; redemption with wider scope invalid; redemption without a
-grant invalid; lease denial receipted; revocation verifies.
+grant invalid; lease denial receipted; revocation verifies; plus the C1
+remainder: redemption after revocation invalid (both revocation sources),
+redemption before its grant line invalid, the four named refusals
+(pairing_absent, lease_revoked, lease_expired, scope_exceeded), the
+forbidden-field sweep over the block, and the v1.0 report body preserved.
