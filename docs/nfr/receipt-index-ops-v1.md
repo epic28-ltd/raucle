@@ -147,3 +147,38 @@ tests:
   truth. A tampered index never affects verification (the chain is
   the truth); `rebuild_from_store` remains the repair path for a
   projection an operator does not trust.
+
+## The build-resume invariant (L1: the background compactor)
+
+L1 (docs/spec/boot-streaming-v0.1.md) moves the index's expensive
+phases off the boot path and behind the readiness gate: the migration
+copy and the rebuild run in a background compactor after the servers
+bind. The J2 doctrine extends to builds unchanged: an interrupted
+build resumes or restarts itself, never crash-loops a boot.
+
+- The open still runs the J2 recovery inspection (schema artifact
+  check): it is cheap and it is the boot-safety contract. What defers
+  is the O(table) migration COPY, which the compactor's phase 1 runs
+  inside the same one-transaction invariants (recovery by inspection
+  before any ALTER, the schema and the `user_version` stamp in one
+  commit).
+- The compactor's batches are IDEMPOTENT over their line range: a
+  unique projection index over `(receipt_hash, segment, line_no)`
+  makes a resumed or re-run sweep insert nothing twice, while the
+  live append path's keyless inserts (NULL segment/line_no, which
+  SQLite treats as distinct) keep every byte-identical same-second
+  attempt the v2 fix protects.
+- The sweep cursor and the build's done key ride the batch's own
+  transaction (`compactor_state`, keys disposable with the
+  projection), so an interrupted run resumes at a committed cursor
+  and a crash before the done key simply re-runs the idempotent
+  sweep on the next boot.
+- `rebuild_from_store` remains the operator's repair contract,
+  unchanged; the compactor never rewrites the chain of record and
+  never emits new in-band record kinds (state is sidecar to the
+  projection, never inside the chain).
+- While the build runs, index-backed query surfaces refuse by name
+  (`receipt_index_building`, with progress) rather than serve an
+  empty 200 that looks complete: an unbuilt projection is
+  indistinguishable from an empty chain, and that silence is the
+  truncation this closes.

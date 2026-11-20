@@ -657,6 +657,39 @@ def _follow_audit_stream(fh):
             yield frame
 
 
+def _replay_tail_frames(path: str, replay: int) -> list[str]:
+    """The last *replay* event frames, from a bounded reverse window.
+
+    L1 (spec 3.3): the replay tail reads the final window of the file,
+    never the whole file. ``fh.readlines()`` mapped the entire audit log
+    to serve 50 frames, the O(file)-per-dashboard-hit class the
+    incident surfaced; the window starts at 64 KiB and doubles only
+    until it holds *replay* frames, so memory holds the window, not the
+    file. Meta lines (chain_meta, checkpoints) are skipped by the frame
+    parser; a torn live write at the tail is skipped, never rendered.
+    """
+    replay = max(0, int(replay))
+    if replay == 0:
+        return []
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        window = 64 * 1024
+        while True:
+            start = max(0, size - window)
+            fh.seek(start)
+            text = fh.read().decode("utf-8", "replace")
+            lines = text.split("\n")
+            if start > 0:
+                lines = lines[1:]  # a partial first line, never evidence
+            if not text.endswith("\n"):
+                lines = lines[:-1]  # a torn live write, skipped by name
+            frames = [frame for frame in (_audit_line_to_frame(line) for line in lines) if frame]
+            if len(frames) >= replay or start == 0:
+                return frames[-replay:]
+            window *= 2
+
+
 def _iter_audit_events(path: str, replay: int = 50, follow: bool = True):
     """Yield audit events as SSE frames: last *replay* existing, then live.
 
@@ -664,14 +697,11 @@ def _iter_audit_events(path: str, replay: int = 50, follow: bool = True):
     want a snapshot, and by tests (an infinite generator cannot be cleanly
     exhausted through a test client's thread portal).
     """
+    yield from _replay_tail_frames(path, replay)
+    if not follow:
+        return
     with open(path, encoding="utf-8") as fh:
-        tail = fh.readlines()[-replay:]
-        for line in tail:
-            frame = _audit_line_to_frame(line)
-            if frame:
-                yield frame
-        if not follow:
-            return
+        fh.seek(0, os.SEEK_END)
         yield from _follow_audit_stream(fh)
 
 

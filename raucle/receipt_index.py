@@ -87,7 +87,25 @@ _RECEIPTS_INDEXES = (
     # EPIC Q lane Q-1: behavioural sessions query receipts by
     # (session_id, iat); only DECLARED session keys are ever indexed.
     "CREATE INDEX IF NOT EXISTS idx_receipts_session ON receipts (session_id, iat)",
+    # L1 boot-streaming: the compactor's batches are idempotent over
+    # their line range. A unique index over (receipt_hash, segment,
+    # line_no) lets a resumed or re-run sweep insert nothing twice while
+    # the keyless doctrine survives: rows the live append path projects
+    # carry NULL segment/line_no, and SQLite treats NULLs as distinct in
+    # unique indexes, so byte-identical same-second attempts (the v2
+    # fix) are never collapsed. The chain of record keeps every attempt.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_receipts_projection_dedupe "
+    "ON receipts (receipt_hash, segment, line_no)",
 )
+
+#: Sidecar state the boot compactor persists inside the index (L1):
+#: cursor and done keys, disposable with the projection itself.
+_COMPACTOR_STATE_SQL = """
+    CREATE TABLE IF NOT EXISTS compactor_state (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )
+"""
 
 
 class ReceiptIndex:
@@ -98,7 +116,13 @@ class ReceiptIndex:
     single connection is the simplest correct shape).
     """
 
-    def __init__(self, sqlite_path: str | Path) -> None:
+    def __init__(
+        self,
+        sqlite_path: str | Path,
+        *,
+        defer_migration: bool = False,
+        cache_mb: int = 0,
+    ) -> None:
         self._path = Path(sqlite_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
@@ -112,7 +136,69 @@ class ReceiptIndex:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
-        self._init_schema()
+        # L1: the index page cache is a configured budget term
+        # (RAUCLE_INDEX_CACHE_MB), not an accident of SQLite defaults;
+        # mmap stays off so resident size never tracks the file.
+        if cache_mb > 0:
+            self._conn.execute(f"PRAGMA cache_size = {-int(cache_mb) * 1024}")
+        # L1 boot-streaming: the boot opens the index WITHOUT the
+        # migration's table copy (it is O(table) and belongs to the
+        # background compactor, spec 3.5 phase 1). The J2 recovery
+        # inspection still runs here: it is cheap and it is the
+        # boot-safety contract.
+        self._pending_migration = False
+        if defer_migration:
+            self._recover_interrupted_migration()
+            version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+            has_table = self._table_exists("receipts")
+            self._pending_migration = bool(has_table and version < self.SCHEMA_VERSION)
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                if not self._pending_migration:
+                    # Only the O(table) migration copy defers (spec 3.5
+                    # phase 1); a fresh or current-shape index still
+                    # gets its cheap DDL at open, so a cold boot can
+                    # project into it while the compactor runs.
+                    self._create_receipts_table(if_not_exists=True)
+                    for stmt in _RECEIPTS_INDEXES:
+                        self._conn.execute(stmt)
+                    self._conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+                self._conn.execute(_COMPACTOR_STATE_SQL)
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
+        else:
+            self._init_schema()
+
+    @property
+    def pending_migration(self) -> bool:
+        """Whether a schema migration is deferred to the compactor."""
+        return self._pending_migration
+
+    def run_pending_migration(self) -> None:
+        """Run the deferred migration inside the J2 invariants: schema
+        inspection already happened at open; the copy, the indexes and
+        the version stamp are ONE transaction, so a crash at any step
+        rolls the file back to the pristine pre-migration state."""
+        if not self._pending_migration:
+            return
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            self._migrate_dedupe_schema()
+            for stmt in _RECEIPTS_INDEXES:
+                self._conn.execute(stmt)
+            self._conn.execute(_COMPACTOR_STATE_SQL)
+            self._conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            raise
+        self._pending_migration = False
+        logger.warning(
+            "receipt_index: compactor completed the deferred schema migration at %s",
+            self._path,
+        )
 
     # ------------------------------------------------------------------
     # Schema
@@ -311,11 +397,9 @@ class ReceiptIndex:
         happened rather than how many lines were attempted.
         """
         try:
-            payload = self._decode_payload(record)
+            params = self._project_row(record, segment=segment, line_no=line_no)
         except Exception:
             return False
-        x_gate = payload.get("x_gate") or {}
-        parents = json.dumps(payload.get("parents") or [])
         with self._lock:
             self._conn.execute(
                 """
@@ -325,30 +409,91 @@ class ReceiptIndex:
                      source, destination, parents_json, segment, line_no)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    record.get("receipt_hash", ""),
-                    int(payload.get("iat", 0)),
-                    str(x_gate.get("agent_id", payload.get("agent_id", ""))),
-                    str(x_gate.get("tool", "")),
-                    str(x_gate.get("decision", payload.get("guardrail_verdict", ""))),
-                    str(x_gate.get("reason", "")),
-                    x_gate.get("policy"),
-                    int(x_gate.get("latency_us", 0)),
-                    x_gate.get("trace_id"),
-                    # EPIC Q lane Q-1: optional session continuity. Absent
-                    # session keys stay NULL - continuity is never
-                    # fabricated from trace_id or anywhere else.
-                    x_gate.get("session_id") or None,
-                    str(x_gate.get("acting_for", "")),
-                    str(x_gate.get("source", "")),
-                    str(x_gate.get("destination", "")),
-                    parents,
-                    segment,
-                    line_no,
-                ),
+                params,
             )
             self._conn.commit()
         return True
+
+    @staticmethod
+    def _project_row(
+        record: dict[str, Any], *, segment: str | None, line_no: int | None
+    ) -> tuple[Any, ...]:
+        """Decode a receipt envelope into one projection row. Shared by
+        the live append path (plain INSERT, every attempt kept) and the
+        compactor's batches (INSERT OR IGNORE over the line range)."""
+        payload = ReceiptIndex._decode_payload(record)
+        x_gate = payload.get("x_gate") or {}
+        parents = json.dumps(payload.get("parents") or [])
+        return (
+            record.get("receipt_hash", ""),
+            int(payload.get("iat", 0)),
+            str(x_gate.get("agent_id", payload.get("agent_id", ""))),
+            str(x_gate.get("tool", "")),
+            str(x_gate.get("decision", payload.get("guardrail_verdict", ""))),
+            str(x_gate.get("reason", "")),
+            x_gate.get("policy"),
+            int(x_gate.get("latency_us", 0)),
+            x_gate.get("trace_id"),
+            # EPIC Q lane Q-1: optional session continuity. Absent
+            # session keys stay NULL - continuity is never
+            # fabricated from trace_id or anywhere else.
+            x_gate.get("session_id") or None,
+            str(x_gate.get("acting_for", "")),
+            str(x_gate.get("source", "")),
+            str(x_gate.get("destination", "")),
+            parents,
+            segment,
+            line_no,
+        )
+
+    def index_batch(
+        self,
+        items: Any,
+        segment: str | None = None,
+        *,
+        state_updates: dict[str, str] | None = None,
+    ) -> int:
+        """Project a batch of ``(line_no, record)`` envelopes in ONE
+        transaction (L1). Idempotent over its line range: the unique
+        projection index ignores a row whose (receipt_hash, segment,
+        line_no) is already projected, so a resumed or re-run sweep
+        inserts nothing twice. ``state_updates`` persist compactor
+        cursor and done keys inside the SAME transaction, so an
+        interrupted run resumes at a committed cursor. Returns the
+        number of items in the batch (what was attempted, matching the
+        rebuild counters' honesty), not the number of new rows.
+        """
+        items = list(items)
+        if not items and not state_updates:
+            return 0
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                for line_no, record in items:
+                    try:
+                        params = self._project_row(record, segment=segment, line_no=line_no)
+                    except Exception:
+                        continue  # shape-filtering a disposable projection
+                    self._conn.execute(
+                        """
+                        INSERT OR IGNORE INTO receipts
+                            (receipt_hash, iat, agent_id, tool, decision, reason,
+                             policy, latency_us, trace_id, session_id, acting_for,
+                             source, destination, parents_json, segment, line_no)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        params,
+                    )
+                for key, value in (state_updates or {}).items():
+                    self._conn.execute(
+                        "INSERT OR REPLACE INTO compactor_state (key, value) VALUES (?, ?)",
+                        (key, str(value)),
+                    )
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
+        return len(items)
 
     def rebuild_from_store(self, store: Any) -> int:
         """Drop and rebuild the projection from a SegmentedReceiptStore.
@@ -535,6 +680,42 @@ class ReceiptIndex:
 
     def count(self) -> int:
         return int(self._conn.execute("SELECT COUNT(*) FROM receipts").fetchone()[0])
+
+    # ------------------------------------------------------------------
+    # Compactor state (L1): disposable keys riding the projection
+    # ------------------------------------------------------------------
+
+    def get_state(self, key: str) -> str | None:
+        """Read one compactor state key, or None when unset."""
+        row = self._conn.execute(
+            "SELECT value FROM compactor_state WHERE key = ?", (key,)
+        ).fetchone()
+        return None if row is None else str(row[0])
+
+    def set_state(self, key: str, value: str) -> None:
+        """Persist one compactor state key in its own transaction."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO compactor_state (key, value) VALUES (?, ?)",
+                (key, str(value)),
+            )
+            self._conn.commit()
+
+    def drop_live_twins(self) -> None:
+        """Live-tail handover (L1): rows the live append path projected
+        during a build are twins of swept rows. The store copy is the
+        projection truth, so a twin is dropped once; a live row with no
+        swept twin is the tail the sweep never reached and stays."""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM receipts WHERE segment IS NULL AND receipt_hash IN "
+                "(SELECT receipt_hash FROM receipts WHERE segment IS NOT NULL)"
+            )
+            self._conn.commit()
+
+    def clear(self) -> None:
+        """Public clear for the compactor's flat-store rebuild path."""
+        self._clear()
 
     # ------------------------------------------------------------------
     # Ancestry (C3)

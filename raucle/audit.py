@@ -50,14 +50,25 @@ import datetime as dt
 import hashlib
 import json
 import logging
+import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
 from raucle._canon import make_duplicate_key_rejecter as _make_duplicate_key_rejecter
+from raucle.errors import ChainTailMalformed
 
 logger = logging.getLogger(__name__)
+
+#: The default bounded read window for the boot-time tail resume (L1):
+#: W_replay in the boot-streaming spec. 64 MiB is the documented starting
+#: default, pending the X5 bench's re-derivation.
+DEFAULT_SCAN_WINDOW_BYTES = 64 * 1024 * 1024
+
+#: The operator path every tail refusal names (mirrors chain_rotation,
+#: kept literal here so audit never imports the rotation module).
+_ROTATE_COMMAND = "raucle rotate-chain"
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +174,164 @@ def _sha256_hex(data: bytes) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Bounded reverse tail read (L1)
+# ---------------------------------------------------------------------------
+
+
+def count_lines(path: str | Path, *, upto_bytes: int | None = None) -> int:
+    """Count newline-terminated lines, streaming in 1 MiB blocks.
+
+    Bounded memory at any file size; ``upto_bytes`` counts only the
+    prefix. Used to derive a global line number for a tail-window
+    refusal, never on the happy resume path.
+    """
+    total = 0
+    remaining = None if upto_bytes is None else int(upto_bytes)
+    with open(path, "rb") as fh:
+        while True:
+            block = fh.read(1 << 20)
+            if not block:
+                break
+            if remaining is not None:
+                if remaining <= 0:
+                    break
+                if len(block) > remaining:
+                    block = block[:remaining]
+                remaining -= len(block)
+            total += block.count(b"\n")
+    return total
+
+
+def read_last_lines(path: str | Path, window_bytes: int) -> tuple[int, list[tuple[int, str, bool]]]:
+    """Read the final *window_bytes* of a file, never the whole file.
+
+    Returns ``(start_offset, entries)`` where each entry is
+    ``(byte_offset, text, terminated)`` with the trailing newline
+    stripped from ``text``. Only the final line may carry
+    ``terminated=False`` (a torn write); the caller fails closed on it.
+    A window that starts mid-line yields a partial FIRST entry, which
+    callers that only need the tail discard.
+    """
+    size = os.path.getsize(path)
+    window = max(1, int(window_bytes))
+    start = max(0, size - window)
+    with open(path, "rb") as fh:
+        fh.seek(start)
+        raw = fh.read()
+    terminated = raw.endswith(b"\n")
+    chunks = raw.split(b"\n")
+    if not terminated:
+        tail = chunks.pop()  # an unterminated final line
+        if not tail:
+            tail = None
+    else:
+        tail = None
+        chunks.pop()  # the empty element after the final newline
+    entries: list[tuple[int, str, bool]] = []
+    offset = start
+    for chunk in chunks:
+        entries.append((offset, chunk.decode("utf-8", "replace"), True))
+        offset += len(chunk) + 1
+    if tail is not None:
+        entries.append((offset, tail.decode("utf-8", "replace"), False))
+    return start, entries
+
+
+# ---------------------------------------------------------------------------
+# The incremental Merkle frontier (L1)
+# ---------------------------------------------------------------------------
+
+
+class MerkleFrontier:
+    """An incremental Merkle frontier over append-only leaf hashes.
+
+    Produces, in O(log n) memory, the SAME roots
+    :func:`_merkle_root` produces over the full leaf list (the
+    per-level duplicate-last rule included), so a checkpoint signed over
+    a frontier root verifies against an offline recomputation from the
+    file. A tampered or stale frontier is detectably wrong for the same
+    reason: it is disposable sidecar state, never a second truth.
+    """
+
+    def __init__(self) -> None:
+        # _pending[j] holds the unpaired subtree hash at level j, or None.
+        self._pending: list[bytes | None] = []
+        self._count = 0
+
+    @property
+    def leaf_count(self) -> int:
+        return self._count
+
+    def add(self, leaf_hex: str) -> None:
+        """Fold one hex-encoded leaf hash into the frontier."""
+        try:
+            carry = bytes.fromhex(leaf_hex)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"non-hex leaf hash in chain: {exc}") from exc
+        j = 0
+        while j < len(self._pending) and self._pending[j] is not None:
+            carry = hashlib.sha256(self._pending[j] + carry).digest()  # type: ignore[operator]
+            self._pending[j] = None
+            j += 1
+        if j == len(self._pending):
+            self._pending.append(carry)
+        else:
+            self._pending[j] = carry
+        self._count += 1
+
+    def root(self) -> str:
+        """The Merkle root over all leaves added so far."""
+        if self._count == 0:
+            return _sha256_hex(b"")
+        count = self._count
+        acc: bytes | None = None
+        j = 0
+        while count > 1:
+            pending = self._pending[j] if j < len(self._pending) else None
+            elements = ([pending] if pending is not None else []) + (
+                [acc] if acc is not None else []
+            )
+            if len(elements) == 2:
+                acc = hashlib.sha256(elements[0] + elements[1]).digest()
+            elif len(elements) == 1:
+                if count % 2 != 1:
+                    raise AssertionError(  # pragma: no cover - unreachable
+                        f"frontier level {j} holds one element over an even {count}"
+                    )
+                acc = hashlib.sha256(elements[0] + elements[0]).digest()
+            else:
+                acc = None
+            count = (count + 1) // 2
+            j += 1
+        top = self._pending[j] if j < len(self._pending) else None
+        final = top if acc is None else acc
+        return final.hex()  # type: ignore[union-attr]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "leaf_count": self._count,
+            "levels": [h.hex() if h is not None else None for h in self._pending],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MerkleFrontier:
+        if not isinstance(data, dict) or data.get("version") != 1:
+            raise ValueError("frontier sidecar: unknown or missing version")
+        count = data.get("leaf_count")
+        levels = data.get("levels")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            raise ValueError("frontier sidecar: leaf_count must be a non-negative int")
+        if not isinstance(levels, list):
+            raise ValueError("frontier sidecar: levels must be a list")
+        frontier = cls()
+        for entry in levels:
+            frontier._pending.append(None if entry is None else bytes.fromhex(entry))
+        frontier._count = count
+        return frontier
+
+
+# ---------------------------------------------------------------------------
 # Hash-chain sink
 # ---------------------------------------------------------------------------
 
@@ -193,11 +362,18 @@ class HashChainSink:
         path: str | Path | IO[str],
         signer: Ed25519Signer | None = None,
         checkpoint_every: int = 1000,
+        *,
+        scan_window_bytes: int | None = None,
     ) -> None:
         self._signer = signer
         self._checkpoint_every = checkpoint_every
+        # L1: the resume reads only this bounded window of the chain tail,
+        # never the whole file. The preflight's W_replay budget and this
+        # knob are the same term.
+        self._scan_window_bytes = max(1024, int(scan_window_bytes or DEFAULT_SCAN_WINDOW_BYTES))
         self._lock = threading.Lock()
-        self._leaf_hashes: list[str] = []
+        self._frontier: MerkleFrontier | None = None
+        self._frontier_path: Path | None = None
         self._next_index = 0
         self._prev_hash = self._GENESIS_HASH
         self._is_new_chain = False
@@ -208,12 +384,18 @@ class HashChainSink:
             # In-memory IO is always treated as a freshly-created chain;
             # the caller is responsible for any prior content.
             self._is_new_chain = True
+            self._frontier = MerkleFrontier()
         else:
             path = Path(path)
             self._is_new_chain = not path.exists()
+            self._frontier_path = Path(str(path) + ".frontier.json")
             if path.exists():
-                # Resume an existing chain
+                # Resume an existing chain through the bounded tail read.
                 self._resume(path)
+            else:
+                # A fresh chain starts with an empty frontier; the
+                # sidecar persists beside the genesis header.
+                self._frontier = MerkleFrontier()
             self._file = open(path, "a", encoding="utf-8")  # noqa: SIM115 — held for sink lifetime
             self._owns_file = True
 
@@ -233,6 +415,7 @@ class HashChainSink:
         # key_id. Verifiers refuse to attribute signed-mode otherwise.
         if self._is_new_chain:
             self._write_chain_header_unsafe()
+            self._persist_frontier_unsafe()
 
     def _write_chain_header_unsafe(self) -> None:
         """Emit the genesis ``chain_meta`` header. Called from ``__init__``
@@ -266,25 +449,168 @@ class HashChainSink:
         self._file.flush()
 
     def _resume(self, path: Path) -> None:
-        """Read an existing chain and recover the tail hash + index.
+        """Recover the tail state (previous hash, next index) from the
+        final bounded window of the chain, never a whole-file scan (L1).
 
-        Skips both ``checkpoint`` and ``chain_meta`` records — those are
-        out-of-band metadata, not part of the event hash chain.
+        Skips ``checkpoint`` and ``chain_meta`` records, which are
+        out-of-band metadata. Fail-closed replaces the silent skip: a
+        torn or unparsable line inside the window, or a record that does
+        not link to its in-window predecessor, raises
+        :class:`ChainTailMalformed` naming the file, the global line
+        number, the byte offset and the rotate command. A window that
+        holds no event record grows (doubling, capped at the file size)
+        rather than guessing the tail state; a file holding none resumes
+        as a fresh event sequence.
         """
-        with open(path, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = _loads_strict(line)
-                except json.JSONDecodeError:
-                    continue
-                if rec.get("checkpoint") or rec.get("chain_meta"):
-                    continue
-                self._prev_hash = rec.get("hash", self._prev_hash)
-                self._next_index = rec.get("index", -1) + 1
-                self._leaf_hashes.append(rec.get("hash", ""))
+        size = path.stat().st_size
+        window = self._scan_window_bytes
+        while True:
+            start, entries = read_last_lines(path, window)
+            kept = entries if start == 0 else entries[1:]
+            tail = self._tail_from_window(path, start, kept, start > 0)
+            if tail is not None:
+                self._prev_hash, self._next_index = tail
+                break
+            if start == 0:
+                # No event record in the whole file: a metadata-only or
+                # freshly-created chain; the event sequence starts here.
+                self._prev_hash = self._GENESIS_HASH
+                self._next_index = 0
+                break
+            window = min(size, window * 2)
+        self._adopt_frontier_sidecar()
+
+    def _tail_from_window(
+        self,
+        path: Path,
+        start: int,
+        entries: list[tuple[int, str, bool]],
+        first_discarded: bool,
+    ) -> tuple[str, int] | None:
+        """Recover ``(tail hash, next index)`` from one window's records.
+
+        Returns ``None`` when the window holds no event record (the caller
+        grows the window). The first entry of a window that starts past
+        byte 0 was already discarded by the caller: it may be a partial
+        line and is never evidence of a torn tail.
+        """
+        prefix_lines: int | None = None
+        prev_hash: str | None = None
+        prev_index: int | None = None
+        tail_hash: str | None = None
+        next_index = 0
+        for pos, (offset, text, terminated) in enumerate(entries):
+            local_line = pos + 2 if first_discarded else pos + 1
+            if not terminated:
+                # A torn write is the tail defect this closes (spec 3.7):
+                # named with its coordinates, never silently skipped.
+                if prefix_lines is None:
+                    prefix_lines = count_lines(path, upto_bytes=start)
+                raise ChainTailMalformed(
+                    f"chain_tail_malformed: torn tail line (file {path}, line "
+                    f"{prefix_lines + local_line}, offset {offset}); the bounded "
+                    f"tail resume refuses to chain onto a torn write. Archive "
+                    f"the chain with '{_ROTATE_COMMAND}', which keeps the "
+                    f"archive verifiable offline and starts a fresh chain."
+                )
+            if not text.strip():
+                continue
+            try:
+                rec = _loads_strict(text)
+            except json.JSONDecodeError as exc:
+                if prefix_lines is None:
+                    prefix_lines = count_lines(path, upto_bytes=start)
+                raise ChainTailMalformed(
+                    f"chain_tail_malformed: unparsable line (file {path}, line "
+                    f"{prefix_lines + local_line}, offset {offset}): {exc}. The "
+                    f"whole-scan resume this replaces silently skipped such a "
+                    f"line; the bounded resume fails closed. Archive the chain "
+                    f"with '{_ROTATE_COMMAND}' and start a fresh one."
+                ) from exc
+            if rec.get("checkpoint") or rec.get("chain_meta"):
+                continue
+            rec_hash = rec.get("hash", "")
+            rec_index = rec.get("index", -1)
+            if prev_hash is not None and (
+                rec.get("prev_hash") != prev_hash or rec_index != prev_index + 1
+            ):
+                if prefix_lines is None:
+                    prefix_lines = count_lines(path, upto_bytes=start)
+                raise ChainTailMalformed(
+                    f"chain_link_broken: record (file {path}, line "
+                    f"{prefix_lines + local_line}, offset {offset}) does not "
+                    f"link to its in-window predecessor (prev_hash or index "
+                    f"mismatch); the tail is unverifiable, so the resume "
+                    f"refuses instead of appending onto it. Archive the chain "
+                    f"with '{_ROTATE_COMMAND}' and start a fresh one."
+                )
+            prev_hash = rec_hash
+            prev_index = rec_index
+            tail_hash = rec_hash
+            next_index = rec_index + 1
+        if tail_hash is None:
+            return None
+        return tail_hash, next_index
+
+    # ------------------------------------------------------------------
+    # Frontier sidecar (disposable state, spec 3.3)
+    # ------------------------------------------------------------------
+
+    @property
+    def frontier_ready(self) -> bool:
+        """Whether checkpoint anchoring is live (a frontier is held)."""
+        return self._frontier is not None
+
+    def attach_frontier(self, frontier: MerkleFrontier) -> None:
+        """Adopt a frontier rebuilt by the background chain scan."""
+        with self._lock:
+            self._frontier = frontier
+            self._persist_frontier_unsafe()
+
+    def _adopt_frontier_sidecar(self) -> None:
+        """Load the frontier sidecar, degraded by name when it cannot be
+        trusted (missing, stale or unparsable). A stale frontier is
+        detectably wrong against an offline recomputation, so the
+        sidecar is never a second truth: mismatching leaf counts degrade
+        anchoring (named, logged) until the background scan rebuilds it."""
+        if self._frontier_path is None:
+            return
+        if self._next_index == 0:
+            # An empty or metadata-only chain needs no rebuilt frontier.
+            self._frontier = MerkleFrontier()
+            return
+        try:
+            data = json.loads(self._frontier_path.read_text(encoding="utf-8"))
+            frontier = MerkleFrontier.from_dict(data)
+        except (OSError, ValueError, json.JSONDecodeError):
+            frontier = None
+        if frontier is not None and frontier.leaf_count == self._next_index:
+            self._frontier = frontier
+            return
+        logger.warning(
+            "HashChainSink frontier sidecar %s is missing or stale (recovered "
+            "events %d): checkpoint anchoring is degraded by name until the "
+            "background scan rebuilds the frontier",
+            self._frontier_path,
+            self._next_index,
+        )
+
+    def _persist_frontier_unsafe(self) -> None:
+        """Write the frontier sidecar atomically. Disposable state: a
+        write failure is logged and never blocks the append path."""
+        if self._frontier_path is None or self._frontier is None:
+            return
+        payload = json.dumps(self._frontier.to_dict())
+        tmp_path = Path(str(self._frontier_path) + ".tmp")
+        try:
+            tmp_path.write_text(payload, encoding="utf-8")
+            os.replace(tmp_path, self._frontier_path)
+        except OSError:
+            logger.warning(
+                "frontier sidecar write failed at %s; anchoring degrades by "
+                "name on the next resume",
+                self._frontier_path,
+            )
 
     # ------------------------------------------------------------------
     # Public API
@@ -309,7 +635,9 @@ class HashChainSink:
             self._file.write(json.dumps(record, ensure_ascii=False) + "\n")
             self._file.flush()
 
-            self._leaf_hashes.append(record_hash)
+            if self._frontier is not None:
+                self._frontier.add(record_hash)
+                self._persist_frontier_unsafe()
             self._prev_hash = record_hash
             self._next_index += 1
 
@@ -355,10 +683,19 @@ class HashChainSink:
     # ------------------------------------------------------------------
 
     def _emit_checkpoint_locked(self) -> dict[str, Any] | None:
-        if not self._signer or not self._leaf_hashes:
+        if not self._signer:
+            return None
+        if self._frontier is None:
+            # Degraded anchoring is named, never silent (spec 3.3): no
+            # checkpoint is emitted over a missing or stale frontier, and
+            # the background scan rebuilds it.
+            logger.warning(
+                "HashChainSink checkpoint skipped: no Merkle frontier "
+                "(degraded anchoring); the background scan rebuilds it"
+            )
             return None
 
-        merkle_root = _merkle_root(self._leaf_hashes)
+        merkle_root = self._frontier.root()
         body = {
             "index": self._next_index,
             "merkle_root": merkle_root,

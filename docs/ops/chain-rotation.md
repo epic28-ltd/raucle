@@ -1,22 +1,33 @@
 # Chain rotation: operator runbook
 
-The gateway's boot maps the whole audit chain and the receipt-store segment
-index into memory (about two times the file size in resident memory).
-Long-running deployments grow both stores, and a boot that does not fit the
-box's memory is killed by the kernel (observed live on 18 November 2026 on
-demo.raucle.com: gateway-audit.jsonl at 12.2 GB and index.sqlite at 15 GB,
-23.4 GB resident, three kernel kills, the demo serving 502 until rotation).
-This runbook is the operator response, and `rotate-chain` is the safe way to
-execute it.
+The gateway's boot streams its stores in bounded windows (the boot-streaming
+architecture, docs/spec/boot-streaming-v0.1.md): the audit chain resumes from
+a bounded tail window, the receipt index builds in a background compactor,
+and the boot memory preflight projects the window budget, not the store size.
+Before that architecture, the boot mapped the whole audit chain and the
+receipt-store segment index into memory (about two times the file size in
+resident memory), and long-running deployments eventually met a boot the box
+could not hold (observed live on 18 November 2026 on demo.raucle.com:
+gateway-audit.jsonl at 12.2 GB and index.sqlite at 15 GB, 23.4 GB resident,
+three kernel kills, the demo serving 502 until rotation). This runbook is the
+operator response, and `rotate-chain` is the safe way to execute it.
 
 ## When to rotate
 
-- The boot memory preflight warns or refuses: the gateway states the projected
-  memory and the exact command. Act on it before the next restart (a restart
-  on the same stores will be OOM-killed again).
-- The demo/traffic chain has grown past your box's comfortable boot budget.
-- You are archiving a demo or evaluation period on purpose (the archive stays
-  verifiable offline for ever; rotation is never data loss).
+- The boot memory preflight refuses: the gateway states the projected
+  window budget and the exact command. A budget over the ceiling means
+  the configured windows plus the baseline do not fit the box; shrink the
+  windows (RAUCLE_BOOT_SCAN_WINDOW_MB, RAUCLE_INDEX_CACHE_MB) or rotate.
+- The boot names a chain refusal: `chain_tail_malformed` or a scan break
+  (`chain_refused`) on the audit chain. Rotation is the recovery path it
+  names: the archive keeps the broken chain verifiable offline and the
+  gateway starts a fresh one.
+- The demo/traffic stores have grown past your box's comfortable DISK
+  budget (the streaming boot no longer grows with the stores, but the
+  archived prefix still occupies the disk, and the sweep's build time
+  scales with store size).
+- You are archiving a demo or evaluation period on purpose (the archive
+  stays verifiable offline for ever; rotation is never data loss).
 
 ## What rotate-chain does
 

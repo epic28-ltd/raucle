@@ -699,7 +699,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
     def health(
         authorization: str | None = Header(None),
         x_totp: str | None = Header(None, alias="X-TOTP"),
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         if gateway.config.health_check_token:
             key = authorization or ""
             if key.startswith(_BEARER_PREFIX):
@@ -708,7 +708,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
 
             if not _hmac.compare_digest(key, gateway.config.health_check_token):
                 raise HTTPException(status_code=401, detail="Health check unauthorized")
-        return {"status": "ok"}
+        return _health_payload(gateway)
 
     @app.post(
         "/api/revoke",
@@ -1132,7 +1132,7 @@ def _register_health_routes(app: FastAPI, gateway: RaucleGateway) -> None:
     def admin_health(
         authorization: str | None = Header(None),
         x_totp: str | None = Header(None, alias="X-TOTP"),
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         if gateway.config.health_check_token:
             key = authorization or ""
             if key.startswith(_BEARER_PREFIX):
@@ -1141,7 +1141,7 @@ def _register_health_routes(app: FastAPI, gateway: RaucleGateway) -> None:
 
             if not _hmac.compare_digest(key, gateway.config.health_check_token):
                 raise HTTPException(status_code=401, detail="Health check unauthorized")
-        return {"status": "ok"}
+        return _health_payload(gateway)
 
     @app.get(
         "/api/demo-key",
@@ -2076,6 +2076,7 @@ def _register_receipt_routes(
                 status_code=501,
                 detail="ancestry requires the receipt index (set RAUCLE_RECEIPT_STORE_DIR)",
             )
+        _refuse_unready_index(gateway)
         return gateway._receipt_index.ancestry(receipt_hash, max_depth=max_depth)
 
     @app.get(
@@ -2309,6 +2310,48 @@ def _chain_graph_response(
     return graph
 
 
+def _health_payload(gateway: RaucleGateway) -> dict[str, Any]:
+    """The shipped liveness contract plus the L1 readiness block (spec
+    3.6). Nothing about existing probes changes: ``status`` stays "ok"
+    at boot and mid-build; readiness is additive and machine-readable,
+    per surface (gate, session continuity, chain scan, receipt index).
+    """
+    payload: dict[str, Any] = {"status": "ok"}
+    readiness = getattr(gateway, "boot_readiness", None)
+    if readiness is not None:
+        payload["readiness"] = readiness.snapshot()
+    return payload
+
+
+def _refuse_unready_index(gateway: RaucleGateway) -> None:
+    """L1 readiness honesty (AC3): an index-backed query surface that is
+    not ready refuses with a named, machine-readable error and its
+    progress, never an empty 200 that looks complete. Partial answers
+    are a named v0.2 extension, gated on the bench numbers."""
+    readiness = getattr(gateway, "boot_readiness", None)
+    if readiness is None or gateway._receipt_index is None:
+        return
+    state_block = readiness.snapshot()["receipt_index"]
+    state = state_block["state"]
+    if state in ("building", "pending"):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "receipt_index_building",
+                "state": state,
+                "progress": state_block["progress"],
+            },
+        )
+    if state == "refused":
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "receipt_index_refused",
+                "reason": state_block.get("error", ""),
+            },
+        )
+
+
 def _receipt_page_response(
     gateway: RaucleGateway,
     user: GatewayUser,
@@ -2325,6 +2368,7 @@ def _receipt_page_response(
 ) -> dict[str, Any]:
     """Receipts page: the index projection, or the store/flat-file fallbacks."""
     check_access(user, "receipts")
+    _refuse_unready_index(gateway)
     if gateway._receipt_index is not None:
         page = _receipt_page_via_index(
             gateway,

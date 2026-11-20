@@ -57,6 +57,16 @@ config:
   sessionWindowTtlSeconds: "900"
   sessionWindowMaxKeys: "1024"
   sessionWindowMaxEntries: "10000"
+  # Boot streaming (L1) + the J1 ceiling: bootMemCeilingMb is 0 (derive
+  # from detected memory minus headroom); bootScanWindowMb is W_replay,
+  # the bounded read window the boot's tail resume, chain scan and
+  # rebuild feeding share; indexCacheMb is the SQLite page cache cap for
+  # the receipt index (mmap stays off so resident size never tracks the
+  # file). Defaults equal the code defaults, honestly pending the X5
+  # bench's re-derivation (docs/nfr/boot-streaming-v1.md).
+  bootMemCeilingMb: "0"
+  bootScanWindowMb: "64"
+  indexCacheMb: "64"
   signerKeyPath: /data/gateway-signing-key.pem
   healthKey: ""
   policyFile: /etc/raucle/policies.yaml

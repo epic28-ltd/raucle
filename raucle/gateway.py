@@ -284,6 +284,14 @@ class GatewayConfig:
     # MB or the boot refuses with a named error naming the rotate command.
     # 0 = derive from detected memory minus headroom.
     boot_mem_ceiling_mb: int = 0
+    # Boot-streaming (L1, spec 3.8): W_replay, the bounded read window
+    # the boot's tail resume, chain scan and rebuild feeding share; and
+    # C_index, the SQLite page cache cap for the receipt index (mmap
+    # stays off so resident size never tracks the file). The defaults
+    # are the spec's starting points, honestly pending the X5 bench's
+    # re-derivation.
+    boot_scan_window_mb: int = 64
+    index_cache_mb: int = 64
 
     # Compliance
     compliance_framework: str = "eu-ai-act"  # eu-ai-act, iso-42001, soc2
@@ -380,6 +388,8 @@ class GatewayConfig:
             boot_selftest=os.environ.get("RAUCLE_BOOT_SELFTEST", "1").lower()
             not in ("0", "false", "no"),
             boot_mem_ceiling_mb=int(os.environ.get("RAUCLE_BOOT_MEM_CEILING_MB", "0") or "0"),
+            boot_scan_window_mb=int(os.environ.get("RAUCLE_BOOT_SCAN_WINDOW_MB", "64") or "64"),
+            index_cache_mb=int(os.environ.get("RAUCLE_INDEX_CACHE_MB", "64") or "64"),
             compliance_framework=os.environ.get("RAUCLE_COMPLIANCE_FRAMEWORK", "eu-ai-act"),
             registry_path=os.environ.get("RAUCLE_REGISTRY_PATH", "/data/registry.jsonl"),
             approval_ttl_seconds=int(os.environ.get("RAUCLE_APPROVAL_TTL", "300")),
@@ -1283,6 +1293,20 @@ class SessionWindowState:
             entries.popleft()
 
 
+def _attach_rebuilt_frontier_to_sink(audit_path, frontier) -> None:
+    """Hand the boot scan's rebuilt Merkle frontier to the audit sink.
+    The sink's sidecar is file-backed, so attaching on a fresh instance
+    persists it for every later append; the frontier is disposable state
+    and a persistence failure degrades anchoring by name, never blocks."""
+    from raucle.audit import HashChainSink
+
+    sink = HashChainSink(audit_path)
+    try:
+        sink.attach_frontier(frontier)
+    finally:
+        sink.close()
+
+
 class RaucleGateway:
     """The gateway core: policy engine + gate + receipt store + stats.
 
@@ -1420,12 +1444,11 @@ class RaucleGateway:
         self.fault_counter = FaultCounter(config.fault_counter_path or None)
         self.boot_selftest_result: dict[str, Any] | None = None
 
-        # Session window replay (EPIC Q lane Q-2): the receipt index is the
-        # durable authority for window state, memory is the fast path.
-        # Rebuild the counters for declared sessions from the index within
-        # the TTL window so a restart mid-session does not silently reset
-        # enforcement.
-        self._replay_session_windows()
+        # Session window replay (EPIC Q lane Q-2, L1 boot-streaming): the
+        # TTL-bounded replay now runs when the boot's continuity surface
+        # lands (inline on a warm boot, from the compactor's tail-window
+        # phase on a cold one). Until it lands, session-rule calls refuse
+        # by name (session_continuity_pending), never a silent cold start.
 
     def _init_receipt_projection(self, config: GatewayConfig) -> None:
         """Segmented receipt store (B2) and the receipt_index projection (PR-C).
@@ -1447,22 +1470,65 @@ class RaucleGateway:
                 max_segment_bytes=config.receipt_segment_max_bytes,
             )
         self._receipt_index = None
+        self.boot_readiness: Any = None
+        self._boot_compactor: Any = None
         idx_path = config.receipt_index_path or (
             str(Path(config.receipt_store_dir) / "index.sqlite") if config.receipt_store_dir else ""
         )
         if idx_path:
+            from raucle.boot_stream import (
+                BOOT_COMPACTOR_DONE_KEY,
+                BootCompactor,
+                BootReadiness,
+                BootWatchdog,
+            )
             from raucle.receipt_index import ReceiptIndex
 
-            self._receipt_index = ReceiptIndex(sqlite_path=idx_path)
-            # Feed any pre-existing chain into a fresh index
-            try:
-                if self._receipt_index.count() == 0:
-                    if self._receipt_store is not None:
-                        self._receipt_index.rebuild_from_store(self._receipt_store)
-                    elif Path(config.receipt_store).exists():
-                        self._receipt_index.rebuild_from_flat_file(config.receipt_store)
-            except Exception:
-                logger.exception("receipt index rebuild failed; queries degraded, chain unaffected")
+            # L1 boot-streaming (spec 3.2): the index opens WITHOUT the
+            # migration copy and WITHOUT the synchronous rebuild. Both
+            # are O(store) and used to sit on the boot path; the
+            # background compactor builds the projection through
+            # bounded windows after this constructor returns, and the
+            # receipt query surfaces refuse by name until it lands.
+            self._receipt_index = ReceiptIndex(
+                sqlite_path=idx_path,
+                defer_migration=True,
+                cache_mb=config.index_cache_mb,
+            )
+            self.boot_readiness = BootReadiness()
+            # An empty configured audit chain must not resolve to the
+            # process CWD (Path("") is "." and exists): the scan would
+            # open a directory and refuse the whole build. No chain
+            # configured, no scan.
+            audit_chain = Path(config.audit_chain) if config.audit_chain else None
+            self._boot_compactor = BootCompactor(
+                self._receipt_index,
+                store=self._receipt_store,
+                flat_path=None if config.receipt_store_dir else config.receipt_store,
+                readiness=self.boot_readiness,
+                watchdog=BootWatchdog(ceiling_mb=config.boot_mem_ceiling_mb),
+                ttl_seconds=self._session_windows.ttl_seconds,
+                batch_rows=1000,
+                scan_window_bytes=config.boot_scan_window_mb * 1024 * 1024,
+                session_replay=self._replay_session_windows,
+                audit_chain=(
+                    audit_chain if audit_chain is not None and audit_chain.exists() else None
+                ),
+                frontier_attach=(
+                    lambda frontier: (
+                        _attach_rebuilt_frontier_to_sink(audit_chain, frontier)
+                        if audit_chain is not None and audit_chain.exists()
+                        else None
+                    )
+                ),
+            )
+            if self._receipt_index.get_state(BOOT_COMPACTOR_DONE_KEY) == "1":
+                # A warm boot: the build is already done, so the
+                # TTL-bounded continuity replay runs inline (seconds)
+                # and the compactor re-checks the done state.
+                self._replay_session_windows()
+                self.boot_readiness.set_session_continuity("ready")
+            self._boot_compactor.start_background()
 
     def run_boot_selftest_at_startup(self) -> dict[str, Any]:
         """Boot self-test (X4): drive the approval path, the constraint
@@ -2893,6 +2959,18 @@ class RaucleGateway:
         # a malformed rule config or a window-state error denies with a
         # named reason instead of skipping.
         if session_id:
+            # L1 (AC5): while the boot's continuity replay is pending,
+            # a session-scoped call refuses by name rather than being
+            # served from a silently cold window.
+            if self._session_rules and not self._session_continuity_ready():
+                return self._deny_result(
+                    result,
+                    "session_continuity_pending: the boot's session-window "
+                    "replay has not landed yet (receipt index building); a "
+                    "session-scoped call refuses by name rather than serve "
+                    "a silently cold window",
+                    start,
+                )
             session_refusal = self._session_rule_refusal(
                 session_id, agent_id, tool, destination_class
             )
@@ -4058,6 +4136,16 @@ class RaucleGateway:
             )
         except Exception:
             logger.exception("session-monitor finding emission failed for rule %s", rule_id)
+
+    def _session_continuity_ready(self) -> bool:
+        """L1: whether the boot's session-window continuity has landed.
+
+        With no index configured there is no continuity surface and the
+        shipped pre-L1 behaviour applies (windows replay from nothing);
+        with one, the readiness gate is the honest signal.
+        """
+        readiness = getattr(self, "boot_readiness", None)
+        return readiness is None or readiness.session_continuity_ready()
 
     def _replay_session_windows(self) -> None:
         """Boot replay: rebuild session window counters from the receipt
