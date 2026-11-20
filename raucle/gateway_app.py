@@ -288,6 +288,7 @@ class ConfigUpdateRequest(BaseModel):
     # signed counterfactual block. It feeds evidence, so it is guarded
     # like every other evidence path (EVIDENCE_PATH_FIELDS).
     counterfactual_ruleset_file: str | None = None
+    tool_schema_manifest: str | None = None
     receipt_store: str | None = None
     receipt_store_dir: str | None = None
     receipt_index_path: str | None = None
@@ -880,6 +881,9 @@ EVIDENCE_PATH_FIELDS = (
     "policy_ledger_path",
     "signer_key_path",
     "counterfactual_ruleset_file",
+    # EPIC W lane W2: the manifest the definition digest binds against
+    # feeds evidence exactly as the counterfactual ruleset does.
+    "tool_schema_manifest",
 )
 
 
@@ -1460,6 +1464,24 @@ def _register_policy_routes(
         user = check_auth(authorization, x_totp)
         check_access(user, "policies")
         return gateway.reload_policies()
+
+    @app.post(
+        "/api/tool-schemas/reload",
+        responses={
+            "401": {"description": "MFA required or missing Authorization header"},
+            "403": {"description": "Invalid API key or insufficient role"},
+        },
+    )
+    def reload_tool_schemas(
+        authorization: str | None = Header(None),
+        x_totp: str | None = Header(None, alias="X-TOTP"),
+    ) -> dict[str, Any]:
+        """EPIC W lane W2: re-read the configured tool schema manifest and
+        receipt every observed definition drift (the same operator plane
+        as the policy reload)."""
+        user = check_auth(authorization, x_totp)
+        check_access(user, "policies")
+        return gateway.reload_tool_schemas()
 
     @app.post(
         "/api/policies/validate",
