@@ -26,10 +26,19 @@ Sources
 Fail-closed rule: a tool **without** a registered schema keeps today's
 behaviour (name-based checks only). A tool **with** a registered schema
 gets the schema check as an additional, always-on gate stage.
+
+W2 (definition drift, EPIC W) extends the bind: every registration
+computes a ``definition_digest`` (sha256 over the schema's canonical
+JSON), gate receipts for schema-registered tools carry it, and the
+explicit reload path supersedes a changed definition while returning
+the drift (old and new digests only, never schema content) for the
+gateway to receipt as evidence.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from typing import Any
 
@@ -92,6 +101,15 @@ def _describe_type(v: Any) -> str:
     return type(v).__name__
 
 
+def _definition_digest(schema: dict[str, Any]) -> str:
+    """The definition digest (EPIC W lane W2): sha256 over the schema's
+    canonical JSON. Key order and the manifest file's byte layout do not
+    change the digest, content does, so the same definition binds the
+    same digest across restarts and hosts."""
+    canonical = json.dumps(schema, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 class ToolSchema:
     """A tool's declared input schema (JSON Schema subset).
 
@@ -100,7 +118,7 @@ class ToolSchema:
     interpret must fail at load, never at call time.
     """
 
-    def __init__(self, name: str, schema: dict[str, Any]) -> None:
+    def __init__(self, name: str, schema: dict[str, Any], manifest: str = "") -> None:
         if not isinstance(name, str) or not name:
             raise ToolSchemaError("tool schema name must be a non-empty string")
         if not isinstance(schema, dict):
@@ -118,6 +136,19 @@ class ToolSchema:
         self.schema = schema
         self.properties = properties
         self.additional_properties = bool(schema.get("additionalProperties") is False)
+        try:
+            # W2: the digest binds at registration; a fragment the
+            # deployment cannot canonicalise fails at load, never at
+            # receipt time.
+            self.digest = _definition_digest(schema)
+        except ValueError as exc:
+            raise ToolSchemaError(
+                f"tool {name!r}: inputSchema is not JSON-serialisable ({exc}); "
+                "non-finite numbers are not valid JSON"
+            ) from exc
+        # W2: the manifest source path the schema was registered from,
+        # so receipts can name the pin the verifier recomputes against.
+        self.manifest = manifest
 
     def declared_fields(self) -> set[str]:
         return set(self.properties)
@@ -178,8 +209,8 @@ class ToolSchemaRegistry:
 
     # -- registration -------------------------------------------------------
 
-    def register(self, name: str, schema: dict[str, Any]) -> ToolSchema:
-        ts = ToolSchema(name, schema)
+    def register(self, name: str, schema: dict[str, Any], manifest: str = "") -> ToolSchema:
+        ts = ToolSchema(name, schema, manifest=manifest)
         existing = self._schemas.get(name)
         if existing is not None and existing.schema != ts.schema:
             raise SchemaPolicyLoadError(
@@ -189,14 +220,23 @@ class ToolSchemaRegistry:
         self._schemas[name] = ts
         return ts
 
-    def register_from_mcp_tools(self, tools: list[dict[str, Any]]) -> None:
+    def register_from_mcp_tools(self, tools: list[dict[str, Any]], manifest: str = "") -> None:
         """Primary source: an MCP ``tools/list`` payload.
 
         Each entry must be ``{"name": str, "inputSchema": object}`` —
         anything else is a load-time error (fail closed at boot).
         """
+        for name, schema in self._validated_mcp_entries(tools):
+            self.register(name, schema, manifest=manifest)
+
+    @staticmethod
+    def _validated_mcp_entries(
+        tools: list[dict[str, Any]],
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """Validated ``(name, inputSchema)`` pairs from an MCP payload."""
         if not isinstance(tools, list):
             raise SchemaPolicyLoadError("MCP tools payload must be a list")
+        out: list[tuple[str, dict[str, Any]]] = []
         for tool in tools:
             if not isinstance(tool, dict):
                 raise SchemaPolicyLoadError("MCP tool entry must be a JSON object")
@@ -208,7 +248,33 @@ class ToolSchemaRegistry:
                 raise SchemaPolicyLoadError(
                     f"tool {name!r}: MCP entry missing an object inputSchema"
                 )
-            self.register(name, schema)
+            out.append((name, schema))
+        return out
+
+    def reload_from_mcp_tools(
+        self, tools: list[dict[str, Any]], manifest: str = ""
+    ) -> list[dict[str, Any]]:
+        """The W2 reload path: re-register every entry, superseding a
+        changed definition instead of refusing it, and return the drift
+        records (tool, old and new digests, manifest) for the gateway to
+        receipt as evidence. Old and new digests only: schema content
+        never leaves the registry. Entries absent from the payload stay
+        registered (removal is a named follow-up, never a silent drop)."""
+        drift: list[dict[str, Any]] = []
+        for name, schema in self._validated_mcp_entries(tools):
+            incoming = ToolSchema(name, schema, manifest=manifest)
+            existing = self._schemas.get(name)
+            if existing is not None and existing.digest != incoming.digest:
+                drift.append(
+                    {
+                        "tool": name,
+                        "old_definition_digest": existing.digest,
+                        "new_definition_digest": incoming.digest,
+                        "manifest": manifest,
+                    }
+                )
+            self._schemas[name] = incoming
+        return drift
 
     def register_from_openapi_fragment(self, fragment: dict[str, Any]) -> None:
         """Secondary source: an OpenAPI fragment for non-MCP tools.
@@ -330,6 +396,22 @@ class ToolSchemaRegistry:
 
     def has_schema(self, tool: str) -> bool:
         return tool in self._schemas
+
+    def definition_digest(self, tool: str) -> str | None:
+        """The definition digest bound at registration (EPIC W lane W2),
+        or None when the tool has no registered schema."""
+        ts = self._schemas.get(tool)
+        return ts.digest if ts is not None else None
+
+    def definition_manifest(self, tool: str) -> str:
+        """The manifest source path the tool's schema was registered from
+        (empty string when registered without one)."""
+        ts = self._schemas.get(tool)
+        return ts.manifest if ts is not None else ""
+
+    def registered_tools(self) -> list[str]:
+        """Every tool with a registered schema, sorted for stable output."""
+        return sorted(self._schemas)
 
     # -- call-time enforcement ----------------------------------------------
 

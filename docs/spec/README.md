@@ -31,6 +31,7 @@ for the extension it defines.
 | Content DLP (`x_dlp`) | Accepted 2026-11-17 | [provenance/v1.2/content-dlp.md](provenance/v1.2/content-dlp.md) |
 | Counterfactual evidence (`x_gate.counterfactual`) | Shipped 2026-11-19 (spec #291, implementation #K3) | [provenance/v1.2/counterfactual-evidence.md](provenance/v1.2/counterfactual-evidence.md) |
 | Revocation-event receipts (`x_revocation`, v1.2 kind) | Shipped 2026-11-19 (spec #291; v1.0 emitter shipped earlier) | [provenance/v1.2/revocation-receipts.md](provenance/v1.2/revocation-receipts.md) |
+| Definition drift (`x_gate.tool_definition`) | Shipped 2026-11-20 (EPIC W lane W2) | [provenance/v1.2/definition-drift.md](provenance/v1.2/definition-drift.md) |
 
 ## Process
 
