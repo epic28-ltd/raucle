@@ -628,6 +628,89 @@ def _log_consistency_shape_refusal(proof: Any) -> str | None:
     return None
 
 
+def _log_checkpoint_header_refusal(header: Any) -> str | None:
+    """A named BAD_SIGNATURE refusal when the JWS header does not follow
+    the transparency-epoch/v1 profile, else ``None``. The profile is
+    closed: unknown header fields are refused, never ignored."""
+    if not isinstance(header, dict):
+        return "the checkpoint header is not a JSON object"
+    unknown = set(header) - _LOG_CHECKPOINT_HEADER_FIELDS
+    if unknown:
+        return f"the checkpoint header carries unknown fields {sorted(unknown)}"
+    if header.get("alg") != "EdDSA":
+        return f"the checkpoint alg is {header.get('alg')!r}, not EdDSA"
+    if header.get("typ") != LOG_CHECKPOINT_TYP:
+        return f"the checkpoint typ is {header.get('typ')!r}, not {LOG_CHECKPOINT_TYP}"
+    if header.get("crit") != [LOG_CRIT_EXTENSION]:
+        return f"the checkpoint crit is {header.get('crit')!r}, not the documented set"
+    if header.get(LOG_CRIT_EXTENSION) != LOG_CRIT_VALUE:
+        return f"the checkpoint {LOG_CRIT_EXTENSION} extension is not the transparency value"
+    if not isinstance(header.get("kid"), str) or not header["kid"]:
+        return "the checkpoint kid is not a non-empty string"
+    return None
+
+
+def _log_checkpoint_key_reasons(
+    operator_public_key_pem: str, *, header_b64: str, payload_b64: str, signature: bytes
+) -> list[str]:
+    """BAD_SIGNATURE refusals for the pinned key and the signature check.
+    The invariant: the key is the PINNED operator parameter, must load
+    as an Ed25519 public key, and must verify the checkpoint's own
+    signature over the ascii signing input."""
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    try:
+        loaded = serialization.load_pem_public_key(operator_public_key_pem.encode("ascii"))
+    except (TypeError, ValueError) as exc:
+        return [f"the pinned operator key does not load as a PEM public key: {exc}"]
+    if not isinstance(loaded, Ed25519PublicKey):
+        return ["the pinned operator key is not an Ed25519 public key"]
+    try:
+        loaded.verify(signature, f"{header_b64}.{payload_b64}".encode("ascii"))
+    except InvalidSignature:
+        return ["the checkpoint signature does not verify against the pinned operator key"]
+    return []
+
+
+def _log_checkpoint_int_refusal(payload: dict[str, Any]) -> str | None:
+    """The closed profile's epoch, iat and size fields are non-negative
+    integers (never bools); a named refusal otherwise."""
+    for name in ("epoch", "iat", "size"):
+        if not _log_int(payload[name], minimum=0):
+            return f"the checkpoint {name} is not a non-negative integer"
+    return None
+
+
+def _log_checkpoint_payload_refusal(payload: Any) -> str | None:
+    """A named BAD_SIGNATURE refusal when the JWS payload does not follow
+    the closed checkpoint profile (iss, org, epoch, size, head_hash,
+    iat, nonce; epoch equal to size), else ``None``."""
+    if not isinstance(payload, dict):
+        return "the checkpoint payload is not a JSON object"
+    missing = _LOG_CHECKPOINT_PAYLOAD_FIELDS - set(payload)
+    if missing:
+        return f"the checkpoint payload lacks {sorted(missing)}"
+    unknown = set(payload) - _LOG_CHECKPOINT_PAYLOAD_FIELDS
+    if unknown:
+        return f"the checkpoint payload carries unknown fields {sorted(unknown)}"
+    if not isinstance(payload["org"], str) or not payload["org"]:
+        return "the checkpoint org is not a non-empty string"
+    refusal = _log_checkpoint_int_refusal(payload)
+    if refusal:
+        return refusal
+    if payload["epoch"] != payload["size"]:
+        return f"the checkpoint epoch {payload['epoch']} does not equal its size {payload['size']}"
+    if not _log_digest_ok(payload["head_hash"]):
+        return "the checkpoint head_hash is not a sha256:<64 hex> digest"
+    if not isinstance(payload["nonce"], str) or not payload["nonce"]:
+        return "the checkpoint nonce is not a non-empty string"
+    if not isinstance(payload["iss"], str) or not payload["iss"]:
+        return "the checkpoint iss is not a non-empty string"
+    return None
+
+
 def _verify_log_checkpoint(
     checkpoint_jws: str, *, operator_public_key_pem: str
 ) -> tuple[dict[str, Any] | None, list[str]]:
@@ -638,10 +721,6 @@ def _verify_log_checkpoint(
     checkpoint is the signed claim, and a claim that cannot be
     verified is worthless as evidence, never merely mis-shaped.
     """
-    from cryptography.exceptions import InvalidSignature
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-
     if len(checkpoint_jws) > _LOG_MAX_CHECKPOINT_BYTES:
         return None, [f"the checkpoint exceeds the {_LOG_MAX_CHECKPOINT_BYTES}-byte bound"]
     parts = checkpoint_jws.split(".")
@@ -652,58 +731,22 @@ def _verify_log_checkpoint(
         header = _loads_strict(_b64url_decode(header_b64).decode("utf-8"))
         payload = _loads_strict(_b64url_decode(payload_b64).decode("utf-8"))
         signature = _b64url_decode(signature_b64)
-    except (ValueError, UnicodeDecodeError) as exc:
+    except ValueError as exc:
         return None, [f"the checkpoint does not parse: {exc}"]
-    if not isinstance(header, dict):
-        return None, ["the checkpoint header is not a JSON object"]
-    unknown = set(header) - _LOG_CHECKPOINT_HEADER_FIELDS
-    if unknown:
-        return None, [f"the checkpoint header carries unknown fields {sorted(unknown)}"]
-    if header.get("alg") != "EdDSA":
-        return None, [f"the checkpoint alg is {header.get('alg')!r}, not EdDSA"]
-    if header.get("typ") != LOG_CHECKPOINT_TYP:
-        return None, [f"the checkpoint typ is {header.get('typ')!r}, not {LOG_CHECKPOINT_TYP}"]
-    if header.get("crit") != [LOG_CRIT_EXTENSION]:
-        return None, [f"the checkpoint crit is {header.get('crit')!r}, not the documented set"]
-    if header.get(LOG_CRIT_EXTENSION) != LOG_CRIT_VALUE:
-        return None, [
-            f"the checkpoint {LOG_CRIT_EXTENSION} extension is not the transparency value"
-        ]
-    if not isinstance(header.get("kid"), str) or not header["kid"]:
-        return None, ["the checkpoint kid is not a non-empty string"]
-    try:
-        loaded = serialization.load_pem_public_key(operator_public_key_pem.encode("ascii"))
-    except (TypeError, UnicodeEncodeError, ValueError) as exc:
-        return None, [f"the pinned operator key does not load as a PEM public key: {exc}"]
-    if not isinstance(loaded, Ed25519PublicKey):
-        return None, ["the pinned operator key is not an Ed25519 public key"]
-    try:
-        loaded.verify(signature, f"{header_b64}.{payload_b64}".encode("ascii"))
-    except InvalidSignature:
-        return None, ["the checkpoint signature does not verify against the pinned operator key"]
-    if not isinstance(payload, dict):
-        return None, ["the checkpoint payload is not a JSON object"]
-    missing = _LOG_CHECKPOINT_PAYLOAD_FIELDS - set(payload)
-    if missing:
-        return None, [f"the checkpoint payload lacks {sorted(missing)}"]
-    unknown = set(payload) - _LOG_CHECKPOINT_PAYLOAD_FIELDS
-    if unknown:
-        return None, [f"the checkpoint payload carries unknown fields {sorted(unknown)}"]
-    if not isinstance(payload["org"], str) or not payload["org"]:
-        return None, ["the checkpoint org is not a non-empty string"]
-    for name in ("epoch", "iat", "size"):
-        if not _log_int(payload[name], minimum=0):
-            return None, [f"the checkpoint {name} is not a non-negative integer"]
-    if payload["epoch"] != payload["size"]:
-        return None, [
-            f"the checkpoint epoch {payload['epoch']} does not equal its size {payload['size']}"
-        ]
-    if not _log_digest_ok(payload["head_hash"]):
-        return None, ["the checkpoint head_hash is not a sha256:<64 hex> digest"]
-    if not isinstance(payload["nonce"], str) or not payload["nonce"]:
-        return None, ["the checkpoint nonce is not a non-empty string"]
-    if not isinstance(payload["iss"], str) or not payload["iss"]:
-        return None, ["the checkpoint iss is not a non-empty string"]
+    refusal = _log_checkpoint_header_refusal(header)
+    if refusal:
+        return None, [refusal]
+    key_reasons = _log_checkpoint_key_reasons(
+        operator_public_key_pem,
+        header_b64=header_b64,
+        payload_b64=payload_b64,
+        signature=signature,
+    )
+    if key_reasons:
+        return None, key_reasons
+    refusal = _log_checkpoint_payload_refusal(payload)
+    if refusal:
+        return None, [refusal]
     return payload, []
 
 
@@ -746,6 +789,64 @@ def _log_org_reasons(entries: list[dict[str, Any]], proof_org: str) -> list[str]
     ]
 
 
+def _log_inclusion_binding_reasons(
+    proof: dict[str, Any],
+    entries: list[dict[str, Any]],
+    *,
+    org: str | None,
+    expect_digest: str | None,
+) -> tuple[list[str], list[str]]:
+    """The bindings checked before the checkpoint: the proof's org against
+    the expected one, the segment's start against the stated target
+    sequence, the chain's own linkage, and the stated head and size
+    against the segment's head. Returns ``(chain_reasons, head_reasons)``
+    in report order; every entry has passed shape validation first."""
+    first, last = entries[0], entries[-1]
+    head_reasons: list[str] = []
+    chain_reasons: list[str] = []
+    if org is not None and proof["org"] != org:
+        head_reasons.append(f"the proof is for org {proof['org']!r}, not the expected org {org!r}")
+    head_reasons += _log_org_reasons(entries, proof["org"])
+    if first["sequence"] != proof["sequence"]:
+        chain_reasons.append(
+            f"the segment begins at entry {first['sequence']}, not the stated"
+            f" target sequence {proof['sequence']}"
+        )
+    chain_reasons += _log_segment_reasons(entries)
+    if proof["head_hash"] != last["entry_hash"]:
+        head_reasons.append("the stated head hash is not the segment's head")
+    if proof["size"] != last["sequence"]:
+        head_reasons.append(
+            f"the stated size {proof['size']} is not the segment's head entry {last['sequence']}"
+        )
+    if expect_digest is not None and first["receipt_digest"] != expect_digest:
+        head_reasons.append("the target entry registers a different digest than the expected one")
+    stated_digest = proof.get("receipt_digest")
+    if stated_digest is not None and stated_digest != first["receipt_digest"]:
+        head_reasons.append("the proof names a different digest than its target entry carries")
+    return chain_reasons, head_reasons
+
+
+def _log_inclusion_signed_head_reasons(
+    payload: dict[str, Any], proof: dict[str, Any], last: dict[str, Any]
+) -> list[str]:
+    """The bindings between the VERIFIED checkpoint and the proof's own
+    claims: the org and size it signed, and that the segment reaches
+    the signed head."""
+    head_reasons: list[str] = []
+    if payload["org"] != proof["org"]:
+        head_reasons.append(
+            f"the signed checkpoint is for org {payload['org']!r}, not {proof['org']!r}"
+        )
+    if payload["size"] != proof["size"]:
+        head_reasons.append(
+            f"the signed checkpoint is the head at size {payload['size']}, not {proof['size']}"
+        )
+    if payload["head_hash"] != last["entry_hash"]:
+        head_reasons.append("the segment does not reach the signed head")
+    return head_reasons
+
+
 def verify_log_inclusion(
     proof: Any,
     *,
@@ -777,28 +878,9 @@ def verify_log_inclusion(
         return LogVerification(STATUS_LOG_MALFORMED, entry_refusals)
 
     first, last = entries[0], entries[-1]
-    head_reasons: list[str] = []
-    chain_reasons: list[str] = []
-    if org is not None and proof["org"] != org:
-        head_reasons.append(f"the proof is for org {proof['org']!r}, not the expected org {org!r}")
-    head_reasons += _log_org_reasons(entries, proof["org"])
-    if first["sequence"] != proof["sequence"]:
-        chain_reasons.append(
-            f"the segment begins at entry {first['sequence']}, not the stated"
-            f" target sequence {proof['sequence']}"
-        )
-    chain_reasons += _log_segment_reasons(entries)
-    if proof["head_hash"] != last["entry_hash"]:
-        head_reasons.append("the stated head hash is not the segment's head")
-    if proof["size"] != last["sequence"]:
-        head_reasons.append(
-            f"the stated size {proof['size']} is not the segment's head entry {last['sequence']}"
-        )
-    if expect_digest is not None and first["receipt_digest"] != expect_digest:
-        head_reasons.append("the target entry registers a different digest than the expected one")
-    stated_digest = proof.get("receipt_digest")
-    if stated_digest is not None and stated_digest != first["receipt_digest"]:
-        head_reasons.append("the proof names a different digest than its target entry carries")
+    chain_reasons, head_reasons = _log_inclusion_binding_reasons(
+        proof, entries, org=org, expect_digest=expect_digest
+    )
     payload, checkpoint_reasons = _verify_log_checkpoint(
         proof["checkpoint_jws"], operator_public_key_pem=operator_public_key_pem
     )
@@ -810,16 +892,7 @@ def verify_log_inclusion(
             head_hash=proof["head_hash"],
             org=proof["org"],
         )
-    if payload["org"] != proof["org"]:
-        head_reasons.append(
-            f"the signed checkpoint is for org {payload['org']!r}, not {proof['org']!r}"
-        )
-    if payload["size"] != proof["size"]:
-        head_reasons.append(
-            f"the signed checkpoint is the head at size {payload['size']}, not {proof['size']}"
-        )
-    if payload["head_hash"] != last["entry_hash"]:
-        head_reasons.append("the segment does not reach the signed head")
+    head_reasons += _log_inclusion_signed_head_reasons(payload, proof, last)
     if chain_reasons:
         return LogVerification(
             STATUS_LOG_CHAIN_BROKEN,
@@ -851,6 +924,71 @@ def verify_log_inclusion(
     )
 
 
+def _log_consistency_binding_reasons(
+    proof: dict[str, Any], entries: list[dict[str, Any]], *, org: str | None
+) -> tuple[list[str], list[str]]:
+    """The bindings checked before the checkpoints: the proof's org
+    against the expected one, the chain's own linkage, and the
+    segment's range against the stated sizes. Returns
+    ``(chain_reasons, head_reasons)`` in report order; every entry has
+    passed shape validation first."""
+    first, last = entries[0], entries[-1]
+    head_reasons: list[str] = []
+    chain_reasons: list[str] = []
+    if org is not None and proof["org"] != org:
+        head_reasons.append(f"the proof is for org {proof['org']!r}, not the expected org {org!r}")
+    head_reasons += _log_org_reasons(entries, proof["org"])
+    chain_reasons += _log_segment_reasons(entries)
+    if first["sequence"] != proof["from_size"] + 1:
+        chain_reasons.append(
+            f"the segment begins at entry {first['sequence']}, not the entry"
+            f" that follows from_size {proof['from_size']}"
+        )
+    if last["sequence"] != proof["to_size"]:
+        chain_reasons.append(
+            f"the segment ends at entry {last['sequence']}, not to_size {proof['to_size']}"
+        )
+    return chain_reasons, head_reasons
+
+
+def _log_consistency_signed_head_reasons(
+    from_payload: dict[str, Any],
+    to_payload: dict[str, Any],
+    proof: dict[str, Any],
+    first: dict[str, Any],
+    last: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    """The bindings between the two VERIFIED checkpoints, the proof's
+    stated sizes, and the segment: the growth binding (the segment
+    must link the signed old head) and the arrival binding (the
+    segment must end at the signed new head). Returns
+    ``(chain_reasons, head_reasons)``."""
+    head_reasons: list[str] = []
+    chain_reasons: list[str] = []
+    for payload, name in ((from_payload, "from"), (to_payload, "to")):
+        if payload["org"] != proof["org"]:
+            head_reasons.append(
+                f"the signed {name}-checkpoint is for org {payload['org']!r}, not {proof['org']!r}"
+            )
+    if from_payload["size"] != proof["from_size"]:
+        chain_reasons.append(
+            f"the from-checkpoint is the head at size {from_payload['size']},"
+            f" not {proof['from_size']}"
+        )
+    if to_payload["size"] != proof["to_size"]:
+        chain_reasons.append(
+            f"the to-checkpoint is the head at size {to_payload['size']}, not {proof['to_size']}"
+        )
+    if first["prev_hash"] != from_payload["head_hash"]:
+        chain_reasons.append(
+            "the segment does not grow from the signed old head: entry"
+            f" {first['sequence']} does not link the from-checkpoint's head"
+        )
+    if to_payload["head_hash"] != last["entry_hash"]:
+        head_reasons.append("the to-checkpoint's signed head is not the segment's head")
+    return chain_reasons, head_reasons
+
+
 def verify_log_consistency(
     proof: Any,
     *,
@@ -877,21 +1015,7 @@ def verify_log_consistency(
         return LogVerification(STATUS_LOG_MALFORMED, entry_refusals)
 
     first, last = entries[0], entries[-1]
-    head_reasons: list[str] = []
-    chain_reasons: list[str] = []
-    if org is not None and proof["org"] != org:
-        head_reasons.append(f"the proof is for org {proof['org']!r}, not the expected org {org!r}")
-    head_reasons += _log_org_reasons(entries, proof["org"])
-    chain_reasons += _log_segment_reasons(entries)
-    if first["sequence"] != proof["from_size"] + 1:
-        chain_reasons.append(
-            f"the segment begins at entry {first['sequence']}, not the entry"
-            f" that follows from_size {proof['from_size']}"
-        )
-    if last["sequence"] != proof["to_size"]:
-        chain_reasons.append(
-            f"the segment ends at entry {last['sequence']}, not to_size {proof['to_size']}"
-        )
+    chain_reasons, head_reasons = _log_consistency_binding_reasons(proof, entries, org=org)
     from_payload, from_reasons = _verify_log_checkpoint(
         proof["from_checkpoint_jws"], operator_public_key_pem=operator_public_key_pem
     )
@@ -906,27 +1030,11 @@ def verify_log_consistency(
             head_hash=last["entry_hash"],
             org=proof["org"],
         )
-    for payload, name in ((from_payload, "from"), (to_payload, "to")):
-        if payload["org"] != proof["org"]:
-            head_reasons.append(
-                f"the signed {name}-checkpoint is for org {payload['org']!r}, not {proof['org']!r}"
-            )
-    if from_payload["size"] != proof["from_size"]:
-        chain_reasons.append(
-            f"the from-checkpoint is the head at size {from_payload['size']},"
-            f" not {proof['from_size']}"
-        )
-    if to_payload["size"] != proof["to_size"]:
-        chain_reasons.append(
-            f"the to-checkpoint is the head at size {to_payload['size']}, not {proof['to_size']}"
-        )
-    if first["prev_hash"] != from_payload["head_hash"]:
-        chain_reasons.append(
-            "the segment does not grow from the signed old head: entry"
-            f" {first['sequence']} does not link the from-checkpoint's head"
-        )
-    if to_payload["head_hash"] != last["entry_hash"]:
-        head_reasons.append("the to-checkpoint's signed head is not the segment's head")
+    grown_chain, grown_head = _log_consistency_signed_head_reasons(
+        from_payload, to_payload, proof, first, last
+    )
+    chain_reasons += grown_chain
+    head_reasons += grown_head
     if chain_reasons:
         return LogVerification(
             STATUS_LOG_CHAIN_BROKEN,
