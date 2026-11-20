@@ -476,6 +476,10 @@ class PolicyFile:
     # bad session rule can never silently vanish from enforcement.
     session_rules: list[SessionRule] = field(default_factory=list)
     session_rule_errors: list[str] = field(default_factory=list)
+    # EPIC W lane W1: operator-declared write-to-read pairings (raw rows;
+    # shape is validated here, the tool-reference bind runs at gateway
+    # load against the tool schema registry, SchemaPolicyLoadError).
+    state_pairings: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: str | Path) -> PolicyFile:
@@ -532,12 +536,14 @@ class PolicyFile:
             policies.append(rule)
 
         session_rules, session_rule_errors = _parse_session_rules(data.get("session_rules"))
+        state_pairings = _parse_state_pairings(data.get("state_pairings"))
         return cls(
             version=version,
             issuer=issuer,
             policies=policies,
             session_rules=session_rules,
             session_rule_errors=session_rule_errors,
+            state_pairings=state_pairings,
         )
 
     def to_yaml(self) -> str:
@@ -550,6 +556,7 @@ class PolicyFile:
                 if self.session_rules
                 else {}
             ),
+            **({"state_pairings": self.state_pairings} if self.state_pairings else {}),
             "policies": [
                 {
                     "tool": r.tool,
@@ -576,6 +583,49 @@ class PolicyFile:
             ],
         }
         return yaml.dump(data, default_flow_style=False, sort_keys=False)
+
+
+def _parse_state_pairings(entries: Any) -> list[dict[str, Any]]:
+    """EPIC W lane W1: the state_pairings policy-file section, raw rows.
+
+    Shape errors refuse the config load here with a named ValueError; the
+    tool-reference validation (unknown tool, undeclared id field) runs at
+    gateway load against the tool schema registry, raising
+    ``SchemaPolicyLoadError`` (the X1 fail-closed bind, never at call
+    time). An absent section is an empty list: no pairings, no coverage
+    claims, byte-identical behaviour.
+    """
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        raise ValueError("state_pairings must be a list of pairing entries")
+    rows: list[dict[str, Any]] = []
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise ValueError(f"state_pairings entry {i} must be a JSON object")
+        for field_name in ("write_tool", "read_tool", "id_pointer"):
+            value = entry.get(field_name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(
+                    f"state_pairings entry {i}: {field_name!r} must be a non-empty string"
+                )
+        classes = entry.get("require_field_classes")
+        if classes is None:
+            classes = []
+        if not isinstance(classes, list) or any(not isinstance(c, str) or not c for c in classes):
+            raise ValueError(
+                f"state_pairings entry {i}: require_field_classes must be a list of "
+                "non-empty strings"
+            )
+        rows.append(
+            {
+                "write_tool": str(entry["write_tool"]),
+                "read_tool": str(entry["read_tool"]),
+                "id_pointer": str(entry["id_pointer"]),
+                "require_field_classes": [str(c) for c in classes],
+            }
+        )
+    return rows
 
 
 # ---------------------------------------------------------------------------
