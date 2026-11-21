@@ -143,6 +143,17 @@ OpenID Connect provider. **Off by default** — enabling is an operator choice:
 - A mapped user gets the SAME session as a key login (identical receipts,
   expiry and closure semantics; `auth_method` records which path opened it).
   Key rotation, receipt sidecar and provisioning are named follow-ups.
+- Slice 2 (X3): the OIDC session-open receipt is the admin-plane SIGN-IN
+  receipt: it additionally binds the verified `sub` and the SHA-256
+  `id_token_digest` of the exact token that produced the identity. The
+  digest is cited, never the token content. Key-login receipts are
+  unchanged (omit-when-empty keeps written chains byte-identical).
+- The panel login card offers the SSO button when federation is enabled and
+  completes the provider callback into the same receipted session, holding
+  the session token in page memory only (never localStorage or a cookie).
+  Sessions and pending logins are per-process state; the decided scale
+  answer for replicas is the single-writer receipt sidecar (a named
+  follow-up), not anything added in this path.
 
 
 ## Gate authentication (agent callers)
