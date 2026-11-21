@@ -11,18 +11,20 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 from typing import Any
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
 from raucle import admin_oidc
 from raucle.admin_session import AdminSessionManager, SessionAuthError
 from raucle.gateway import GatewayConfig, RaucleGateway, UserManager
-from raucle.gateway_app import create_admin_app
+from raucle.gateway_app import ADMIN_PANEL_HTML, create_admin_app
 
 pytest.importorskip("fastapi")
 pytest.importorskip("cryptography")
@@ -77,6 +79,7 @@ class MockIdPState:
         self.codes: dict[str, dict[str, Any]] = {}
         self.discovery_up = True
         self.jwks_up = True
+        self.last_id_token = ""
 
 
 def _token_response(record: dict[str, Any]) -> bytes:
@@ -162,7 +165,9 @@ class MockIdPHandler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"access_token": "at"}).encode())
             return
         state.codes.pop(code, None)
-        self._send(200, _token_response(record))
+        body = _token_response(record)
+        state.last_id_token = json.loads(body).get("id_token", "")
+        self._send(200, body)
 
 
 @pytest.fixture
@@ -610,16 +615,34 @@ class TestReceiptedSessions:
         fed.start()
         verifier, challenge = admin_oidc.make_pkce_pair()
         code = _register_code(state, challenge=challenge)
-        claims = fed.exchange_code(code, verifier, redirect_uri=REDIRECT_URI)
+        claims, token_digest = fed.exchange_code_with_digest(
+            code, verifier, redirect_uri=REDIRECT_URI
+        )
+        assert token_digest == hashlib.sha256(state.last_id_token.encode()).hexdigest()
         user = fed.map_user(users, claims)
-        oidc_session = sessions.open_with_user(user)
+        oidc_session = sessions.open_with_user(
+            user, subject=claims.get("sub", ""), id_token_digest=token_digest
+        )
         key_session = sessions.open_with_key("a" * 40)
         payloads = _decode_receipts(cfg.receipt_store)
         exts = [p["x_admin_session"] for p in payloads if "x_admin_session" in p]
         assert {e["auth_method"] for e in exts} == {"key", "oidc"}
-        # identical evidence shape and closure rules on both paths
-        assert all(sorted(e) == sorted(exts[0]) for e in exts)
+        core = ["action", "auth_method", "expires_at", "session_id", "user_id"]
+        key_exts = [e for e in exts if e["auth_method"] == "key"]
+        oidc_exts = [e for e in exts if e["auth_method"] == "oidc"]
+        # X3 slice 2: the OIDC sign-in receipt additionally binds the subject
+        # and the verified id-token digest; key receipts keep the slice 1
+        # field set exactly (omit-when-empty keeps old chains byte-identical).
+        assert all(sorted(e) == sorted(core) for e in key_exts)
+        assert all(sorted(e) == sorted(core + ["subject", "id_token_digest"]) for e in oidc_exts)
+        assert oidc_exts[0]["subject"] == "subject-1"
+        assert oidc_exts[0]["id_token_digest"] == token_digest
         assert all(int(e["expires_at"]) == e["expires_at"] for e in exts)
+        # the session table carries none of the token-derived evidence
+        table = json.dumps(sessions._sessions)
+        assert "subject-1" not in table
+        assert token_digest not in table
+        assert state.last_id_token not in table
         assert sessions.close(oidc_session["token"]) is True
         assert sessions.close(key_session["token"]) is True
         payloads = _decode_receipts(cfg.receipt_store)
@@ -845,3 +868,174 @@ class TestVerifierCompat:
         assert cfg.admin_session_ttl == 1800
         # to_yaml never materialises a secret slot for OIDC
         assert "client_secret" not in cfg.to_yaml()
+
+
+# ---------------------------------------------------------------------------
+# X3 slice 2: sign-in receipt (id-token digest), panel SSO, spec contract
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def oidc_client(idp, users, tmp_path, monkeypatch):
+    """The admin app with federation ENABLED against the loopback mock.
+
+    Production transport rerouted https://idp.test.example -> loopback; the
+    config and validation strings stay the production ones."""
+    server, state = idp
+    real_get = admin_oidc._default_http_get
+    real_post = admin_oidc._default_http_post_form
+    base = _loopback(server)
+    monkeypatch.setattr(
+        admin_oidc,
+        "_default_http_get",
+        lambda url, timeout: real_get(url.replace(ISSUER, base), timeout),
+    )
+    monkeypatch.setattr(
+        admin_oidc,
+        "_default_http_post_form",
+        lambda url, form, timeout: real_post(url.replace(ISSUER, base), form, timeout),
+    )
+    monkeypatch.setenv("RAUCLE_OIDC_CLIENT_SECRET", CLIENT_SECRET)
+    cfg = GatewayConfig(
+        receipt_store=str(tmp_path / "r.jsonl"),
+        oidc_enabled=True,
+        oidc_issuer=ISSUER,
+        oidc_client_id=CLIENT_ID,
+        oidc_redirect_uri=REDIRECT_URI,
+    )
+    gw = RaucleGateway(cfg)
+    from fastapi.testclient import TestClient
+
+    return TestClient(create_admin_app(gw, users)), state, cfg
+
+
+def _complete_oidc_login(client, idp_state):
+    """GET /api/oidc/login, register a matching code, POST the callback."""
+    login = client.get("/api/oidc/login").json()
+    qs = parse_qs(urlparse(login["authorization_url"]).query)
+    code = _register_code(idp_state, challenge=qs["code_challenge"][0], nonce=qs["nonce"][0])
+    return client.post("/api/oidc/callback", json={"code": code, "state": login["state"]})
+
+
+class TestSignInReceipt:
+    def test_http_sign_in_receipt_cites_verified_id_token_digest(self, oidc_client):
+        client, state, cfg = oidc_client
+        resp = _complete_oidc_login(client, state)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["session_token"].startswith("rst_")
+        assert body["subject"] == "subject-1"
+        assert body["user_id"].startswith("usr-")
+        # bounded disclosure: ids and the session, never token content
+        assert "id_token" not in body
+        assert "access_token" not in body
+        digest = hashlib.sha256(state.last_id_token.encode()).hexdigest()
+        exts = [
+            p["x_admin_session"]
+            for p in _decode_receipts(cfg.receipt_store)
+            if "x_admin_session" in p
+        ]
+        oidc_opens = [e for e in exts if e["action"] == "open" and e["auth_method"] == "oidc"]
+        assert len(oidc_opens) == 1
+        ext = oidc_opens[0]
+        assert ext["subject"] == "subject-1"
+        assert ext["id_token_digest"] == digest
+        assert ext["user_id"].startswith("usr-")
+        assert ext["session_id"].startswith("ses-")
+        # sign-in fields ride the OPEN receipt only; closes stay slice 1 shaped
+        assert all(
+            "id_token_digest" not in e and "subject" not in e
+            for e in exts
+            if e["action"] == "close"
+        )
+
+    def test_no_token_content_sweep_over_the_session_surface(self, oidc_client):
+        client, state, cfg = oidc_client
+        resp = _complete_oidc_login(client, state)
+        assert resp.status_code == 200
+        token = state.last_id_token
+        assert token
+        raw = Path(cfg.receipt_store).read_text(encoding="utf-8")
+        blob = json.dumps(_decode_receipts(cfg.receipt_store))
+        segments = token.split(".")
+        for surface in (raw, blob, resp.text):
+            assert token not in surface
+            assert segments[1] not in surface  # the claims segment
+            assert segments[2] not in surface  # the signature segment
+        # the digest is the evidence; the token never is
+        assert hashlib.sha256(token.encode()).hexdigest() in blob
+
+    def test_key_path_receipt_keeps_the_slice1_field_set(self, users, tmp_path):
+        cfg = GatewayConfig(receipt_store=str(tmp_path / "r.jsonl"))
+        gw = RaucleGateway(cfg)
+        sessions = AdminSessionManager(users, receipt_emitter=gw._emit_admin_session_receipt)
+        sessions.open_with_key("a" * 40)
+        exts = [
+            p["x_admin_session"]
+            for p in _decode_receipts(cfg.receipt_store)
+            if "x_admin_session" in p
+        ]
+        assert sorted(exts[0]) == [
+            "action",
+            "auth_method",
+            "expires_at",
+            "session_id",
+            "user_id",
+        ]
+
+
+def _panel_script() -> str:
+    return "\n".join(re.findall(r"<script[^>]*>(.*?)</script>", ADMIN_PANEL_HTML, re.S))
+
+
+class TestPanelSSO:
+    def test_login_card_offers_sso_control(self):
+        lines = [line for line in ADMIN_PANEL_HTML.splitlines() if "ssoLoginBtn" in line]
+        assert lines, "the login card carries no SSO button"
+        assert 'data-hi="ssoLogin()"' in lines[0]
+        assert "hidden" in lines[0]  # revealed only when the config says enabled
+
+    def test_sso_wiring_targets_the_session_routes(self):
+        script = _panel_script()
+        assert "/api/session/config" in script
+        assert "/api/oidc/login" in script
+        assert "/api/oidc/callback" in script
+        assert "handleOidcCallback" in script
+        assert "history.replaceState" in script
+
+    def test_sso_handler_never_persists_token_material(self):
+        script = _panel_script()
+        block = script[script.index("function initSso") : script.index("function login(")]
+        assert "localStorage" not in block
+        assert "document.cookie" not in block
+
+    def test_panel_page_serves_the_sso_control(self, oidc_client):
+        client, _, _ = oidc_client
+        page = client.get("/")
+        assert page.status_code == 200
+        assert "ssoLoginBtn" in page.text
+
+
+class TestSpecContract:
+    """The spec doc is the contract; pin the lines honesty requires."""
+
+    @staticmethod
+    def _spec() -> str:
+        path = Path(__file__).resolve().parents[1] / "docs" / "spec" / "x3-oidc-admin-v1.md"
+        # whitespace-normalised so a reflow cannot break the contract pin
+        return " ".join(path.read_text(encoding="utf-8").split())
+
+    def test_spec_binds_the_digest_receipt(self):
+        spec = self._spec()
+        assert "id_token_digest" in spec
+        assert "never token content" in spec
+
+    def test_spec_keeps_t_s3_named(self):
+        spec = self._spec()
+        assert "T-S3" in spec
+        assert "Per-request TOTP is not session security" in spec
+
+    def test_spec_records_the_decided_scale_answer(self):
+        spec = self._spec()
+        assert "single-writer receipt sidecar" in spec
+        assert "per-process" in spec
