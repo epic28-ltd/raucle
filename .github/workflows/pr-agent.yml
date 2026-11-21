@@ -1,0 +1,52 @@
+name: PR Agent
+
+# L9 open code review layer: PR-Agent (Apache-2.0) self-hosted as a GitHub
+# Action, so every pull request gets an open review before it merges.
+# The reviewer calls our own Ollama Cloud endpoint, the same provider the
+# build lanes already use; no new third party sees a diff.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+
+jobs:
+  pr_agent_job:
+    if: ${{ github.event.sender.type != 'Bot' }}
+    name: PR Agent (review + describe auto, /improve by comment)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: PR Agent action step
+        id: pragent
+        # v0.50.0, pinned by commit sha, never a floating tag. The action
+        # repository moved from the qodo-ai org to the-pr-agent; this is
+        # the canonical name. Runtime image for this release:
+        # pragent/pr-agent:0.50.0-github_action
+        # sha256:548e894a88071180832b2f4233f734d0acd0db1a879e2fcbaa70bac8b8372ebe
+        # (the pinned wrapper's Dockerfile tracks the rolling
+        # github_action tag upstream, per its SECURITY.md).
+        uses: the-pr-agent/pr-agent@e673a02076ce09a4726c3d0c3cc85780e59ca52b
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # OpenAI-compatible route to Ollama Cloud, per PR-Agent's
+          # changing-a-model docs: openai/ prefix plus OPENAI__API_BASE
+          # and OPENAI__KEY. Verified live: model glm-5.3 answers at
+          # https://ollama.com/v1 (probed 21 Nov 2026). The key is read
+          # by name from the OLLAMA_API_KEY org secret; no value here.
+          config.model: "openai/glm-5.3"
+          config.fallback_models: '[]'
+          config.custom_model_max_tokens: "32000"
+          OPENAI__API_BASE: "https://ollama.com/v1"
+          OPENAI__KEY: ${{ secrets.OLLAMA_API_KEY }}
+          # Auto review and describe on PR events; /improve stays comment
+          # triggered (auto_improve off). synchronize is skipped by
+          # default upstream, so pr_actions spells it out: every push to
+          # an open PR is re-reviewed.
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "true"
+          github_action_config.auto_improve: "false"
+          github_action_config.pr_actions: '["opened", "synchronize", "reopened"]'
