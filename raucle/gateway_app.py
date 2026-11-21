@@ -2791,14 +2791,18 @@ def _oidc_callback_response(
     pending = pending_states.pop(req.state or "", None)
     if pending is None or pending["created_at"] + _OIDC_PENDING_TTL_SECONDS < time.time():
         raise HTTPException(401, f"{admin_oidc.EXCHANGE_ERROR}: unknown or replayed state")
-    claims = oidc_federation.exchange_code(
+    claims, token_digest = oidc_federation.exchange_code_with_digest(
         req.code,
         pending["code_verifier"],
         redirect_uri=oidc_federation.config.redirect_uri,
         expected_nonce=pending["nonce"],
     )
     user = oidc_federation.map_user(users, claims)
-    opened = sessions.open_with_user(user)
+    # X3 slice 2: the sign-in receipt cites the subject and the VERIFIED
+    # id-token digest; the token content itself never enters evidence.
+    opened = sessions.open_with_user(
+        user, subject=claims.get("sub", ""), id_token_digest=token_digest
+    )
     return {
         "session_token": opened["token"],
         "expires_at": opened["expires_at"],
@@ -3335,6 +3339,7 @@ body.demo #policyEditorCard{display:none}
       <button class="btn" style="width:100%;margin-top:8px" data-hi="loginWithTotp()">Verify & Sign In</button>
     </div>
     <button class="btn" style="width:100%;margin-top:12px" data-hi="login()">Sign In</button>
+    <button class="btn btn-secondary hidden" style="width:100%;margin-top:12px" id="ssoLoginBtn" data-hi="ssoLogin()">Sign in with SSO</button>
     <div style="text-align:center;margin:16px 0 8px;color:#737373;font-size:0.8rem">or</div>
     <button class="btn" style="width:100%;background:#171717;color:#fff" id="enterDemoBtn" data-hi="enterDemo()">View Demo</button>
     <div style="margin-top:10px;font-size:0.75rem;color:#737373;text-align:center">
@@ -3934,6 +3939,31 @@ body.demo #policyEditorCard{display:none}
 
 <script>
 let key='', totpCode='', connPollId=null, allConns=[], dirFilter='all', selectedSource=null, selectedDest=null;
+
+function initSso() {
+  fetch('/api/session/config').then(r=>r.json()).then(d=>{
+    if (d && d.oidc_enabled) document.getElementById('ssoLoginBtn').classList.remove('hidden');
+  }).catch(()=>{});
+}
+function ssoLogin() {
+  fetch('/api/oidc/login').then(r=>r.json()).then(d=>{
+    if (d && d.authorization_url) window.location.href=d.authorization_url;
+    else alert('SSO is not enabled on this gateway');
+  }).catch(()=>alert('SSO login failed'));
+}
+function handleOidcCallback() {
+  const q=new URLSearchParams(window.location.search);
+  const code=q.get('code')||'', error=q.get('error')||'';
+  if (!code && !error) return false;
+  fetch('/api/oidc/callback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:code,state:q.get('state')||'',error:error})})
+    .then(r=>{
+      if (r.ok) { r.json().then(d=>{ key=d.session_token; history.replaceState(null,'',window.location.pathname); showMain(); }); return; }
+      history.replaceState(null,'',window.location.pathname);
+      r.json().then(d=>alert('SSO sign-in refused: '+(d.detail||'unknown error'))).catch(()=>alert('SSO sign-in refused'));
+    })
+    .catch(()=>alert('SSO sign-in failed'));
+  return true;
+}
 
 function login() {
   key = document.getElementById('apiKey').value;
@@ -4995,12 +5025,14 @@ async function enterDemo() {
 }
 // ?demo=1 (or #demo) auto-enters demo mode after the page settles
 window.addEventListener('load', () => {
+  if (handleOidcCallback()) return;
   const q = new URLSearchParams(window.location.search);
   const h = window.location.hash || '';
   if (q.get('demo') === '1' || q.get('tour') === '1' || h.startsWith('#demo')) {
     const btn = document.getElementById('enterDemoBtn');
     if (btn) btn.click();
   }
+  initSso();
 });
 
 function buildScenarioPicker() {
@@ -5901,7 +5933,7 @@ function mcpScan(){
   }).then(d=>{ if(d) renderMcpFindings(d.findings||[]); }).catch(()=>{ sum.textContent='Scan request failed.'; });
 }
 
-if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();}function navEvidencePack(el){showTab('assure',el);setTimeout(function(){var t=document.getElementById('assurancePacketView');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navKeyModel(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcpt-keymodel');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navCoverage(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcptCoverageCard');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadAssure()":(ev,el)=>loadAssure(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('assure',this)":(ev,el)=>showTab('assure',el),"showTab('capdemo',this)":(ev,el)=>showTab('capdemo',el),"navEvidencePack()":(ev,el)=>navEvidencePack(el),"navKeyModel()":(ev,el)=>navKeyModel(el),"navCoverage()":(ev,el)=>navCoverage(el),"capDemoPick(event)":(ev,el)=>capDemoPick(ev),"capDemoVerify()":(ev,el)=>capDemoVerify(),"loadAssurancePacket()":(ev,el)=>loadAssurancePacket(),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"sessionFindingVerify(event)":(ev,el)=>sessionFindingVerify(ev),"showTab('session',this)":(ev,el)=>showTab('session',el),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev),"simTabPick(event)":(ev,el)=>simTabPick(ev),"simTabRun()":(ev,el)=>simTabRun(),"simTabClear()":(ev,el)=>simTabClear(),"showTab('simulate',this)":(ev,el)=>showTab('simulate',el)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
+if(!globalThis.__raucleHiBound){globalThis.__raucleHiBound=true;function gotoTopology(){window.location.href='/topology';}function reloadPage(){location.reload();}function navEvidencePack(el){showTab('assure',el);setTimeout(function(){var t=document.getElementById('assurancePacketView');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navKeyModel(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcpt-keymodel');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);}function navCoverage(el){showTab('receipts',el);setTimeout(function(){var t=document.getElementById('rcptCoverageCard');if(t&&t.offsetParent)t.scrollIntoView({behavior:'smooth',block:'start'});},350);};globalThis.__HI={"gotoTopology()":(ev,el)=>gotoTopology(),"reloadPage()":(ev,el)=>reloadPage(),"addUser()":(ev,el)=>addUser(),"clearLearn()":(ev,el)=>clearLearn(),"clearRcptFilters()":(ev,el)=>clearRcptFilters(),"confirmMfa()":(ev,el)=>confirmMfa(),"copyDraftToEditor()":(ev,el)=>copyDraftToEditor(),"demoExample()":(ev,el)=>demoExample(),"enterDemo()":(ev,el)=>enterDemo(),"exportReceipts()":(ev,el)=>exportReceipts(),"flowItemClick(event,'dest')":(ev,el)=>flowItemClick(ev,'dest'),"flowItemClick(event,'source')":(ev,el)=>flowItemClick(ev,'source'),"flowItemClick(event,'tool')":(ev,el)=>flowItemClick(ev,'tool'),"loadConfig()":(ev,el)=>loadConfig(),"loadLearn()":(ev,el)=>loadLearn(),"loadReceipts()":(ev,el)=>loadReceipts(),"loadAssure()":(ev,el)=>loadAssure(),"loadRecent()":(ev,el)=>loadRecent(),"login()":(ev,el)=>login(),"loginWithTotp()":(ev,el)=>loginWithTotp(),"rcptPage(false)":(ev,el)=>rcptPage(false),"rcptPage(true)":(ev,el)=>rcptPage(true),"rcptRowClick(event)":(ev,el)=>rcptRowClick(ev),"reloadPolicy()":(ev,el)=>reloadPolicy(),"saveConfig()":(ev,el)=>saveConfig(),"savePolicy()":(ev,el)=>savePolicy(),"saveSIEM()":(ev,el)=>saveSIEM(),"scenarioClick(event)":(ev,el)=>scenarioClick(ev),"setDecisionFilter('all',this)":(ev,el)=>setDecisionFilter('all',el),"setDecisionFilter('allow',this)":(ev,el)=>setDecisionFilter('allow',el),"setDecisionFilter('deny',this)":(ev,el)=>setDecisionFilter('deny',el),"setDecisionFilter('escalate',this)":(ev,el)=>setDecisionFilter('escalate',el),"setDirFilter('all',this)":(ev,el)=>setDirFilter('all',el),"setDirFilter('inbound',this)":(ev,el)=>setDirFilter('inbound',el),"setDirFilter('outbound',this)":(ev,el)=>setDirFilter('outbound',el),"showTab('config',this)":(ev,el)=>showTab('config',el),"showTab('connections',this)":(ev,el)=>showTab('connections',el),"showTab('dlp',this)":(ev,el)=>showTab('dlp',el),"showTab('injection',this)":(ev,el)=>showTab('injection',el),"showTab('shadow',this)":(ev,el)=>showTab('shadow',el),"showTab('dashboard',this)":(ev,el)=>showTab('dashboard',el),"showTab('learn',this)":(ev,el)=>showTab('learn',el),"showTab('mcp',this)":(ev,el)=>showTab('mcp',el),"showTab('policies',this)":(ev,el)=>showTab('policies',el),"showTab('stop',this)":(ev,el)=>showTab('stop',el),"showTab('receipts',this)":(ev,el)=>showTab('receipts',el),"showTab('assure',this)":(ev,el)=>showTab('assure',el),"showTab('capdemo',this)":(ev,el)=>showTab('capdemo',el),"navEvidencePack()":(ev,el)=>navEvidencePack(el),"navKeyModel()":(ev,el)=>navKeyModel(el),"navCoverage()":(ev,el)=>navCoverage(el),"capDemoPick(event)":(ev,el)=>capDemoPick(ev),"capDemoVerify()":(ev,el)=>capDemoVerify(),"loadAssurancePacket()":(ev,el)=>loadAssurancePacket(),"showTab('siem',this)":(ev,el)=>showTab('siem',el),"showTab('users',this)":(ev,el)=>showTab('users',el),"offlineVerify(event)":(ev,el)=>offlineVerify(ev),"topoFit()":(ev,el)=>topoFit(),"topoFullscreen()":(ev,el)=>topoFullscreen(),"topoZoomIn()":(ev,el)=>topoZoomIn(),"topoZoomOut()":(ev,el)=>topoZoomOut(),"tourEnd(false)":(ev,el)=>tourEnd(false),"tourNext()":(ev,el)=>tourNext(),"tourRestart()":(ev,el)=>tourRestart(),"userMfaAction(event,'disable')":(ev,el)=>userMfaAction(ev,'disable'),"userMfaAction(event,'setup')":(ev,el)=>userMfaAction(ev,'setup'),"validatePolicy()":(ev,el)=>validatePolicy(),"mcpScan()":(ev,el)=>mcpScan(),"mcpClear()":(ev,el)=>mcpClear(),"mcpPick(event)":(ev,el)=>mcpPick(ev),"sessionFindingVerify(event)":(ev,el)=>sessionFindingVerify(ev),"showTab('session',this)":(ev,el)=>showTab('session',el),"simRun()":(ev,el)=>simRun(),"simPick(event)":(ev,el)=>simPick(ev),"simTabPick(event)":(ev,el)=>simTabPick(ev),"simTabRun()":(ev,el)=>simTabRun(),"simTabClear()":(ev,el)=>simTabClear(),"ssoLogin()":(ev,el)=>ssoLogin(),"showTab('simulate',this)":(ev,el)=>showTab('simulate',el)};document.addEventListener('click',function(ev){const c=ev.target&&ev.target.closest?ev.target.closest('[data-hi]'):null;if(!c)return;const a=c.closest('a[href="#"]');if(a)ev.preventDefault();const fn=globalThis.__HI[c.getAttribute('data-hi')];if(fn)fn(ev,c);});};
 </script>
 </body>
 </html>"""

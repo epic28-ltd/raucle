@@ -33,6 +33,17 @@ for the extension it defines.
 | Revocation-event receipts (`x_revocation`, v1.2 kind) | Shipped 2026-11-19 (spec #291; v1.0 emitter shipped earlier) | [provenance/v1.2/revocation-receipts.md](provenance/v1.2/revocation-receipts.md) |
 | Definition drift (`x_gate.tool_definition`) | Shipped 2026-11-20 (EPIC W lane W2) | [provenance/v1.2/definition-drift.md](provenance/v1.2/definition-drift.md) |
 
+## Product-surface specifications
+
+Specifications for operator-facing gateway surfaces (admin plane, panel).
+They are normative for the surface they define and do not alter the receipt
+protocol.
+
+| Surface | Status | Document |
+|---|---|---|
+| Admin-plane OIDC identity federation + receipted admin sessions (X3 slice 1) | Shipped 2026-11-09 (PR #235) | [admin-identity-federation-x3s1.md](admin-identity-federation-x3s1.md) |
+| OIDC/SSO admin plane v1: sign-in receipt (subject + id-token digest), panel SSO, T-S3 and scale posture (X3 slice 2) | Accepted 2026-11-21 (lane L10) | [x3-oidc-admin-v1.md](x3-oidc-admin-v1.md) |
+
 ## Process
 
 - Specs follow versioned URLs (`/spec/<name>/v<N>`). A spec at a given version is **immutable except for non-breaking clarifications**.

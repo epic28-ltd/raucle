@@ -22,7 +22,9 @@ Configuration posture:
   and persisted). An unknown subject is a NAMED ``MAPPING_ERROR`` - it is
   never auto-provisioned, because provisioning is a follow-up slice.
 - Tokens issued after an OIDC login are :mod:`raucle.admin_session`
-  sessions with the SAME receipted semantics as key-based sessions.
+  sessions with the SAME receipted semantics as key-based sessions, and
+  the sign-in receipt additionally binds the verified subject plus the
+  id-token digest (X3 slice 2): the digest, never the token content.
 
 The identity verdict is fail-closed end to end: discovery failure, a
 discovery document missing required endpoints, an unsupported signing
@@ -157,6 +159,16 @@ def make_pkce_pair() -> tuple[str, str]:
     return verifier, challenge
 
 
+def id_token_digest(id_token: str) -> str:
+    """Bare SHA-256 hex digest of the verified id_token.
+
+    X3 slice 2: the admin sign-in receipt cites this digest as the evidence
+    of the exact token whose strict verification produced the identity; the
+    token content itself never enters evidence.
+    """
+    return hashlib.sha256(id_token.encode("utf-8")).hexdigest()
+
+
 def _b64url_decode(segment: str) -> bytes:
     return base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4))
 
@@ -287,6 +299,27 @@ class OIDCFederation:
         """Exchange the authorization code for tokens and return the VERIFIED
         id_token claims. Any verification failure raises a named error and
         yields no session."""
+        claims, _digest = self.exchange_code_with_digest(
+            code,
+            code_verifier,
+            redirect_uri=redirect_uri,
+            expected_nonce=expected_nonce,
+        )
+        return claims
+
+    def exchange_code_with_digest(
+        self,
+        code: str,
+        code_verifier: str,
+        *,
+        redirect_uri: str,
+        expected_nonce: str = "",
+    ) -> tuple[dict[str, Any], str]:
+        """The same exchange, plus the SHA-256 digest of the verified id_token.
+
+        X3 slice 2: the admin sign-in receipt cites that digest (never the
+        token content) as the evidence of the exact token whose strict
+        verification produced the identity."""
         self._require_started()
         if not code or not isinstance(code, str):
             raise OIDCError(EXCHANGE_ERROR, "authorization code is missing")
@@ -318,7 +351,10 @@ class OIDCFederation:
         id_token = tokens.get("id_token") if isinstance(tokens, dict) else None
         if not id_token or not isinstance(id_token, str):
             raise OIDCError(EXCHANGE_ERROR, "token response carries no id_token")
-        return self.verify_id_token(id_token, expected_nonce=expected_nonce)
+        return (
+            self.verify_id_token(id_token, expected_nonce=expected_nonce),
+            id_token_digest(id_token),
+        )
 
     # -- id_token verification ---------------------------------------------
 
