@@ -22,7 +22,9 @@ Session semantics (both paths identical):
 - opening and closing a session are RECEIPTED: a signed provenance
   receipt with an ``x_admin_session`` extension binds the session id
   (hash-derived public handle, never the token), the user_id, the auth
-  method and the expiry. Logout is a signed lifecycle event, never a
+  method and the expiry. An OIDC open receipt additionally binds the
+  verified subject and the id-token digest (X3 slice 2) - the digest,
+  never the token content. Logout is a signed lifecycle event, never a
   silent delete - the same doctrine as records destroy.
 
 Fail-closed posture: an unknown, expired, malformed or already-closed
@@ -113,13 +115,33 @@ class AdminSessionManager:
                 raise SessionAuthError("Invalid TOTP code", status=403)
         return self._open(user, auth_method="key")
 
-    def open_with_user(self, user: GatewayUser) -> dict[str, Any]:
+    def open_with_user(
+        self,
+        user: GatewayUser,
+        *,
+        subject: str = "",
+        id_token_digest: str = "",
+    ) -> dict[str, Any]:
         """Open a session for an already-authenticated identity (the OIDC
         path after subject mapping). Same receipted semantics as the key
-        path; only ``auth_method`` differs."""
-        return self._open(user, auth_method="oidc")
+        path; only ``auth_method`` differs. X3 slice 2: the sign-in receipt
+        additionally binds the verified OIDC subject and the id-token
+        digest; key logins pass neither and keep the slice 1 receipt."""
+        return self._open(
+            user,
+            auth_method="oidc",
+            subject=subject,
+            id_token_digest=id_token_digest,
+        )
 
-    def _open(self, user: GatewayUser, *, auth_method: str) -> dict[str, Any]:
+    def _open(
+        self,
+        user: GatewayUser,
+        *,
+        auth_method: str,
+        subject: str = "",
+        id_token_digest: str = "",
+    ) -> dict[str, Any]:
         token = SESSION_TOKEN_PREFIX + secrets.token_hex(32)
         token_hash = _hash_session_token(token)
         now = time.time()
@@ -141,7 +163,15 @@ class AdminSessionManager:
             "opened_at": now,
             "expires_at": expires_at,
         }
-        self._emit("open", user, token_hash, auth_method, expires_at)
+        self._emit(
+            "open",
+            user,
+            token_hash,
+            auth_method,
+            expires_at,
+            subject=subject,
+            id_token_digest=id_token_digest,
+        )
         logger.info("admin session opened for %s (method=%s)", user.user_id, auth_method)
         return {"token": token, "expires_at": expires_at, "user": user}
 
@@ -204,6 +234,9 @@ class AdminSessionManager:
         token_hash: str,
         auth_method: str,
         expires_at: float,
+        *,
+        subject: str = "",
+        id_token_digest: str = "",
     ) -> None:
         if self._receipt_emitter is None:
             return
@@ -216,6 +249,13 @@ class AdminSessionManager:
             # refuses floats); the session table keeps the precise float.
             "expires_at": int(expires_at),
         }
+        # X3 slice 2: sign-in evidence rides the OIDC OPEN receipt only.
+        # Omitted when empty so key-path receipts keep their exact slice 1
+        # shape and already-written chains verify byte-identically.
+        if subject:
+            extension["subject"] = subject
+        if id_token_digest:
+            extension["id_token_digest"] = id_token_digest
         try:
             receipt_hash = self._receipt_emitter(action, extension)
         except Exception:  # pragma: no cover - emitter is gateway-internal
