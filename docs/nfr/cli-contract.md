@@ -49,6 +49,7 @@ docstrings of the `_cmd_*` handlers in `raucle/cli.py`.)
 | watch | streams; 1 on unreadable source |
 | registry | publish/resolve/verify; 2 on missing subcommand, 1 on integrity failures (dispatcher) |
 | counterfactual | replay under alternative policy; 1 on malformed record |
+| analytics | drift: 0 with the report (signals or none), 2 on missing subcommand, 1 on missing source |
 | records | lifecycle ops; 1 on state conflicts |
 | timestamp | TSA anchor ops; 1 on token failure |
 | containment | hold/resume/status; 1 on missing subcommand, state errors and refused transitions (ContainmentError path) |

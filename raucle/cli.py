@@ -399,6 +399,34 @@ def _build_parser() -> argparse.ArgumentParser:
     cf_pol.add_argument("--policy", required=True, help="The alternative policy YAML")
     cf_pol.add_argument("--out", help="Write the JSON report here (else stdout)")
 
+    # -- analytics (I2: drift and scope-drift over receipt history) -------
+    an_p = subparsers.add_parser(
+        "analytics",
+        help="Analytics over receipt history: deterministic reads of the receipts",
+    )
+    an_sub = an_p.add_subparsers(dest="analytics_command")
+    an_drift = an_sub.add_parser(
+        "drift",
+        help="Drift and scope-drift signals over a receipt chain or store",
+    )
+    an_drift.add_argument(
+        "source",
+        help="Receipt chain JSONL file or segmented store directory",
+    )
+    an_drift.add_argument(
+        "--min-window",
+        type=int,
+        default=4,
+        help="Minimum receipts per deny-rate window before a delta is called drift (default: 4)",
+    )
+    an_drift.add_argument(
+        "--deny-delta",
+        type=float,
+        default=0.5,
+        help="Absolute deny-rate delta between windows that fires a signal (default: 0.5)",
+    )
+    an_drift.add_argument("--out", help="Write the JSON report here (else stdout)")
+
     # -- records (G3 lifecycle: retention + disposal evidence) -------------
     rec_p = subparsers.add_parser(
         "records", help="Records lifecycle: tamper-evident disposal evidence"
@@ -1741,6 +1769,35 @@ def _cmd_counterfactual(args: argparse.Namespace) -> int:
 
         _P(args.out).write_text(text + "\n", encoding="utf-8")
         print(f"counterfactual report written to {args.out}")
+    else:
+        print(text)
+    return 0
+
+
+def _cmd_analytics_drift(args: argparse.Namespace) -> int:
+    """I2: drift and scope-drift signals, deterministically over receipts."""
+    if getattr(args, "analytics_command", None) != "drift":
+        print("error: analytics needs the 'drift' subcommand", file=sys.stderr)
+        return 2
+    from raucle.drift import collect_drift_signals
+
+    try:
+        report = collect_drift_signals(
+            args.source,
+            min_window=args.min_window,
+            deny_delta_threshold=args.deny_delta,
+        )
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    import json as _json
+
+    text = _json.dumps(report, indent=2)
+    if getattr(args, "out", None):
+        from pathlib import Path as _P
+
+        _P(args.out).write_text(text + "\n", encoding="utf-8")
+        print(f"drift report written to {args.out}")
     else:
         print(text)
     return 0
@@ -3496,6 +3553,7 @@ def _dispatch(argv: list[str] | None = None) -> int:
         "compliance": _cmd_compliance,
         "records": _cmd_records,
         "counterfactual": _cmd_counterfactual,
+        "analytics": _cmd_analytics_drift,
         "passport": _cmd_passport,
         "verify-receipt": _cmd_verify_receipt,
         "audit-export": _cmd_audit_export,
