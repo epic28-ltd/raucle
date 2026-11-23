@@ -1,0 +1,21 @@
+{{- if .Values.sidecar.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "raucle-gateway.fullname" . }}-sidecar
+  labels:
+    app.kubernetes.io/name: {{ include "raucle-gateway.name" . }}-sidecar
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  # ClusterIP only and never in the ingress: the sidecar trusts a
+  # shared secret, not a capability, and its callers are this
+  # deployment's own gateways. Keep it inside the cluster.
+  type: ClusterIP
+  ports:
+    - name: sidecar
+      port: {{ .Values.sidecar.port }}
+      targetPort: sidecar
+  selector:
+    app.kubernetes.io/name: {{ include "raucle-gateway.name" . }}-sidecar
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

@@ -78,6 +78,28 @@ tamper-evidence. Distributed consensus (Raft) over receipts would make the
 chain depend on cluster state - the opposite of offline-verifiable
 evidence.
 
+## Topology 2b: the receipt sidecar (X3 slice 4)
+
+The decided scale answer (docs/spec/x3-sidecar-v0.1.md): the single-writer
+rule MOVES into a sidecar process instead of pinning the gateway.
+
+- One `raucle sidecar` process owns the store directory and the index;
+  gateway replicas submit minted envelopes to it over local HTTP with a
+  shared-secret handshake and never touch the chain files.
+- The gateways mount the store read-only; the signing key is the one
+  writable surface they keep: its own volume at `/keys` (the chart
+  points `RAUCLE_SIGNER_KEY_PATH` there in this mode), shared by the
+  replicas so the topology mints under one gate identity. An unwritable
+  key path is a named boot refusal (`signer_key_unwritable`), never a
+  crash loop.
+- The gateways may scale horizontally; the sidecar stays at exactly one
+  replica (Recreate). The tamper-evidence contract is unchanged: still
+  one writer per chain, just a different process holding the pen.
+- Receipt loss is named, never silent: overflow is a named refusal and
+  the loss is receipted as a signed advisory, so the chain explains its
+  own gaps. The enforcement decision completes before submission and is
+  unaffected by any sidecar failure.
+
 ## Topology 3: namespace sharding (scale-out)
 
 One gateway + chain per agent namespace (or per tenant). A router at the

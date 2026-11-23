@@ -15,3 +15,24 @@ spec:
     requests:
       storage: {{ .Values.persistence.size }}
 {{- end }}
+{{- if and .Values.persistence.enabled .Values.sidecar.enabled }}
+# X3 slice 4: the signing key's own claim. In sidecar mode the gateways
+# mount the data claim read-only, so the key needs its own writable
+# volume, shared by the replicas (one gate identity per deployment).
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "raucle-gateway.fullname" . }}-signer-key
+  labels:
+    {{- include "raucle-gateway.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.signerKeySize }}
+{{- end }}
