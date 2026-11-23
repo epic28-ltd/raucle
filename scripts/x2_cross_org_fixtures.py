@@ -36,8 +36,8 @@ from raucle.provenance import (  # noqa: E402
     _b64url_encode,
     _canonical_json,
 )
-from raucle.trust_registry import TrustRegistry, _key_id_for  # noqa: E402
 from raucle.transparency import LOG_GENESIS_PREV_HASH, compute_log_entry_hash  # noqa: E402
+from raucle.trust_registry import TrustRegistry, _key_id_for  # noqa: E402
 
 OUT_DEFAULT = ROOT / "assets" / "verifier" / "fixtures" / "cross-org"
 FIXED_NOW = 1_760_000_000
@@ -160,18 +160,18 @@ def build_fixture(out_dir: Path) -> dict[str, str]:
         "\n"
         "Inputs a third party holds in cross-org verification:\n"
         "\n"
-        "- `chain.jsonl` — the receipt chain signed by ORG A's agent key.\n"
-        "- `registry.jsonl` — the Trust Registry artifact (operator-signed\n"
+        "- `chain.jsonl`: the receipt chain signed by ORG A's agent key.\n"
+        "- `registry.jsonl`: the Trust Registry artifact (operator-signed\n"
         "  append-only log) publishing org A's key and capability statement.\n"
-        "- `log-inclusion.json` — the transparency log's inclusion proof for\n"
+        "- `log-inclusion.json`: the transparency log's inclusion proof for\n"
         "  the leaf receipt's digest (the riding key is convenience material\n"
         "  only, never verification input).\n"
         "\n"
         "The out-of-band anchors (committed here so tests can pin them):\n"
         "\n"
-        "- `registry-operator.pem` — the registry operator public key; pin it\n"
+        "- `registry-operator.pem`: the registry operator public key; pin it\n"
         "  to authenticate the registry artifact.\n"
-        "- `log-operator.pem` — the log operator public key; pin it to\n"
+        "- `log-operator.pem`: the log operator public key; pin it to\n"
         "  authenticate the inclusion proof's checkpoint.\n"
         "\n"
         "Regenerate with `scripts/x2_cross_org_fixtures.py`, then re-pin with\n"
