@@ -21,7 +21,7 @@ from raucle.cli import main
 from raucle.demo_bundle import bundle_digest, locate_demo_bundle
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PIN = "sha256:892587363d470b51d83a4cc7aca8c2155d3fe69b9fb2b95f9f839f6f935809d9"
+PIN = "sha256:c47a44fbb6321b6fa7df1be41a043dfe2a13a67d475586a4918bdd747d349597"
 
 
 def _run(capsys: pytest.CaptureFixture[str], *argv: str) -> tuple[int, str]:

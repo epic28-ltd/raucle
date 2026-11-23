@@ -1,0 +1,1 @@
+- Advisory redaction middleware (EPIC Q7c): raucle/redaction.py and the middleware advisory layer mint receipted findings for scan-and-redact, advisory by design, a fail-open evidence lane beside the deterministic gate and never enforcement, with the v1 spec (docs/spec/advisory-middleware-v1.md) and a getting-started track (tests/test_advisory_middleware.py).

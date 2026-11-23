@@ -1,0 +1,1 @@
+- Content-plane DLP receipts as a public v1.2 spec (docs/spec/provenance/v1.2/content-dlp.md) with the schema and gateway mint path implemented: x_dlp carries digests, bounded pattern classes and span counts only, never content, and every finding cites the gate receipt of the scanned call (tests/test_dlp_receipts.py).

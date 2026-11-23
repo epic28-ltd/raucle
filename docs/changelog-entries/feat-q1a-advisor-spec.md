@@ -1,0 +1,1 @@
+- New public specification docs/spec/advisor-classifier-v1.md (EPIC Q1a design slice): the advisory LLM detector designed to run beside the deterministic gate, with the explicit guard confession and promotion-path hook stating that advisory classification informs policy authoring and review while receipted verdicts stay deterministic; docs-only lane, no gate code changes.
