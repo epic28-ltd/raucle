@@ -819,7 +819,10 @@ def _mixed_chain_scenario(tmp_path: Path, *, with_statement: bool = True) -> tup
             "valid": False,
             "registry_ok": True,
             "scope": False,
-            "reasonIncludes": ["no capability statement supplied for agent_key_id="],
+            "reasonIncludes": [
+                "no capability statement supplied for agent_key_id=",
+                "line 2: no capability statement supplied for agent_key_id=",
+            ],
         },
     }, operator.public_key_pem()
 
@@ -839,6 +842,7 @@ def test_mixed_chain_unstated_key_refuses_named(tmp_path):
     assert v.scope_verified is False
     joined = " ".join(v.reasons)
     assert "no capability statement supplied for agent_key_id=" in joined
+    assert "line 2: no capability statement supplied for agent_key_id=" in joined
 
 
 @pytest.mark.skipif(not _node_available(), reason="node unavailable")
@@ -847,6 +851,54 @@ def test_page_scope_leg_refuses_mixed_chain(tmp_path):
     verifier when a mixed chain carries a registered-but-unstated signing
     key: the verdict refuses and the reason names the unstated key."""
     scenario, _operator_public_pem = _mixed_chain_scenario(tmp_path)
+    scenarios = {"cases": [scenario]}
+    scen = tmp_path / "scenarios.json"
+    scen.write_text(json.dumps(scenarios), encoding="utf-8")
+    harness = ROOT / "tests" / "verifier_harness" / "x2_harness.mjs"
+    r = subprocess.run(
+        ["node", str(harness), str(ROOT), str(scen)],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=ROOT,
+    )
+    assert r.returncode == 0, f"harness failed:\n{r.stdout}\n{r.stderr}"
+
+
+def test_chain_with_no_published_statements_stays_honest(tmp_path):
+    """The OSS mirror on the two-key construction: when the registry
+    publishes no capability statement for ANY signing key, capability
+    conformance is skipped entirely (the verifier receives no statements)
+    and the scope leg stays honestly unstated with the verdict green,
+    like test_scope_unstated_when_registry_publishes_no_statement."""
+    scenario, operator_public_pem = _mixed_chain_scenario(tmp_path, with_statement=False)
+    v = verify_receipt_cross_org(
+        scenario["chain"],
+        registry_jsonl=scenario["registry"],
+        operator_public_pem=operator_public_pem,
+    )
+    assert v.valid, v.reasons
+    assert v.registry_verified
+    assert v.scope_verified is None
+    assert "scope unstated" in " ".join(v.reasons)
+
+
+@pytest.mark.skipif(not _node_available(), reason="node unavailable")
+def test_page_scope_leg_unstated_when_registry_publishes_nothing(tmp_path):
+    """The shipped X2 page keeps the honest-unstated verdict green when the
+    registry publishes no capability statement for any signing key: without
+    other keys' scope material the mixed-chain refusal must not fire
+    (docs/spec/x2-cross-org-v0.1.md, Honest limits)."""
+    scenario, _operator_public_pem = _mixed_chain_scenario(tmp_path, with_statement=False)
+    scenario["name"] = "registry publishes no scope material for any signing key"
+    scenario["expect"] = {
+        "valid": True,
+        "registry_ok": True,
+        "scope": None,
+        "reasonIncludes": [
+            "scope unstated: the registry publishes no capability statement"
+        ],
+    }
     scenarios = {"cases": [scenario]}
     scen = tmp_path / "scenarios.json"
     scen.write_text(json.dumps(scenarios), encoding="utf-8")

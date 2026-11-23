@@ -1239,11 +1239,15 @@ var X2V = (function () {
         scopeReasons = scopeReasons.concat(rs);
       }
     }
-    if (Object.keys(unstatedKids).length > 0) {
+    if (scopeHasStmt && Object.keys(unstatedKids).length > 0) {
       /* Mixed chain: name the unstated signing keys per receipt line, the
          same refusal the OSS verifier reports ("no capability statement
-         supplied"). The scope leg cannot be green while other keys' scope
-         material is held and this key's is not pinned at all. */
+         supplied"). The refusal is warranted ONLY while the registry
+         publishes scope material for other signing keys; the OSS mirror
+         (ProvenanceVerifier capability conformance) skips the conformance
+         check entirely when no statement is supplied at all, so a registry
+         that states nothing for any key falls through to the honest
+         unstated residual below (leg null, verdict stays green). */
       chain.lines.forEach(function (res) {
         if (!unstatedKids[res.kid]) return;
         scopeReasons.push("line " + res.line + ": no capability statement supplied for " +
