@@ -81,6 +81,42 @@ def _refuse(reasons: list[str], verdict: CrossOrgVerdict | None = None) -> Cross
     return v
 
 
+def _parse_chain_envelopes(raw: str) -> tuple[list[dict[str, Any]] | None, str]:
+    """Parse the brace form of the receipt input: chain envelope lines one
+    per line, blank lines ignored. Every line must be exactly a
+    {receipt_hash, jws} envelope - unknown envelope fields are malleability
+    and are refused the same way the chain verifier refuses them. Returns
+    ``(envelopes, refusal)`` - exactly one is set."""
+    envelopes: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            env = json.loads(line)
+        except json.JSONDecodeError as exc:
+            return None, f"chain line is not JSON: {exc}"
+        if not isinstance(env, dict) or set(env) != set(_ENVELOPE_FIELDS):
+            return None, (
+                "chain line is not a {receipt_hash, jws} envelope "
+                "(unknown envelope fields are malleability)"
+            )
+        envelopes.append(env)
+    if not envelopes:
+        return None, "no receipt supplied"
+    return envelopes, ""
+
+
+def _bare_jws_envelope(raw: str) -> list[dict[str, Any]]:
+    """Synthesise the single envelope for a bare compact JWS: the hash is
+    recomputed over the exact JWS bytes, so a receipt handed over without
+    its envelope still carries the digest the whole chain verifies."""
+    import hashlib
+
+    digest = "sha256:" + hashlib.sha256(raw.encode("ascii", "ignore")).hexdigest()
+    return [{"receipt_hash": digest, "jws": raw}]
+
+
 def _parse_receipt_text(text: str) -> tuple[list[dict[str, Any]] | None, str]:
     """Parse the receipt input: chain envelope lines (one per line, blank
     lines ignored), or a single bare compact JWS (hash recomputed over the
@@ -90,29 +126,8 @@ def _parse_receipt_text(text: str) -> tuple[list[dict[str, Any]] | None, str]:
     if not raw:
         return None, "no receipt supplied"
     if raw.startswith("{"):
-        import hashlib
-
-        envelopes: list[dict[str, Any]] = []
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                env = json.loads(line)
-            except json.JSONDecodeError as exc:
-                return None, f"chain line is not JSON: {exc}"
-            if not isinstance(env, dict) or set(env) != set(_ENVELOPE_FIELDS):
-                return None, (
-                    "chain line is not a {receipt_hash, jws} envelope "
-                    "(unknown envelope fields are malleability)"
-                )
-            envelopes.append(env)
-        if not envelopes:
-            return None, "no receipt supplied"
-        return envelopes, ""
-    # bare JWS: synthesise the envelope with the recomputed hash
-    digest = "sha256:" + hashlib.sha256(raw.encode("ascii", "ignore")).hexdigest()
-    return [{"receipt_hash": digest, "jws": raw}], ""
+        return _parse_chain_envelopes(raw)
+    return _bare_jws_envelope(raw), ""
 
 
 def _payload_of(jws: str) -> dict[str, Any] | None:

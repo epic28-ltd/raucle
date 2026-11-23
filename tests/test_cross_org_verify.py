@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 from raucle.audit import Ed25519Signer
-from raucle.cross_org import verify_receipt_cross_org
+from raucle.cross_org import _parse_receipt_text, verify_receipt_cross_org
 from raucle.provenance import AgentIdentity, ProvenanceLogger, _canonical_json
 from raucle.transparency import (
     LOG_GENESIS_PREV_HASH,
@@ -650,6 +650,29 @@ def test_fixture_generator_round_trip_verifies(tmp_path):
     assert v.log_status == "LOG-INCLUDED"
 
 
+def test_bare_jws_receipt_verifies_with_recomputed_hash(tmp_path):
+    """The documented bare-JWS input form: the envelope hash recomputed
+    over the exact JWS bytes is byte-identical to the minted chain's own
+    receipt_hash, so a receipt handed over as a single JWS verifies green
+    through the same cross-org path (the parentless root receipt)."""
+    operator = _operator_signer()
+    identity = _org_a_identity()
+    _registry(identity, operator, path=tmp_path / "registry.jsonl")
+    chain_text, _chain, _rh = _receipt_chain(identity, tmp_path / "sub")
+    env = json.loads(chain_text.splitlines()[0])
+    parsed, refusal = _parse_receipt_text(env["jws"])
+    assert refusal == ""
+    assert parsed == [{"receipt_hash": env["receipt_hash"], "jws": env["jws"]}]
+    v = verify_receipt_cross_org(
+        env["jws"],
+        registry_path=tmp_path / "registry.jsonl",
+        operator_public_pem=operator.public_key_pem(),
+    )
+    assert v.valid, v.reasons
+    assert v.registry_verified
+    assert v.receipt_verified
+
+
 # ---------------------------------------------------------------------------
 # Artifact hardening the cross-org path depends on
 # ---------------------------------------------------------------------------
@@ -895,9 +918,7 @@ def test_page_scope_leg_unstated_when_registry_publishes_nothing(tmp_path):
         "valid": True,
         "registry_ok": True,
         "scope": None,
-        "reasonIncludes": [
-            "scope unstated: the registry publishes no capability statement"
-        ],
+        "reasonIncludes": ["scope unstated: the registry publishes no capability statement"],
     }
     scenarios = {"cases": [scenario]}
     scen = tmp_path / "scenarios.json"
