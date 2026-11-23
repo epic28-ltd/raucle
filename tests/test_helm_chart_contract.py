@@ -92,3 +92,133 @@ class TestProdEnvExample:
                 continue
             _key, _sep, value = stripped.partition("=")
             assert len(value) < 40 or value.startswith("/"), f"looks like a secret: {stripped}"
+
+
+SIDECAR_DEPLOYMENT = CHART / "templates" / "sidecar-deployment.yaml"
+SIDECAR_SERVICE = CHART / "templates" / "sidecar-service.yaml"
+SECRET_TEMPLATE = CHART / "templates" / "secret.yaml"
+PVC_TEMPLATE = CHART / "templates" / "pvc.yaml"
+
+
+class TestSidecarWiring:
+    """X3 slice 4: the chart actually wires the single-writer sidecar.
+
+    Helm is not in CI, so these are source-level assertions on the chart
+    files (the same doctrine as the classes above)."""
+
+    def test_values_carry_the_sidecar_knobs(self):
+        sidecar = _values()["sidecar"]
+        for key in (
+            "enabled",
+            "replicaCount",
+            "port",
+            "maxQueue",
+            "receiptStoreDir",
+            "receiptSegmentMaxBytes",
+            "receiptIndexPath",
+            "indexCacheMb",
+            "secret",
+        ):
+            assert key in sidecar, f"values.yaml is missing sidecar.{key}"
+        assert sidecar["enabled"] is False
+        assert sidecar["replicaCount"] == 1, "the sidecar is THE writer: pinned at 1"
+        assert sidecar["maxQueue"] == "4096", "chart default must equal the code default"
+
+    def test_gateway_deployment_wires_url_and_secret_in_sidecar_mode(self):
+        text = _template()
+        assert "{{- if .Values.sidecar.enabled }}" in text
+        assert "RAUCLE_RECEIPT_SIDECAR_URL" in text
+        assert "RAUCLE_RECEIPT_SIDECAR_SECRET" in text
+        # the URL points at the sidecar service, never a public host
+        assert "raucle-gateway.fullname" in text
+
+    def test_store_env_rows_are_gated_on_the_sidecar_being_disabled(self):
+        """No local store rows render in sidecar mode: the gateway's
+        two-writer guard refuses a sidecar URL plus a local projection,
+        so the chart must not pass both."""
+        text = _template()
+        if_pos = text.index("{{- if .Values.sidecar.enabled }}")
+        sidecar_pos = text.index("RAUCLE_RECEIPT_SIDECAR_URL")
+        else_pos = text.index("{{- else }}", sidecar_pos)
+        store_pos = text.index("RAUCLE_RECEIPT_STORE_DIR", else_pos)
+        assert if_pos < sidecar_pos < else_pos < store_pos, (
+            "the store rows must sit in the {{- else }} branch, behind the sidecar branch"
+        )
+
+    def test_gateway_data_mount_is_read_only_in_sidecar_mode(self):
+        text = _template()
+        assert "readOnly: {{ .Values.sidecar.enabled }}" in text
+
+    def test_sidecar_deployment_is_the_single_writer(self):
+        text = SIDECAR_DEPLOYMENT.read_text(encoding="utf-8")
+        assert "replicas: {{ .Values.sidecar.replicaCount }}" in text
+        assert "type: Recreate" in text, "one writer: never two sidecar pods at once"
+        assert 'command: ["raucle", "sidecar"]' in text
+        assert "RAUCLE_RECEIPT_SIDECAR_SECRET" in text
+        assert "RAUCLE_RECEIPT_SIDECAR_MAX_QUEUE" in text
+        assert "persistentVolumeClaim" in text, "the sidecar owns the data volume"
+        assert "readOnly: " not in text, "the sidecar mounts the store read-write"
+
+    def test_sidecar_store_knobs_reach_the_sidecar_argv(self):
+        """Every sidecar value maps to real configuration: the store knobs
+        are argv to `raucle sidecar`, and the env row no sidecar code
+        reads is gone."""
+        text = SIDECAR_DEPLOYMENT.read_text(encoding="utf-8")
+        assert "--max-segment-bytes" in text
+        assert ".Values.sidecar.receiptSegmentMaxBytes" in text
+        assert "--index-cache-mb" in text
+        assert ".Values.sidecar.indexCacheMb" in text
+        assert "RAUCLE_INDEX_CACHE_MB" not in text, (
+            "the sidecar reads no env cache knob; RAUCLE_INDEX_CACHE_MB is the gateway's own row"
+        )
+
+    def test_sidecar_service_is_clusterip_only(self):
+        text = SIDECAR_SERVICE.read_text(encoding="utf-8")
+        assert "type: ClusterIP" in text, "the sidecar must never be exposed past the cluster"
+        assert "raucle-gateway.fullname" in text
+
+    def test_secret_template_carries_the_sidecar_secret_conditionally(self):
+        text = SECRET_TEMPLATE.read_text(encoding="utf-8")
+        assert "{{- if .Values.sidecar.enabled }}" in text
+        assert "RAUCLE_RECEIPT_SIDECAR_SECRET" in text
+        assert "sidecar.secret is REQUIRED" in text
+
+    def test_prod_env_example_documents_the_sidecar_vars(self):
+        path = Path(__file__).resolve().parents[1] / "deploy" / "prod.env.example"
+        text = path.read_text(encoding="utf-8")
+        for name in (
+            "RAUCLE_RECEIPT_SIDECAR_URL",
+            "RAUCLE_RECEIPT_SIDECAR_SECRET",
+            "RAUCLE_RECEIPT_SIDECAR_TIMEOUT",
+            "RAUCLE_RECEIPT_SIDECAR_MAX_QUEUE",
+        ):
+            assert name in text, f"{name} missing from deploy/prod.env.example"
+
+    def test_sidecar_mode_puts_the_signer_key_on_a_writable_mount(self):
+        """/data is read-only on the gateways in sidecar mode, so the
+        signing key needs its own writable mount (the cold-standup
+        crash the read-only data mount otherwise causes)."""
+        text = _template()
+        assert "{{- if .Values.sidecar.enabled }}" in text
+        assert "/keys/gateway-signing-key.pem" in text
+        assert "- name: signer-key" in text
+        assert "mountPath: /keys" in text
+        assert 'claimName: {{ include "raucle-gateway.fullname" . }}-signer-key' in text
+        # the read-only data mount is unchanged
+        assert "readOnly: {{ .Values.sidecar.enabled }}" in text
+
+    def test_signer_key_claim_is_wired(self):
+        text = PVC_TEMPLATE.read_text(encoding="utf-8")
+        assert "{{- if and .Values.persistence.enabled .Values.sidecar.enabled }}" in text
+        assert 'name: {{ include "raucle-gateway.fullname" . }}-signer-key' in text
+        assert ".Values.persistence.signerKeySize" in text
+        assert _values()["persistence"]["signerKeySize"]
+
+    def test_no_include_uses_the_rebound_dot_in_sidecar_templates(self):
+        for path in (SIDECAR_DEPLOYMENT, SIDECAR_SERVICE, SECRET_TEMPLATE):
+            text = path.read_text(encoding="utf-8")
+            for block in re.finditer(
+                r"\{\{-\s*with[^}]*\}\}(.*?)\{\{-\s*end\s*\}\}", text, re.DOTALL
+            ):
+                bad = re.findall(r'include\s+"[^"]+"\s+\.\s*[}|]', block.group(1))
+                assert not bad, f"{path.name}: include with rebound dot: {bad}"

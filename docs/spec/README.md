@@ -43,6 +43,7 @@ protocol.
 |---|---|---|
 | Admin-plane OIDC identity federation + receipted admin sessions (X3 slice 1) | Shipped 2026-11-09 (PR #235) | [admin-identity-federation-x3s1.md](admin-identity-federation-x3s1.md) |
 | OIDC/SSO admin plane v1: sign-in receipt (subject + id-token digest), panel SSO, T-S3 and scale posture (X3 slice 2) | Accepted 2026-11-21 (lane L10) | [x3-oidc-admin-v1.md](x3-oidc-admin-v1.md) |
+| Single-writer receipt sidecar v0.1: one process owns chain append + index while gateway replicas scale (X3 slice 4) | Accepted 2026-11-23 (lane L15) | [x3-sidecar-v0.1.md](x3-sidecar-v0.1.md) |
 
 ## Process
 
