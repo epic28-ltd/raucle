@@ -38,6 +38,10 @@ spec:
             - "0.0.0.0"
             - --port
             - {{ .Values.sidecar.port | quote }}
+            - --max-segment-bytes
+            - {{ .Values.sidecar.receiptSegmentMaxBytes | quote }}
+            - --index-cache-mb
+            - {{ .Values.sidecar.indexCacheMb | quote }}
           env:
             - name: RAUCLE_RECEIPT_SIDECAR_SECRET
               valueFrom:
@@ -46,8 +50,6 @@ spec:
                   key: RAUCLE_RECEIPT_SIDECAR_SECRET
             - name: RAUCLE_RECEIPT_SIDECAR_MAX_QUEUE
               value: {{ .Values.sidecar.maxQueue | quote }}
-            - name: RAUCLE_INDEX_CACHE_MB
-              value: {{ .Values.sidecar.indexCacheMb | quote }}
           ports:
             - name: sidecar
               containerPort: {{ .Values.sidecar.port }}

@@ -114,7 +114,9 @@ sidecar:
   port: 8092
   maxQueue: "4096"         # RAUCLE_RECEIPT_SIDECAR_MAX_QUEUE (named overflow refusal past this)
   receiptStoreDir: /data/receipts-segments
-  receiptSegmentMaxBytes: "67108864"
+  # both knobs reach the sidecar service through its argv
+  # (templates/sidecar-deployment.yaml)
+  receiptSegmentMaxBytes: "67108864"   # --max-segment-bytes
   receiptIndexPath: /data/receipts-segments/index.sqlite
-  indexCacheMb: "64"
+  indexCacheMb: "64"                   # --index-cache-mb (RAUCLE_INDEX_CACHE_MB is the gateway's own cache knob)
   secret: ""               # REQUIRED when enabled; RAUCLE_RECEIPT_SIDECAR_SECRET

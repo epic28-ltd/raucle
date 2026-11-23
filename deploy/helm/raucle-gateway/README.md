@@ -30,6 +30,8 @@ X3 slice 4 values (spec: `docs/spec/x3-sidecar-v0.1.md`):
 | `sidecar.port` | sidecar listen port inside the cluster (default 8092, ClusterIP only, never the ingress) |
 | `sidecar.maxQueue` | bound on the submit queue; overflow is a named refusal the gateway receipts as an advisory |
 | `sidecar.receiptStoreDir` / `sidecar.receiptIndexPath` | the store the sidecar owns (gateways get the URL, not the paths) |
+| `sidecar.receiptSegmentMaxBytes` | segment rollover threshold in bytes; reaches the sidecar as `--max-segment-bytes` |
+| `sidecar.indexCacheMb` | SQLite page cache cap for the receipt index; reaches the sidecar as `--index-cache-mb` (`RAUCLE_INDEX_CACHE_MB` is the gateway's own knob) |
 | `sidecar.replicaCount` | pinned at 1; the single-writer honest note above |
 
 Honest notes for the sidecar mode:

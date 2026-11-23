@@ -159,6 +159,19 @@ class TestSidecarWiring:
         assert "persistentVolumeClaim" in text, "the sidecar owns the data volume"
         assert "readOnly: " not in text, "the sidecar mounts the store read-write"
 
+    def test_sidecar_store_knobs_reach_the_sidecar_argv(self):
+        """Every sidecar value maps to real configuration: the store knobs
+        are argv to `raucle sidecar`, and the env row no sidecar code
+        reads is gone."""
+        text = SIDECAR_DEPLOYMENT.read_text(encoding="utf-8")
+        assert "--max-segment-bytes" in text
+        assert ".Values.sidecar.receiptSegmentMaxBytes" in text
+        assert "--index-cache-mb" in text
+        assert ".Values.sidecar.indexCacheMb" in text
+        assert "RAUCLE_INDEX_CACHE_MB" not in text, (
+            "the sidecar reads no env cache knob; RAUCLE_INDEX_CACHE_MB is the gateway's own row"
+        )
+
     def test_sidecar_service_is_clusterip_only(self):
         text = SIDECAR_SERVICE.read_text(encoding="utf-8")
         assert "type: ClusterIP" in text, "the sidecar must never be exposed past the cluster"
