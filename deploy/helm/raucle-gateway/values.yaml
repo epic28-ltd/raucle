@@ -2,7 +2,11 @@
 # Every value maps to the documented gateway configuration; see
 # docs/getting-started/20-production-hardening.md for the reasoning.
 
-replicaCount: 1  # ONE writer per chain (tamper-evidence); see deployment-topologies.md
+# Without the sidecar every gateway writes the chain itself, so this
+# stays 1 (one writer per chain; docs/deployment-topologies.md). With
+# sidecar.enabled=true the sidecar is the single writer and this may
+# scale: replicas submit minted envelopes and never touch the store.
+replicaCount: 1
 
 image:
   repository: ghcr.io/epic28-ltd/raucle-gateway  # build from Dockerfile.gateway
@@ -34,6 +38,10 @@ persistence:
   enabled: true
   size: 10Gi
   storageClass: ""   # cluster default
+  # X3 slice 4: the signing key gets its own claim in sidecar mode (the
+  # data claim is read-only on the gateways there); replicas share it so
+  # the deployment mints under one gate identity.
+  signerKeySize: 1Gi
 
 # Gateway configuration (env-var names mirror the application)
 config:
@@ -67,6 +75,8 @@ config:
   bootMemCeilingMb: "0"
   bootScanWindowMb: "64"
   indexCacheMb: "64"
+  # Sidecar mode: the chart overrides this to the writable signer-key
+  # mount (/keys/gateway-signing-key.pem); /data is read-only there.
   signerKeyPath: /data/gateway-signing-key.pem
   healthKey: ""
   policyFile: /etc/raucle/policies.yaml
@@ -89,3 +99,24 @@ policies: {}
 tolerations: []
 nodeSelector: {}
 affinity: {}
+
+# X3 slice 4: the single-writer receipt sidecar
+# (docs/spec/x3-sidecar-v0.1.md). When enabled, ONE sidecar process owns
+# the receipt store and the index (it mounts the data volume
+# read-write; the gateways mount it read-only), and gateway replicas
+# submit their minted envelopes to it over a shared-secret handshake.
+# The gateway single-replica constraint lifts; the sidecar itself is
+# PINNED to one replica with a Recreate strategy: it is THE writer, and
+# the SQLite WAL never has two writer processes.
+sidecar:
+  enabled: false
+  replicaCount: 1          # PINNED: exactly one writer per chain
+  port: 8092
+  maxQueue: "4096"         # RAUCLE_RECEIPT_SIDECAR_MAX_QUEUE (named overflow refusal past this)
+  receiptStoreDir: /data/receipts-segments
+  # both knobs reach the sidecar service through its argv
+  # (templates/sidecar-deployment.yaml)
+  receiptSegmentMaxBytes: "67108864"   # --max-segment-bytes
+  receiptIndexPath: /data/receipts-segments/index.sqlite
+  indexCacheMb: "64"                   # --index-cache-mb (RAUCLE_INDEX_CACHE_MB is the gateway's own cache knob)
+  secret: ""               # REQUIRED when enabled; RAUCLE_RECEIPT_SIDECAR_SECRET

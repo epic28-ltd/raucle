@@ -1,5 +1,7 @@
 """Persistence tests: gateway signing key (A2) and admin users (A3)."""
 
+from pathlib import Path
+
 import pytest
 
 from raucle.gateway import GatewayConfig, RaucleGateway, UserManager
@@ -56,6 +58,43 @@ class TestSignerPersistence:
         key_path.write_bytes(pem)
         with pytest.raises(ValueError, match="not an Ed25519"):
             RaucleGateway(base_config)
+
+    def test_unwritable_key_path_refuses_boot_by_name(self, base_config, tmp_path):
+        """A raw OSError on the key path (a read-only mount, a bad
+        permission, a file where a directory belongs) is a named,
+        restart-required boot refusal, never a bare PermissionError."""
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_text("", encoding="utf-8")
+        base_config.signer_key_path = str(blocker / "deeper" / "key.pem")
+        with pytest.raises(ValueError) as caught:
+            RaucleGateway(base_config)
+        message = str(caught.value)
+        assert "signer_key_unwritable" in message
+        assert "RAUCLE_SIGNER_KEY_PATH" in message
+        assert "restart" in message
+        assert str(blocker / "deeper" / "key.pem") in message
+
+    def test_key_create_race_adopts_the_winner(self, base_config, monkeypatch):
+        """Sidecar-mode replicas share the key volume: the loser of the
+        O_EXCL create race adopts the winner's key, so one deployment
+        boots with one gate identity instead of crash-looping."""
+        gw1 = RaucleGateway(base_config)
+        key_path = gw1._signer_key_path()
+        assert key_path.exists()
+        real_exists = Path.exists
+        state = {"lies": 0}
+
+        def lying_once(target, *args, **kwargs):
+            if str(target) == str(key_path) and state["lies"] == 0:
+                state["lies"] += 1
+                return False
+            return real_exists(target, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "exists", lying_once)
+        gw2 = RaucleGateway(base_config)
+        assert state["lies"] == 1, "the create race must have been hit"
+        assert gw2._signer.key_id() == gw1._signer.key_id()
+        assert gw2._signer.public_key_pem() == gw1._signer.public_key_pem()
 
     def test_signer_survives_restart_and_old_tokens_verify(self, base_config, tmp_path):
         """The restart test a CTO runs: token minted by boot 1 verifies at boot 2."""

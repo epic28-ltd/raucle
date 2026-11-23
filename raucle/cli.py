@@ -205,6 +205,53 @@ def _build_parser() -> argparse.ArgumentParser:
         help=_HELP_RULES_DIR,
     )
 
+    # -- sidecar (X3 slice 4: the single-writer receipt sidecar) ------------
+    sidecar_p = subparsers.add_parser(
+        "sidecar",
+        help="Run the single-writer receipt sidecar (X3 slice 4)",
+    )
+    sidecar_p.add_argument(
+        "--store-dir",
+        required=True,
+        type=str,
+        help="Receipt store directory the sidecar owns",
+    )
+    sidecar_p.add_argument(
+        "--index-path",
+        type=str,
+        default="",
+        help="Index path (default: <store-dir>/index.sqlite)",
+    )
+    sidecar_p.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind address (default: 127.0.0.1; keep it on a trusted segment)",
+    )
+    sidecar_p.add_argument(
+        "--port",
+        type=int,
+        default=8092,
+        help="Port (default: 8092)",
+    )
+    sidecar_p.add_argument(
+        "--max-queue",
+        type=int,
+        default=None,
+        help="Bound on the submit queue (default: RAUCLE_RECEIPT_SIDECAR_MAX_QUEUE or 4096)",
+    )
+    sidecar_p.add_argument(
+        "--max-segment-bytes",
+        type=int,
+        default=67108864,
+        help="Segment rollover threshold in bytes (default: 67108864)",
+    )
+    sidecar_p.add_argument(
+        "--index-cache-mb",
+        type=int,
+        default=64,
+        help="SQLite page cache cap for the index in MiB (default: 64)",
+    )
+
     # -- urlgate (EPIC O3: URL-switch gate proxy for SDK clients) -----------
     urlgate_p = subparsers.add_parser(
         "urlgate",
@@ -1360,6 +1407,56 @@ def _urlgate_default_upstream() -> str:
         return DEFAULT_UPSTREAM
     except Exception:
         return "https://api.openai.com"
+
+
+def _cmd_sidecar(args: argparse.Namespace) -> int:
+    """Run the single-writer receipt sidecar (X3 slice 4).
+
+    The sidecar is THE owner of the receipt chain and index append path:
+    gateway replicas submit their minted envelopes here over local HTTP
+    with a shared-secret handshake. The secret comes from
+    RAUCLE_RECEIPT_SIDECAR_SECRET only (never argv), and the process
+    refuses to start without it.
+    """
+    import os
+    import time as _time
+
+    from raucle.sidecar import ReceiptSidecar, _sidecar_max_queue_from_env
+
+    secret = os.environ.get("RAUCLE_RECEIPT_SIDECAR_SECRET", "")
+    try:
+        sidecar = ReceiptSidecar(
+            store_dir=args.store_dir,
+            secret=secret,
+            index_path=args.index_path or None,
+            host=args.host,
+            port=args.port,
+            max_queue=args.max_queue if args.max_queue else _sidecar_max_queue_from_env(),
+            max_segment_bytes=args.max_segment_bytes,
+            index_cache_mb=args.index_cache_mb,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    sidecar.start()
+    print(
+        f"receipt sidecar: single writer listening on {sidecar.url} "
+        f"(store={args.store_dir}, index={args.index_path or 'default'}, "
+        "secret handshake required; gateways submit via "
+        "RAUCLE_RECEIPT_SIDECAR_URL)"
+    )
+    try:
+        while True:
+            _time.sleep(3600)
+    except KeyboardInterrupt:
+        print("receipt sidecar: shutting down (draining the submit queue)")
+    finally:
+        counts = sidecar.stop()
+        print(
+            f"receipt sidecar: stopped; written={counts['written']} "
+            f"lost={counts['lost']} (named counters, never a silent guess)"
+        )
+    return 0
 
 
 def _cmd_urlgate(args: argparse.Namespace) -> int:
@@ -3636,6 +3733,7 @@ def _dispatch(argv: list[str] | None = None) -> int:
         "scan-pdf": _cmd_scan_pdf,
         "scrub": _cmd_scrub,
         "serve": _cmd_serve,
+        "sidecar": _cmd_sidecar,
         "urlgate": _cmd_urlgate,
         "watch": _cmd_watch,
         "registry": _cmd_registry,
