@@ -10,8 +10,9 @@ allowed), and the hosted transparency log's inclusion proof supplies the
 registration leg (when it was registered).
 
 These tests pin the OSS Python verify path; the shipped browser page
-(assets/verifier/x2-verifier.html) mirrors it and is exercised by the node
-harness plus the page-contract tests in test_x2_cross_org_page.py.
+(assets/verifier/x2-verifier.html) mirrors it and is exercised by the
+node harness (tests/verifier_harness/x2_harness.mjs) that
+tests/test_x2_verifier.py drives.
 """
 
 from __future__ import annotations
