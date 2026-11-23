@@ -42,8 +42,18 @@ Honest notes for the sidecar mode:
 - In sidecar mode the gateways run without a local index, so their
   receipt query surfaces answer as any no-index deployment does; the
   chain and the index live on the sidecar's volume.
+- The gateways mount `/data` read-only in this mode, so the signing key
+  has its own writable volume (mounted at `/keys`, claim
+  `<fullname>-signer-key` with persistence, an emptyDir otherwise; the
+  chart points `RAUCLE_SIGNER_KEY_PATH` there). Replicas share the key
+  volume: the first replica creates the key, the rest adopt it, so the
+  deployment mints under one gate identity. An unwritable key path is a
+  named boot refusal (`signer_key_unwritable`) that asks for a restart.
 
-Policies mount as a ConfigMap (edit `policies` in values). Keys, receipts,
-index and registry live on the PVC under `/data`. See
+Policies mount as a ConfigMap (edit `policies` in values). Without the
+sidecar, keys, receipts, index and registry live on the PVC under
+`/data`. In sidecar mode the gateways mount `/data` read-only (the
+sidecar owns the store and the index) and the signing key lives on its
+own writable volume (see the notes above). See
 `docs/getting-started/20-production-hardening.md` for the rest of the
 checklist.

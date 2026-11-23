@@ -86,6 +86,12 @@ rule MOVES into a sidecar process instead of pinning the gateway.
 - One `raucle sidecar` process owns the store directory and the index;
   gateway replicas submit minted envelopes to it over local HTTP with a
   shared-secret handshake and never touch the chain files.
+- The gateways mount the store read-only; the signing key is the one
+  writable surface they keep: its own volume at `/keys` (the chart
+  points `RAUCLE_SIGNER_KEY_PATH` there in this mode), shared by the
+  replicas so the topology mints under one gate identity. An unwritable
+  key path is a named boot refusal (`signer_key_unwritable`), never a
+  crash loop.
 - The gateways may scale horizontally; the sidecar stays at exactly one
   replica (Recreate). The tamper-evidence contract is unchanged: still
   one writer per chain, just a different process holding the pen.

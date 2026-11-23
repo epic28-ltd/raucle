@@ -1880,15 +1880,32 @@ class RaucleGateway:
             logger.info("loaded gateway signing key %s (key_id=%s)", key_path, signer.key_id())
             return signer
 
-        key_path.parent.mkdir(parents=True, exist_ok=True)
         private_key = Ed25519PrivateKey.generate()
         pem = private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.PKCS8,
             encryption_algorithm=serialization.NoEncryption(),
         )
-        # 0600 from creation
-        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            key_path.parent.mkdir(parents=True, exist_ok=True)
+            # 0600 from creation
+            fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            # Sidecar-mode replicas share the signer-key volume: losing the
+            # create race is another replica's O_EXCL win, and that key is
+            # the deployment's gate identity. Adopt it instead of refusing
+            # the boot.
+            return self._load_or_create_local_signer(key_path)
+        except OSError as err:
+            # An unwritable key path (a read-only mount, a bad permission)
+            # is a named, operator-actionable boot refusal, never a raw
+            # PermissionError: the storage fix needs a restart.
+            raise ValueError(
+                f"signer_key_unwritable: gateway signing key {key_path} cannot "
+                f"be created ({err}); make the key path writable (a writable "
+                "volume at RAUCLE_SIGNER_KEY_PATH, or fixed permissions) and "
+                "restart the process"
+            ) from None
         with os.fdopen(fd, "wb") as fh:
             fh.write(pem)
             fh.flush()

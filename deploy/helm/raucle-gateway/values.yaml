@@ -38,6 +38,10 @@ persistence:
   enabled: true
   size: 10Gi
   storageClass: ""   # cluster default
+  # X3 slice 4: the signing key gets its own claim in sidecar mode (the
+  # data claim is read-only on the gateways there); replicas share it so
+  # the deployment mints under one gate identity.
+  signerKeySize: 1Gi
 
 # Gateway configuration (env-var names mirror the application)
 config:
@@ -71,6 +75,8 @@ config:
   bootMemCeilingMb: "0"
   bootScanWindowMb: "64"
   indexCacheMb: "64"
+  # Sidecar mode: the chart overrides this to the writable signer-key
+  # mount (/keys/gateway-signing-key.pem); /data is read-only there.
   signerKeyPath: /data/gateway-signing-key.pem
   healthKey: ""
   policyFile: /etc/raucle/policies.yaml

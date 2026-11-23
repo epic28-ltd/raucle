@@ -110,8 +110,15 @@ spec:
               value: {{ .Values.config.bootScanWindowMb | quote }}
             - name: RAUCLE_INDEX_CACHE_MB
               value: {{ .Values.config.indexCacheMb | quote }}
+            {{- if .Values.sidecar.enabled }}
+            # X3 slice 4: /data is read-only in sidecar mode by design, so
+            # the local signing key gets its own writable mount instead.
+            - name: RAUCLE_SIGNER_KEY_PATH
+              value: /keys/gateway-signing-key.pem
+            {{- else }}
             - name: RAUCLE_SIGNER_KEY_PATH
               value: {{ .Values.config.signerKeyPath | quote }}
+            {{- end }}
             - name: RAUCLE_POLICY_FILE
               value: {{ .Values.config.policyFile | quote }}
             - name: RAUCLE_POLICY_DIR
@@ -142,6 +149,12 @@ spec:
               # writes the store; the mount is read-only by deployment
               # shape, not only by configuration.
               readOnly: {{ .Values.sidecar.enabled }}
+            {{- if .Values.sidecar.enabled }}
+            # the signing key's own writable mount: the gateway's only
+            # write surface in sidecar mode
+            - name: signer-key
+              mountPath: /keys
+            {{- end }}
             - name: policies
               mountPath: /etc/raucle/policies
               readOnly: true
@@ -167,6 +180,18 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- if .Values.sidecar.enabled }}
+        # the signing key: shared by the replicas so the deployment mints
+        # under one gate identity; the first replica creates the key, the
+        # rest adopt it
+        - name: signer-key
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "raucle-gateway.fullname" . }}-signer-key
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
         - name: policies
           configMap:
             name: {{ include "raucle-gateway.fullname" . }}-config

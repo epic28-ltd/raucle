@@ -97,6 +97,7 @@ class TestProdEnvExample:
 SIDECAR_DEPLOYMENT = CHART / "templates" / "sidecar-deployment.yaml"
 SIDECAR_SERVICE = CHART / "templates" / "sidecar-service.yaml"
 SECRET_TEMPLATE = CHART / "templates" / "secret.yaml"
+PVC_TEMPLATE = CHART / "templates" / "pvc.yaml"
 
 
 class TestSidecarWiring:
@@ -179,6 +180,26 @@ class TestSidecarWiring:
             "RAUCLE_RECEIPT_SIDECAR_MAX_QUEUE",
         ):
             assert name in text, f"{name} missing from deploy/prod.env.example"
+
+    def test_sidecar_mode_puts_the_signer_key_on_a_writable_mount(self):
+        """/data is read-only on the gateways in sidecar mode, so the
+        signing key needs its own writable mount (the cold-standup
+        crash the read-only data mount otherwise causes)."""
+        text = _template()
+        assert "{{- if .Values.sidecar.enabled }}" in text
+        assert "/keys/gateway-signing-key.pem" in text
+        assert "- name: signer-key" in text
+        assert "mountPath: /keys" in text
+        assert 'claimName: {{ include "raucle-gateway.fullname" . }}-signer-key' in text
+        # the read-only data mount is unchanged
+        assert "readOnly: {{ .Values.sidecar.enabled }}" in text
+
+    def test_signer_key_claim_is_wired(self):
+        text = PVC_TEMPLATE.read_text(encoding="utf-8")
+        assert "{{- if and .Values.persistence.enabled .Values.sidecar.enabled }}" in text
+        assert 'name: {{ include "raucle-gateway.fullname" . }}-signer-key' in text
+        assert ".Values.persistence.signerKeySize" in text
+        assert _values()["persistence"]["signerKeySize"]
 
     def test_no_include_uses_the_rebound_dot_in_sidecar_templates(self):
         for path in (SIDECAR_DEPLOYMENT, SIDECAR_SERVICE, SECRET_TEMPLATE):
