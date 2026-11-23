@@ -6,7 +6,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>raucle offline verifier — receipts &amp; audit packs</title>
+<title>raucle offline verifier - receipts &amp; audit packs</title>
 <style>
   :root { font-family: system-ui, sans-serif; }
   body { background: #fff; color: #111; margin: 2rem; max-width: 60rem; }
@@ -37,7 +37,7 @@
 <p class="muted">
   Verifies raucle audit packs (<code>PACK.json</code>, manifest, receipt chain) or a bare
   receipt chain / single receipt <em>entirely in your browser</em>. This page makes no
-  network connections after load — drop in files, get a verdict. Public keys must ship
+  network connections after load - drop in files, get a verdict. Public keys must ship
   inside the pack (that is what an audit pack is for); nothing is retrieved.
 </p>
 <h2>1 · Provide the artefact</h2>
@@ -46,7 +46,7 @@
   <input id="files" type="file" multiple webkitdirectory />
   <input id="multi" type="file" multiple accept=".json,.jsonl,.pem" />
 </div>
-<h2>— or paste a receipt / chain —</h2>
+<h2>or paste a receipt / chain</h2>
 <p class="muted">One receipt JWS per line, or <code>{"receipt_hash": …, "jws": …}</code> JSONL envelopes.
 Verify against the keys the pack carried (below) or a pasted PEM.</p>
 <textarea id="pastec" placeholder='{"receipt_hash":"sha256:…","jws":"…"}'></textarea>
@@ -64,12 +64,12 @@ Verify against the keys the pack carried (below) or a pasted PEM.</p>
 </p>
 <textarea id="xorg-receipt" placeholder="the receipt: chain envelope lines {&quot;receipt_hash&quot;:…,&quot;jws&quot;:…}, or a bare compact JWS"></textarea>
 <textarea id="xorg-registry" placeholder="the registry artifact (trust-registry JSONL, one entry per line)"></textarea>
-<textarea id="xorg-anchor" placeholder="registry operator public key — the pinned anchor (out of band): -----BEGIN PUBLIC KEY-----"></textarea>
+<textarea id="xorg-anchor" placeholder="registry operator public key; the pinned anchor (out of band): -----BEGIN PUBLIC KEY-----"></textarea>
 <div class="muted">Optional freshness pins (a stale snapshot can hide a later revocation):</div>
 <input id="xorg-min-index" type="number" min="0" placeholder="minimum head index" />
 <input id="xorg-head-hash" placeholder="expected head hash (sha256:&hellip;)" />
 <input id="xorg-max-age" type="number" min="0" placeholder="maximum artifact age in seconds" />
-<textarea id="xorg-log-proof" placeholder="optional third leg: the transparency log inclusion proof (JSON) — when was it registered"></textarea>
+<textarea id="xorg-log-proof" placeholder="optional third leg: the transparency log inclusion proof (JSON), when was it registered"></textarea>
 <textarea id="xorg-log-key" placeholder="log operator public key (pinned, a separate anchor): -----BEGIN PUBLIC KEY-----"></textarea>
 <button id="xorg-run">verify cross-org</button>
 
@@ -79,7 +79,7 @@ Verify against the keys the pack carried (below) or a pasted PEM.</p>
 <div id="results"></div>
 <h2>3 · The verification recipe this page runs</h2>
 <div id="recipe"><pre>
-Verification recipe — what this page checks, in order:
+Verification recipe: what this page checks, in order:
 
 1. PACK.json (index): a JSON object of kind 'raucle-audit-pack/v1'. Verify its
    Ed25519 signature: re-serialise the index WITHOUT audit_public_key_pem and
@@ -108,7 +108,7 @@ Verification recipe — what this page checks, in order:
      d. payload: typ 'provenance-receipt/v1', non-empty iss;
      e. the Ed25519 signature over the raw signing input
         (base64url(header) + '.' + base64url(payload)) verifies against the
-        bundled public key for agent_key_id — fail-closed: an unknown key id
+        bundled public key for agent_key_id; fail-closed: an unknown key id
         is a denial, never a pass-through;
      f. receipt_hash equals sha256 over the exact JWS ascii bytes;
      g. every parent receipt_hash cited by the receipt appears in the chain.
@@ -117,13 +117,13 @@ Verification recipe — what this page checks, in order:
    receipt must never be reported as verified. Packs that declare
    require_pq are likewise denied outright.
 
-Trust note: a self-signed pack proves internal consistency only — anyone can
+Trust note: a self-signed pack proves internal consistency only: anyone can
 rebuild and sign their own pack. Pin the custodian's audit key id (the
 signer shown on a verified pack) out of band to get 'this pack came from
 that custodian'.
 
 All of the above is recomputed locally from the dropped bytes alone. The page
-performs no network I/O — no keys or data leave the browser, and nothing is
+performs no network I/O: no keys or data leave the browser, and nothing is
 looked up anywhere.
 </pre></div>
 <script id="x2-verifier-core">
@@ -170,7 +170,7 @@ var X2V = (function () {
     }).join("");
   }
   /* JCS (RFC 8785) per raucle's _canonical_json: sort object keys by UTF-16
-     code units, no whitespace, raw UTF-8, integers-and-stringables only —
+     code units, no whitespace, raw UTF-8, integers-and-stringables only;
      floats and NaN/Infinity are rejected exactly as Python rejects them. */
   function canon(obj, path) {
     path = path || "$";
@@ -202,7 +202,7 @@ var X2V = (function () {
   }
   function canonBytes(obj) { return enc(canon(obj)); }
 
-  /* JSON parser that rejects duplicate object keys — same object-smuggling
+  /* JSON parser that rejects duplicate object keys: same object-smuggling
      defence as the Python verifier's object_pairs_hook. */
   function parseNoDup(text) {
     var pos = 0;
@@ -608,7 +608,7 @@ var X2V = (function () {
         r.key_id = (await sha256hex(enc(String(pem)))).slice(0, 16);
       } else {
         r.sig_ok = null;
-        r.reasons.push("no public key supplied — signature unverifiable (fail-closed); pass the bundle's PEM");
+        r.reasons.push("no public key supplied; signature unverifiable (fail-closed); pass the bundle's PEM");
       }
       r.status = r.hash_ok && r.sig_ok !== false ? (r.sig_ok === true ? "green" : "warn") : "red";
       var pay = JSON.parse(dec(b64uDecode(parts[1])));
@@ -1318,7 +1318,7 @@ var X2V = (function () {
   function renderVerdict(el, ok, label, extra) {
     el.style.display = "block";
     el.className = ok ? "verified" : "deny";
-    el.textContent = (ok ? "VERIFIED — " : "DENY — ") + label + (extra ? " · " + extra : "");
+    el.textContent = (ok ? "VERIFIED - " : "DENY - ") + label + (extra ? " · " + extra : "");
   }
   function table(lines) {
     var html = "<table><tr><th>line</th><th>agent</th><th>operation</th><th>key id</th><th>status</th><th>detail</th></tr>";
@@ -1332,7 +1332,7 @@ var X2V = (function () {
   function checkList(checks) {
     var html = "<ul class='reasons'>";
     checks.forEach(function (c) {
-      html += "<li>" + (c.ok ? "✔" : "✘") + " " + c.check + (c.reasons.length ? " — " + c.reasons.join("; ") : "") + "</li>";
+      html += "<li>" + (c.ok ? "✔" : "✘") + " " + c.check + (c.reasons.length ? ": " + c.reasons.join("; ") : "") + "</li>";
     });
     return html + "</ul>";
   }
@@ -1447,7 +1447,7 @@ document.getElementById("xorg-run").addEventListener("click", async function () 
       }
       C.innerHTML = "<ul class='reasons'>" + legs.map(function (c) {
         return "<li>" + (c.ok === true ? "✔" : c.ok === null ? "·" : "✘") + " " + c.check +
-          (c.reasons && c.reasons.length ? " — " + c.reasons.join("; ") : "") + "</li>";
+          (c.reasons && c.reasons.length ? ": " + c.reasons.join("; ") : "") + "</li>";
       }).join("") + "</ul>";
       R.innerHTML = table(v.lines);
     } catch (e) {
@@ -1462,7 +1462,7 @@ document.getElementById("xorg-run").addEventListener("click", async function () 
     try {
       var r = await X2V.verifySingleJWS(jws, pem);
       renderVerdict(V, r.status === "green", "receipt " + (r.agent_id || ""), r.receipt_hash ? r.receipt_hash.slice(0, 23) + "… (hash recompute green)" : "");
-      R.innerHTML = "<ul class='reasons'><li>signature: " + (r.sig_ok === true ? "green against pasted key " + r.key_id : r.sig_ok === false ? "RED — signature did not verify" : "unstated (no key)") + "</li><li>receipt_hash recompute: " + (r.hash_ok ? "green" : "RED") + "</li>" + r.reasons.map(function (x) { return "<li>" + x + "</li>"; }).join("") + "</ul>";
+      R.innerHTML = "<ul class='reasons'><li>signature: " + (r.sig_ok === true ? "green against pasted key " + r.key_id : r.sig_ok === false ? "RED: signature did not verify" : "unstated (no key)") + "</li><li>receipt_hash recompute: " + (r.hash_ok ? "green" : "RED") + "</li>" + r.reasons.map(function (x) { return "<li>" + x + "</li>"; }).join("") + "</ul>";
       C.innerHTML = "";
     } catch (e) {
       renderVerdict(V, false, "receipt error", String(e.message));
