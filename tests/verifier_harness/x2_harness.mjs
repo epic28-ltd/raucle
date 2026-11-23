@@ -276,6 +276,36 @@ expect(xlogUnpinned.valid === false && xlogUnpinned.log_status === "LOG-UNPINNED
   }
 }
 
+// 17. optional cross-org scenario pack (argv[3], a JSON file written by the
+//     pytest run): cases minted by the real production code paths, each
+//     naming the inputs and the expected fail-closed outcome of the shipped
+//     page's cross-org verifier.
+if (process.argv[3]) {
+  const scenarios = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+  for (const c of scenarios.cases) {
+    const v = await X2V.verifyCrossOrg(c.chain, c.registry, c.opts || {});
+    const want = c.expect || {};
+    results.scenarios = results.scenarios || [];
+    results.scenarios.push({
+      name: c.name, valid: v.valid, registry_ok: v.registry_ok, scope: v.scope,
+      reasons: v.reasons.slice(0, 3),
+    });
+    if (want.valid !== undefined) {
+      expect(v.valid === want.valid, c.name + ": valid", v.reasons);
+    }
+    if (want.registry_ok !== undefined) {
+      expect(v.registry_ok === want.registry_ok, c.name + ": registry_ok", v.registry_reasons);
+    }
+    if (want.scope !== undefined) {
+      expect(v.scope === want.scope, c.name + ": scope", v.reasons);
+    }
+    (want.reasonIncludes || []).forEach((s) => {
+      expect(JSON.stringify(v.reasons).includes(s),
+        c.name + ": named reason " + JSON.stringify(s), v.reasons);
+    });
+  }
+}
+
 if (failures.length) {
   console.log(JSON.stringify({ ok: false, failures }, null, 2));
   process.exit(1);

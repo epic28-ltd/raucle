@@ -18,6 +18,8 @@ tests/test_x2_verifier.py drives.
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -673,3 +675,86 @@ def test_from_jsonl_rejects_duplicate_keys():
     assert doctored != raw
     with pytest.raises(Exception):  # noqa: B017 - named via the rejecter
         TrustRegistry.from_jsonl(doctored)
+
+
+# ---------------------------------------------------------------------------
+# The registry-vs-page parity pins (X2 slice 3)
+# ---------------------------------------------------------------------------
+
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _node_available() -> bool:
+    return shutil.which("node") is not None
+
+
+def _hybrid_decorated_registry(path: Path, *, pq_key_id: str) -> str:
+    """The registry artifact with its register entry additionally declaring
+    operator_pq_key_id: a hybrid-declared signature the verifier cannot
+    accept without the ML-DSA-65 component verifying. Those fields are
+    excluded from the entry body, so the entry hash and chain stay intact
+    and only the hybrid leg decides the verdict."""
+    lines = path.read_text(encoding="utf-8").strip().splitlines()
+    entry = json.loads(lines[1])
+    entry["operator_pq_key_id"] = pq_key_id
+    lines[1] = json.dumps(entry)
+    return "\n".join(lines) + "\n"
+
+
+def test_hybrid_registry_entry_refuses_named(tmp_path):
+    """An entry declaring operator_pq_key_id must fail closed when its
+    ML-DSA-65 operator signature component cannot be verified: classical-only
+    acceptance of a hybrid entry is never green."""
+    operator = _operator_signer()
+    identity = _org_a_identity()
+    _registry(identity, operator, path=tmp_path / "registry.jsonl")
+    line, _chain, _rh = _receipt_chain(identity, tmp_path / "sub")
+    hybrid = _hybrid_decorated_registry(tmp_path / "registry.jsonl", pq_key_id="0" * 16)
+
+    v = verify_receipt_cross_org(
+        line,
+        registry_jsonl=hybrid,
+        operator_public_pem=operator.public_key_pem(),
+    )
+    assert not v.valid
+    assert not v.registry_verified
+    assert "hybrid entry carries operator_pq_key_id" in " ".join(v.reasons)
+
+
+@pytest.mark.skipif(not _node_available(), reason="node unavailable")
+def test_page_registry_leg_refuses_hybrid_entry(tmp_path):
+    """The shipped X2 page refuses the artifact the OSS registry leg refuses:
+    an entry declaring operator_pq_key_id without a verifiable ML-DSA-65
+    operator signature component fails closed with a named reason."""
+    operator = _operator_signer()
+    identity = _org_a_identity()
+    _registry(identity, operator, path=tmp_path / "registry.jsonl")
+    line, _chain, _rh = _receipt_chain(identity, tmp_path / "sub")
+    hybrid = _hybrid_decorated_registry(tmp_path / "registry.jsonl", pq_key_id="0" * 16)
+    scenarios = {
+        "cases": [
+            {
+                "name": "hybrid registry entry without a verifiable ML-DSA-65 component",
+                "chain": line,
+                "registry": hybrid,
+                "opts": {"operatorPem": operator.public_key_pem().decode("ascii")},
+                "expect": {
+                    "valid": False,
+                    "registry_ok": False,
+                    "reasonIncludes": ["ML-DSA-65 operator signature component"],
+                },
+            }
+        ]
+    }
+    scen = tmp_path / "scenarios.json"
+    scen.write_text(json.dumps(scenarios), encoding="utf-8")
+    harness = ROOT / "tests" / "verifier_harness" / "x2_harness.mjs"
+    r = subprocess.run(
+        ["node", str(harness), str(ROOT), str(scen)],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=ROOT,
+    )
+    assert r.returncode == 0, f"harness failed:\n{r.stdout}\n{r.stderr}"

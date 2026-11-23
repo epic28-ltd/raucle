@@ -710,6 +710,14 @@ var X2V = (function () {
           out.reasons.push("entry " + i + ": operator signature invalid against the pinned anchor");
         }
       }
+      /* Fail closed on a hybrid-declared entry exactly like the OSS registry
+         leg: an entry carrying operator_pq_key_id MUST have its ML-DSA-65
+         operator signature component verified, and the browser cannot verify
+         ML-DSA-65. Classical-only acceptance of a hybrid entry is never green. */
+      if (e.operator_pq_key_id) {
+        out.reasons.push("entry " + i + ": hybrid entry carries operator_pq_key_id and its " +
+          "ML-DSA-65 operator signature component cannot be verified in-browser (fail-closed)");
+      }
       if (e.type === "register") {
         var kid = (await sha256hex(enc(String(e.public_key_pem)))).slice(0, 16);
         if (e.key_id !== kid) {
