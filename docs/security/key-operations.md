@@ -39,9 +39,15 @@ raucle registry revoke <old-key-id> --reason "scheduled rotation"
 #    - after revoke, only the new generation authorises
 ```
 
-Gateway signing-key rotation (the `agent:gate` identity) is a restart
-procedure: archive the PEM, remove it, boot. The new boot generates a new
-identity; the archived public key verifies every old receipt offline,
+Gateway signing-key rotation (the `agent:gate` identity): with an operator
+key registry configured (`RAUCLE_OPERATOR_KEY_REGISTRY`), `raucle operator
+rotate-keys` is the receipted path. It re-registers the successor in the
+registry (the old key retires, still verifiable), archives the old PEM
+without deleting it and verifies a fresh boot signs with the new key
+(runbook: docs/ops/key-rotation.md; `tests/test_key_rotation.py` is the
+proof). Without a registry the hand path stands: archive the PEM, remove
+it, boot, and the boot guard stays out of the way. The new boot generates a
+new identity; the archived public key verifies every old receipt offline,
 forever. Old and new receipts coexist in one chain - verification needs
 both public keys, which is what audit packs bundle (`--pubkeys` accepts
 several). The TEE (`RAUCLE_SIGNER=tee`) backend replaces this host PEM
