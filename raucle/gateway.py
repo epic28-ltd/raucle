@@ -1496,11 +1496,15 @@ class RaucleGateway:
             from raucle.sidecar import SidecarClient
 
             if not config.receipt_sidecar_secret:
-                logger.error(
-                    "RAUCLE_RECEIPT_SIDECAR_URL is set but "
-                    "RAUCLE_RECEIPT_SIDECAR_SECRET is empty; receipts will "
-                    "be lost by name on every submit (fail-open for "
-                    "persistence only, never for enforcement)"
+                # Spec (docs/spec/x3-sidecar-v0.1.md): the sidecar refuses
+                # to boot without the shared secret and the gateway refuses
+                # sidecar mode without it. An empty secret would lose every
+                # minted receipt by name on every submit.
+                raise ValueError(
+                    "receipt sidecar mode requires RAUCLE_RECEIPT_SIDECAR_SECRET "
+                    "(fail closed): without the shared secret every submit is "
+                    "an unauthorized refusal and every receipt is lost; set "
+                    "the secret and restart"
                 )
             self._sidecar_client = SidecarClient(
                 url=config.receipt_sidecar_url,

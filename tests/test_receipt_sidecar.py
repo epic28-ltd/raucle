@@ -389,6 +389,27 @@ class TestMisconfigurationGuard:
         with pytest.raises(ValueError, match="single-writer guard"):
             RaucleGateway(cfg)
 
+    def test_sidecar_mode_without_secret_refuses_to_boot(self, tmp_path):
+        """Gateway-side mirror of the sidecar's empty-secret refusal: the
+        spec is normative on both sides (docs/spec/x3-sidecar-v0.1.md)."""
+        cfg = GatewayConfig(
+            host="127.0.0.1",
+            admin_api_key="k",
+            signer_backend="local",
+            policy_file="",
+            receipt_store=str(tmp_path / "nosecret-legacy.jsonl"),
+            audit_chain=str(tmp_path / "nosecret-audit.jsonl"),
+            registry_path=str(tmp_path / "nosecret-registry.jsonl"),
+            emit_receipts=True,
+            receipt_sidecar_url="http://127.0.0.1:1/",
+            receipt_sidecar_secret="",
+        )
+        policy = tmp_path / "nosecret-policies.yaml"
+        policy.write_text(POLICY, encoding="utf-8")
+        cfg.policy_file = str(policy)
+        with pytest.raises(ValueError, match="RAUCLE_RECEIPT_SIDECAR_SECRET"):
+            RaucleGateway(cfg)
+
     def test_env_round_trip(self, monkeypatch):
         monkeypatch.setenv("RAUCLE_RECEIPT_SIDECAR_URL", "http://sidecar:8092")
         monkeypatch.setenv("RAUCLE_RECEIPT_SIDECAR_SECRET", "s3cret")
