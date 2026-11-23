@@ -77,12 +77,27 @@ spec:
             {{- end }}
             - name: RAUCLE_EMIT_RECEIPTS
               value: {{ .Values.config.emitReceipts | quote }}
+            {{- if .Values.sidecar.enabled }}
+            # X3 slice 4: this gateway owns no chain write; the sidecar is
+            # the deployment's single writer. No RAUCLE_RECEIPT_STORE_DIR or
+            # RAUCLE_RECEIPT_INDEX_PATH rows appear in this mode (the
+            # gateway's two-writer guard refuses a local projection plus a
+            # sidecar URL).
+            - name: RAUCLE_RECEIPT_SIDECAR_URL
+              value: "http://{{ include "raucle-gateway.fullname" . }}-sidecar:{{ .Values.sidecar.port }}"
+            - name: RAUCLE_RECEIPT_SIDECAR_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "raucle-gateway.fullname" . }}-secrets
+                  key: RAUCLE_RECEIPT_SIDECAR_SECRET
+            {{- else }}
             - name: RAUCLE_RECEIPT_STORE_DIR
               value: {{ .Values.config.receiptStoreDir | quote }}
             - name: RAUCLE_RECEIPT_SEGMENT_MAX_BYTES
               value: {{ .Values.config.receiptSegmentMaxBytes | quote }}
             - name: RAUCLE_RECEIPT_INDEX_PATH
               value: {{ .Values.config.receiptIndexPath | quote }}
+            {{- end }}
             - name: RAUCLE_SESSION_WINDOW_TTL_SECONDS
               value: {{ .Values.config.sessionWindowTtlSeconds | quote }}
             - name: RAUCLE_SESSION_WINDOW_MAX_KEYS
@@ -123,6 +138,10 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+              # X3 slice 4: with the sidecar enabled the gateway never
+              # writes the store; the mount is read-only by deployment
+              # shape, not only by configuration.
+              readOnly: {{ .Values.sidecar.enabled }}
             - name: policies
               mountPath: /etc/raucle/policies
               readOnly: true

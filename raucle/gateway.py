@@ -210,6 +210,14 @@ class GatewayConfig:
     receipt_store: str = "/data/receipts.jsonl"
     audit_chain: str = "/data/audit.jsonl"
 
+    # X3 slice 4: the single-writer receipt sidecar. When the URL is set
+    # this gateway no longer writes the chain or the index; it submits
+    # each minted envelope to the sidecar (the deployment's single
+    # writer). The secret is env-only: it never enters a config document.
+    receipt_sidecar_url: str = ""
+    receipt_sidecar_secret: str = ""
+    receipt_sidecar_timeout: float = 2.0
+
     # Gate authentication: "off" (trusted internal network, declared
     # agent_id), "apikey" (per-agent API key, X-Api-Key header), or
     # "token" (capability token, X-Capability-Token header - the
@@ -414,6 +422,11 @@ class GatewayConfig:
                 os.environ.get("RAUCLE_RECEIPT_SEGMENT_MAX_BYTES", "67108864")
             ),
             receipt_index_path=os.environ.get("RAUCLE_RECEIPT_INDEX_PATH", ""),
+            receipt_sidecar_url=os.environ.get("RAUCLE_RECEIPT_SIDECAR_URL", ""),
+            receipt_sidecar_secret=os.environ.get("RAUCLE_RECEIPT_SIDECAR_SECRET", ""),
+            receipt_sidecar_timeout=float(
+                os.environ.get("RAUCLE_RECEIPT_SIDECAR_TIMEOUT", "2.0") or "2.0"
+            ),
             deployment_trust=_deployment_trust_from_env(),
             oidc_enabled=os.environ.get("RAUCLE_OIDC_ENABLED", "").lower() in ("1", "true", "yes"),
             oidc_issuer=os.environ.get("RAUCLE_OIDC_ISSUER", ""),
@@ -1460,7 +1473,47 @@ class RaucleGateway:
         (no store dir), the index stays off unless an explicit path is
         given (the flat file has no segments to rebuild from, so the index
         must be fed live only).
+
+        X3 slice 4: with a sidecar URL configured this gateway owns no
+        write projection at all; the sidecar is the deployment's single
+        writer. A URL configured together with a local projection is the
+        two-writer deployment this slice exists to prevent, so it is a
+        named boot refusal.
         """
+        self._sidecar_client = None
+        self._pending_sidecar_advisories: deque = deque(maxlen=128)
+        if config.receipt_sidecar_url:
+            if config.receipt_store_dir or config.receipt_index_path:
+                raise ValueError(
+                    "single-writer guard: receipt_sidecar_url is configured "
+                    "together with receipt_store_dir/receipt_index_path; a "
+                    "gateway with a local write projection plus a sidecar "
+                    "would be a two-writer deployment (refusing to boot)"
+                )
+            from raucle.sidecar import SidecarClient
+
+            if not config.receipt_sidecar_secret:
+                logger.error(
+                    "RAUCLE_RECEIPT_SIDECAR_URL is set but "
+                    "RAUCLE_RECEIPT_SIDECAR_SECRET is empty; receipts will "
+                    "be lost by name on every submit (fail-open for "
+                    "persistence only, never for enforcement)"
+                )
+            self._sidecar_client = SidecarClient(
+                url=config.receipt_sidecar_url,
+                secret=config.receipt_sidecar_secret,
+                timeout=config.receipt_sidecar_timeout,
+            )
+            self._receipt_store = None
+            self._receipt_index = None
+            self.boot_readiness = None
+            self._boot_compactor = None
+            logger.info(
+                "receipt sidecar mode: this gateway owns no chain write; "
+                "submitting minted envelopes to %s",
+                config.receipt_sidecar_url,
+            )
+            return
         self._receipt_store = None
         if config.receipt_store_dir:
             from raucle.receipt_store import SegmentedReceiptStore
@@ -1837,10 +1890,16 @@ class RaucleGateway:
         logger.info("generated new gateway signing key %s (key_id=%s)", key_path, signer.key_id())
         return signer
 
-    def _sign_and_store_receipt(self, payload: dict[str, Any]) -> str:
+    def _sign_and_store_receipt(self, payload: dict[str, Any], *, advisory: bool = False) -> str:
         """Sign a receipt payload with the gate identity and append it to
         the receipt store. Shared core for gate, approval, stop and
-        authority-envelope receipts (PR-B, PR-E)."""
+        authority-envelope receipts (PR-B, PR-E).
+
+        X3 slice 4: in sidecar mode the append and the index write are
+        the sidecar's; this gateway submits the minted envelope and owns
+        no local sink. ``advisory`` marks the receipt as itself an
+        overflow advisory so a refused advisory can never recurse into
+        minting another (it pends instead)."""
         from raucle.provenance import _b64url_encode, _canonical_json, _sha256_hex
 
         header = {
@@ -1864,6 +1923,9 @@ class RaucleGateway:
             logger.warning(
                 "RAUCLE_CHAOS drop_receipt: receipt %s withheld from the store", receipt_hash
             )
+            return receipt_hash
+        if self._sidecar_client is not None:
+            self._submit_receipt_to_sidecar(json.loads(line), advisory=advisory)
             return receipt_hash
         if self._receipt_store is not None:
             self._receipt_store.append_line(line)
@@ -1895,6 +1957,139 @@ class RaucleGateway:
                     # Index failure degrades queries, never the chain
                     logger.exception("receipt index insert failed (query degraded)")
         return receipt_hash
+
+    # ------------------------------------------------------------------
+    # X3 slice 4: the sidecar submit path (the sidecar owns the chain)
+    # ------------------------------------------------------------------
+
+    def _submit_receipt_to_sidecar(
+        self, envelope: dict[str, Any], *, advisory: bool = False
+    ) -> None:
+        """Submit one minted envelope to the receipt sidecar.
+
+        The gate decision that produced this receipt has already been
+        enforced and returned to the caller; every failure below is a
+        receipt-persistence loss recorded by name, never an enforcement
+        change. Overflow additionally receipts the loss as an advisory
+        (``x_sidecar``), so the gap in the chain is claim-shaped evidence
+        the offline verifier can re-read, in the harness finding
+        pattern. A refused advisory pends instead of recursing.
+        """
+        from raucle.sidecar import SidecarError, SidecarRefused
+
+        client = self._sidecar_client
+        if client is None:
+            return
+        receipt_hash = str(envelope.get("receipt_hash") or "")
+        self._drain_pending_sidecar_advisories()
+        try:
+            client.submit(envelope)
+        except SidecarRefused as refusal:
+            if refusal.reason == "receipt_sink_overflow" and not advisory:
+                self._emit_sidecar_advisory(envelope, refusal)
+            elif refusal.reason == "receipt_sink_overflow":
+                self._pend_sidecar_advisory(envelope)
+            else:
+                logger.error(
+                    "receipt_sidecar_refused: reason=%s receipt=%s "
+                    "(receipt lost by name; the decision already stands)",
+                    refusal.reason,
+                    receipt_hash,
+                )
+        except SidecarError as err:
+            logger.error(
+                "receipt_sidecar_submit_failed: reason=%s receipt=%s "
+                "(receipt lost by name; the decision already stands)",
+                err.reason,
+                receipt_hash,
+            )
+
+    def _drain_pending_sidecar_advisories(self) -> None:
+        """Ride the pending advisories ahead of the next submit.
+
+        Advisories refused while the queue was full wait here (bounded);
+        each new submit drains them first, oldest first, stopping
+        honestly when the queue is full again.
+        """
+        if not self._pending_sidecar_advisories:
+            return
+        from raucle.sidecar import SidecarError, SidecarRefused
+
+        client = self._sidecar_client
+        if client is None:
+            self._pending_sidecar_advisories.clear()
+            return
+        pending = list(self._pending_sidecar_advisories)
+        self._pending_sidecar_advisories.clear()
+        for position, advisory_envelope in enumerate(pending):
+            try:
+                client.submit(advisory_envelope)
+            except SidecarRefused as refusal:
+                if refusal.reason == "receipt_sink_overflow":
+                    self._pending_sidecar_advisories.extend(pending[position:])
+                    break
+                logger.error(
+                    "receipt_sidecar_advisory_dropped: reason=%s receipt=%s",
+                    refusal.reason,
+                    advisory_envelope.get("receipt_hash"),
+                )
+            except SidecarError as err:
+                logger.error(
+                    "receipt_sidecar_advisory_dropped: reason=%s receipt=%s",
+                    err.reason,
+                    advisory_envelope.get("receipt_hash"),
+                )
+
+    def _pend_sidecar_advisory(self, envelope: dict[str, Any]) -> None:
+        """Park one refused advisory on the bounded pending list."""
+        pending = self._pending_sidecar_advisories
+        if len(pending) == pending.maxlen:
+            dropped = pending.popleft()
+            logger.error(
+                "receipt_sidecar_advisory_spillover: pending list full "
+                "(%d); dropping advisory for %s (named loss)",
+                pending.maxlen,
+                dropped.get("receipt_hash"),
+            )
+        pending.append(envelope)
+
+    def _emit_sidecar_advisory(self, envelope: dict[str, Any], refusal: Any) -> None:
+        """Receipt the sidecar's named refusal as an advisory.
+
+        Bounded disclosure: the refused receipt's hash, the named
+        reason and the time; never content, never the secret. The
+        refused receipt is genuinely absent from the chain, and this
+        advisory is the signed, verifiable record of why (the offline
+        reconciliation names such gaps; this receipt explains them).
+        """
+        if not self.config.emit_receipts:
+            return
+        from raucle.provenance import _canonical_json, _sha256_hex
+
+        extension: dict[str, Any] = {
+            "action": "refused",
+            "refused_receipt": str(envelope.get("receipt_hash") or ""),
+            "reason": _sanitize_log_text(str(refusal.reason)),
+            "refused_at": int(time.time()),
+        }
+        queue_depth = getattr(refusal, "body", {}).get("queue_depth")
+        if isinstance(queue_depth, int):
+            extension["queue_depth"] = queue_depth
+        payload: dict[str, Any] = {
+            "iss": "raucle-gateway",
+            "typ": _RECEIPT_TYP,
+            "iat": int(time.time()),
+            "agent_id": self._gate_identity.agent_id,
+            "agent_key_id": self._gate_identity.key_id,
+            "operation": "guardrail_scan",
+            "parents": [],
+            "taint": ["gate:observed"],
+            "input_hash": _sha256_hex(_canonical_json(extension)),
+            "ruleset_hash": _sha256_hex(_canonical_json(extension)),
+            "guardrail_verdict": "advisory",
+            "x_sidecar": extension,
+        }
+        self._sign_and_store_receipt(payload, advisory=True)
 
     def _emit_authority_receipt(
         self, *, verdict: str, extension_key: str, extension: dict[str, Any]

@@ -43,6 +43,7 @@ docstrings of the `_cmd_*` handlers in `raucle/cli.py`.)
 | agents | key issue/revoke/list; 1 on lookup/auth errors |
 | canary | mint: 0. observe: the CURRENT quirk, documented so it can never be silently changed — observe returns 0 when the canary IS observed in outputs (finding reported) and 1 when unobserved; no exit code distinguishes a leaked credential from a quiet run beyond this mapping |
 | serve | runs until stopped; 1 on bind/config failure |
+| sidecar | single-writer receipt sidecar: runs until stopped; 1 on a missing RAUCLE_RECEIPT_SIDECAR_SECRET (fail-closed boot) or bind failure |
 | urlgate | proxy loop; 1 on config failure |
 | rules | list/fuzz; 1 on rule-store errors |
 | audit | chain verify/build; 2 on tamper evidence, 1 on missing input |

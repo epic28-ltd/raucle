@@ -1,0 +1,79 @@
+{{- if .Values.sidecar.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "raucle-gateway.fullname" . }}-sidecar
+  labels:
+    app.kubernetes.io/name: {{ include "raucle-gateway.name" . }}-sidecar
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: receipt-sidecar
+spec:
+  # PINNED at 1: this process is THE single writer of the receipt chain
+  # and the index. Never scale it; several sidecar pods would be the
+  # two-writer deployment the X3 slice exists to prevent.
+  replicas: {{ .Values.sidecar.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "raucle-gateway.name" . }}-sidecar
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "raucle-gateway.name" . }}-sidecar
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: receipt-sidecar
+    spec:
+      containers:
+        - name: sidecar
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          command: ["raucle", "sidecar"]
+          args:
+            - --store-dir
+            - {{ .Values.sidecar.receiptStoreDir | quote }}
+            - --index-path
+            - {{ .Values.sidecar.receiptIndexPath | quote }}
+            - --host
+            - "0.0.0.0"
+            - --port
+            - {{ .Values.sidecar.port | quote }}
+          env:
+            - name: RAUCLE_RECEIPT_SIDECAR_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "raucle-gateway.fullname" . }}-secrets
+                  key: RAUCLE_RECEIPT_SIDECAR_SECRET
+            - name: RAUCLE_RECEIPT_SIDECAR_MAX_QUEUE
+              value: {{ .Values.sidecar.maxQueue | quote }}
+            - name: RAUCLE_INDEX_CACHE_MB
+              value: {{ .Values.sidecar.indexCacheMb | quote }}
+          ports:
+            - name: sidecar
+              containerPort: {{ .Values.sidecar.port }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: sidecar
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: sidecar
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "raucle-gateway.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}
