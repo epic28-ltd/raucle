@@ -1,6 +1,9 @@
 # WORM receipt archive (H3)
 
-Status: design only, not yet implemented. Draft 30 October 2026.
+Status: implemented 23 November 2026 (`raucle/worm.py`, v0.23.6): the
+archive writer and store ship with the compliance-mode semantics enforced
+in software, and the S3 Object Lock backend behind the same operations is
+the deployment-side implementation. Draft 30 October 2026.
 Companion to the records management semantics work (G3, `raucle/records.py`),
 the time-source model (G1, `docs/spec/time-source-v1.md`), the audit-chain
 projection (H1b-1), and the pq1 hybrid signature design
