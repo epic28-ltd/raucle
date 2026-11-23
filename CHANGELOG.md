@@ -2,6 +2,163 @@
 
 ## Unreleased
 
+## 0.23.7 (2026-11-23) - receipts v1.2 evidence lanes, X2 cross-org + transparency-log verification, X3 receipted operator key rotation
+
+- The admin panel gains the Data Protection screen (lane D2) on the real advisory redaction engine: /api/demo/dlp-findings reads the signed x_dlp receipts minted after receipted gate decisions, rows carry digests, bounded pattern classes and span counts only (never content) and cite the gate receipt of the scanned call; scripts/demo_agents.py drives the scripted scenario end to end (tests/test_demo_session_plane.py).
+
+- EPIC D lanes D14-D17: the enterprise console reframe of the demo session plane. New raucle/demo_session.py backs the admin panel's Session behaviour tab with read-only endpoints over live machinery (session rules read from the compiled policy configuration, per-session windows derived from the real receipt index, session findings re-verifiable offline against the chain), the scripted runaway-loop scenario runs as real gateway policy, and render-contract tests pin the tab's honest states (tests/test_admin_panel_render.py, tests/test_admin_panel_js.py).
+
+- The 18 Nov incident's class defect closed at the structure (spec
+  docs/spec/boot-streaming-v0.1.md, ADR 0007): the gateway binds first and
+  streams its stores in bounded windows. The audit chain's resume is a
+  bounded reverse tail read (W_replay, RAUCLE_BOOT_SCAN_WINDOW_MB, default
+  64 MiB) with an incremental Merkle frontier sidecar replacing the
+  whole-file leaf list (roots identical, O(log n) memory, disposable
+  state per the strictest-verifier doctrine; the SSE replay tail reads a
+  bounded window too, not the whole audit log per dashboard hit).
+- Fail-closed where the old resume was silent: a torn or unparsable tail
+  line raises the named refusal chain_tail_malformed (file, line number,
+  byte offset, naming `raucle rotate-chain`), never the silent skip the
+  whole-scan resume carried; the file is never modified. A chain break
+  found by the background scan stops it by name (chain_refused with the
+  break's coordinates) and the audit sink refuses to append past it.
+- The receipt index builds in a background compactor after the bind, in
+  the spec's four phases: migration inside the J2 one-transaction
+  invariants (recovery inspection stays at open), a TTL-bounded tail
+  window that lands session continuity (session-rule calls before it
+  lands refuse by name, session_continuity_pending, never a silently
+  cold window), a batched historical sweep with cursor-transactional
+  resume (interrupted builds resume or restart, never crash-loop), then
+  live-tail follow. Mid-build, index-backed query surfaces refuse by
+  name with progress (receipt_index_building), never an empty 200 that
+  looks complete; after the build, answers are byte-identical to a full
+  rebuild_from_store.
+- /health keeps its liveness contract and gains the machine-readable
+  per-surface readiness block (gate, session continuity, chain scan
+  with verified-through offset, receipt index with progress).
+- Boot memory is bounded by configuration: the J1 preflight projects the
+  window budget (baseline + scan window + index cache, spec 3.1) instead
+  of the store's on-disk bytes, so the ceiling lowers as the windows
+  shrink while the knob and refusal contracts stay; a runtime watchdog
+  samples resident size during the scan and compactor and a breach is the
+  shipped BootMemoryCeilingExceeded refusal, never an OOM kill.
+- New knobs (honest defaults, pending the X5 bench re-derivation):
+  RAUCLE_BOOT_SCAN_WINDOW_MB (64), RAUCLE_INDEX_CACHE_MB (64, SQLite
+  page cache cap, mmap off), wired through the helm chart and
+  deploy/prod.env.example with the J1 ceiling variable. The
+  k1-boot-streaming bench (bench/run_bench.py --k1, scales ci, demo and
+  incident) lands its legs in bench/results/k1-2026-11-20.json;
+  docs/nfr/boot-streaming-v1.md records this machine's numbers and the
+  incident-scale leg ships behind the flag for the X5 session that can
+  afford it. The rotation runbook and the receipt-index ops note are
+  extended, not contradicted.
+- New tests pin the invariants (29 in tests/test_boot_stream.py, plus the
+  re-derived preflight suite): bounded-boot flatness (peak allocations
+  flat in store size, under the configured ceiling), bind-first against
+  the real app factories, readiness honesty, the named torn-tail refusal,
+  TTL session-continuity equivalence, the budget projection and the
+  pre-binding refusal, the watchdog breach, resume-without-duplicates
+  and the projection-equivalence guarantee.
+
+- Admin-plane SSO (X3 slice 2): the OIDC sign-in receipt now binds the
+  verified subject and the SHA-256 id-token digest (the digest, never token
+  content), and the admin panel gains the SSO path: the login card offers
+  provider sign-in when federation is enabled, hands the browser to the
+  authorization URL and completes the callback into a receipted session.
+- New spec docs/spec/x3-oidc-admin-v1.md: the v1 contract for the
+  admin-plane OIDC surface, keeping the T-S3 note (per-request TOTP is not
+  session security; raw-key authentication is unchanged) and recording the
+  decided scale answer: a single-writer receipt sidecar owns chain append
+  for replicas, so this slice ships per-process admin sessions with that
+  residual named.
+- Key-based admin authentication, per-request TOTP on that path and the
+  off-by-default posture are unchanged; existing chains verify
+  byte-identically because the new receipt fields are omit-when-empty.
+
+- feat(analytics): `raucle analytics drift` - drift and scope-drift analytics over a receipt chain or segmented store, deterministic reads of receipt fields only, with five named evidence-shaped signals (definition-drift over the W2 tool_definition digests, authority-widening, authority-narrowing, deny-rate-delta over cited windows, revocation-cascade over prior use); every row cites its receipts, a signal that cannot cite them is not emitted, and bounded disclosure holds over the whole report (digests, identifiers and counts, never content)
+- docs(nfr): drift-analytics-v1.md records the five signals, the honest states (uncitable receipts, rotations, thin windows, unused revocations emit nothing) and what the report does NOT prove
+
+- `raucle operator rotate-keys` (X3 slice 3): receipted rotation of the operator plane's signing key, on the rotate-chain discipline. The successor publishes through the operator key registry's append discipline and the old key RETIRES (a registry state distinct from revocation: still resolvable, no longer holding the issuer name; the registry holds both keys across the transition), the old key file archives as `<key>.retired-<date>` (never deleted, digest printed), the key store updates, the boundary mints as a signed `x_key_rotation` receipt signed by the new key (the first receipt pinned to it), and a fresh boot is verified signing with it. All-or-nothing: the named refusals (no operator identity, no registry configured, registry file absent, nothing to rotate, same-day retirement already present, signed registry without its operator key, key not registered, key revoked) raise before any side effect.
+- The transition semantics: receipts minted before the rotation keep verifying against the retired key, resolved by key id through the registry; new receipts carry the new key id; nothing re-signs history. Revoking the retired key stays a separate operator act and cuts old receipts fail-closed (retire then revoke composes; rotation never revokes).
+- The boot split-brain guard: with `RAUCLE_OPERATOR_KEY_REGISTRY` set and the local signer backend, the boot refuses a key the registry does not vouch for (registry missing or failing integrity verification, key unregistered, revoked or retired) with a named restart-required `KeyStoreRegistryMismatch` - the unregistered and retired refusals name `raucle operator rotate-keys`, the missing, unverifiable and revoked refusals name their actual remedy; a re-run recovers the crash window (the registry ahead of the key store) by retiring the crashed attempt's public-only key visibly. KMS and TEE signers keep their own key lifecycle (named follow-up); an unset registry leaves the boot unchanged.
+- Registry retirement is additive: `retired` fields are omit-when-empty, existing records serialise byte-identically, and retired keys stay resolvable for verification while the active holder of an issuer name changes.
+- docs: operator runbook (docs/ops/key-rotation.md), spec doc and Product-surface row (docs/spec/operator-key-rotation-x3s3.md), the `operator` row in the CLI contract (docs/nfr/cli-contract.md), and docs/security/key-operations.md now names the receipted path for gateway signing-key rotation.
+
+- X3 slice 4: the single-writer receipt sidecar (`raucle sidecar`, a
+  stdlib-only service in the same repo) owns the receipt chain append and
+  the index projection. Gateway replicas submit their minted envelopes to
+  it over local HTTP with a shared-secret handshake
+  (RAUCLE_RECEIPT_SIDECAR_URL/SECRET/TIMEOUT/MAX_QUEUE), so several
+  gateways can serve traffic while one process writes and the SQLite WAL
+  never has two writers. The mint stays in the gateway; the sidecar
+  assigns chain order.
+- Receipt loss is named, never silent: submit goes through a bounded
+  queue, overflow is a named `receipt_sink_overflow` refusal, and the
+  gateway receipts the loss as a signed `x_sidecar` advisory (the
+  harness-finding pattern, bounded disclosure: refused hash, reason,
+  time). The enforcement decision completed before submission and
+  stands; this is fail-open for receipt persistence only. A gateway
+  configured with a sidecar URL plus a local write projection is a named
+  two-writer boot refusal.
+- Restart resume is unchanged: the store reopens the last unsealed
+  segment, the J2 interrupted-migration recovery still runs in the index
+  constructor, and an index left behind by a crash is rebuilt from the
+  chain of record. Chains written through the sidecar are byte-identical
+  to single-writer ones and verify through the unchanged offline
+  verifier.
+- The Helm chart gains the sidecar Deployment and Service (replicas
+  pinned to 1 with a Recreate strategy, owns the data volume; the
+  gateways mount it read-only and their single-replica constraint lifts),
+  with the honest notes in the chart README and
+  docs/deployment-topologies.md. New spec first:
+  docs/spec/x3-sidecar-v0.1.md.
+
+- feat(worm): H3 WORM receipt archive implemented per the 30 October design (`raucle/worm.py`): an append-only, hash-chained archive writer over a store that models S3 Object Lock compliance-mode semantics in software (a key is written once, byte-identical retries are idempotent, retention extends but never shortens, deletion requires both expiry and a cleared legal hold, reads pin content-addressed version IDs); the design's four write moments (chain segment close, evidence-pack publication, disposal, anchoring) land under the design's key families, each write carrying artifact type, chain slug, span, SHA-256, retention category and the ledger position it was cut from; the non-WORM write log is a hash chain in a sidecar store, rebuildable from the bucket alone, and verification recomputes every object digest from the bytes on disk rather than trusting recorded hashes
+- feat(worm): disposal and retention binding: `archive_destruction` ingests the signed `x_destruction` receipt, the escrow reference (digest, record count, span digest) and the re-anchored surviving chain, with the destruction receipt floored at the surviving chain's horizon; the chain's archive horizon (the latest `x_gate.retention_until`, G1's value) becomes the WORM retention, floored at the operator's configured minimum, with the 24-hour bucket default locking objects that arrive with no schedule; legal holds are operator-plane events whose decisions are themselves archived; the archive writer exposes no delete surface at all
+- docs(designs): the worm-archive design status flipped to implemented, with the local backend named as the in-software model of the compliance-mode semantics and the S3 Object Lock backend as the deployment-side implementation behind the same operations
+
+- Changelog entries convention (L5): builder lanes stop editing CHANGELOG.md directly and write one bullet-only entry file per branch (`docs/changelog-entries/<branch>.md`) instead; `tools/assemble_changelog.py` inserts the entry bullets under `## Unreleased` in file order at merge time, deletes the entry files, and exits non-zero if a bullet would duplicate an existing changelog line. CI enforces the lane rule: a PR that adds changelog entry files must not add lines to CHANGELOG.md (removals stay allowed). The current Unreleased content migrated verbatim to `docs/changelog-entries/migration-journal.md` as the demonstration.
+
+- Lease-use verification (C1 remainder, spec
+  docs/spec/provenance/v1.2/lease-extension.md): a lease-use receipt now
+  verifies only while the lease is valid and its use is scope-matched. The
+  offline verifier rejects a redemption whose lease was revoked at an
+  earlier line (`lease_revoked`), on the same temporal doctrine as the A3
+  cascade: an `x_lease` `revoked` event and an `x_revocation` block citing
+  the lease id are both revocation evidence, and a redemption before the
+  revocation line stays valid evidence.
+- The lease redemption refusals are named in the verifier errors:
+  `pairing_absent` (no grant from an earlier line in the chain),
+  `lease_expired` (the redemption's iat past the grant's TTL window),
+  `scope_exceeded` (a redemption wider than its grant, the narrowing
+  invariant) and `lease_revoked`. Each failure names its class, never a
+  generic invalid.
+- The shared forbidden-field sweep now covers the `x_lease` block: lease
+  receipts carry handles, the grant pairing, scope names and digests only,
+  never content; a content-like field anywhere inside the block fails with
+  the sweep's named error.
+- The verification report body is unchanged: the named errors ride the
+  existing `errors` list and no new report keys are added, so the v1.0
+  byte shape is preserved and the digest pins and fixture packs stand as
+  they were (pinned by test).
+
+- Session continuity without fabrication: the x_gate block carries an optional session_id taken verbatim from the caller's declared session, and the receipt index moves to schema v3 with active_session_ids and session_receipts query paths; only sessions callers themselves declared are represented, so the index never invents continuity (tests/test_gate_session_id.py, red-first).
+
+- Deterministic session behavioural rules join the gate policy family (EPIC Q1): rules evaluate only over calls that declare a session_id, so callers without one are untouched by their deployment's policy file. The shipped rule kind runaway_tool_loop denies at the gate once a tool hits its threshold inside its window, with a signed deny receipt plus a session-monitor finding that cites the exact call it cut off; policies/examples/session-behavioural.yaml ships the worked example as real gateway policy.
+
+- New public specification docs/spec/advisor-classifier-v1.md (EPIC Q1a design slice): the advisory LLM detector designed to run beside the deterministic gate, with the explicit guard confession and promotion-path hook stating that advisory classification informs policy authoring and review while receipted verdicts stay deterministic; docs-only lane, no gate code changes.
+
+- Per-participant policy scoping (EPIC Q3): a participant matcher scopes policy rules to the receipt planes they actually govern, tool_call and tool_response_taint, with the session-behavioural-rules spec extended alongside (tests/test_participant_scoping.py).
+
+- Content-plane DLP receipts as a public v1.2 spec (docs/spec/provenance/v1.2/content-dlp.md) with the schema and gateway mint path implemented: x_dlp carries digests, bounded pattern classes and span counts only, never content, and every finding cites the gate receipt of the scanned call (tests/test_dlp_receipts.py).
+
+- Advisory redaction middleware (EPIC Q7c): raucle/redaction.py and the middleware advisory layer mint receipted findings for scan-and-redact, advisory by design, a fail-open evidence lane beside the deterministic gate and never enforcement, with the v1 spec (docs/spec/advisory-middleware-v1.md) and a getting-started track (tests/test_advisory_middleware.py).
+
+- feat(x2): cross-org receipt verification through the Trust Registry (X2 slice 3): `raucle.cross_org.verify_receipt_cross_org` resolves another org's signing key from the registry artifact alone (operator-signed chain, pinned anchor, freshness pins), verifies the receipt with the same ProvenanceVerifier an auditor runs, holds the registry-published capability statement as the scope leg (unstated by name when none is published), and pairs the transparency log's inclusion proof as the registration leg against a separately pinned log operator key; a third party verifies org A's receipt with no prior key exchange and no trust in either org's operator.
+- feat(x2): the shipped offline verifier page (`assets/verifier/x2-verifier.html`) gains a cross-org mode: receipt plus registry artifact plus pinned anchor, optional freshness pins, optional inclusion proof; the four legs (registry, receipt, scope, registration) render with named reasons, the no-network discipline stays test-pinned, and the committed fixture set (`assets/verifier/fixtures/cross-org/`, generator `scripts/x2_cross_org_fixtures.py`) exercises clean and doctored cases in the node harness plus a UI render probe.
+- security: Trust Registry `from_jsonl` and `from_url` now parse entries with the duplicate-key rejecter the file path already had, so a crafted registry artifact with duplicate JSON keys cannot smuggle a key_id past integrity checks on the text and network loading paths.
+
+
 ## 0.23.6 (2026-11-12) - demo panels: read-only operator surfaces for the demo visitor
 
 ### Added - demo panels: read-only operator surfaces for the demo visitor
