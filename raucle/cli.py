@@ -331,6 +331,38 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     rotate_p.add_argument("--reason", default="", help="Reason recorded in the rotation receipt")
 
+    # -- operator (X3 slice 3: the operator plane's admin actions) ---------
+    operator_p = subparsers.add_parser(
+        "operator",
+        help="Operator-plane actions (rotate the gateway signing key)",
+    )
+    operator_sub = operator_p.add_subparsers(dest="operator_command")
+    rotate_keys_p = operator_sub.add_parser(
+        "rotate-keys",
+        help=(
+            "Rotate the gateway signing key: register the new key in the "
+            "operator key registry, retire the old one (still verifiable), "
+            "archive it (never deleted), verify a fresh boot signs with the "
+            "new key"
+        ),
+    )
+    rotate_keys_p.add_argument(
+        "--operator",
+        default="",
+        help="Operator identity recorded in the rotation receipt (or set RAUCLE_OPERATOR)",
+    )
+    rotate_keys_p.add_argument(
+        "--reason", default="", help="Reason recorded in the rotation receipt"
+    )
+    rotate_keys_p.add_argument(
+        "--registry-key",
+        default=os.environ.get("RAUCLE_REGISTRY_OPERATOR_KEY", ""),
+        help=(
+            "The registry's own operator key PEM, required when the registry "
+            "is signed (or set RAUCLE_REGISTRY_OPERATOR_KEY)"
+        ),
+    )
+
     # -- verify-receipt -----------------------------------------------------
     watch_p = subparsers.add_parser(
         "watch",
@@ -2492,6 +2524,56 @@ def _cmd_rotate_chain(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_operator_rotate_keys(args: argparse.Namespace) -> int:
+    """X3 slice 3: receipted rotation of the operator plane's signing key.
+
+    Bonds to the same env vars the gateway boot reads
+    (RAUCLE_SIGNER_KEY_PATH, the receipt store, and
+    RAUCLE_OPERATOR_KEY_REGISTRY for the registry the rotation and the
+    boot guard bind to; RAUCLE_REGISTRY_OPERATOR_KEY names the registry's
+    own signing key when the registry is signed). Re-registers the new
+    key through the registry's append discipline, archives the old key
+    (never deletes, digest printed), records the boundary as a signed
+    rotation receipt and verifies a fresh boot signs with the new key.
+    """
+    from raucle.audit import Ed25519Signer
+    from raucle.errors import KeyRotationRefusedError
+    from raucle.gateway import GatewayConfig
+    from raucle.key_rotation import rotate_keys
+
+    config = GatewayConfig.from_env()
+    registry_signer = None
+    if args.registry_key:
+        registry_signer = Ed25519Signer.from_pem(validate_path(args.registry_key).read_bytes())
+    try:
+        result = rotate_keys(
+            config,
+            operator=args.operator,
+            reason=args.reason,
+            registry_signer=registry_signer,
+        )
+    except KeyRotationRefusedError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print("key rotation complete (archived, never deleted):")
+    print(f"  old key id: {result['old_key_id']} (retired, still verifiable)")
+    print(f"  new key id: {result['new_key_id']} (active)")
+    retired = result["archived_key"]
+    print(f"  retired key: {retired['retired_path']}")
+    print(f"      sha256 {retired['sha256']}  {retired['bytes']} bytes")
+    print(f"  key store: {result['key_store']}")
+    reg = result["registry"]
+    others = ""
+    if reg.get("retired_others"):
+        others = f", retired crashed attempts {','.join(reg['retired_others'])}"
+    print(f"  registry: {reg['path']} (head index {reg['head_index']}{others})")
+    print(f"  rotation receipt: {result['receipt_hash']}")
+    print(f"  receipt written:  {result['receipt_path']}")
+    print(f"  fresh boot verified: signs with key {result['boot']['signer_key_id']}")
+    print("Old receipts verify against the retired key through the registry.")
+    return 0
+
+
 def _containment_dispatch(manager: Any, sub: str, args: argparse.Namespace) -> dict:
     """Route a containment subcommand to its manager call and return the result."""
     reason = getattr(args, "reason", "")
@@ -3502,6 +3584,8 @@ def main(argv: list[str] | None = None) -> int:
     from raucle.errors import (
         BootMemoryCeilingExceeded,
         ConfigurationError,
+        KeyRotationRefusedError,
+        KeyStoreRegistryMismatch,
         PolicyUnproven,
         RotationRefusedError,
     )
@@ -3531,7 +3615,12 @@ def main(argv: list[str] | None = None) -> int:
     except (ConfigurationError, PolicyUnproven, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    except (BootMemoryCeilingExceeded, RotationRefusedError) as exc:
+    except (
+        BootMemoryCeilingExceeded,
+        KeyRotationRefusedError,
+        KeyStoreRegistryMismatch,
+        RotationRefusedError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
@@ -3593,6 +3682,7 @@ def _dispatch(argv: list[str] | None = None) -> int:
         ("agents", "issue-key"): _cmd_agents_issue_key,
         ("agents", "revoke-key"): _cmd_agents_revoke_key,
         ("agents", "list"): _cmd_agents_list,
+        ("operator", "rotate-keys"): _cmd_operator_rotate_keys,
         ("canary", "mint"): _cmd_canary_mint,
         ("canary", "observe"): _cmd_canary_observe,
         ("authorship", "sign"): _cmd_authorship_sign,

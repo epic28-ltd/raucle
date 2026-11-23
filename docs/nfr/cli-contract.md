@@ -66,6 +66,7 @@ docstrings of the `_cmd_*` handlers in `raucle/cli.py`.)
 | prove | 0 proven, 2 refuted/undecided (CI gate), 1 build error |
 | cap | capability mint/verify; 2 on cap violation |
 | rotate-chain | receipted rotation of the gateway boot stores (audit chain + receipt-store segments); 1 on preflight or refusal (boot memory ceiling reached; named refusals: today's archive exists, nothing to rotate, no operator identity; a store that fails mid-digest aborts exit 1 with stores untouched) - runbook: docs/ops/chain-rotation.md |
+| operator | rotate-keys: receipted rotation of the gateway signing key (re-register the new key in the operator key registry, retire and archive the old key, record a signed rotation receipt, verify a fresh boot signs with the new key); 1 on refusal (named refusals: no operator key registry, no operator identity, nothing to rotate, same-day repeat, key store ahead of the registry); 0 prints old and new key ids, the retired key digest and the rotation receipt hash - runbook: docs/ops/key-rotation.md |
 
 ## Honesty notes
 
