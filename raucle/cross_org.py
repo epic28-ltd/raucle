@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from raucle.provenance import CapabilityStatement, ProvenanceVerifier
+from raucle.provenance import CapabilityStatement, ProvenanceVerifier, VerificationReport
 from raucle.transparency import STATUS_LOG_INCLUDED
 from raucle.trust_registry import RegistryIntegrityError, TrustRegistry
 
@@ -264,6 +264,117 @@ def _verify_log_leg(
     verdict.registered_at = int(log_proof["entries"][0]["registered_at"])
 
 
+def _envelope_kids(envelopes: list[dict[str, Any]]) -> tuple[list[str] | None, str]:
+    """Collect every signing key named by the receipt envelopes. The
+    receipt leg resolves ALL of them through the registry, so a payload
+    that cannot name a key is an upfront named refusal. Returns
+    ``(kids, refusal)`` - exactly one is set, the kids in sorted order."""
+    kids: set[str] = set()
+    for env in envelopes:
+        payload = _payload_of(env["jws"])
+        if payload is None:
+            return None, ("a receipt is not a 3-segment compact JWS (PQ hybrids unsupported here)")
+        kid = str(payload.get("agent_key_id", ""))
+        if not kid:
+            return None, "a receipt payload carries no agent_key_id"
+        kids.add(kid)
+    return sorted(kids), ""
+
+
+def _resolve_registry_keys(
+    reg: TrustRegistry, kids: list[str], verdict: CrossOrgVerdict
+) -> tuple[dict[str, Any], dict[str, bytes], list[str] | None]:
+    """Resolve every signing key through the registry: unknown and revoked
+    keys are named, fail-closed refusals, never a silent skip. Returns
+    ``(records, public_keys, refusal)`` - the refusal list is set only when
+    the verdict must refuse; records and public keys are empty in that
+    case. A revoked key marks the verdict revoked before the refusal."""
+    records: dict[str, Any] = {}
+    public_keys: dict[str, bytes] = {}
+    for kid in kids:
+        record = reg.resolve(kid)
+        if record is None:
+            return {}, {}, [f"agent key {kid} is not in the registry (unknown issuer)"]
+        if record.revoked:
+            verdict.revoked = True
+            return (
+                {},
+                {},
+                [
+                    f"agent key {kid} is revoked in the registry"
+                    + (f" (reason: {record.revoked_reason})" if record.revoked_reason else "")
+                ],
+            )
+        records[kid] = record
+        public_keys[kid] = record.public_key_pem.encode("ascii")
+    return records, public_keys, None
+
+
+def _published_statements(
+    records: dict[str, Any], verdict: CrossOrgVerdict
+) -> tuple[dict[str, CapabilityStatement], list[str]]:
+    """Extract each resolved key's published capability statement from the
+    registry record metadata. A statement must bind the SAME registry-
+    resolved key (checked by :func:`_statement_from_record`): substitutable
+    scope material fails the scope leg and is a named refusal, with
+    scope_verified failed before the verdict refuses."""
+    caps: dict[str, CapabilityStatement] = {}
+    for kid, record in records.items():
+        stmt, stmt_reasons = _statement_from_record(record, kid)
+        if stmt_reasons:
+            verdict.scope_verified = False
+            return {}, stmt_reasons
+        if stmt is not None:
+            caps[kid] = stmt
+    return caps, []
+
+
+def _run_provenance_leg(
+    verifier: ProvenanceVerifier, envelopes: list[dict[str, Any]]
+) -> VerificationReport:
+    """The receipt leg: the same :class:`ProvenanceVerifier` an auditor
+    runs over an exported chain. The envelopes are written to a temporary
+    file that is removed on every path, so verification never leaves
+    receipt bytes behind."""
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".jsonl", delete=False, encoding="utf-8"
+        ) as fh:
+            tmp = Path(fh.name)
+            for env in envelopes:
+                fh.write(json.dumps(env) + "\n")
+        return verifier.verify_chain(tmp)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+
+
+def _classify_scope(
+    verdict: CrossOrgVerdict,
+    report: VerificationReport,
+    caps: dict[str, CapabilityStatement],
+    kids: list[str],
+) -> None:
+    """Classify the scope leg after the chain verifies. With published
+    statements every receipt is held to them; with none supplied the leg
+    is honestly UNSTATED (None) with a named residual - never green on
+    scope and never a refusal in itself. The verdict is green exactly
+    when the receipt leg is."""
+    verdict.receipt_verified = bool(report.valid)
+    verdict.reasons.extend(report.errors)
+    if caps:
+        verdict.scope_verified = bool(report.valid) and report.capability_violations == 0
+    else:
+        verdict.scope_verified = None
+        verdict.reasons.append(
+            "scope unstated: the registry publishes no capability statement for "
+            f"the signing key(s) {sorted(kids)}, so what this agent was allowed "
+            "to do is not pinned (the signature and hash legs still verify)"
+        )
+    verdict.valid = bool(report.valid)
+
+
 def verify_receipt_cross_org(
     receipt_text: str,
     *,
@@ -329,77 +440,24 @@ def verify_receipt_cross_org(
     envelopes, refusal = _parse_receipt_text(receipt_text)
     if envelopes is None:
         return _refuse([refusal], verdict)
-    public_keys: dict[str, bytes] = {}
-    kids: set[str] = set()
-    for env in envelopes:
-        payload = _payload_of(env["jws"])
-        if payload is None:
-            return _refuse(
-                ["a receipt is not a 3-segment compact JWS (PQ hybrids unsupported here)"],
-                verdict,
-            )
-        kid = str(payload.get("agent_key_id", ""))
-        if not kid:
-            return _refuse(["a receipt payload carries no agent_key_id"], verdict)
-        kids.add(kid)
-    records: dict[str, Any] = {}
-    for kid in sorted(kids):
-        record = reg.resolve(kid)
-        if record is None:
-            return _refuse([f"agent key {kid} is not in the registry (unknown issuer)"], verdict)
-        if record.revoked:
-            verdict.revoked = True
-            return _refuse(
-                [
-                    f"agent key {kid} is revoked in the registry"
-                    + (f" (reason: {record.revoked_reason})" if record.revoked_reason else "")
-                ],
-                verdict,
-            )
-        records[kid] = record
-        public_keys[kid] = record.public_key_pem.encode("ascii")
-    verdict.key_id = sorted(kids)[0]
+    kids, kid_refusal = _envelope_kids(envelopes)
+    if kids is None:
+        return _refuse([kid_refusal], verdict)
+    records, public_keys, key_refusal = _resolve_registry_keys(reg, kids, verdict)
+    if key_refusal:
+        return _refuse(key_refusal, verdict)
+    verdict.key_id = min(kids)
     verdict.issuer = records[verdict.key_id].issuer
 
     # -- the receipt leg: the same verifier an auditor runs -----------------
-    caps: dict[str, CapabilityStatement] = {}
-    for kid, record in records.items():
-        stmt, stmt_reasons = _statement_from_record(record, kid)
-        if stmt_reasons:
-            verdict.scope_verified = False
-            return _refuse(stmt_reasons, verdict)
-        if stmt is not None:
-            caps[kid] = stmt
-
-    verifier = ProvenanceVerifier(
-        public_keys=public_keys,
-        capabilities=caps or None,
+    caps, stmt_refusal = _published_statements(records, verdict)
+    if stmt_refusal:
+        return _refuse(stmt_refusal, verdict)
+    report = _run_provenance_leg(
+        ProvenanceVerifier(public_keys=public_keys, capabilities=caps or None),
+        envelopes,
     )
-    tmp = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w", suffix=".jsonl", delete=False, encoding="utf-8"
-        ) as fh:
-            tmp = Path(fh.name)
-            for env in envelopes:
-                fh.write(json.dumps(env) + "\n")
-        report = verifier.verify_chain(tmp)
-    finally:
-        if tmp is not None:
-            tmp.unlink(missing_ok=True)
-
-    verdict.receipt_verified = bool(report.valid)
-    verdict.reasons.extend(report.errors)
-    if caps:
-        verdict.scope_verified = bool(report.valid) and report.capability_violations == 0
-    else:
-        verdict.scope_verified = None
-        verdict.reasons.append(
-            "scope unstated: the registry publishes no capability statement for "
-            f"the signing key(s) {sorted(kids)}, so what this agent was allowed "
-            "to do is not pinned (the signature and hash legs still verify)"
-        )
-    verdict.valid = bool(report.valid)
+    _classify_scope(verdict, report, caps, kids)
 
     # -- the registration leg (when a proof is supplied) ---------------------
     # The registration leg binds the chain's LEAF receipt (the last
@@ -411,8 +469,6 @@ def verify_receipt_cross_org(
         expect_digest=str(envelopes[-1]["receipt_hash"]),
         verdict=verdict,
     )
-    if verdict.log_status == STATUS_LOG_INCLUDED:
-        verdict.valid = verdict.valid and True
     return verdict
 
 
