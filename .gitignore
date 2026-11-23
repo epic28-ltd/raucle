@@ -15,6 +15,7 @@ htmlcov/
 # …except the X2 verifier fixture PUBLIC keys (public material, must ship so
 # the committed fixture pack verifies in CI)
 !assets/verifier/fixtures/fixture-pack/pubkeys/*.pem
+!assets/verifier/fixtures/cross-org/*.pem
 !docs/demo-bundle/pubkeys/*.pem
 
 # Sibling reference-implementation repos cloned during multi-repo work

@@ -1,0 +1,23 @@
+{
+  "org": "org-a",
+  "sequence": 1,
+  "entries": [
+    {
+      "org": "org-a",
+      "sequence": 1,
+      "prev_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "receipt_digest": "sha256:06cdfc6bd292f7af9ab9680e3f5f9752223a26041c4736b45f938617497194e6",
+      "payload_digest": null,
+      "registered_at": 1760000000,
+      "entry_hash": "sha256:1f967f19373a2c95827bc32eecf7418b54163d4948c7665af712efc514db3f32"
+    }
+  ],
+  "size": 1,
+  "head_hash": "sha256:1f967f19373a2c95827bc32eecf7418b54163d4948c7665af712efc514db3f32",
+  "checkpoint_jws": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsicmF1Y2xlL3YxIl0sImtpZCI6InJhdWNsZS1wb3J0YWwtZml4dHVyZSIsInJhdWNsZS92MSI6InRyYW5zcGFyZW5jeSIsInR5cCI6InRyYW5zcGFyZW5jeS1lcG9jaC92MSJ9.eyJlcG9jaCI6MSwiaGVhZF9oYXNoIjoic2hhMjU2OjFmOTY3ZjE5MzczYTJjOTU4MjdiYzMyZWVjZjc0MThiNTQxNjNkNDk0OGM3NjY1YWY3MTJlZmM1MTRkYjNmMzIiLCJpYXQiOjE3NjAwMDAwMDAsImlzcyI6InJhdWNsZS1wb3J0YWwiLCJub25jZSI6ImNyb3Nzb3JnLWZpeHR1cmUiLCJvcmciOiJvcmctYSIsInNpemUiOjF9.zb0UoyN9oELwlZnUg2rCUIFdXDyP9khZhlTMu4npyzzar-N6Q7dAfh8czLndhEZ_9ET4aF0PT8jeG0aG-AuqCg",
+  "receipt_digest": "sha256:06cdfc6bd292f7af9ab9680e3f5f9752223a26041c4736b45f938617497194e6",
+  "payload_digest": null,
+  "epoch": 1,
+  "key_id": "2007a528f1b1be66",
+  "operator_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAOEOWF8PjsPwRERI5qPaosbpWcqDOGlc5a5mbx10/t/o=\n-----END PUBLIC KEY-----\n"
+}

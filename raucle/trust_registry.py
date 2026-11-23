@@ -180,13 +180,18 @@ class TrustRegistry:
 
     @classmethod
     def from_jsonl(cls, text: str) -> TrustRegistry:
-        """Build an in-memory registry from JSONL text and integrity-check it."""
+        """Build an in-memory registry from JSONL text and integrity-check it.
+
+        Entries parse with the duplicate-key rejecter (X2 slice 3): text
+        arriving from another party is attacker-controllable, and a crafted
+        entry with duplicate keys must not smuggle a key_id past integrity
+        checks the way a bare json.loads would tolerate."""
         reg = cls()
         reg._entries = []
         for line in text.splitlines():
             line = line.strip()
             if line:
-                reg._entries.append(json.loads(line))
+                reg._entries.append(json.loads(line, object_pairs_hook=_reject_duplicate_keys))
         if not reg._entries:
             reg._append_header()
         else:
@@ -225,7 +230,9 @@ class TrustRegistry:
         for line in body.splitlines():
             line = line.strip()
             if line:
-                reg._entries.append(json.loads(line))
+                # Duplicate-key rejecter (X2 slice 3): a network body is the
+                # most attacker-controllable source this class accepts.
+                reg._entries.append(json.loads(line, object_pairs_hook=_reject_duplicate_keys))
         if not reg._entries:
             reg._append_header()
         else:
