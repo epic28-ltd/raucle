@@ -1,0 +1,1 @@
+- Session continuity without fabrication: the x_gate block carries an optional session_id taken verbatim from the caller's declared session, and the receipt index moves to schema v3 with active_session_ids and session_receipts query paths; only sessions callers themselves declared are represented, so the index never invents continuity (tests/test_gate_session_id.py, red-first).

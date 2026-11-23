@@ -1,0 +1,1 @@
+- Per-participant policy scoping (EPIC Q3): a participant matcher scopes policy rules to the receipt planes they actually govern, tool_call and tool_response_taint, with the session-behavioural-rules spec extended alongside (tests/test_participant_scoping.py).
