@@ -487,9 +487,9 @@ class TestCoverageCompletions:
             with pytest.raises(urllib.error.HTTPError) as caught:
                 urllib.request.urlopen(f"{sc.url}/nope", timeout=5.0)
             assert caught.value.code == 404
+            post_request = urllib.request.Request(sc.url + "/nope", data=b"{}", method="POST")
             with pytest.raises(urllib.error.HTTPError) as caught:
-                request = urllib.request.Request(sc.url + "/nope", data=b"{}", method="POST")
-                urllib.request.urlopen(request, timeout=5.0)
+                urllib.request.urlopen(post_request, timeout=5.0)
             assert caught.value.code == 404
         finally:
             sc.stop()

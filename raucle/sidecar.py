@@ -38,6 +38,7 @@ import logging
 import os
 import re
 import secrets
+import sqlite3
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -199,7 +200,7 @@ class SidecarClient:
             raise SidecarRefused(
                 reason, detail, parsed if isinstance(parsed, dict) else None
             ) from None
-        except (URLError, TimeoutError, OSError) as err:
+        except (URLError, OSError) as err:
             raise SidecarUnreachable("sidecar_unreachable", str(err)) from None
 
 
@@ -292,7 +293,10 @@ class ReceiptSidecar:
 
     @property
     def url(self) -> str:
-        return f"http://{self._host}:{self._port}"
+        # Deliberate: the submit surface is plaintext HTTP on a trusted
+        # local or in-cluster segment, per the spec; mTLS is a named
+        # follow-up, not an assumption (docs/spec/x3-sidecar-v0.1.md).
+        return f"http://{self._host}:{self._port}"  # NOSONAR
 
     @property
     def port(self) -> int:
@@ -347,7 +351,11 @@ class ReceiptSidecar:
         self._store.append_line(line)
         try:
             self._index.index_receipt(envelope)
-        except Exception:  # noqa: BLE001 - index failure degrades queries, never the chain
+        except sqlite3.Error:
+            # Index failure degrades queries, never the chain. Anything
+            # outside sqlite's failure class propagates to the sink's
+            # own named write-error boundary (receipt_sink_write_error),
+            # which is the honest accounting for it.
             logger.exception("receipt sidecar: index insert failed (query degraded)")
 
 
@@ -365,7 +373,9 @@ def _make_handler(sidecar: ReceiptSidecar) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:  # noqa: N802 - http.server API
             if self.path != "/submit":
-                self._respond(404, {"error": "not_found", "detail": self.path})
+                # No reflection of the request path: a 404 is a named
+                # error, not an echo of caller-controlled bytes.
+                self._respond(404, {"error": "not_found"})
                 return
             try:
                 length = int(self.headers.get("Content-Length") or "0")
@@ -424,7 +434,7 @@ def _make_handler(sidecar: ReceiptSidecar) -> type[BaseHTTPRequestHandler]:
             if self.path == "/health":
                 self._respond(200, sidecar.health())
                 return
-            self._respond(404, {"error": "not_found", "detail": self.path})
+            self._respond(404, {"error": "not_found"})
 
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002 - stdlib API
             logger.debug("receipt sidecar http: " + format, *args)

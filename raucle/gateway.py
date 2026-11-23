@@ -58,6 +58,9 @@ _HASH_PREFIX = "sha256:"
 _GATE_AGENT_ID = "agent:gate"
 _RECEIPT_TYP = "provenance-receipt/v1"
 _RECEIPT_CRIT = "raucle/v1"
+# Shared taint literal for authority-envelope receipts (the same value
+# _emit_authority_receipt binds): one constant, not three copies.
+_TAINT_GATE_OBSERVED = "gate:observed"
 
 # Learn-mode draft-policy preamble (see RaucleGateway.draft_policy): the
 # draft is a PROPOSAL the operator reviews before saving; learning never
@@ -1990,14 +1993,14 @@ class RaucleGateway:
             elif refusal.reason == "receipt_sink_overflow":
                 self._pend_sidecar_advisory(envelope)
             else:
-                logger.error(
+                logger.exception(
                     "receipt_sidecar_refused: reason=%s receipt=%s "
                     "(receipt lost by name; the decision already stands)",
                     refusal.reason,
                     receipt_hash,
                 )
         except SidecarError as err:
-            logger.error(
+            logger.exception(
                 "receipt_sidecar_submit_failed: reason=%s receipt=%s "
                 "(receipt lost by name; the decision already stands)",
                 err.reason,
@@ -2028,13 +2031,13 @@ class RaucleGateway:
                 if refusal.reason == "receipt_sink_overflow":
                     self._pending_sidecar_advisories.extend(pending[position:])
                     break
-                logger.error(
+                logger.exception(
                     "receipt_sidecar_advisory_dropped: reason=%s receipt=%s",
                     refusal.reason,
                     advisory_envelope.get("receipt_hash"),
                 )
             except SidecarError as err:
-                logger.error(
+                logger.exception(
                     "receipt_sidecar_advisory_dropped: reason=%s receipt=%s",
                     err.reason,
                     advisory_envelope.get("receipt_hash"),
@@ -2083,7 +2086,7 @@ class RaucleGateway:
             "agent_key_id": self._gate_identity.key_id,
             "operation": "guardrail_scan",
             "parents": [],
-            "taint": ["gate:observed"],
+            "taint": [_TAINT_GATE_OBSERVED],
             "input_hash": _sha256_hex(_canonical_json(extension)),
             "ruleset_hash": _sha256_hex(_canonical_json(extension)),
             "guardrail_verdict": "advisory",
