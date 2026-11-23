@@ -88,3 +88,41 @@ class ChainTailMalformed(Exception):
     byte offset and the operator path (``raucle rotate-chain``, which
     archives the broken chain verifiably and starts a fresh one).
     """
+
+
+class KeyRotationRefusedError(Exception):
+    """An operator-plane key rotation refused before touching anything.
+
+    Raised by ``raucle operator rotate-keys``
+    (:func:`raucle.key_rotation.rotate_keys`) when the rotation would be
+    unsafe or pointless:
+
+    * no operator key registry configured
+      (``RAUCLE_OPERATOR_KEY_REGISTRY``),
+    * the configured registry file is absent (fail-closed: without the
+      registry, receipts minted before the rotation could not verify
+      afterwards),
+    * no signing key to rotate (the key store is empty),
+    * the signing key is not registered, or is revoked,
+    * a signed registry without the registry operator key to append with,
+    * no operator identity (``--operator`` or ``RAUCLE_OPERATOR``),
+    * today's retirement archive already exists (idempotent-safe).
+
+    The refusal is all-or-nothing: no file moves, no registry entry and
+    no receipt is minted when it raises.
+    """
+
+
+class KeyStoreRegistryMismatch(Exception):
+    """The gateway boot refused: the local key store and the operator key
+    registry disagree (X3 slice 3, the split-brain guard).
+
+    Raised at boot when ``RAUCLE_OPERATOR_KEY_REGISTRY`` is configured
+    and the local signing key is not the registry's vouched-for active
+    entry: the registry never saw the key, or it retired or revoked it
+    (a rotation whose registry update landed but whose key-store update
+    did not, or a hand-restored old key). The message names the reconcile
+    command (``raucle operator rotate-keys``) and the restart: the boot
+    never serves receipts on a key the registry does not vouch for, and
+    the guard binds at construction, so a reconcile requires a restart.
+    """

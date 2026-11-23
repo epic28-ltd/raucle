@@ -298,6 +298,12 @@ class GatewayConfig:
 
     # Registry
     registry_path: str = "/data/registry.jsonl"
+    # X3 slice 3: the operator key registry vouches for the operator
+    # plane's signing key (rotate-keys keeps it current; receipt
+    # verification resolves key ids through it). When set, the boot
+    # requires the local signing key to be its active entry (the
+    # split-brain guard). Empty = no registry discipline, boot unchanged.
+    operator_key_registry: str = ""
     # Root that evidence files (policy, receipts, audit chain, registries,
     # keys) must sit inside when an admin redirects them through the panel
     # (RED-035). Empty = the parent of ``receipt_store``.
@@ -392,6 +398,7 @@ class GatewayConfig:
             index_cache_mb=int(os.environ.get("RAUCLE_INDEX_CACHE_MB", "64") or "64"),
             compliance_framework=os.environ.get("RAUCLE_COMPLIANCE_FRAMEWORK", "eu-ai-act"),
             registry_path=os.environ.get("RAUCLE_REGISTRY_PATH", "/data/registry.jsonl"),
+            operator_key_registry=os.environ.get("RAUCLE_OPERATOR_KEY_REGISTRY", ""),
             approval_ttl_seconds=int(os.environ.get("RAUCLE_APPROVAL_TTL", "300")),
             policy_ledger_path=os.environ.get("RAUCLE_POLICY_LEDGER", ""),
             data_root=os.environ.get("RAUCLE_DATA_ROOT", ""),
@@ -1767,6 +1774,19 @@ class RaucleGateway:
                 key_id=self.config.kms_key_id,
                 region=self.config.kms_region,
             )
+
+        # X3 slice 3: the split-brain guard. When an operator key registry
+        # is configured, the boot requires the local signing key to be the
+        # registry's vouched-for active entry; a mismatch (the registry
+        # never saw the key, or retired or revoked it) is a named
+        # restart-required refusal. The guard binds at construction, so a
+        # reconcile always names the restart. KMS and TEE signers keep
+        # their own key lifecycle (named follow-up), so only the local
+        # backend is guarded.
+        if self.config.signer_backend == "local" and self.config.operator_key_registry:
+            from raucle.key_rotation import verify_boot_key_against_registry
+
+            verify_boot_key_against_registry(self.config, self._signer)
 
         # Create issuer from THE signer's key material (A2: local signers
         # now persist, so the issuer identity is stable across restarts -
