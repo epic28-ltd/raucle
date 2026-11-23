@@ -54,8 +54,12 @@ before the rotation keep verifying without re-signing history.
 6. **Boot split-brain guard** (`KeyStoreRegistryMismatch`,
    restart-required, local signer backend only, when a registry is
    configured): registry missing or failing integrity verification; local
-   key unregistered, revoked or retired. Each refusal names
-   `raucle operator rotate-keys` and the restart. A crash between the
+   key unregistered, revoked or retired. Each refusal is named and
+   restart-required; the unregistered and retired refusals point at
+   `raucle operator rotate-keys` (reconciliation the command can do),
+   while the missing, unverifiable-registry and revoked refusals point
+   at their actual remedy (registry init/publish, restore, revoke-then-
+   rotate). A crash between the
    registry update and the key-store move recovers by a re-run: the
    crashed attempt's public-only key retires visibly.
 

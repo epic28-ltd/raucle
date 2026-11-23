@@ -22,12 +22,14 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from raucle.gateway import GatewayConfig, RaucleGateway
+from raucle.key_rotation import key_store_path
 
 
 def _utc_today() -> str:
@@ -213,6 +215,12 @@ class TestRotateKeys:
         retired = _retired_key_name(config)
         assert retired.is_file()
         assert result["archived_key"]["retired_path"] == str(retired)
+        # D3 assert-close (checker 23 Nov): the new private key lands 0600
+        # from creation (O_CREAT|O_EXCL with 0o600), matching the boot-
+        # created key pin in tests/test_gateway_persistence.py.
+        new_key_path = Path(key_store_path(config))
+        assert new_key_path.is_file()
+        assert (os.stat(new_key_path).st_mode & 0o777) == 0o600
         assert result["archived_key"]["sha256"] == _sha256_file(retired)
         assert result["archived_key"]["bytes"] == retired.stat().st_size
 
@@ -525,6 +533,20 @@ class TestBootKeyRegistryGuard:
         TrustRegistry(config.operator_key_registry)
 
         with pytest.raises(KeyStoreRegistryMismatch, match="rotate-keys"):
+            RaucleGateway(config)
+
+    def test_boot_refuses_corrupted_registry(self, tmp_path):
+        """D1 close (checker 23 Nov): a registry that exists but fails
+        verification (tampered/corrupt bytes) is a named
+        KeyStoreRegistryMismatch at boot with the restart-required guard."""
+        from raucle.key_rotation import KeyStoreRegistryMismatch
+
+        config = self._guarded_config(tmp_path)
+        config.operator_key_registry = str(tmp_path / "corrupt-registry.jsonl")
+        # A file exists, holds bytes, and fails TrustRegistry.load.
+        Path(config.operator_key_registry).write_text("{not json at all", encoding="utf-8")
+
+        with pytest.raises(KeyStoreRegistryMismatch, match="failed verification"):
             RaucleGateway(config)
 
     def test_boot_refuses_missing_registry_file(self, tmp_path):

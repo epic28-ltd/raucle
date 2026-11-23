@@ -115,7 +115,7 @@ the registry does not vouch for:
   or an old key was hand-restored).
 
 Each refusal is a named, restart-required `KeyStoreRegistryMismatch`
-naming `raucle operator rotate-keys` and the restart. Recovery is a
+naming the actual remedy (rotate-keys where reconciliation is possible, otherwise the registry fix) and the restart. Recovery is a
 re-run: the crashed attempt's public-only key retires visibly in the
 registry and a fresh key takes the name; nothing wedges.
 

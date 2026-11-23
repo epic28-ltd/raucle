@@ -121,7 +121,8 @@ class KeyStoreRegistryMismatch(Exception):
     and the local signing key is not the registry's vouched-for active
     entry: the registry never saw the key, or it retired or revoked it
     (a rotation whose registry update landed but whose key-store update
-    did not, or a hand-restored old key). The message names the reconcile
+    did not, or a hand-restored old key). The unregistered and retired
+    refusals name the reconcile
     command (``raucle operator rotate-keys``) and the restart: the boot
     never serves receipts on a key the registry does not vouch for, and
     the guard binds at construction, so a reconcile requires a restart.
