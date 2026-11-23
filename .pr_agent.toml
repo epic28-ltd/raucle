@@ -1,0 +1,29 @@
+# PR-Agent house rules for this repository (L9 open code review layer).
+# The PR-Agent GitHub Action reads this file from the repository root.
+# Model, endpoint and credentials live in .github/workflows/pr-agent.yml
+# (the OLLAMA_API_KEY org secret is referenced by name only); this file
+# carries the reviewer standards, so the review enforces house rules,
+# not generic ones.
+
+[config]
+# British English for every generated comment, label and description.
+response_language = "en-GB"
+
+[pr_reviewer]
+extra_instructions = """
+House rules for every review of this repository:
+- Write in British English. Em dashes are banned; use commas, brackets or a colon instead.
+- Receipt and report shapes are byte compatibility contracts. A new field is omitted when absent, never emitted as a null or empty default, so existing consumers keep verifying byte for byte. Flag any change that pads, reorders or renames an existing shape.
+- Secrets never belong in a diff: no key material, tokens, passwords or private URLs in code, tests, fixtures or docs. Credentials arrive by reference (env var, secret name, file path), never by value.
+- Lane PRs follow TDD: a failing red test landing before its fix is expected, not a defect. Flag a fix that arrives with no red test.
+- Honest states over empty answers: a truthful not verified, skipped or failed state beats a fabricated or blank field. Flag any number or result that is invented or not backed by a run the PR cites.
+Repo note: this repository is the OSS core. Gate and receipt schema changes are OSS release prerequisites, so check them against the public verifier and the conformance vectors first.
+"""
+
+[pr_description]
+extra_instructions = """
+Write in British English. Em dashes are banned.
+Summarise what the change actually does, not what it aspires to do.
+Keep the original description content that is already accurate.
+Receipt schema changes are release prerequisites; name them plainly in the description.
+"""
