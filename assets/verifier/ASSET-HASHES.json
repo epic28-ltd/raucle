@@ -1,11 +1,17 @@
 {
   "_comment": "sha256 pins for the X2 offline verifier page and its committed fixture pack; enforced by tests/test_x2_verifier.py. Regenerate with scripts/x2_asset_hashes.py after a deliberate asset change.",
   "assets": {
+    "fixtures/cross-org/README.md": "9dfff57bec0caba6de9786401fb219b045f081ad8cb1cc7d1e2b356602fb49b5",
+    "fixtures/cross-org/chain.jsonl": "4e94aaafb0ef5f4167a193d105e4711267f93dd919e599cf9335afb412d352c3",
+    "fixtures/cross-org/log-inclusion.json": "7b62cea442d4724f80b5ef86929cfeb4e77f5249c004b5228f6cb5792d71a976",
+    "fixtures/cross-org/log-operator.pem": "2007a528f1b1be66259ebbd4e3a24602359ce6d6c0a7d2c009d1b04709e5d5bf",
+    "fixtures/cross-org/registry-operator.pem": "38ec47bbc227b6f2d437233d1c7dbb609fc554d83b3fef9e7bc005889ba0d7cc",
+    "fixtures/cross-org/registry.jsonl": "e95888dea1ac2f232141277dfb354ae4b06867655d1e0f7d43383a48b65ee1d1",
     "fixtures/fixture-pack/PACK.json": "58695919401e9362841219e2d1cf6a29a7f8861fd0800418264431b5919cd6bf",
     "fixtures/fixture-pack/chain.jsonl": "e1ac473d7dbeb32403f54c74aa14d598d18223586f1106886e83e9465e68dd97",
     "fixtures/fixture-pack/manifest.json": "70718c00f441811ed4c60f9ca034b66db6c48a1021506d20510532c1b5b9da1b",
     "fixtures/fixture-pack/pubkeys/6a1521989e13ddb8.pem": "6a1521989e13ddb82ec636d66c0af8ff387f5b505d72a78efe97f4beffdd93e3",
     "fixtures/fixture-pack/report.html": "1f9f4850c7a0be71505831065dc6de0c35b97d5eefabe89440984177aaefb8b0",
-    "x2-verifier.html": "9b414b5c3880a715de4836ec31eef36e3475920825cc678a9e6a42af4a249f35"
+    "x2-verifier.html": "e23e8fc9ad0934d6ff3e05d7de74ce8fd9f02e161eede9070e991248c80d710a"
   }
 }

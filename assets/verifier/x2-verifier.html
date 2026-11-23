@@ -6,7 +6,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>raucle offline verifier — receipts &amp; audit packs</title>
+<title>raucle offline verifier - receipts &amp; audit packs</title>
 <style>
   :root { font-family: system-ui, sans-serif; }
   body { background: #fff; color: #111; margin: 2rem; max-width: 60rem; }
@@ -37,7 +37,7 @@
 <p class="muted">
   Verifies raucle audit packs (<code>PACK.json</code>, manifest, receipt chain) or a bare
   receipt chain / single receipt <em>entirely in your browser</em>. This page makes no
-  network connections after load — drop in files, get a verdict. Public keys must ship
+  network connections after load - drop in files, get a verdict. Public keys must ship
   inside the pack (that is what an audit pack is for); nothing is retrieved.
 </p>
 <h2>1 · Provide the artefact</h2>
@@ -46,19 +46,40 @@
   <input id="files" type="file" multiple webkitdirectory />
   <input id="multi" type="file" multiple accept=".json,.jsonl,.pem" />
 </div>
-<h2>— or paste a receipt / chain —</h2>
+<h2>or paste a receipt / chain</h2>
 <p class="muted">One receipt JWS per line, or <code>{"receipt_hash": …, "jws": …}</code> JSONL envelopes.
 Verify against the keys the pack carried (below) or a pasted PEM.</p>
 <textarea id="pastec" placeholder='{"receipt_hash":"sha256:…","jws":"…"}'></textarea>
 <textarea id="pastek" placeholder="optional: -----BEGIN PUBLIC KEY----- (one Ed25519 PEM; its base64 key_id is shown after verify)"></textarea>
 <button id="runpaste">verify pasted</button>
+<h2>4 · Cross-org verification (X2 slice 3)</h2>
+<p class="muted">
+  Verify <em>another</em> organisation's receipt with no prior key exchange and no
+  trust in either operator: the signing org's public key is resolved through its
+  Trust Registry artifact (hash chain + operator signatures + freshness pins)
+  against the <strong>pinned registry operator anchor</strong>, then the receipt
+  signature, the published scope, and (when supplied) the transparency log's
+  inclusion proof are verified entirely in your browser. No network I/O; the
+  anchor is the only trust input.
+</p>
+<textarea id="xorg-receipt" placeholder="the receipt: chain envelope lines {&quot;receipt_hash&quot;:…,&quot;jws&quot;:…}, or a bare compact JWS"></textarea>
+<textarea id="xorg-registry" placeholder="the registry artifact (trust-registry JSONL, one entry per line)"></textarea>
+<textarea id="xorg-anchor" placeholder="registry operator public key; the pinned anchor (out of band): -----BEGIN PUBLIC KEY-----"></textarea>
+<div class="muted">Optional freshness pins (a stale snapshot can hide a later revocation):</div>
+<input id="xorg-min-index" type="number" min="0" placeholder="minimum head index" />
+<input id="xorg-head-hash" placeholder="expected head hash (sha256:&hellip;)" />
+<input id="xorg-max-age" type="number" min="0" placeholder="maximum artifact age in seconds" />
+<textarea id="xorg-log-proof" placeholder="optional third leg: the transparency log inclusion proof (JSON), when was it registered"></textarea>
+<textarea id="xorg-log-key" placeholder="log operator public key (pinned, a separate anchor): -----BEGIN PUBLIC KEY-----"></textarea>
+<button id="xorg-run">verify cross-org</button>
+
 <h2>2 · Verdict</h2>
 <div id="verdict"></div>
 <div id="packchecks"></div>
 <div id="results"></div>
 <h2>3 · The verification recipe this page runs</h2>
 <div id="recipe"><pre>
-Verification recipe — what this page checks, in order:
+Verification recipe: what this page checks, in order:
 
 1. PACK.json (index): a JSON object of kind 'raucle-audit-pack/v1'. Verify its
    Ed25519 signature: re-serialise the index WITHOUT audit_public_key_pem and
@@ -87,7 +108,7 @@ Verification recipe — what this page checks, in order:
      d. payload: typ 'provenance-receipt/v1', non-empty iss;
      e. the Ed25519 signature over the raw signing input
         (base64url(header) + '.' + base64url(payload)) verifies against the
-        bundled public key for agent_key_id — fail-closed: an unknown key id
+        bundled public key for agent_key_id; fail-closed: an unknown key id
         is a denial, never a pass-through;
      f. receipt_hash equals sha256 over the exact JWS ascii bytes;
      g. every parent receipt_hash cited by the receipt appears in the chain.
@@ -96,13 +117,13 @@ Verification recipe — what this page checks, in order:
    receipt must never be reported as verified. Packs that declare
    require_pq are likewise denied outright.
 
-Trust note: a self-signed pack proves internal consistency only — anyone can
+Trust note: a self-signed pack proves internal consistency only: anyone can
 rebuild and sign their own pack. Pin the custodian's audit key id (the
 signer shown on a verified pack) out of band to get 'this pack came from
 that custodian'.
 
 All of the above is recomputed locally from the dropped bytes alone. The page
-performs no network I/O — no keys or data leave the browser, and nothing is
+performs no network I/O: no keys or data leave the browser, and nothing is
 looked up anywhere.
 </pre></div>
 <script id="x2-verifier-core">
@@ -149,7 +170,7 @@ var X2V = (function () {
     }).join("");
   }
   /* JCS (RFC 8785) per raucle's _canonical_json: sort object keys by UTF-16
-     code units, no whitespace, raw UTF-8, integers-and-stringables only —
+     code units, no whitespace, raw UTF-8, integers-and-stringables only;
      floats and NaN/Infinity are rejected exactly as Python rejects them. */
   function canon(obj, path) {
     path = path || "$";
@@ -181,7 +202,7 @@ var X2V = (function () {
   }
   function canonBytes(obj) { return enc(canon(obj)); }
 
-  /* JSON parser that rejects duplicate object keys — same object-smuggling
+  /* JSON parser that rejects duplicate object keys: same object-smuggling
      defence as the Python verifier's object_pairs_hook. */
   function parseNoDup(text) {
     var pos = 0;
@@ -587,7 +608,7 @@ var X2V = (function () {
         r.key_id = (await sha256hex(enc(String(pem)))).slice(0, 16);
       } else {
         r.sig_ok = null;
-        r.reasons.push("no public key supplied — signature unverifiable (fail-closed); pass the bundle's PEM");
+        r.reasons.push("no public key supplied; signature unverifiable (fail-closed); pass the bundle's PEM");
       }
       r.status = r.hash_ok && r.sig_ok !== false ? (r.sig_ok === true ? "green" : "warn") : "red";
       var pay = JSON.parse(dec(b64uDecode(parts[1])));
@@ -598,12 +619,701 @@ var X2V = (function () {
     return r;
   }
 
+
+  /* --- X2 slice 3: cross-org verification through the Trust Registry --- */
+  /* Mirrors raucle/cross_org.py + the trust-registry and transparency
+     verifiers. The one trust anchor is the PINNED registry operator key;
+     nothing riding the artifacts is verification input. */
+  var REGISTRY_VERSION = "trust-registry/v1";
+  var REGISTRY_GENESIS = "0000000000000000000000000000000000000000000000000000000000000000";
+  var LOG_GENESIS_PREV = "sha256:" + "0000000000000000000000000000000000000000000000000000000000000000";
+  var MAX_CLOCK_SKEW = 300;
+  var LOG_DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+  var LOG_ENTRY_FIELDS = ["entry_hash", "org", "payload_digest", "prev_hash",
+    "receipt_digest", "registered_at", "sequence"];
+  var LOG_HEADER_FIELDS = ["alg", "crit", "kid", "raucle/v1", "typ"];
+  var LOG_PAYLOAD_FIELDS = ["epoch", "head_hash", "iat", "iss", "nonce", "org", "size"];
+  function isLogInt(v) { return typeof v === "number" && Number.isInteger(v); }
+  function logDigestOk(v) { return typeof v === "string" && LOG_DIGEST_RE.test(v); }
+  function utf16Sorted(list) { return list.slice().sort(); }
+
+  function registryEntryBody(e) {
+    var body = Object.create(null);
+    Object.keys(e).forEach(function (k) {
+      if (["hash", "operator_sig", "operator_pq_key_id", "operator_pq_sig"].indexOf(k) < 0) {
+        body[k] = e[k];
+      }
+    });
+    return body;
+  }
+
+  /* The registry leg: strict JSONL parse, chain re-hash, key_id binding,
+     operator signatures against the PINNED anchor, issuer-name uniqueness,
+     freshness pins. Named reasons, fail-closed. */
+  async function verifyRegistryArtifact(text, opts) {
+    opts = opts || {};
+    var out = {
+      ok: false, reasons: [], headIndex: -1, headHash: "", headTs: 0,
+      records: Object.create(null),
+    };
+    var rawLines = String(text).replace(/\r/g, "").split("\n")
+      .filter(function (l) { return l.trim(); });
+    if (!rawLines.length) {
+      out.reasons.push("registry artifact is empty");
+      return out;
+    }
+    var entries = [];
+    for (var i = 0; i < rawLines.length; i += 1) {
+      try { entries.push(parseNoDup(rawLines[i])); }
+      catch (e) {
+        out.reasons.push("registry line " + (i + 1) + " is not strict JSON: " + e.message);
+        return out;
+      }
+    }
+    var header = entries[0];
+    if (header.type !== "header") {
+      out.reasons.push("registry artifact does not start with a header entry");
+      return out;
+    }
+    if (header.version !== REGISTRY_VERSION) {
+      out.reasons.push("unexpected registry version " + JSON.stringify(header.version));
+      return out;
+    }
+    if (!header.signed) {
+      out.reasons.push("registry artifact is unsigned: an unsigned log cannot " +
+        "anchor cross-org trust (publish with an operator signer)");
+      return out;
+    }
+    if (!opts.operatorPem) {
+      out.reasons.push("no registry anchor pinned: paste the registry operator's " +
+        "public key (obtained out of band); an artifact verified only against " +
+        "its own chain is not authenticated");
+      return out;
+    }
+    var anchorRaw;
+    try { anchorRaw = pemToRawEd25519(opts.operatorPem, "registry anchor key"); }
+    catch (e) { out.reasons.push(e.message); return out; }
+    /* chain + operator signatures + key_id binding + fold */
+    var prev = REGISTRY_GENESIS;
+    var state = out.records;
+    for (i = 0; i < entries.length; i += 1) {
+      var e = entries[i];
+      if (e.index !== i) out.reasons.push("entry " + i + ": index mismatch");
+      if (e.prev_hash !== prev) out.reasons.push("entry " + i + ": broken chain");
+      var expect = await sha256hex(canonBytes(registryEntryBody(e)));
+      if (e.hash !== expect) out.reasons.push("entry " + i + ": hash mismatch (tampered)");
+      if (!e.operator_sig) {
+        out.reasons.push("entry " + i + ": missing operator signature");
+      } else {
+        var good = await edVerify(anchorRaw, b64uDecode(e.operator_sig), enc(String(e.hash)));
+        if (good !== true) {
+          out.reasons.push("entry " + i + ": operator signature invalid against the pinned anchor");
+        }
+      }
+      /* Fail closed on a hybrid-declared entry exactly like the OSS registry
+         leg: an entry carrying operator_pq_key_id MUST have its ML-DSA-65
+         operator signature component verified, and the browser cannot verify
+         ML-DSA-65. Classical-only acceptance of a hybrid entry is never green. */
+      if (e.operator_pq_key_id) {
+        out.reasons.push("entry " + i + ": hybrid entry carries operator_pq_key_id and its " +
+          "ML-DSA-65 operator signature component cannot be verified in-browser (fail-closed)");
+      }
+      if (e.type === "register") {
+        var kid = (await sha256hex(enc(String(e.public_key_pem)))).slice(0, 16);
+        if (e.key_id !== kid) {
+          out.reasons.push("entry " + i + ": key_id does not match SHA-256 of its public key");
+        }
+        state[e.key_id] = {
+          keyId: e.key_id, issuer: e.issuer, pem: e.public_key_pem,
+          revoked: false, revokedReason: "", metadata: e.metadata || Object.create(null),
+          algorithm: "",
+        };
+      } else if (e.type === "register_pq") {
+        state[e.pq_key_id] = {
+          keyId: e.pq_key_id, issuer: e.issuer, pem: e.public_key_pem || "",
+          revoked: false, revokedReason: "", metadata: { algorithm: e.algorithm || "ml-dsa-65" },
+          algorithm: e.algorithm || "ml-dsa-65",
+        };
+      } else if (e.type === "revoke" && state[e.key_id]) {
+        state[e.key_id].revoked = true;
+        state[e.key_id].revokedReason = e.reason || "";
+      }
+      prev = e.hash;
+    }
+    /* issuer-name uniqueness, per algorithm namespace (mirrors Python) */
+    var seenClassical = Object.create(null), seenPq = Object.create(null);
+    Object.keys(state).forEach(function (kid) {
+      var rec = state[kid];
+      if (rec.revoked) return;
+      var canon = String(rec.issuer).normalize("NFC").toLowerCase().trim();
+      if (!canon) {
+        out.reasons.push("active register entry for key " + kid + " has a blank issuer name");
+        return;
+      }
+      if (rec.algorithm) {
+        var perAlgo = canon + "|" + rec.algorithm;
+        if (seenPq[perAlgo] && seenPq[perAlgo] !== kid) {
+          out.reasons.push("duplicate active issuer name " + JSON.stringify(rec.issuer) +
+            " for " + rec.algorithm + " (keys " + seenPq[perAlgo] + " and " + kid + ")");
+        }
+        seenPq[perAlgo] = kid;
+      } else {
+        if (seenClassical[canon] && seenClassical[canon] !== kid) {
+          out.reasons.push("duplicate active issuer name " + JSON.stringify(rec.issuer) +
+            " (keys " + seenClassical[canon] + " and " + kid + ")");
+        }
+        seenClassical[canon] = kid;
+      }
+    });
+    /* freshness pins */
+    var head = entries[entries.length - 1];
+    out.headIndex = head.index;
+    out.headHash = head.hash;
+    out.headTs = head.ts || 0;
+    if (opts.minIndex != null && head.index < opts.minIndex) {
+      out.reasons.push("stale snapshot: head index " + head.index +
+        " < expected min " + opts.minIndex);
+    }
+    if (opts.expectedHeadHash && head.hash !== opts.expectedHeadHash) {
+      out.reasons.push("stale snapshot: head hash " + head.hash +
+        " != expected " + opts.expectedHeadHash);
+    }
+    if (opts.maxAgeSeconds != null) {
+      var now = opts.now != null ? opts.now : Math.floor(Date.now() / 1000);
+      if (head.ts > now + MAX_CLOCK_SKEW) {
+        out.reasons.push("stale/forged snapshot: head ts " + head.ts +
+          " is in the future (now " + now + ", allowed skew " + MAX_CLOCK_SKEW + "s)");
+      }
+      if (now - head.ts > opts.maxAgeSeconds) {
+        out.reasons.push("stale snapshot: head is " + (now - head.ts) +
+          "s old (max " + opts.maxAgeSeconds + "s)");
+      }
+    }
+    out.ok = out.reasons.length === 0;
+    return out;
+  }
+
+  /* The scope leg: the org's published capability statement (registry
+     metadata) held against the receipt. Mirrors ProvenanceVerifier's
+     capability conformance for the single-statement case. */
+  function capStmtBody(stmt) {
+    var body = Object.create(null);
+    body.agent_id = stmt.agent_id;
+    body.key_id = stmt.key_id;
+    body.public_key_pem = stmt.public_key_pem;
+    body.allowed_models = utf16Sorted(stmt.allowed_models || []);
+    body.allowed_tools = utf16Sorted(stmt.allowed_tools || []);
+    body.data_classifications = utf16Sorted(stmt.data_classifications || []);
+    body.issuer = stmt.issuer;
+    body.issued_at = stmt.issued_at;
+    body.expires_at = stmt.expires_at;
+    if (stmt.sanitisation_authority && stmt.sanitisation_authority.length) {
+      body.sanitisation_authority = utf16Sorted(stmt.sanitisation_authority);
+    }
+    if (stmt.attestation) body.attestation = stmt.attestation;
+    return body;
+  }
+
+  async function verifyScopeForReceipt(stmt, record, kid, pay) {
+    /* Returns [] when the scope leg is green for this receipt, else named reasons. */
+    var reasons = [];
+    if (stmt.key_id !== kid) {
+      return ["published capability statement binds key " + JSON.stringify(stmt.key_id) +
+        ", not the registry-resolved key " + JSON.stringify(kid) +
+        " (substitutable scope material refused)"];
+    }
+    if (stmt.public_key_pem !== record.pem) {
+      return ["published capability statement does not carry the registry-resolved public key"];
+    }
+    try {
+      var raw = pemToRawEd25519(record.pem, "registry key " + kid);
+      var ok = await edVerify(raw, b64Decode(stmt.signature), canonBytes(capStmtBody(stmt)));
+      if (ok !== true) {
+        reasons.push("capability statement for " + kid +
+          " failed signature/key-binding verification");
+      }
+    } catch (e) {
+      reasons.push("capability statement for " + kid + " does not verify: " + e.message);
+    }
+    if (pay.agent_id !== stmt.agent_id) {
+      reasons.push("receipt agent_id " + JSON.stringify(pay.agent_id) +
+        " does not match the published statement agent_id " +
+        JSON.stringify(stmt.agent_id) + " for " + kid);
+    }
+    if (stmt.expires_at != null && pay.iat && pay.iat >= stmt.expires_at) {
+      reasons.push("capability statement for " + kid + " expired at " + stmt.expires_at +
+        " but the receipt was issued at " + pay.iat);
+    }
+    if (pay.tool && stmt.allowed_tools && stmt.allowed_tools.length &&
+        stmt.allowed_tools.indexOf(pay.tool) < 0) {
+      reasons.push("receipt invokes tool " + JSON.stringify(pay.tool) +
+        " which the published statement for " + kid + " does not allow");
+    }
+    if (pay.model && stmt.allowed_models && stmt.allowed_models.length &&
+        stmt.allowed_models.indexOf(pay.model) < 0) {
+      reasons.push("receipt invokes model " + JSON.stringify(pay.model) +
+        " which the published statement for " + kid + " does not allow");
+    }
+    return reasons;
+  }
+
+  /* The registration leg: the transparency log's inclusion proof, verified
+     against a PINNED log operator key. Named statuses mirror the Python
+     verifier exactly (precedence MALFORMED, BAD-SIGNATURE, CHAIN-BROKEN,
+     HEAD-MISMATCH; every reason reported). */
+  function logEntryRefusal(entry) {
+    if (typeof entry !== "object" || entry === null) return "an entry is not a JSON object";
+    var keys = Object.keys(entry);
+    var required = LOG_ENTRY_FIELDS.filter(function (f) { return f !== "payload_digest"; });
+    for (var i = 0; i < required.length; i += 1) {
+      if (keys.indexOf(required[i]) < 0) {
+        return "an entry lacks the fields " + JSON.stringify(
+          required.filter(function (f) { return keys.indexOf(f) < 0; }).sort());
+      }
+    }
+    var unknown = keys.filter(function (k) { return LOG_ENTRY_FIELDS.indexOf(k) < 0; }).sort();
+    if (unknown.length) return "an entry carries unknown fields " + JSON.stringify(unknown);
+    if (typeof entry.org !== "string" || !entry.org) return "entry org is not a non-empty string";
+    if (!isLogInt(entry.sequence) || entry.sequence < 1) {
+      return "entry sequence is not a positive integer";
+    }
+    var names = ["entry_hash", "prev_hash", "receipt_digest"];
+    for (i = 0; i < names.length; i += 1) {
+      if (!logDigestOk(entry[names[i]])) return "entry " + names[i] + " is not a sha256:<64 hex> digest";
+    }
+    if (entry.payload_digest != null && !logDigestOk(entry.payload_digest)) {
+      return "entry payload_digest is not a sha256:<64 hex> digest";
+    }
+    if (!isLogInt(entry.registered_at) || entry.registered_at < 0) {
+      return "entry registered_at is not a non-negative integer";
+    }
+    return null;
+  }
+
+  async function logEntryHashOf(entry) {
+    var record = Object.create(null);
+    record.org = entry.org;
+    record.payload_digest = entry.payload_digest === undefined ? null : entry.payload_digest;
+    record.prev_hash = entry.prev_hash;
+    record.receipt_digest = entry.receipt_digest;
+    record.registered_at = entry.registered_at;
+    record.sequence = entry.sequence;
+    return "sha256:" + (await sha256hex(canonBytes(record)));
+  }
+
+  async function verifyLogCheckpoint(jws, operatorPem) {
+    /* Returns {payload, reasons} - reasons empty when the checkpoint
+       verifies against the PINNED key and follows the closed profile. */
+    var parts = String(jws).split(".");
+    if (parts.length !== 3) {
+      return { payload: null, reasons: ["a checkpoint carries three segments, got " + parts.length] };
+    }
+    var header, payload;
+    try {
+      header = parseNoDup(dec(b64uDecode(parts[0])));
+      payload = parseNoDup(dec(b64uDecode(parts[1])));
+    } catch (e) {
+      return { payload: null, reasons: ["the checkpoint does not parse: " + e.message] };
+    }
+    var unknownH = Object.keys(header).filter(function (k) {
+      return LOG_HEADER_FIELDS.indexOf(k) < 0;
+    }).sort();
+    if (unknownH.length) {
+      return { payload: null, reasons: ["the checkpoint header carries unknown fields " + JSON.stringify(unknownH)] };
+    }
+    if (header.alg !== "EdDSA") {
+      return { payload: null, reasons: ["the checkpoint alg is " + JSON.stringify(header.alg) + ", not EdDSA"] };
+    }
+    if (header.typ !== "transparency-epoch/v1") {
+      return { payload: null, reasons: ["the checkpoint typ is " + JSON.stringify(header.typ) + ", not transparency-epoch/v1"] };
+    }
+    if (!Array.isArray(header.crit) || header.crit.length !== 1 || header.crit[0] !== "raucle/v1") {
+      return { payload: null, reasons: ["the checkpoint crit is " + JSON.stringify(header.crit) + ", not the documented set"] };
+    }
+    if (header["raucle/v1"] !== "transparency") {
+      return { payload: null, reasons: ["the checkpoint raucle/v1 extension is not the transparency value"] };
+    }
+    if (typeof header.kid !== "string" || !header.kid) {
+      return { payload: null, reasons: ["the checkpoint kid is not a non-empty string"] };
+    }
+    var raw;
+    try { raw = pemToRawEd25519(operatorPem, "log operator key"); }
+    catch (e) { return { payload: null, reasons: [e.message] }; }
+    var good = await edVerify(raw, b64uDecode(parts[2]), enc(parts[0] + "." + parts[1]));
+    if (good !== true) {
+      return { payload: null, reasons: ["the checkpoint signature does not verify against the pinned operator key"] };
+    }
+    var missingP = LOG_PAYLOAD_FIELDS.filter(function (f) {
+      return !(f in payload);
+    }).sort();
+    if (missingP.length) {
+      return { payload: null, reasons: ["the checkpoint payload lacks " + JSON.stringify(missingP)] };
+    }
+    var unknownP = Object.keys(payload).filter(function (k) {
+      return LOG_PAYLOAD_FIELDS.indexOf(k) < 0;
+    }).sort();
+    if (unknownP.length) {
+      return { payload: null, reasons: ["the checkpoint payload carries unknown fields " + JSON.stringify(unknownP)] };
+    }
+    if (typeof payload.org !== "string" || !payload.org) {
+      return { payload: null, reasons: ["the checkpoint org is not a non-empty string"] };
+    }
+    var intNames = ["epoch", "iat", "size"];
+    for (var i = 0; i < intNames.length; i += 1) {
+      if (!isLogInt(payload[intNames[i]]) || payload[intNames[i]] < 0) {
+        return { payload: null, reasons: ["the checkpoint " + intNames[i] + " is not a non-negative integer"] };
+      }
+    }
+    if (payload.epoch !== payload.size) {
+      return { payload: null, reasons: ["the checkpoint epoch " + payload.epoch + " does not equal its size " + payload.size] };
+    }
+    if (!logDigestOk(payload.head_hash)) {
+      return { payload: null, reasons: ["the checkpoint head_hash is not a sha256:<64 hex> digest"] };
+    }
+    if (typeof payload.nonce !== "string" || !payload.nonce) {
+      return { payload: null, reasons: ["the checkpoint nonce is not a non-empty string"] };
+    }
+    if (typeof payload.iss !== "string" || !payload.iss) {
+      return { payload: null, reasons: ["the checkpoint iss is not a non-empty string"] };
+    }
+    return { payload: payload, reasons: [] };
+  }
+
+  async function verifyLogInclusion(proof, opts) {
+    opts = opts || {};
+    var out = { status: "LOG-MALFORMED", reasons: [], size: 0, head_hash: "",
+      registered_at: null, checkpoint_iat: null };
+    if (typeof proof !== "object" || proof === null) {
+      out.reasons.push("the proof is not a JSON object");
+      return out;
+    }
+    for (var n = 0; n < ["checkpoint_jws", "entries", "head_hash", "org", "sequence", "size"].length; n += 1) {
+      var name = ["checkpoint_jws", "entries", "head_hash", "org", "sequence", "size"][n];
+      if (!(name in proof)) { out.reasons.push("the proof lacks " + name); return out; }
+    }
+    if (typeof proof.org !== "string" || !proof.org) {
+      out.reasons.push("proof org is not a non-empty string"); return out;
+    }
+    if (!isLogInt(proof.sequence) || proof.sequence < 1) {
+      out.reasons.push("proof sequence is not a positive integer"); return out;
+    }
+    if (!isLogInt(proof.size) || proof.size < 1) {
+      out.reasons.push("proof size is not a positive integer"); return out;
+    }
+    if (!Array.isArray(proof.entries) || !proof.entries.length) {
+      out.reasons.push("proof entries is not a non-empty list"); return out;
+    }
+    if (!logDigestOk(proof.head_hash)) {
+      out.reasons.push("proof head_hash is not a sha256:<64 hex> digest"); return out;
+    }
+    if (typeof proof.checkpoint_jws !== "string") {
+      out.reasons.push("proof checkpoint_jws is not a string"); return out;
+    }
+    out.size = proof.size; out.head_hash = proof.head_hash;
+    var entries = proof.entries;
+    for (var i = 0; i < entries.length; i += 1) {
+      var r = logEntryRefusal(entries[i]);
+      if (r) { out.reasons.push(r); return out; }
+    }
+    var first = entries[0], last = entries[entries.length - 1];
+    /* chain + head bindings, in the Python report order */
+    var chainReasons = [], headReasons = [];
+    if (opts.org && proof.org !== opts.org) {
+      headReasons.push("the proof is for org " + JSON.stringify(proof.org) +
+        ", not the expected org " + JSON.stringify(opts.org));
+    }
+    entries.forEach(function (entry) {
+      if (entry.org !== proof.org) {
+        headReasons.push("entry " + entry.sequence + " belongs to org " +
+          JSON.stringify(entry.org) + ", not the proof org " + JSON.stringify(proof.org));
+      }
+    });
+    if (first.sequence !== proof.sequence) {
+      chainReasons.push("the segment begins at entry " + first.sequence +
+        ", not the stated target sequence " + proof.sequence);
+    }
+    for (i = 0; i < entries.length; i += 1) {
+      var entry = entries[i];
+      var expectHash = await logEntryHashOf(entry);
+      if (expectHash !== entry.entry_hash) {
+        chainReasons.push("entry " + entry.sequence + " does not bind its stated hash (recomputed != stated)");
+      }
+    }
+    if (first.sequence === 1 && first.prev_hash !== LOG_GENESIS_PREV) {
+      chainReasons.push("the first entry does not name the genesis link " + LOG_GENESIS_PREV);
+    }
+    for (i = 1; i < entries.length; i += 1) {
+      var previous = entries[i - 1];
+      entry = entries[i];
+      if (entry.sequence !== previous.sequence + 1) {
+        chainReasons.push("the segment is not contiguous: entry " + entry.sequence +
+          " follows entry " + previous.sequence);
+      }
+      if (entry.prev_hash !== previous.entry_hash) {
+        chainReasons.push("entry " + entry.sequence + " does not link the previous entry's hash (entry " +
+          previous.sequence + ")");
+      }
+    }
+    if (proof.head_hash !== last.entry_hash) {
+      headReasons.push("the stated head hash is not the segment's head");
+    }
+    if (proof.size !== last.sequence) {
+      headReasons.push("the stated size " + proof.size +
+        " is not the segment's head entry " + last.sequence);
+    }
+    if (opts.expectDigest && first.receipt_digest !== opts.expectDigest) {
+      headReasons.push("the target entry registers a different digest than the expected one");
+    }
+    if (proof.receipt_digest !== undefined && proof.receipt_digest !== first.receipt_digest) {
+      headReasons.push("the proof names a different digest than its target entry carries");
+    }
+    var cp = await verifyLogCheckpoint(proof.checkpoint_jws, opts.operatorPem);
+    if (!cp.payload) {
+      out.status = "LOG-BAD-SIGNATURE";
+      out.reasons = chainReasons.concat(headReasons, cp.reasons);
+      return out;
+    }
+    var payload = cp.payload;
+    if (payload.org !== proof.org) {
+      headReasons.push("the signed checkpoint is for org " + JSON.stringify(payload.org) +
+        ", not " + JSON.stringify(proof.org));
+    }
+    if (payload.size !== proof.size) {
+      headReasons.push("the signed checkpoint is the head at size " + payload.size +
+        ", not " + proof.size);
+    }
+    if (payload.head_hash !== last.entry_hash) {
+      headReasons.push("the segment does not reach the signed head");
+    }
+    if (chainReasons.length) {
+      out.status = "LOG-CHAIN-BROKEN";
+      out.reasons = chainReasons.concat(headReasons);
+      return out;
+    }
+    if (headReasons.length) {
+      out.status = "LOG-HEAD-MISMATCH";
+      out.reasons = headReasons;
+      return out;
+    }
+    out.status = "LOG-INCLUDED";
+    out.reasons = [];
+    out.registered_at = first.registered_at;
+    out.checkpoint_iat = payload.iat;
+    return out;
+  }
+
+  /* Parse the receipt input: envelope lines, or a single bare JWS. */
+  function parseReceiptEnvelopes(text) {
+    var raw = String(text).trim();
+    if (!raw) return { refusal: "no receipt supplied" };
+    if (raw.charAt(0) === "{") {
+      var envs = [];
+      var lines = raw.replace(/\r/g, "").split("\n").filter(function (l) { return l.trim(); });
+      for (var i = 0; i < lines.length; i += 1) {
+        var env;
+        try { env = parseNoDup(lines[i]); }
+        catch (e) { return { refusal: "chain line is not strict JSON: " + e.message }; }
+        var extra = Object.keys(env).filter(function (k) {
+          return ENV_FIELDS.indexOf(k) < 0;
+        });
+        if (extra.length) {
+          return { refusal: "chain line is not a {receipt_hash, jws} envelope (unknown envelope fields are malleability)" };
+        }
+        envs.push(env);
+      }
+      if (!envs.length) return { refusal: "no receipt supplied" };
+      return { envelopes: envs };
+    }
+    /* bare JWS: the page cannot sha256 synchronously; the caller recomputes
+       the hash via the chain verifier by wrapping it as an envelope with a
+       recomputed hash. */
+    return { bareJws: raw };
+  }
+
+  /* The full cross-org verification: registry leg, receipt leg (keys
+     resolved through the registry), scope leg (published statement),
+     registration leg (inclusion proof, when supplied). */
+  async function verifyCrossOrg(receiptText, registryText, opts) {
+    opts = opts || {};
+    var out = {
+      valid: false, registry_ok: false, registry_reasons: [],
+      head_index: -1, head_hash: "", issuer: "", key_id: "", revoked: false,
+      chain_valid: false, receipt_count: 0, lines: [],
+      scope: null, scope_reasons: [],
+      log_status: null, log_reasons: [], registered_at: null, checkpoint_iat: null,
+      reasons: [],
+    };
+    var reg;
+    try {
+      reg = await verifyRegistryArtifact(registryText, opts);
+    } catch (e) {
+      out.registry_reasons = ["registry artifact refused: " + e.message];
+      out.reasons = out.registry_reasons;
+      return out;
+    }
+    out.registry_ok = reg.ok;
+    out.registry_reasons = reg.reasons;
+    out.head_index = reg.headIndex;
+    out.head_hash = reg.headHash;
+    if (!reg.ok) { out.reasons = reg.reasons; return out; }
+    var parsed = parseReceiptEnvelopes(receiptText);
+    if (parsed.refusal) { out.reasons = [parsed.refusal]; return out; }
+    var chainText;
+    if (parsed.bareJws) {
+      var h = await sha256hex(enc(parsed.bareJws));
+      chainText = JSON.stringify({ receipt_hash: "sha256:" + h, jws: parsed.bareJws });
+    } else {
+      chainText = parsed.envelopes.map(function (e) { return JSON.stringify(e); }).join("\n");
+    }
+    /* resolve every signing key through the registry */
+    var kids = Object.create(null);
+    parsed.envelopes = parsed.envelopes || [];
+    var envList = parsed.envelopes.length ? parsed.envelopes : [{ receipt_hash: null, jws: parsed.bareJws }];
+    for (var i = 0; i < envList.length; i += 1) {
+      var parts = String(envList[i].jws).split(".");
+      if (parts.length !== 3) {
+        out.reasons = ["a receipt is not a 3-segment compact JWS (PQ hybrids unsupported here)"];
+        return out;
+      }
+      var pay;
+      try { pay = parseNoDup(dec(b64uDecode(parts[1]))); }
+      catch (e) { out.reasons = ["a receipt payload does not parse: " + e.message]; return out; }
+      kids[pay.agent_key_id] = true;
+    }
+    var keymap = Object.create(null);
+    var kidList = Object.keys(kids);
+    for (i = 0; i < kidList.length; i += 1) {
+      var kid = kidList[i];
+      var record = reg.records[kid];
+      if (!record) {
+        out.reasons = ["agent key " + kid + " is not in the registry (unknown issuer)"];
+        return out;
+      }
+      if (record.revoked) {
+        out.revoked = true;
+        out.reasons = ["agent key " + kid + " is revoked in the registry" +
+          (record.revokedReason ? " (reason: " + record.revokedReason + ")" : "")];
+        return out;
+      }
+      keymap[kid] = pemToRawEd25519(record.pem, "registry key " + kid);
+      out.issuer = record.issuer;
+      out.key_id = kid;
+    }
+    var chain = await verifyChainText(chainText, keymap);
+    out.chain_valid = chain.valid;
+    out.receipt_count = chain.receipt_count;
+    out.lines = chain.lines;
+    /* the scope leg: per signing key with a published statement. A signing
+       key the registry resolves but publishes no statement for is NOT
+       skipped in a mixed chain: while other keys' scope material is held,
+       every receipt by that key is a named refusal, exactly like the OSS
+       verifier (fail-closed, never half-green). */
+    var scopeHasStmt = false;
+    var unstatedKids = Object.create(null);
+    var scopeReasons = [];
+    for (i = 0; i < kidList.length; i += 1) {
+      kid = kidList[i];
+      record = reg.records[kid];
+      var stmtRaw = record.metadata.capability_statement;
+      if (stmtRaw === undefined || stmtRaw === null) {
+        unstatedKids[kid] = true;
+        continue;
+      }
+      if (typeof stmtRaw !== "object") {
+        out.scope = false;
+        out.scope_reasons = ["registry metadata carries a malformed capability statement (not an object)"];
+        out.reasons = out.scope_reasons;
+        return out;
+      }
+      scopeHasStmt = true;
+      for (var ln = 0; ln < chain.lines.length; ln += 1) {
+        var res = chain.lines[ln];
+        if (res.kid !== kid) continue;
+        var lineEnv;
+        try {
+          lineEnv = parseNoDup(chainText.replace(/\r/g, "").split("\n").filter(function (l) { return l.trim(); })[ln]);
+        } catch (e) { continue; }
+        var lineParts = String(lineEnv.jws).split(".");
+        var linePay = parseNoDup(dec(b64uDecode(lineParts[1])));
+        var rs = await verifyScopeForReceipt(stmtRaw, record, kid, linePay);
+        scopeReasons = scopeReasons.concat(rs);
+      }
+    }
+    if (scopeHasStmt && Object.keys(unstatedKids).length > 0) {
+      /* Mixed chain: name the unstated signing keys per receipt line, the
+         same refusal the OSS verifier reports ("no capability statement
+         supplied"). The refusal is warranted ONLY while the registry
+         publishes scope material for other signing keys; the OSS mirror
+         (ProvenanceVerifier capability conformance) skips the conformance
+         check entirely when no statement is supplied at all, so a registry
+         that states nothing for any key falls through to the honest
+         unstated residual below (leg null, verdict stays green). */
+      chain.lines.forEach(function (res) {
+        if (!unstatedKids[res.kid]) return;
+        scopeReasons.push("line " + res.line + ": no capability statement supplied for " +
+          "agent_key_id=" + res.kid + " (fail-closed: the registry publishes scope " +
+          "material for other signing keys, but none for this one)");
+      });
+      out.scope = false;
+      out.scope_reasons = scopeReasons;
+    } else if (scopeHasStmt) {
+      out.scope = chain.valid && scopeReasons.length === 0;
+      out.scope_reasons = scopeReasons;
+    } else {
+      out.scope = null;
+      out.scope_reasons = ["scope unstated: the registry publishes no capability statement for the signing key(s), so what this agent was allowed to do is not pinned (the signature and hash legs still verify)"];
+    }
+    /* the registration leg */
+    if (opts.logProofText) {
+      var proof;
+      try { proof = parseNoDup(opts.logProofText); }
+      catch (e) {
+        out.log_status = "LOG-MALFORMED";
+        out.log_reasons = ["the inclusion proof does not parse: " + e.message];
+        out.reasons = out.registry_reasons.concat(chain.lines.flatMap(function (l) { return l.reasons; }), out.scope_reasons, out.log_reasons);
+        out.valid = false;
+        return out;
+      }
+      if (!opts.logOperatorPem) {
+        out.log_status = "LOG-UNPINNED";
+        out.log_reasons = ["log operator key not pinned: an inclusion proof verified against its own riding key would be self-attested; pin the log operator's public key obtained out of band"];
+        out.valid = false;
+        out.reasons = out.log_reasons;
+        return out;
+      }
+      /* the registration leg binds the chain's LEAF receipt (the last
+         envelope, the newest one a third party is handed) */
+      var leafEnv = envList[envList.length - 1];
+      var leafDigest = leafEnv.receipt_hash ||
+        ("sha256:" + (await sha256hex(enc(String(leafEnv.jws)))));
+      var logRes = await verifyLogInclusion(proof, {
+        operatorPem: opts.logOperatorPem,
+        expectDigest: leafDigest,
+      });
+      out.log_status = logRes.status;
+      out.log_reasons = logRes.reasons;
+      out.registered_at = logRes.registered_at;
+      out.checkpoint_iat = logRes.checkpoint_iat;
+    } else {
+      out.log_reasons = ["log inclusion proof not supplied: when this receipt was registered is unverified (named residual, not a failure)"];
+    }
+    var receiptReasons = [];
+    chain.lines.forEach(function (l) {
+      receiptReasons = receiptReasons.concat(l.reasons);
+    });
+    out.reasons = out.registry_reasons.concat(receiptReasons, out.scope_reasons, out.log_reasons);
+    out.valid = reg.ok && chain.valid && out.scope !== false &&
+      (out.log_status === null || out.log_status === "LOG-INCLUDED");
+    return out;
+  }
+
   return {
     b64uDecode: b64uDecode, b64Decode: b64Decode, canonBytes: canonBytes, canon: canon,
     parseNoDup: parseNoDup, sha256hex: sha256hex, pemToRawEd25519: pemToRawEd25519,
     edVerify: edVerify, verifyChainText: verifyChainText, verifyChainEnvelope: verifyChainEnvelope,
     verifyIndex: verifyIndex, verifyManifest: verifyManifest, verifyPack: verifyPack,
-    verifySingleJWS: verifySingleJWS,
+    verifySingleJWS: verifySingleJWS, verifyRegistryArtifact: verifyRegistryArtifact,
+    verifyLogInclusion: verifyLogInclusion, verifyCrossOrg: verifyCrossOrg,
   };
 })();
 </script>
@@ -641,7 +1351,7 @@ var X2V = (function () {
   function renderVerdict(el, ok, label, extra) {
     el.style.display = "block";
     el.className = ok ? "verified" : "deny";
-    el.textContent = (ok ? "VERIFIED — " : "DENY — ") + label + (extra ? " · " + extra : "");
+    el.textContent = (ok ? "VERIFIED - " : "DENY - ") + label + (extra ? " · " + extra : "");
   }
   function table(lines) {
     var html = "<table><tr><th>line</th><th>agent</th><th>operation</th><th>key id</th><th>status</th><th>detail</th></tr>";
@@ -655,7 +1365,7 @@ var X2V = (function () {
   function checkList(checks) {
     var html = "<ul class='reasons'>";
     checks.forEach(function (c) {
-      html += "<li>" + (c.ok ? "✔" : "✘") + " " + c.check + (c.reasons.length ? " — " + c.reasons.join("; ") : "") + "</li>";
+      html += "<li>" + (c.ok ? "✔" : "✘") + " " + c.check + (c.reasons.length ? ": " + c.reasons.join("; ") : "") + "</li>";
     });
     return html + "</ul>";
   }
@@ -731,6 +1441,52 @@ var X2V = (function () {
   ["files", "multi"].forEach(function (id) {
     document.getElementById(id).addEventListener("change", function (e) { handleFiles(e.target.files); });
   });
+document.getElementById("xorg-run").addEventListener("click", async function () {
+    var V = document.getElementById("verdict"), R = document.getElementById("results"), C = document.getElementById("packchecks");
+    var receipt = document.getElementById("xorg-receipt").value;
+    var registry = document.getElementById("xorg-registry").value;
+    var anchor = document.getElementById("xorg-anchor").value || null;
+    var minIndex = document.getElementById("xorg-min-index").value;
+    var headHash = document.getElementById("xorg-head-hash").value.trim();
+    var maxAge = document.getElementById("xorg-max-age").value;
+    var logProof = document.getElementById("xorg-log-proof").value.trim();
+    var logKey = document.getElementById("xorg-log-key").value || null;
+    if (!receipt.trim() || !registry.trim()) {
+      renderVerdict(V, false, "cross-org", "supply both the receipt and the registry artifact");
+      return;
+    }
+    var opts = { operatorPem: anchor };
+    if (minIndex !== "") opts.minIndex = parseInt(minIndex, 10);
+    if (headHash) opts.expectedHeadHash = headHash;
+    if (maxAge !== "") opts.maxAgeSeconds = parseInt(maxAge, 10);
+    if (logProof) opts.logProofText = logProof;
+    if (logKey) opts.logOperatorPem = logKey;
+    try {
+      var v = await X2V.verifyCrossOrg(receipt, registry, opts);
+      var label = "cross-org receipt";
+      if (v.issuer) label += " from " + v.issuer;
+      if (v.log_status === "LOG-INCLUDED" && v.registered_at != null) {
+        label += ", registered " + new Date(v.registered_at * 1000).toISOString();
+      }
+      renderVerdict(V, v.valid, label, v.chain_valid ? v.receipt_count + " receipts" : "");
+      var legs = [];
+      legs.push({ ok: v.registry_ok, check: "registry artifact (chain + operator anchor + freshness)", reasons: v.registry_reasons });
+      legs.push({ ok: v.chain_valid, check: "receipt signature via registry-resolved key (" + v.receipt_count + " receipts)", reasons: v.chain_valid ? [] : ["per-receipt failures listed below"] });
+      legs.push({ ok: v.scope, check: "scope: what was allowed (published capability statement)", reasons: v.scope === null ? [v.scope_reasons[0] || "scope unstated"] : v.scope_reasons });
+      if (v.log_status !== null) {
+        legs.push({ ok: v.log_status === "LOG-INCLUDED", check: "registration: transparency log inclusion (" + v.log_status + ")", reasons: v.log_reasons });
+      } else {
+        legs.push({ ok: null, check: "registration: transparency log inclusion (not supplied)", reasons: v.log_reasons });
+      }
+      C.innerHTML = "<ul class='reasons'>" + legs.map(function (c) {
+        return "<li>" + (c.ok === true ? "✔" : c.ok === null ? "·" : "✘") + " " + c.check +
+          (c.reasons && c.reasons.length ? ": " + c.reasons.join("; ") : "") + "</li>";
+      }).join("") + "</ul>";
+      R.innerHTML = table(v.lines);
+    } catch (e) {
+      renderVerdict(V, false, "cross-org verification error", String(e.message));
+    }
+  });
   document.getElementById("runpaste").addEventListener("click", async function () {
     var V = document.getElementById("verdict"), R = document.getElementById("results"), C = document.getElementById("packchecks");
     var jws = document.getElementById("pastec").value;
@@ -739,7 +1495,7 @@ var X2V = (function () {
     try {
       var r = await X2V.verifySingleJWS(jws, pem);
       renderVerdict(V, r.status === "green", "receipt " + (r.agent_id || ""), r.receipt_hash ? r.receipt_hash.slice(0, 23) + "… (hash recompute green)" : "");
-      R.innerHTML = "<ul class='reasons'><li>signature: " + (r.sig_ok === true ? "green against pasted key " + r.key_id : r.sig_ok === false ? "RED — signature did not verify" : "unstated (no key)") + "</li><li>receipt_hash recompute: " + (r.hash_ok ? "green" : "RED") + "</li>" + r.reasons.map(function (x) { return "<li>" + x + "</li>"; }).join("") + "</ul>";
+      R.innerHTML = "<ul class='reasons'><li>signature: " + (r.sig_ok === true ? "green against pasted key " + r.key_id : r.sig_ok === false ? "RED: signature did not verify" : "unstated (no key)") + "</li><li>receipt_hash recompute: " + (r.hash_ok ? "green" : "RED") + "</li>" + r.reasons.map(function (x) { return "<li>" + x + "</li>"; }).join("") + "</ul>";
       C.innerHTML = "";
     } catch (e) {
       renderVerdict(V, false, "receipt error", String(e.message));
