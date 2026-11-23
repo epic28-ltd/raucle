@@ -314,3 +314,142 @@ def test_future_dated_head_rejected(tmp_path):
             max_age_seconds=3600,
             now=head_ts - 10_000,  # head is 10000s in this verifier's future
         )
+
+
+class TestRetirement:
+    """X3 slice 3: key retirement, the registry's rotation transition state.
+
+    A RETIRED key is not revoked: revocation is the trust cut (fail-closed,
+    the key stops resolving); retirement only ends the key's tenure as the
+    ACTIVE holder of its issuer name, so receipts the retired key signed
+    keep verifying through the registry. The dual-key window a rotation
+    needs (retired + active under one issuer) is exactly this state.
+    """
+
+    def test_retire_keeps_key_verifiable_and_marks_record(self, tmp_path):
+        reg = TrustRegistry(tmp_path / "r.jsonl")
+        iss = _issuer("org-a")
+        kid = reg.publish(iss.public_key_pem, issuer="Org A")
+
+        reg.retire(kid, reason="operator key rotation")
+
+        # Retired is NOT revoked: the key still resolves so the receipts it
+        # signed keep verifying. The trust cut (revoke) is a separate act.
+        assert reg.public_key(kid) == iss.public_key_pem
+        assert reg.is_retired(kid)
+        assert not reg.is_revoked(kid)
+        rec = reg.resolve(kid)
+        assert rec is not None
+        assert rec.retired
+        assert rec.retired_reason == "operator key rotation"
+        assert not rec.revoked
+
+    def test_retired_key_stays_in_issuer_map_for_verification(self, tmp_path):
+        """Old tokens/receipts keep verifying: retirement does not remove
+        the key from the verifier's issuer map (revocation does)."""
+        reg = TrustRegistry(tmp_path / "r.jsonl")
+        iss_old = _issuer("org-a")
+        old_kid = reg.publish(iss_old.public_key_pem, issuer="Org A")
+        iss_new = _issuer("org-a")
+        new_kid = reg.publish(iss_new.public_key_pem, issuer="Org A v2")
+
+        reg.retire(old_kid, reason="rotation")
+
+        assert old_kid in reg.as_issuer_map()
+        assert new_kid in reg.as_issuer_map()
+
+    def test_retire_unknown_key_refuses(self, tmp_path):
+        reg = TrustRegistry(tmp_path / "r.jsonl")
+        with pytest.raises(ValueError, match="not registered"):
+            reg.retire("deadbeefdeadbeef", reason="nothing to retire")
+
+    def test_publish_new_key_under_freed_name_after_retire(self, tmp_path):
+        """Rotation's re-registration: retire the old key, then publish the
+        successor under the SAME issuer name. The retired key no longer
+        competes for the name (that is the transition), and the registry
+        holds BOTH keys: retired + active."""
+        reg = TrustRegistry(tmp_path / "r.jsonl")
+        iss_old = _issuer("org-a")
+        old_kid = reg.publish(iss_old.public_key_pem, issuer="raucle-gateway")
+        reg.retire(old_kid, reason="rotation")
+
+        iss_new = _issuer("org-a")
+        new_kid = reg.publish(iss_new.public_key_pem, issuer="raucle-gateway")
+
+        assert new_kid != old_kid
+        # The dual-key window: both resolve, only the successor is active.
+        assert reg.public_key(old_kid) == iss_old.public_key_pem
+        assert reg.public_key(new_kid) == iss_new.public_key_pem
+        assert reg.is_retired(old_kid)
+        assert not reg.is_retired(new_kid)
+        active = [r for r in reg.records() if not r.retired and not r.revoked]
+        assert [r.key_id for r in active] == [new_kid]
+        assert active[0].issuer == "raucle-gateway"
+
+    def test_publish_under_a_name_held_active_still_refuses(self, tmp_path):
+        """Retirement is the ONLY way a second key takes an issuer name:
+        while the old key is still active, the impersonation control holds."""
+        reg = TrustRegistry(tmp_path / "r.jsonl")
+        reg.publish(_issuer("org-a").public_key_pem, issuer="Org A")
+        with pytest.raises(ValueError, match="collides"):
+            reg.publish(_issuer("org-a").public_key_pem, issuer="org a")
+
+    def test_registry_with_retired_and_active_reloads_and_verifies(self, tmp_path):
+        """The post-rotation registry is loadable: issuer-name uniqueness
+        counts only ACTIVE keys, and the whole log verifies."""
+        path = tmp_path / "r.jsonl"
+        op = Ed25519Signer.generate()
+        reg = TrustRegistry(path, operator_signer=op)
+        old_kid = reg.publish(_issuer("org-a").public_key_pem, issuer="raucle-gateway")
+        reg.retire(old_kid, reason="rotation")
+        new_kid = reg.publish(_issuer("org-b").public_key_pem, issuer="raucle-gateway")
+
+        loaded = TrustRegistry.load(path)
+        loaded.verify_integrity(operator_public_pem=op.public_key_pem())
+        assert loaded.is_retired(old_kid)
+        assert not loaded.is_retired(new_kid)
+        assert loaded.public_key(old_kid) is not None
+
+    def test_retire_is_append_only_history_preserved(self, tmp_path):
+        path = tmp_path / "r.jsonl"
+        reg = TrustRegistry(path)
+        kid = reg.publish(_issuer("org-a").public_key_pem, issuer="Org A")
+        before = (path.read_text(encoding="utf-8")).splitlines()
+
+        reg.retire(kid, reason="rotation")
+
+        after = path.read_text(encoding="utf-8").splitlines()
+        assert len(after) == len(before) + 1
+        import json as _json
+
+        entry = _json.loads(after[-1])
+        assert entry["type"] == "retire"
+        assert entry["key_id"] == kid
+        assert entry["reason"] == "rotation"
+
+    def test_republish_after_retire_reactivates(self, tmp_path):
+        """Symmetric with revocation: a fresh register entry supersedes the
+        retirement (auditable in history)."""
+        reg = TrustRegistry(tmp_path / "r.jsonl")
+        iss = _issuer("org-a")
+        kid = reg.publish(iss.public_key_pem, issuer="Org A")
+        reg.retire(kid, reason="rotation")
+        assert reg.is_retired(kid)
+        reg.publish(iss.public_key_pem, issuer="Org A")
+        assert not reg.is_retired(kid)
+
+    def test_retire_then_revoke_fails_closed(self, tmp_path):
+        """The separate acts compose: retirement keeps the retired key
+        verifiable; a LATER revocation cuts it (old receipts stop verifying)."""
+        reg = TrustRegistry(tmp_path / "r.jsonl")
+        iss = _issuer("org-a")
+        kid = reg.publish(iss.public_key_pem, issuer="Org A")
+        reg.retire(kid, reason="rotation")
+        assert reg.public_key(kid) is not None
+
+        reg.revoke(kid, reason="compromised after rotation")
+
+        assert reg.public_key(kid) is None
+        rec = reg.resolve(kid)
+        assert rec is not None
+        assert rec.retired and rec.revoked
