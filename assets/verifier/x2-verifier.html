@@ -1203,14 +1203,22 @@ var X2V = (function () {
     out.chain_valid = chain.valid;
     out.receipt_count = chain.receipt_count;
     out.lines = chain.lines;
-    /* the scope leg: per signing key with a published statement */
+    /* the scope leg: per signing key with a published statement. A signing
+       key the registry resolves but publishes no statement for is NOT
+       skipped in a mixed chain: while other keys' scope material is held,
+       every receipt by that key is a named refusal, exactly like the OSS
+       verifier (fail-closed, never half-green). */
     var scopeHasStmt = false;
+    var unstatedKids = Object.create(null);
     var scopeReasons = [];
     for (i = 0; i < kidList.length; i += 1) {
       kid = kidList[i];
       record = reg.records[kid];
       var stmtRaw = record.metadata.capability_statement;
-      if (stmtRaw === undefined || stmtRaw === null) continue;
+      if (stmtRaw === undefined || stmtRaw === null) {
+        unstatedKids[kid] = true;
+        continue;
+      }
       if (typeof stmtRaw !== "object") {
         out.scope = false;
         out.scope_reasons = ["registry metadata carries a malformed capability statement (not an object)"];
@@ -1231,7 +1239,20 @@ var X2V = (function () {
         scopeReasons = scopeReasons.concat(rs);
       }
     }
-    if (scopeHasStmt) {
+    if (Object.keys(unstatedKids).length > 0) {
+      /* Mixed chain: name the unstated signing keys per receipt line, the
+         same refusal the OSS verifier reports ("no capability statement
+         supplied"). The scope leg cannot be green while other keys' scope
+         material is held and this key's is not pinned at all. */
+      chain.lines.forEach(function (res) {
+        if (!unstatedKids[res.kid]) return;
+        scopeReasons.push("line " + res.line + ": no capability statement supplied for " +
+          "agent_key_id=" + res.kid + " (fail-closed: the registry publishes scope " +
+          "material for other signing keys, but none for this one)");
+      });
+      out.scope = false;
+      out.scope_reasons = scopeReasons;
+    } else if (scopeHasStmt) {
       out.scope = chain.valid && scopeReasons.length === 0;
       out.scope_reasons = scopeReasons;
     } else {

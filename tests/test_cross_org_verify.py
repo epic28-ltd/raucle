@@ -758,3 +758,104 @@ def test_page_registry_leg_refuses_hybrid_entry(tmp_path):
         cwd=ROOT,
     )
     assert r.returncode == 0, f"harness failed:\n{r.stdout}\n{r.stderr}"
+
+
+def _mint_receipt_envelope(identity: AgentIdentity, *, parents: list[str], tool: str) -> str:
+    """A production-signed receipt envelope from an identity whose logger is
+    not the writer of the surrounding chain: the shape a mixed chain hands
+    the verifier (one logger-minted root, one directly signed child)."""
+    from raucle.provenance import Operation, ProvenanceReceipt, hash_obj
+
+    receipt = ProvenanceReceipt(
+        agent_id=identity.statement.agent_id,
+        agent_key_id=identity.key_id,
+        operation=Operation.TOOL_CALL,
+        parents=parents,
+        input_hash=hash_obj({"account": "ACC-1"}),
+        output_hash=hash_obj({"ok": True}),
+        tool=tool,
+        taint=["external_user"],
+        issued_at=1_700_000_000,
+    )
+    receipt.sign(identity)
+    return json.dumps({"receipt_hash": receipt.receipt_hash, "jws": receipt.jws})
+
+
+def _mixed_chain_scenario(tmp_path: Path, *, with_statement: bool = True) -> tuple[dict, bytes]:
+    """A real registry + receipt chain where one signing key carries the
+    org's published capability statement and a second key is registered but
+    unstated. Returns (scenario dict for the node harness, operator anchor
+    bytes for the OSS path)."""
+    operator = _operator_signer()
+    stated = AgentIdentity.generate(
+        agent_id="agent:org-a-billing",
+        allowed_tools=["tool.ledger.get"],
+    )
+    unstated = AgentIdentity.generate(
+        agent_id="agent:org-b-analytics",
+        allowed_tools=["tool.ledger.get"],
+    )
+    reg = TrustRegistry(path=tmp_path / "registry.jsonl", operator_signer=operator)
+    reg_metadata: dict = {"org": "org-a"}
+    if with_statement:
+        reg_metadata["capability_statement"] = stated.statement.to_dict()
+    reg.publish(stated.public_key_pem(), issuer="org-a", metadata=reg_metadata)
+    reg.publish(unstated.public_key_pem(), issuer="org-b", metadata={"org": "org-b"})
+    tmp_sub = tmp_path / "sub"
+    tmp_sub.mkdir(parents=True, exist_ok=True)
+    writer = ProvenanceLogger(stated, sink_path=tmp_sub / "chain.jsonl")
+    root = writer.record_user_input("read ACC-1 ledger")
+    writer.close()
+    root_line = (tmp_sub / "chain.jsonl").read_text(encoding="utf-8").strip()
+    child = _mint_receipt_envelope(unstated, parents=[root], tool="tool.ledger.get")
+    chain_text = root_line + "\n" + child
+    registry_text = (tmp_path / "registry.jsonl").read_text(encoding="utf-8")
+    return {
+        "name": "mixed chain with a registered-but-unstated signing key",
+        "chain": chain_text,
+        "registry": registry_text,
+        "opts": {"operatorPem": operator.public_key_pem().decode("ascii")},
+        "expect": {
+            "valid": False,
+            "registry_ok": True,
+            "scope": False,
+            "reasonIncludes": ["no capability statement supplied for agent_key_id="],
+        },
+    }, operator.public_key_pem()
+
+
+def test_mixed_chain_unstated_key_refuses_named(tmp_path):
+    """A mixed chain (one signing key with a published statement, one
+    registered but unstated) is a refusal, never a half-green verdict: the
+    receipts of the unstated key are named against the scope leg."""
+    scenario, operator_public_pem = _mixed_chain_scenario(tmp_path)
+    v = verify_receipt_cross_org(
+        scenario["chain"],
+        registry_jsonl=scenario["registry"],
+        operator_public_pem=operator_public_pem,
+    )
+    assert not v.valid
+    assert v.registry_verified
+    assert v.scope_verified is False
+    joined = " ".join(v.reasons)
+    assert "no capability statement supplied for agent_key_id=" in joined
+
+
+@pytest.mark.skipif(not _node_available(), reason="node unavailable")
+def test_page_scope_leg_refuses_mixed_chain(tmp_path):
+    """The shipped X2 page holds the scope leg closed exactly like the OSS
+    verifier when a mixed chain carries a registered-but-unstated signing
+    key: the verdict refuses and the reason names the unstated key."""
+    scenario, _operator_public_pem = _mixed_chain_scenario(tmp_path)
+    scenarios = {"cases": [scenario]}
+    scen = tmp_path / "scenarios.json"
+    scen.write_text(json.dumps(scenarios), encoding="utf-8")
+    harness = ROOT / "tests" / "verifier_harness" / "x2_harness.mjs"
+    r = subprocess.run(
+        ["node", str(harness), str(ROOT), str(scen)],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=ROOT,
+    )
+    assert r.returncode == 0, f"harness failed:\n{r.stdout}\n{r.stderr}"
