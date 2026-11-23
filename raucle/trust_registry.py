@@ -97,6 +97,8 @@ class TrustRecord:
     created_at: int
     revoked: bool = False
     revoked_reason: str = ""
+    retired: bool = False
+    retired_reason: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -109,6 +111,13 @@ class TrustRecord:
         }
         if self.revoked_reason:
             d["revoked_reason"] = self.revoked_reason
+        # X3 slice 3: retirement is the rotation transition state. Omitted
+        # when unset so every existing record's serialised shape is
+        # byte-identical (omit-when-empty, the additive-extension rule).
+        if self.retired:
+            d["retired"] = True
+        if self.retired_reason:
+            d["retired_reason"] = self.retired_reason
         if self.metadata:
             d["metadata"] = self.metadata
         return d
@@ -312,7 +321,10 @@ class TrustRegistry:
         if not canon:
             raise ValueError("issuer name must be non-empty")
         for kid, rec in self._fold().items():
-            if rec.revoked:
+            if rec.revoked or rec.retired:
+                # Revoked keys are cut; retired keys ended their tenure by
+                # rotation (X3 slice 3). Neither holds the issuer name, and
+                # both stay resolvable for verification.
                 continue
             if (rec.metadata or {}).get("algorithm"):
                 continue  # PQ keys may share their issuer's name (hybrid design)
@@ -387,6 +399,22 @@ class TrustRegistry:
         """Revoke an issuer key. Append-only; history is preserved."""
         self._write_entry({"type": "revoke", "key_id": key_id, "reason": reason})
 
+    def retire(self, key_id: str, *, reason: str = "") -> None:
+        """Retire an issuer key (X3 slice 3: the rotation transition state).
+
+        Append-only like revocation, but a DIFFERENT act. A retired key is
+        still resolvable: receipts it signed keep verifying through the
+        registry (``public_key`` still returns the PEM, and the key stays in
+        ``as_issuer_map``), while it stops competing for its issuer name so
+        a rotation's successor may publish under that name. The trust cut is
+        :meth:`revoke`, which stays a separate operator decision and fails
+        closed. Refuses an unknown ``key_id``: retiring a key the registry
+        never vouched for would mint a transition record for nothing.
+        """
+        if key_id not in self._fold():
+            raise ValueError(f"cannot retire key {key_id}: not registered")
+        self._write_entry({"type": "retire", "key_id": key_id, "reason": reason})
+
     # -- resolution (the consumer surface) ----------------------------------
 
     def _fold(self) -> dict[str, TrustRecord]:
@@ -418,6 +446,11 @@ class TrustRegistry:
                 if rec is not None:
                     rec.revoked = True
                     rec.revoked_reason = e.get("reason", "")
+            elif t == "retire":
+                rec = state.get(e["key_id"])
+                if rec is not None:
+                    rec.retired = True
+                    rec.retired_reason = e.get("reason", "")
         return state
 
     def resolve(self, key_id: str) -> TrustRecord | None:
@@ -435,6 +468,15 @@ class TrustRegistry:
     def is_revoked(self, key_id: str) -> bool:
         rec = self._fold().get(key_id)
         return rec is not None and rec.revoked
+
+    def is_retired(self, key_id: str) -> bool:
+        """True when the key's tenure ended by rotation (not by revocation).
+
+        A retired key still resolves (its receipts keep verifying); only
+        the ACTIVE holder of an issuer name changes.
+        """
+        rec = self._fold().get(key_id)
+        return rec is not None and rec.retired
 
     def as_issuer_map(self) -> dict[str, str]:
         """``{key_id: pem}`` for all **active** issuers — drop-in for
@@ -499,7 +541,10 @@ class TrustRegistry:
         seen_classical: dict[str, str] = {}
         seen_pq: dict[str, str] = {}
         for kid, rec in self._fold().items():
-            if rec.revoked:
+            if rec.revoked or rec.retired:
+                # Retired keys keep the name for verifiability but no longer
+                # HOLD it: the active successor may carry the same issuer
+                # name (the X3 slice 3 rotation transition).
                 continue
             self._assert_issuer_unique(kid, rec, seen_classical, seen_pq)
 
