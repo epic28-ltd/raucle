@@ -582,7 +582,8 @@ def test_committed_cross_org_fixture_verifies_green():
     path (the node harness then proves the BROWSER implementation agrees)."""
     v = verify_receipt_cross_org(**_fixture_inputs())
     assert v.valid, v.reasons
-    assert v.registry_verified and v.receipt_verified
+    assert v.registry_verified
+    assert v.receipt_verified
     assert v.scope_verified is True
     assert v.issuer == "org-a"
     assert v.log_status == "LOG-INCLUDED"
@@ -619,13 +620,11 @@ def test_committed_fixture_riding_log_key_is_never_verification_input():
     assert v.log_status == "LOG-BAD-SIGNATURE"
 
 
-def test_fixture_generator_round_trip_verifies(tmp_path):
+def test_fixture_generator_round_trip_verifies(tmp_path, monkeypatch):
     """scripts/x2_cross_org_fixtures.py builds a fresh fixture set from the
     real production paths; its output must verify green through the module
     (the fixture cannot rot without this pin going red)."""
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parent.parent / "scripts"))
     import x2_cross_org_fixtures
 
     written = x2_cross_org_fixtures.build_fixture(tmp_path)
