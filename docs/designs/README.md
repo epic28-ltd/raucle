@@ -8,4 +8,4 @@ do; the specs carry the on-wire formats.
 | Design | Status | Scope |
 |---|---|---|
 | [Audit-export artifact (v1)](audit-export-v1.md) | Shipped (v0.17 primitives) | Examiner-facing signed audit reports |
-| [WORM receipt archive (H3)](worm-archive.md) | Design only, not implemented | S3 Object Lock compliance-mode receipt archive, retention and recovery design |
+| [WORM receipt archive (H3)](worm-archive.md) | Shipped (v0.23.6 writer + store; S3 Object Lock backend deployment-side) | S3 Object Lock compliance-mode receipt archive, retention and recovery design |
