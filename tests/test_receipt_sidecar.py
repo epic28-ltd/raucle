@@ -416,3 +416,123 @@ def _app(gateway):
     from raucle.gateway_app import create_gateway_app
 
     return create_gateway_app(gateway)
+
+
+class TestCoverageCompletions:
+    """The gate counts these branches: fail-closed CLI boot, the serve
+    loop shutdown, transport names, env guards, HTTP 404s, lifecycle
+    idempotency, and the advisory pending-list edges."""
+
+    def test_cli_refuses_without_secret(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("RAUCLE_RECEIPT_SIDECAR_SECRET", raising=False)
+        from raucle.cli import main
+
+        assert main(["sidecar", "--store-dir", str(tmp_path / "s")]) == 1
+
+    def test_cli_serves_until_interrupted_then_drains(self, tmp_path, monkeypatch):
+        import time as time_mod
+
+        import raucle.sidecar as sidecar_mod
+
+        monkeypatch.setenv("RAUCLE_RECEIPT_SIDECAR_SECRET", SECRET)
+        seen: dict[str, bool] = {}
+
+        class FakeSidecar:
+            def __init__(self, **_kwargs) -> None:
+                seen["initialised"] = True
+
+            def start(self) -> None:
+                seen["serving"] = True
+
+            def stop(self) -> dict[str, int]:
+                seen["stopped"] = True
+                return {"written": 3, "lost": 0}
+
+            url = "http://127.0.0.1:1"
+
+        monkeypatch.setattr(sidecar_mod, "ReceiptSidecar", FakeSidecar)
+
+        def _interrupt(_seconds: float) -> None:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(time_mod, "sleep", _interrupt)
+        from raucle.cli import main
+
+        assert main(["sidecar", "--store-dir", str(tmp_path / "s")]) == 0
+        assert seen == {"initialised": True, "serving": True, "stopped": True}
+
+    def test_unreachable_sidecar_is_a_named_transport_error(self):
+        from raucle.sidecar import SidecarUnreachable
+
+        client = SidecarClient(url="http://127.0.0.1:1", secret=SECRET, timeout=0.5)
+        with pytest.raises(SidecarUnreachable) as exc:
+            client.submit({"receipt_hash": "sha256:" + "c" * 64, "jws": "x.y.z"})
+        assert exc.value.reason == "sidecar_unreachable"
+
+    def test_max_queue_env_guards_garbage(self, monkeypatch):
+        from raucle.sidecar import _sidecar_max_queue_from_env
+
+        monkeypatch.setenv("RAUCLE_RECEIPT_SIDECAR_MAX_QUEUE", "not-a-number")
+        assert _sidecar_max_queue_from_env() == 4096
+        monkeypatch.setenv("RAUCLE_RECEIPT_SIDECAR_MAX_QUEUE", "-3")
+        assert _sidecar_max_queue_from_env() == 4096
+
+    def test_unknown_paths_answer_404_and_lifecycle_is_idempotent(self, tmp_path):
+        import urllib.error
+        import urllib.request
+
+        sc = _sidecar(tmp_path)
+        try:
+            sc.start()  # idempotent
+            with pytest.raises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(f"{sc.url}/nope", timeout=5.0)
+            assert caught.value.code == 404
+            with pytest.raises(urllib.error.HTTPError) as caught:
+                request = urllib.request.Request(sc.url + "/nope", data=b"{}", method="POST")
+                urllib.request.urlopen(request, timeout=5.0)
+            assert caught.value.code == 404
+        finally:
+            sc.stop()
+            sc.stop()  # idempotent
+
+    def test_pend_spillover_drops_oldest(self, tmp_path):
+        gw_local = _gateway(tmp_path, "", name="gw-spill")
+        for i in range(130):
+            gw_local._pend_sidecar_advisory({"receipt_hash": f"sha256:{i:064x}", "jws": "x"})
+        pending = gw_local._pending_sidecar_advisories
+        assert len(pending) == 128
+        # the two oldest were dropped with a named log, never silently
+        assert pending[0]["receipt_hash"] == "sha256:" + f"{2:064x}"
+
+    def test_drain_clears_when_the_gateway_owns_no_client(self, tmp_path):
+        gw_local = _gateway(tmp_path, "", name="gw-drain")
+        gw_local._pending_sidecar_advisories.append({"receipt_hash": "sha256:" + "d" * 64})
+        gw_local._drain_pending_sidecar_advisories()
+        assert len(gw_local._pending_sidecar_advisories) == 0
+        # the no-client submit guard returns without touching anything
+        gw_local._submit_receipt_to_sidecar({"receipt_hash": "sha256:" + "e" * 64})
+
+    def test_advisory_suppressed_when_receipts_are_off(self, tmp_path):
+        cfg = GatewayConfig(
+            host="127.0.0.1",
+            admin_api_key="k",
+            signer_backend="local",
+            policy_file="",
+            receipt_store=str(tmp_path / "off-legacy.jsonl"),
+            audit_chain=str(tmp_path / "off-audit.jsonl"),
+            registry_path=str(tmp_path / "off-registry.jsonl"),
+            emit_receipts=False,
+            receipt_sidecar_url="http://127.0.0.1:1/",
+            receipt_sidecar_secret=SECRET,
+        )
+        policy = tmp_path / "off-policies.yaml"
+        policy.write_text(POLICY, encoding="utf-8")
+        cfg.policy_file = str(policy)
+        gw = RaucleGateway(cfg)
+        assert (
+            gw._emit_sidecar_advisory(
+                {"receipt_hash": "sha256:" + "f" * 64},
+                type("R", (), {"reason": "receipt_sink_overflow"})(),
+            )
+            is None
+        )
