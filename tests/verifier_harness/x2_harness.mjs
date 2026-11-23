@@ -169,32 +169,32 @@ const xclean = await X2V.verifyCrossOrg(xorg.chain, xorg.registry, xopts());
 results.xorg_clean = { valid: xclean.valid, registry_ok: xclean.registry_ok,
   chain_valid: xclean.chain_valid, scope: xclean.scope, log_status: xclean.log_status,
   issuer: xclean.issuer, registered_at: xclean.registered_at };
-expect(xclean.valid === true, "cross-org clean verifies", xclean.reasons);
-expect(xclean.registry_ok && xclean.chain_valid && xclean.scope === true, "cross-org legs green", xclean.reasons);
-expect(xclean.log_status === "LOG-INCLUDED" && xclean.registered_at !== null, "registration leg included", xclean.log_reasons);
-expect(xclean.issuer === "org-a" && xclean.receipt_count === 2, "issuer and receipt count", [xclean.issuer, xclean.receipt_count]);
+await expect(xclean.valid === true, "cross-org clean verifies", xclean.reasons);
+await expect(xclean.registry_ok && xclean.chain_valid && xclean.scope === true, "cross-org legs green", xclean.reasons);
+await expect(xclean.log_status === "LOG-INCLUDED" && xclean.registered_at !== null, "registration leg included", xclean.log_reasons);
+await expect(xclean.issuer === "org-a" && xclean.receipt_count === 2, "issuer and receipt count", [xclean.issuer, xclean.receipt_count]);
 
 // 10b. cross-org without the log proof: still valid, residual named
 const xnoLog = await X2V.verifyCrossOrg(xorg.chain, xorg.registry, xopts({ logProofText: null, logOperatorPem: null }));
-expect(xnoLog.valid === true && xnoLog.log_status === null &&
+await expect(xnoLog.valid === true && xnoLog.log_status === null &&
   JSON.stringify(xnoLog.log_reasons).includes("not supplied"),
   "absent log proof leaves a named residual", xnoLog.log_reasons);
 
 // 11. tampered registry bytes -> named registry refusal
 const xtampered = await X2V.verifyCrossOrg(xorg.chain, xorg.registry.replace('"org-a"', '"org-a "'), xopts());
-expect(xtampered.valid === false && xtampered.registry_ok === false, "tampered registry denied", xtampered.registry_reasons);
+await expect(xtampered.valid === false && xtampered.registry_ok === false, "tampered registry denied", xtampered.registry_reasons);
 
 // 12. wrong registry anchor -> operator signature invalid, named
 const xwrongAnchor = await X2V.verifyCrossOrg(xorg.chain, xorg.registry,
   xopts({ operatorPem: xorg.logKey }));
-expect(xwrongAnchor.valid === false && xwrongAnchor.registry_ok === false &&
+await expect(xwrongAnchor.valid === false && xwrongAnchor.registry_ok === false &&
   JSON.stringify(xwrongAnchor.registry_reasons).includes("operator signature"),
   "wrong registry anchor denied named", xwrongAnchor.registry_reasons);
 
 // 13. stale freshness pin -> named stale snapshot
 const xstale = await X2V.verifyCrossOrg(xorg.chain, xorg.registry,
   xopts({ minIndex: 99 }));
-expect(xstale.valid === false && xstale.registry_ok === false &&
+await expect(xstale.valid === false && xstale.registry_ok === false &&
   JSON.stringify(xstale.registry_reasons).includes("stale snapshot"),
   "stale freshness pin denied named", xstale.registry_reasons);
 
@@ -206,13 +206,13 @@ const regHeadTs = (() => {
 })();
 const xaged = await X2V.verifyCrossOrg(xorg.chain, xorg.registry,
   xopts({ maxAgeSeconds: 60, now: regHeadTs + 7200 }));
-expect(xaged.valid === false && JSON.stringify(xaged.registry_reasons).includes("stale snapshot"),
+await expect(xaged.valid === false && JSON.stringify(xaged.registry_reasons).includes("stale snapshot"),
   "aged artifact denied named", xaged.registry_reasons);
 
 // 14. log proof pinned to the wrong log key -> LOG-BAD-SIGNATURE
 const xlogBad = await X2V.verifyCrossOrg(xorg.chain, xorg.registry,
   xopts({ logOperatorPem: xorg.anchor }));
-expect(xlogBad.log_status === "LOG-BAD-SIGNATURE" && xlogBad.valid === false,
+await expect(xlogBad.log_status === "LOG-BAD-SIGNATURE" && xlogBad.valid === false,
   "wrong pinned log key refuses named", [xlogBad.log_status, xlogBad.log_reasons]);
 
 // 14b. doctored proof entry -> chain broken / head mismatch, named
@@ -220,14 +220,14 @@ const doctoredProof = JSON.parse(xorg.proof);
 doctoredProof.entries[0].receipt_digest = "sha256:" + "1".repeat(64);
 const xlogDoctored = await X2V.verifyCrossOrg(xorg.chain, xorg.registry,
   xopts({ logProofText: JSON.stringify(doctoredProof) }));
-expect(xlogDoctored.valid === false &&
+await expect(xlogDoctored.valid === false &&
   ["LOG-CHAIN-BROKEN", "LOG-HEAD-MISMATCH", "LOG-BAD-SIGNATURE"].includes(xlogDoctored.log_status),
   "doctored inclusion proof refuses named", [xlogDoctored.log_status, xlogDoctored.log_reasons]);
 
 // 15. proof without a pinned log key -> LOG-UNPINNED, never self-attested
 const xlogUnpinned = await X2V.verifyCrossOrg(xorg.chain, xorg.registry,
   xopts({ logOperatorPem: null }));
-expect(xlogUnpinned.valid === false && xlogUnpinned.log_status === "LOG-UNPINNED",
+await expect(xlogUnpinned.valid === false && xlogUnpinned.log_status === "LOG-UNPINNED",
   "unpinned log key refuses named", [xlogUnpinned.log_status, xlogUnpinned.log_reasons]);
 
 // 16. render probe: the browser-only UI wiring drives the cross-org handler
@@ -262,15 +262,15 @@ expect(xlogUnpinned.valid === false && xlogUnpinned.log_status === "LOG-UNPINNED
     if (typeof click !== "function") throw new Error("cross-org click handler not wired");
     await click();
     const verdict = elements["verdict"];
-    expect(verdict.style.display === "block" && verdict.className === "verified" &&
+    await expect(verdict.style.display === "block" && verdict.className === "verified" &&
       verdict.textContent.indexOf("VERIFIED") === 0 &&
       verdict.textContent.includes("org-a"),
       "render probe: cross-org verdict rendered VERIFIED from org-a", verdict.textContent);
     const legs = elements["packchecks"].innerHTML;
-    expect(legs.includes("registry artifact") && legs.includes("receipt signature") &&
+    await expect(legs.includes("registry artifact") && legs.includes("receipt signature") &&
       legs.includes("scope") && legs.includes("registration"),
       "render probe: all four legs rendered", legs);
-    expect(elements["results"].innerHTML.includes("<table"), "render probe: receipt table rendered");
+    await expect(elements["results"].innerHTML.includes("<table"), "render probe: receipt table rendered");
   } finally {
     delete globalThis.document;
   }
@@ -291,18 +291,18 @@ if (process.argv[3]) {
       reasons: v.reasons.slice(0, 3),
     });
     if (want.valid !== undefined) {
-      expect(v.valid === want.valid, c.name + ": valid", v.reasons);
+      await expect(v.valid === want.valid, c.name + ": valid", v.reasons);
     }
     if (want.registry_ok !== undefined) {
-      expect(v.registry_ok === want.registry_ok, c.name + ": registry_ok", v.registry_reasons);
+      await expect(v.registry_ok === want.registry_ok, c.name + ": registry_ok", v.registry_reasons);
     }
     if (want.scope !== undefined) {
-      expect(v.scope === want.scope, c.name + ": scope", v.reasons);
+      await expect(v.scope === want.scope, c.name + ": scope", v.reasons);
     }
-    (want.reasonIncludes || []).forEach((s) => {
-      expect(JSON.stringify(v.reasons).includes(s),
+    for (const s of want.reasonIncludes || []) {
+      await expect(JSON.stringify(v.reasons).includes(s),
         c.name + ": named reason " + JSON.stringify(s), v.reasons);
-    });
+    }
   }
 }
 
