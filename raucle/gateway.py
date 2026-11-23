@@ -2133,7 +2133,7 @@ class RaucleGateway:
             "agent_key_id": self._gate_identity.key_id,
             "operation": "guardrail_scan",
             "parents": [],
-            "taint": ["gate:observed"],
+            "taint": [_TAINT_GATE_OBSERVED],
             "input_hash": _sha256_hex(_canonical_json(extension)),
             # The ruleset in force for an authority event is the event's own
             # extension block: binding its hash makes suspend/revocation/lease
@@ -2193,7 +2193,7 @@ class RaucleGateway:
             "agent_key_id": self._gate_identity.key_id,
             "operation": "guardrail_scan",
             "parents": [],
-            "taint": ["gate:observed"],
+            "taint": [_TAINT_GATE_OBSERVED],
             "input_hash": _sha256_hex(_canonical_json(ctx.args)),
             "ruleset_hash": ctx.ruleset_override
             or self._policy_ruleset_hash(ctx.tool, ctx.source, ctx.destination),

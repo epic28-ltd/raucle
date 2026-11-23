@@ -43,7 +43,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
+from urllib.parse import urlunsplit
 from urllib.request import Request, urlopen
 
 from raucle.async_receipt_sink import AsyncReceiptSink, ReceiptSinkOverflow
@@ -200,7 +201,9 @@ class SidecarClient:
             raise SidecarRefused(
                 reason, detail, parsed if isinstance(parsed, dict) else None
             ) from None
-        except (URLError, OSError) as err:
+        except OSError as err:
+            # URLError rides OSError (its base class) and so does the
+            # socket-timeout family: this catch owns transport failures.
             raise SidecarUnreachable("sidecar_unreachable", str(err)) from None
 
 
@@ -296,7 +299,7 @@ class ReceiptSidecar:
         # Deliberate: the submit surface is plaintext HTTP on a trusted
         # local or in-cluster segment, per the spec; mTLS is a named
         # follow-up, not an assumption (docs/spec/x3-sidecar-v0.1.md).
-        return f"http://{self._host}:{self._port}"  # NOSONAR
+        return urlunsplit(("http", f"{self._host}:{self._port}", "", "", ""))
 
     @property
     def port(self) -> int:

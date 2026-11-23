@@ -557,3 +557,30 @@ class TestCoverageCompletions:
             )
             is None
         )
+
+
+class TestSecurityResponses:
+    """S5131 pin: caller-controlled path bytes never echo into a body."""
+
+    def test_unknown_paths_answer_inert_404s(self, tmp_path):
+        import urllib.error
+        import urllib.request
+
+        payload = "<script>alert(1)</script>"
+        sc = _sidecar(tmp_path)
+        try:
+            post_request = urllib.request.Request(f"{sc.url}/{payload}", data=b"{}", method="POST")
+            with pytest.raises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(post_request, timeout=5.0)
+            assert caught.value.code == 404
+            post_body = caught.value.read().decode("utf-8", "replace")
+            with pytest.raises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(f"{sc.url}/{payload}", timeout=5.0)
+            assert caught.value.code == 404
+            get_body = caught.value.read().decode("utf-8", "replace")
+            for body in (get_body, post_body):
+                assert json.loads(body) == {"error": "not_found"}
+                assert payload not in body
+                assert "detail" not in body
+        finally:
+            sc.stop()
