@@ -92,7 +92,7 @@ Every hash above is real except the `...` width trims; the second record's `prev
 
 ---
 
-**Verifiable authorisation and provenance for production AI agents.** raucle produces a cryptographic record — the *capability receipt* — of every policy-gated action an AI agent takes: what it was authorised to do, by whose authority, against a policy proof that can be independently verified, and what action was executed. It proves exactly that and no more — not that the action was wise or safe, but that it was authorised and what was done. The receipt is content-addressed, Ed25519-signed, and verifiable by any third party — a regulator, an auditor, a downstream tool, a partner organisation — without contacting the vendor. Built for the *audit* problem regulated industries actually have, not just the *attack* problem the literature chases.
+**Verifiable authorisation and provenance for production AI agents.** raucle produces a cryptographic record, the *capability receipt*, of every policy-gated action an AI agent takes: what it was authorised to do, by whose authority, and against a policy proof that can be independently verified. It proves exactly that and no more: not that the action was wise or safe, and not, on its own, proof that the action happened on the tool side at all. The authorisation decision is the gate's receipt; the execution record is the executing application's own self-reported tool receipt; an independently witnessed execution level is on the registered roadmap, not shipped (see the evidence ladder in "Why the receipt can be trusted"). The receipt is content-addressed, Ed25519-signed, and verifiable by any third party, a regulator, an auditor, a downstream tool, a partner organisation, without contacting the vendor. Built for the *audit* problem regulated industries actually have, not just the *attack* problem the literature chases.
 
 ## The audit problem
 
@@ -108,9 +108,31 @@ The receipt is not a log — it is a *provable record*. Three formal-verificatio
 
 - **SMT-backed policy verification.** For each tool's JSON Schema and security policy, raucle's prover (Z3) either proves that every schema-valid string satisfies the policy, or extracts a concrete counterexample call. The resulting `ProofResult` is content-addressed and cited by every capability token derived from it.
 - **Cryptographic capability tokens.** Tokens carry the cited proof hash, an agent identity, a constraint set, an attenuation chain, and an expiry — signed under Ed25519. Three soundness theorems are mechanised in Lean 4 with zero `sorry`s: attenuation cannot broaden permissions; the gate's ALLOW implies satisfaction of the **modelled** constraint kinds (`allowed_values`, `forbidden_values`, `max_value`/`min_value`, `required_present`); and, assuming prover soundness (an explicit Lean axiom), a call in a tool's modelled call language under a PROVEN proof for that tool's policy `P` satisfies `P` (via the axiom) while the gate independently bounds it to the token's constraints — the binding that the *cited* proof pertains to that tool's `(schema, P)` is an operational strict-mode runtime check, not mechanised. The mechanisation scope is deliberately narrower than the runtime gate: `starts_with`, `forbidden_field_combinations`, dot-delimited `agent_id` scope, revocation, expiry, signature, issuer pinning, and strict-proof binding are enforced at runtime and covered by tests, but are **not** in the Lean model yet. See `paper/lean/README.md` for the exact proof boundary.
-- **A gate on the tool-execution path you wire it into.** Every call on a gated path passes the gate's eight verifications, fail-closed by default, and the gate's decision is the receipt's payload. The guarantee is only as complete as the path coverage: a receipt proves what happened *where raucle sits on the execution path*. The strongest coverage is credential custody — where raucle holds the tool's credential (or brokers a per-call scoped one), acting without a receipt is impossible because the agent never holds the key. raucle ships adapters for the Microsoft Agent Framework, the Agent Governance Toolkit, LangChain, and AutoGen, and a gateway pattern for MCP; it does **not** claim to mediate execution paths it is not on.
+- **A gate on the tool-execution path you wire it into.** Every call on a gated path passes the gate's eight verifications, fail-closed by default, and the gate's decision is the receipt's payload. The guarantee is only as complete as the path coverage: a gate receipt records the decision the gate reached, and the evidence ladder below says exactly what that receipt binds. The strongest coverage is credential custody, where raucle holds the tool's credential (or brokers a per-call scoped one) and acting without a receipt is impossible because the agent never holds the key. raucle ships adapters for the Microsoft Agent Framework, the Agent Governance Toolkit, LangChain, and AutoGen, and a gateway pattern for MCP; it does **not** claim to mediate execution paths it is not on.
 
 The technique is written up as a paper draft. The paper draft, the Lean proofs, the benchmark harness, and the engine are all released as open source under the permissive **Apache-2.0** licence.
+
+### What each receipt class binds: the evidence ladder
+
+raucle issues two receipt families at a gated call, and they are not the same kind of evidence. An authorisation decision is not execution proof, and an application's self-report is not an independent witness:
+
+| Guarantee | Where it lives today | What it binds | What it does NOT bind |
+|---|---|---|---|
+| Authorisation evidence | the `/gate` decision receipt (`x_gate`; `x_evidence: gate_observed`) | which authority allowed or denied a specific tool plus the canonical argument hash, for a named `agent_id`, under a policy and rule | it does NOT prove tool execution: the gate never sees the tool run |
+| Application-attested execution evidence | the provenance `record_tool_call` receipt (`x_evidence: self_reported`) | tool, canonical input and output digests, as reported by the executing application | it is not independently witnessed: the executing application signs its own claim |
+| Executor-attested (registered roadmap) | W1 state-verified write receipts ([`state-verification.md`](docs/spec/provenance/v1.2/state-verification.md)) | read-back evidence of the write, bound at mint by the runtime that executed it | designed, not shipped as a verifier-checked level |
+| Externally anchored (registered roadmap) | the hosted transparency log work (see [`transparency`](raucle/transparency.py)) | non-equivocation of the chain head, in front of an external service | designed, not shipped in the OSS verifier path |
+
+The receipt schema evolution follows the AEC evidence-chain composition work (`draft-schrock-ep-authorization-evidence-chain`) as its standards direction. The verdict ladder an offline verifier can reach:
+
+| Level | What it says | Availability |
+|---|---|---|
+| PROVENANCE_SIGNATURE_VALID | the named key signed the receipt | issued today |
+| CAPABILITY_OPERATION_PERMITTED | the resolved, trust-labelled capability statement permits the broad operation class | issued today |
+| GATE_DECISION_VERIFIED | the specific tool and hashed arguments were gate-authorised | issued today: authorisation evidence only, it does NOT prove execution |
+| EXECUTION_CONFIRMED | independent downstream evidence that the action ran | registered roadmap (W1 state verification, [`state-verification.md`](docs/spec/provenance/v1.2/state-verification.md), and the AEC composition draft `draft-schrock-ep-authorization-evidence-chain`): no receipt kind issues this level today |
+
+Trust modes are labelled, informationally: when verification resolves a capability statement, the verdict names how it was vouched, `self-asserted` (self-signed in the OSS mode, moving with the agent key) or `authority-issued` (separately vouched, today through the registry-anchored agent passport). A cryptographic self-signature never implies organisational authorisation, and the label never changes a check outcome. The receipt's own `x_evidence` claim (`gate_observed` on `/gate` decision receipts, `self_reported` on `record_tool_call` receipts) is treated as informational: the absence on legacy receipts is tolerated, and a receipt claiming a higher level verifies like any other receipt. The reviewer's trust-level vocabulary (SELF_REPORTED / GATE_OBSERVED / EXECUTOR_ATTESTED / EXTERNALLY_CONFIRMED) is the planned schema evolution: the first two values ship today as that informational claim, while a typed, verifier-checked level schema is designed, not shipped.
 
 ## Evidence the mechanism is sound
 
@@ -210,19 +232,21 @@ The registry, handshake, passport, and compliance modules went through nine roun
 pip install raucle
 ```
 
-Optional extras:
+Optional extras (which extra carries what):
 
-```bash
-pip install 'raucle[rules]'        # YAML rule loading (PyYAML)
-pip install 'raucle[server]'       # REST API server (FastAPI + uvicorn)
-pip install 'raucle[ml]'           # Transformer-based classifier (torch + transformers)
-pip install 'raucle[compliance]'   # Capability tokens, signed audit chain, receipts (cryptography)
-pip install 'raucle[proof]'        # SMT prover for prove-a-policy (Z3)
-pip install 'raucle[agent-framework]'  # Microsoft Agent Framework adapter
-pip install 'raucle[all]'          # rules + ml + server + compliance + multimodal + proof
-```
+| Extra | Carries |
+|---|---|
+| `rules` | YAML rule loading (PyYAML). Detection rules only. |
+| `server` | The REST API server: FastAPI + uvicorn, slowapi rate limiting, TOTP MFA. This is the detection engine the OpenClaw plugin talks to. |
+| `ml` | Transformer-based classifier (torch + transformers). |
+| `compliance` | Capability tokens, signed audit chain, receipts (cryptography). |
+| `proof` | SMT prover for prove-a-policy (Z3). |
+| `agent-framework` | The Microsoft Agent Framework adapter, plus `cryptography>=42.0`: the adapter emits signed capability receipts. |
+| Other adapters | `openai-agents`, `langchain`, `autogen`, `crewai`, `langgraph`, `pydantic-ai`, `google-adk`: framework adapters, each also carrying `cryptography>=42.0` for the same reason. |
+| `all` | The engine extras (`rules`, `ml`, `server`, `compliance`, `multimodal`, `proof`), **not** the framework adapters. |
+| `timestamp`, `pq`, `kms`/`kms-*` | RFC 3161 timestamping, ML-DSA-65 hybrid signatures, and KMS signer backends. |
 
-> The `[all]` extra bundles the engine extras (`rules`, `ml`, `server`, `compliance`, `multimodal`, `proof`) but **not** the framework adapters — install `[agent-framework]` separately if you use the Microsoft Agent Framework integration.
+> The `[all]` extra bundles the engine extras but **not** the framework adapters: install the adapter extra you need separately. A detection-only install (`rules` + `server`) powers scanner integrations such as the OpenClaw plugin; receipt-grade enforcement needs `compliance` and lives in the gate-based integration paths.
 
 Requires Python 3.10+.
 
@@ -590,27 +614,30 @@ git commit -s -m "Add new detection rule"
 
 ## OpenClaw Plugin
 
-The `plugins/openclaw/` directory contains the **Raucle plugin for OpenClaw** — emits a capability receipt for every agent action and blocks tool calls outside the in-force capability. The same plugin gives you audit-grade evidence and runtime protection in one configuration.
+The `plugins/openclaw/` directory contains the **Raucle plugin for OpenClaw**: a detection-layer scanner integration. It scans inbound prompts, outbound messages, and tool call arguments through OpenClaw's hooks and blocks MALICIOUS content (`blockOnMalicious`; on its own scan failure a hook logs and lets the call proceed, so a raucle outage degrades to unmonitored traffic rather than blocking it). The plugin issues **no capability receipts and performs no capability enforcement**; it calls the scanning API in [`raucle/server.py`](raucle/server.py). For receipt-grade enforcement, use the gate-based integration paths: the gateway's `/gate` endpoint, the framework adapters under [`raucle/integrations/`](raucle/integrations/), and the capability, audit and receipt primitives in the main package (see the extras table under [Install](#install)).
 
 ### Quick install
 
 ```bash
-# 1. Install the detection engine
+# 1. Install the detection engine (scanner only; see the boundary notes below)
 pip install raucle[server,rules]
 
-# 2. Copy the plugin
+# 2. Copy the plugin (it starts and finds the scanner server itself)
 cp -r plugins/openclaw/ ~/.openclaw/extensions/raucle/
 
-# 3. Enable it (one command)
+# 3. Enable it (one command; the hook permission grant is part of the step)
 openclaw config set plugins.allow+=raucle \
   plugins.load.paths+=~/.openclaw/extensions/raucle \
   plugins.entries.raucle.enabled=true \
   plugins.entries.raucle.config.mode=standard \
-  plugins.entries.raucle.config.blockOnMalicious=true
+  plugins.entries.raucle.config.blockOnMalicious=true \
+  plugins.entries.raucle.hooks.allowConversationAccess=true
 
 # 4. Restart
 openclaw gateway restart
 ```
+
+`plugins.entries.raucle.hooks.allowConversationAccess=true` is the permission grant current OpenClaw hosts require for the `before_prompt_build` hook (inbound prompt scanning and the SUSPICIOUS warning injection). Without it the prompt hook is not authorised to run on current hosts.
 
 Or manually add to `openclaw.json`:
 
@@ -625,27 +652,32 @@ Or manually add to `openclaw.json`:
         "config": {
           "mode": "standard",
           "blockOnMalicious": true
-        }
+        },
+        "hooks": { "allowConversationAccess": true }
       }
     }
   }
 }
 ```
 
-That's it — all agents are now protected. No per-agent configuration needed.
-
-### What it does
+### What it does, and where its boundary is
 
 | Hook | Action |
 |---|---|
-| `before_prompt_build` | Scans every inbound message; injects security warning for SUSPICIOUS, hard blocks MALICIOUS |
+| `before_prompt_build` | Scans every inbound message; injects a security warning for SUSPICIOUS, hard blocks MALICIOUS. Requires the `allowConversationAccess` grant above. |
 | `message_sending` | Scans outbound agent responses for data leakage |
-| `before_tool_call` | Validates tool arguments before execution (shell injection, path traversal, SQLi, SSRF) |
-| `llm_output` | Monitors large LLM outputs for anomalies |
+| `before_tool_call` | Validates tool arguments before execution (shell injection, path traversal, SQL injection, SSRF) |
+| `llm_output` | Logs large LLM outputs for visibility (observational; full output scanning happens in `message_sending`) |
+
+**Enforcement boundary.** The plugin scans and blocks only the calls OpenClaw dispatches through the typed `before_tool_call` hook. Hook availability depends on the emitting harness, as OpenClaw's own documentation notes: the Claude CLI backend executes configured `mcp.servers` tools directly, bypassing gateway hooks (an open OpenClaw issue), and `after_tool_call` is observational, so it cannot serve as a fallback boundary. A deployment that needs MCP enforcement should gate at the MCP server or run a mandatory MCP gateway rather than rely on this plugin. The plugin covers the agents whose calls reach these hooks; it does not protect every agent and it is not a capability gate.
+
+**Server lifecycle.** The plugin starts and finds the local raucle scanner server itself ([`src/server-manager.ts`](plugins/openclaw/src/server-manager.ts)): installing `raucle[server,rules]` provides the code, and the plugin spawns the server (or reuses one already running on the configured port, default 8900). No separate server start is required.
+
+**Detection engine versus receipts.** `raucle[server,rules]` installs the detection engine (the scanner the hooks call). The capability, audit and receipt primitives require `raucle[compliance]` and live in the gate-based integration paths, not in this plugin. Agents on this plugin are scanned; their decisions are not receipted. Use the gateway `/gate` integration or a framework adapter when you need receipts.
 
 ### Per-agent sensitivity
 
-Override detection sensitivity for specific agents:
+`agentOverrides` override the global mode for the named agents; agents without an override inherit the global mode. `scanToolCalls` (like `scanInbound` and `scanOutbound`) can be toggled globally or per agent.
 
 ```json
 "agentOverrides": {
@@ -661,10 +693,10 @@ Modes: `strict` (lowest false negatives), `standard` (balanced), `permissive` (l
 
 Agents cannot disable Raucle by modifying their own configuration. The plugin:
 
-- **Runs at the gateway level**, not inside the agent sandbox — agents cannot access the plugin process
-- **Hooks fire before the agent sees the prompt** — the security scan completes before the LLM is called
-- **Configuration is in `openclaw.json`** which is owned by the gateway process, not individual agents
-- **The raucle server runs as a separate process** on a fixed port — agents cannot stop or modify it
+- **Runs at the gateway level**, not inside the agent sandbox: agents cannot access the plugin process
+- **Hooks fire before the agent sees the prompt**: the security scan completes before the LLM is called
+- **Configuration is in `openclaw.json`**, which is owned by the gateway process, not individual agents
+- **The raucle server runs as a separate process** on a fixed port: agents cannot stop or modify it
 
 To prevent agents from using tools to modify `openclaw.json` and disable the plugin, add the config file to your sandbox deny list or set `exec.security` appropriately. The plugin itself has no mechanism for agents to disable it from within a conversation.
 

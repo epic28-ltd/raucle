@@ -51,6 +51,12 @@ _MIN_ADMIN_KEY_CHARS = 24
 # for large-args deployments with RAUCLE_GATE_MAX_PAYLOAD_CHARS.
 _MAX_GATE_PAYLOAD_CHARS = 1_000_000
 
+# Q15 (RED-037 round two): rate limiting is mandatory on the SERVING path.
+# When slowapi is absent a serving boot refuses with a named error; this
+# variable is the deliberate opt-out (the null limiter stands in and the
+# boot still logs the warning).
+ENV_RATE_LIMIT_DISABLE = "RAUCLE_DISABLE_RATE_LIMIT"
+
 
 def _gate_payload_limit() -> int:
     import os
@@ -593,6 +599,10 @@ class _NullLimiter:
     slowapi is an optional dependency. When it is absent the gateway logs a
     warning and this object makes ``@_limiter.limit(...)`` a no-op, rather than
     the route definition branching on whether the library imported.
+
+    Q15: reaching this stand-in on the serving path requires an explicit
+    ``RAUCLE_DISABLE_RATE_LIMIT=1`` opt-out - without it the app factory
+    refuses the boot (nothing serves unlimited silently).
     """
 
     def limit(self, *_args: Any, **_kwargs: Any) -> Any:
@@ -666,7 +676,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
             ),
         )
         app.add_middleware(SlowAPIMiddleware)
-    except ImportError:
+    except ImportError as _import_error:
         _limiter = _NullLimiter()
         # RED-037: silently running without a rate limit is the failure mode
         # worth shouting about, because the deployment believes it has one.
@@ -674,6 +684,21 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
             "slowapi is not installed: the gateway is running WITHOUT rate limiting. "
             'Install the "server" extra (pip install "raucle[server]") to enable it.'
         )
+        # Q15 (RED-037 round two): creating the gateway app IS serving mode,
+        # so a serving boot without the limiter refuses by name unless the
+        # operator explicitly opts out. Local dev/CLI paths never construct
+        # this app, so they are unaffected.
+        import os as _os
+
+        if _os.environ.get(ENV_RATE_LIMIT_DISABLE, "").lower() not in ("1", "true", "yes"):
+            from raucle.errors import ConfigurationError
+
+            raise ConfigurationError(
+                "serving the gateway without a rate limiter is refused: slowapi is "
+                "not installed. Install the [server] extra "
+                '(pip install "raucle[server]"), or set '
+                "RAUCLE_DISABLE_RATE_LIMIT=1 to serve without limiting deliberately."
+            ) from _import_error
 
     _install_security_headers(app)
 
