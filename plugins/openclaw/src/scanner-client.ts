@@ -73,6 +73,11 @@ export function classifyScanError(err: unknown): ScanReasonClass {
   if (e instanceof SyntaxError && /JSON/i.test(message)) {
     return "malformed-response";
   }
+  if (/malformed response body/i.test(message)) {
+    // _post() rewraps JSON-parse failures as IdentityMismatchError; the wire
+    // condition is still a malformed response, not an identity failure.
+    return "malformed-response";
+  }
   if (/process-dead|process exited/i.test(message)) {
     return "process-dead";
   }

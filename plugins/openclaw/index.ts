@@ -572,13 +572,20 @@ export function registerPlugin(api: Record<string, unknown>, deps: PluginDeps = 
         // F104: the call's fate was sealed by the deadline - the late result
         // never upgrades the outcome, and no receipt implies the call
         // proceeded.
+        // Derive the logged outcome from the ACTIVE failure mode: a late
+        // scan under closed mode blocked the call (denied/enforced); under
+        // open mode the call continued unscreened (unknown/failed_open) -
+        // never mint a denied+failed_open pair the host would not write.
+        const lateOutcome = failureMode === "closed" ? "denied" : "unknown";
+        const lateCoverage = failureMode === "closed" ? "enforced" : "unknown";
+        const lateReason = failureMode === "closed" ? "scanner_unavailable" : "plugin_hook_failed_open";
         recordToolDecision({
           toolName,
           agentId,
           authority: false,
-          outcome: "denied",
-          coverageState: "unknown",
-          reasonCode: "plugin_hook_failed_open",
+          outcome: lateOutcome,
+          coverageState: lateCoverage,
+          reasonCode: lateReason,
           scanner,
           receipt: { issued: false, bound: "none" },
           discarded: "late-arrival-after-seal",
