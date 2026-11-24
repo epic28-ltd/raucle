@@ -1051,6 +1051,8 @@ class VerificationReport:
     """Outcome of verifying an audit chain file.
 
     ``signed_mode`` is derived from the chain's ``chain_meta`` header:
+    ``"signed"``, ``"unsigned"``, ``"unverifiable"`` (signed chain, no key:
+    hash-integrity check only) or ``"unknown"``.
 
     * ``"signed"``    — header declares ``signed=true`` and the header
       signature verifies. Subsequent checkpoints must use the same
@@ -1070,7 +1072,9 @@ class VerificationReport:
     invalid_signatures: int
     first_invalid_index: int | None = None
     errors: list[str] = field(default_factory=list)
-    signed_mode: str = "unknown"  # "signed" | "unsigned" | "unknown"
+    signed_mode: str = "unknown"  # "signed" | "unsigned" | "unknown" | "unverifiable"
+    # (unverifiable = hash-intact signed genesis verified without the operator
+    #  key: best-effort integrity only, checkpoint authentication not possible)
     chain_key_id: str | None = None  # populated from chain_meta when signed
 
     def to_dict(self) -> dict[str, Any]:
