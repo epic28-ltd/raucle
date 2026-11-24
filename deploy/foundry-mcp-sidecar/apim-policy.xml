@@ -1,18 +1,36 @@
 <!--
   raucle sidecar — APIM inbound policy for Azure AI Foundry MCP routing.
 
-  Apply this policy to the APIM operation that fronts your MCP server
-  in a Foundry-attached APIM instance. Every Foundry-originated MCP
-  call will be routed through the raucle sidecar, which emits a signed
-  capability receipt for each ALLOW / DENY decision before forwarding
-  (or rejecting) the call.
+  What this policy DOES (and nothing more):
+    1. Routes the APIM operation it is applied to, to the configured
+       backend service URL.
+    2. Propagates agent, token, correlation and receipt headers.
+    3. Implements the direct-route guard: an inbound request whose Host
+       header names the MCP backend host directly is denied with a named
+       403 before routing happens (defence in depth at the visible
+       control point).
+    4. Fails closed with a structured 503 when the backend service
+       errors (on-error block).
+
+  What this policy does NOT do: it emits no receipts and runs no gate.
+  Receipt emission and tool-call gating are contracts of the raucle
+  sidecar in the PROPOSED integration described in
+  deploy/foundry-mcp-sidecar/README.md - the guard here complements,
+  and never replaces, the MCP server's network rule, which is the
+  primary no-bypass control. The four-header contract below binds the
+  agent runtime to the proposed sidecar behaviour.
 
   Replacement tokens — set these as APIM Named Values before applying:
 
-    {{raucle-sidecar-fqdn}}   FQDN of the raucle sidecar Container App,
-                              e.g. raucle-sidecar.internal.azurecontainerapps.io
-    {{raucle-mcp-path}}       Path prefix at which the sidecar mounts
-                              the MCP forwarder, defaults to /mcp
+    {{raucle-sidecar-fqdn}}       FQDN of the raucle sidecar Container
+                                  App, e.g.
+                                  raucle-sidecar.internal.azurecontainerapps.io
+    {{raucle-mcp-path}}           Path prefix at which the sidecar mounts
+                                  the MCP forwarder, defaults to /mcp
+    {{raucle-mcp-backend-host}}  The MCP server's own hostname (e.g.
+                                  mcp.customer.example.com). The Bicep
+                                  template provisions this named value
+                                  from the mcpBackendUrl parameter.
 
   Companion docs:
     - deploy/foundry-mcp-sidecar/README.md   (customer-facing walkthrough)
@@ -56,15 +74,53 @@
       <value>@(context.RequestId.ToString())</value>
     </set-header>
 
-    <!-- 5. Enforce that this policy is the only path to the MCP
-         backend. If a customer accidentally creates a direct route
-         that bypasses the sidecar, the sidecar's receipt chain has
-         gaps. The named-value below should be set to the MCP server's
-         hostname; APIM denies any inbound request whose Host header
-         matches that hostname unless this policy applied first. -->
+    <!-- 5. Direct-route guard (Q21, external phase-22 review). Deny
+         requests that name the MCP backend's hostname directly before
+         any routing happens: a request arriving at this operation whose
+         Host header matches the MCP server's own hostname indicates a
+         direct route pointed at the backend rather than the
+         sidecar-routed operation, and letting it through would leave
+         gaps in the receipt chain. APIM denies it with a named 403.
+
+         Expression validity, per the APIM policy expression reference:
+         context.Request.Headers.GetValueOrDefault and the
+         {{named-value}} interpolation inside a @(...) expression are the
+         documented patterns (named values in string literals inside
+         expressions resolve before evaluation). Deploy-time syntax
+         cannot be validated offline - per the Microsoft reference,
+         policy expressions get only limited verification when the
+         policy is defined and run at gateway run-time - so verify at
+         deploy time: save this policy against a development APIM
+         instance (the portal validates XML well-formedness on save),
+         then with the API trace enabled exercise both paths - a normal
+         sidecar-routed call (must route through) and a direct-call
+         attempt naming the backend host (must return the 403 denial
+         below). The direct-call attempt failing is the deployment
+         acceptance row of the external review; see README "Deployment
+         acceptance".
+
+         The comparison is a case-insensitive Contains on the Host
+         header: a Host that merely names the backend host (with or
+         without a port, or inside a longer crafted host string) denies
+         too — the guard fails closed, and the network rule is the
+         primary control.
+
+         Residual, stated plainly: this guard covers requests that reach
+         THIS operation; it does not cover direct network paths to the
+         MCP backend that bypass APIM entirely - the MCP server's
+         inbound network rules remain the primary no-bypass control. -->
     <choose>
-      <when condition="@(context.Variables.GetValueOrDefault<string>("raucle-applied") == null)">
-        <set-variable name="raucle-applied" value="true" />
+      <when condition='@(context.Request.Headers.GetValueOrDefault("Host", "").Trim().ToLowerInvariant().Contains("{{raucle-mcp-backend-host}}".ToLowerInvariant()))'>
+        <return-response>
+          <set-status code="403" reason="raucle direct-route denied" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-header name="X-Raucle-Correlation-Id" exists-action="override">
+            <value>@(context.RequestId.ToString())</value>
+          </set-header>
+          <set-body>{"jsonrpc": "2.0", "error": {"code": -32098, "message": "direct route to the MCP backend is denied; calls must enter through the sidecar-routed operation", "data": {"raucle": "direct_route_denied", "correlation_id": "@(context.RequestId.ToString())"}}}</set-body>
+        </return-response>
       </when>
     </choose>
   </inbound>
@@ -91,8 +147,7 @@
          return a structured error to Foundry rather than silently
          falling through to the MCP backend without a receipt. -->
     <choose>
-      <when condition="@(context.LastError.Source == "set-backend-service" ||
-                         (context.Response?.StatusCode >= 500))">
+      <when condition='@(context.LastError.Source == "set-backend-service" || (context.Response?.StatusCode >= 500))'>
         <return-response>
           <set-status code="503" reason="raucle sidecar unavailable" />
           <set-header name="Content-Type" exists-action="override">
