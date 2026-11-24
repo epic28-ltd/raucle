@@ -89,6 +89,14 @@ test("the respawn ladder backs off, caps consecutive rounds and gives up with a 
   assert.match(abandoned.msg, /reasonClass=spawn-give-up/, "the advisory carries a named reasonClass");
   assert.match(abandoned.msg, /port 8900/, "the advisory names the port");
   assert.match(abandoned.msg, /RAUCLE_PLUGIN_SCAN_SECRET/, "the advisory names the operator remedy");
+  // The ladder abandons on the failed spawn AFTER maxAttempts recovery
+  // respawns, so the scanner has exited maxAttempts + 1 times in total
+  // (this test runs maxAttempts=2); the advisory reports that observed count.
+  assert.match(
+    abandoned.msg,
+    /exited 3 times in a row/,
+    "the advisory reports the observed exit count (maxAttempts + 1)"
+  );
   manager.stop();
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(spawnTimes.length, 3, "no spawns after the ladder gave up");

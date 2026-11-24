@@ -549,7 +549,8 @@ def test_tour_retired_screens_stay_off_the_walkthrough() -> None:
 
 def test_tour_opens_and_closes_on_the_overview_and_honesty_banner() -> None:
     steps = _tour_steps()
-    assert steps[0][2] and "overview" in steps[0][2].lower()
+    assert steps[0][2]
+    assert "overview" in steps[0][2].lower()
     assert steps[-1][0] == "dashboard"
     assert steps[-1][1] == "#honestyBanner"
 

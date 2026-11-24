@@ -473,7 +473,8 @@ class TestRunawayToolLoop:
         assert "lookup_balance" in trip["reason"]
         assert "ACC-999" not in trip["reason"]
         # window counters in the reason: 2 prior, threshold 3
-        assert "2" in trip["reason"] and "3" in trip["reason"]
+        assert "2" in trip["reason"]
+        assert "3" in trip["reason"]
         # receipted deny + session-monitor finding citing it
         assert trip["receipt_id"]
         findings = session_findings(gw, "sr-loop")
@@ -549,7 +550,8 @@ class TestGradualExtraction:
         assert "external" in trip["reason"]
         assert "ext.example" not in trip["reason"]
         findings = session_findings(gw, "sr-extraction")
-        assert findings and findings[0]["cited_receipt"] == trip["receipt_id"]
+        assert findings
+        assert findings[0]["cited_receipt"] == trip["receipt_id"]
         assert_chain_verifies(gw)
 
     def test_other_classes_do_not_count(self, client):
@@ -593,9 +595,11 @@ class TestForbiddenToolChain:
         assert trip["decision"] == "deny"
         assert trip["rule_id"] == "sr-chain"
         assert "sr-chain" in trip["reason"]
-        assert "lookup_balance" in trip["reason"] and "web.fetch" in trip["reason"]
+        assert "lookup_balance" in trip["reason"]
+        assert "web.fetch" in trip["reason"]
         findings = session_findings(gw, "sr-chain")
-        assert findings and findings[0]["cited_receipt"] == trip["receipt_id"]
+        assert findings
+        assert findings[0]["cited_receipt"] == trip["receipt_id"]
         assert_chain_verifies(gw)
 
     def test_interleaved_tools_do_not_complete_the_chain(self, client):
@@ -648,7 +652,8 @@ class TestScopeDrift:
         # content-free: the argument value never enters the reason
         assert "SECRETVAL" not in trip["reason"]
         findings = session_findings(gw, "sr-drift")
-        assert findings and findings[0]["cited_receipt"] == trip["receipt_id"]
+        assert findings
+        assert findings[0]["cited_receipt"] == trip["receipt_id"]
         assert_chain_verifies(gw)
 
     def test_known_tools_do_not_strike(self, client):
