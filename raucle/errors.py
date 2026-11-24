@@ -175,3 +175,32 @@ class ReceiptStoreSealRefused(Exception):
     :class:`ChainTailMalformed`, which guards the receipt index's chain
     resume; this class guards the receipt store's segments and seals.
     """
+
+
+class PolicySealRefused(Exception):
+    """Loading refused a control-plane file whose seal does not hold (RAU-02).
+
+    Raised by the seal-aware policy load path (the gateway's boot and
+    reload, :meth:`raucle.policy.PolicyFile.load_sealed`) and by the
+    gateway's file-cache seal checks for the operator registries, when
+    the ``<file>.meta`` sidecar seal from
+    :mod:`raucle.policy_seal` does not hold for the file's current
+    bytes. The message always names the FILE and the REASON. It fires in
+    exactly these situations:
+
+    * a sidecar exists and the signature does not verify over the
+      current bytes, or the sealed digest diverges from them, or the
+      sidecar is corrupt, malformed, or carries unknown fields, or the
+      signing key id is not among the configured verification keys -
+      tamper evidence, refused in every sealing mode except ``off``;
+    * the sealing mode is ``required`` and the file has NO seal at all
+      (``RAUCLE_POLICY_SEALING``), naming the file and the mode.
+
+    It never fires for the advisory-unsealed case (that boots with a
+    named advisory log line), and it never fires at all when
+    ``RAUCLE_POLICY_SEALING=off`` - the operator's explicit opt-out.
+    The gateway surfaces the refusal as boot failure, reload error
+    (previous rules keep enforcing), or a deny-path raise for the
+    registries; the refusal is recorded by the caller and never
+    swallowed here.
+    """

@@ -9,7 +9,7 @@ via the ``X-Totp`` header the panel uses.
 from __future__ import annotations
 
 import json
-import sys
+import socket
 
 import pytest
 from fastapi.testclient import TestClient
@@ -204,13 +204,26 @@ def test_health_token_enforced_on_both_apps(tmp_path, monkeypatch):
 def test_siem_forwarders_splunk_and_elastic(monkeypatch):
     sent = []
 
-    class _FakeRequests:
+    class _FakeSession:
         @staticmethod
         def post(url, data=None, headers=None, timeout=None, json=None):
             sent.append((url, headers, json))
             return None
 
-    monkeypatch.setitem(sys.modules, "requests", _FakeRequests)
+    from raucle.gateway import SIEMForwarder
+
+    # RAU-04: stub the pinned-session seam, not sys.modules (a fake
+    # requests module poisons raucle.siem_pinned's import binding)
+    monkeypatch.setattr(SIEMForwarder, "_pinned_session", lambda self: _FakeSession())
+    # RAU-04: validation resolves the target now; point the seam at a
+    # public record instead of a real lookup in tests
+    from raucle import siem_pinned
+
+    monkeypatch.setattr(
+        siem_pinned,
+        "resolve_siem_host",
+        lambda host: [(socket.AF_INET, "93.184.216.34")],
+    )
     for backend, url in (
         ("splunk", "http://hk.example/services/collector"),
         ("elastic", "http://es.example:9200/raucle"),
@@ -218,11 +231,10 @@ def test_siem_forwarders_splunk_and_elastic(monkeypatch):
         config = GatewayConfig(
             siem_enabled=True, siem_backend=backend, siem_url=url, siem_token="tok"
         )
-        from raucle.gateway import SIEMForwarder
-
         SIEMForwarder(config).forward({"decision": "ALLOW"})
     assert len(sent) == 2
     assert sent[0][2]["event"] == {"decision": "ALLOW"}
+    assert sent[0][0].startswith("http://hk.example")
     assert sent[1][1]["Content-Type"] == "application/json"
 
 
