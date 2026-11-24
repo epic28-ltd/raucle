@@ -2349,7 +2349,7 @@ class RaucleGateway:
         """
         if not self.config.emit_receipts:
             return None
-        from raucle.provenance import _canonical_json, _sha256_hex
+        from raucle.provenance import EVIDENCE_GATE_OBSERVED, _canonical_json, _sha256_hex
 
         # Receipts v1.2 (lane K3): the counterfactual is evaluated BEFORE
         # the payload iat is stamped, so the block can never post-date its
@@ -2365,6 +2365,11 @@ class RaucleGateway:
             "operation": "guardrail_scan",
             "parents": [],
             "taint": [_TAINT_GATE_OBSERVED],
+            # Lane Q16 (additive, informational): this receipt is the
+            # AUTHORISATION decision record, not execution proof. The
+            # receipt self-describes its own evidence level so verifiers
+            # and auditors never read it as the executor's attestation.
+            "x_evidence": EVIDENCE_GATE_OBSERVED,
             "input_hash": _sha256_hex(_canonical_json(ctx.args)),
             "ruleset_hash": ctx.ruleset_override
             or self._policy_ruleset_hash(ctx.tool, ctx.source, ctx.destination),

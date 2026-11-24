@@ -245,6 +245,36 @@ _MAX_SAFE_INT = 2**53 - 1
 _MIN_SAFE_INT = -(2**53 - 1)
 _SHA256_PREFIX = "sha256:"
 
+# ---------------------------------------------------------------------------
+# Evidence-level and trust-mode vocabulary (lane Q16, additive metadata).
+#
+# The receipt's own claim about its evidence rides the payload root under
+# the x_ extension namespace (x_evidence) so every reference verifier keeps
+# accepting it. Verifiers treat the field as INFORMATIONAL: it never
+# upgrades a verdict, absence on legacy receipts is tolerated, and a
+# producer claiming a level above what it can prove (executor_attested on
+# an app-recorded receipt) verifies like any other receipt, no extra trust
+# granted. See docs/security-model.md, "Receipts, evidence levels and
+# trust modes".
+# ---------------------------------------------------------------------------
+
+#: A /gate decision receipt: the gate observed and signed the decision.
+EVIDENCE_GATE_OBSERVED = "gate_observed"
+#: An application-recorded tool_call receipt: the executing application
+#: reports its own tool outcome (self-attested, not independently witnessed).
+EVIDENCE_SELF_REPORTED = "self_reported"
+#: The executor-attested claim value: what an app COULD self-claim, never a
+#: verifier-granted level (the W1/AEC programme is registered, not shipped).
+EVIDENCE_EXECUTOR_ATTESTED = "executor_attested"
+
+#: Trust mode of a resolved capability statement: self-signed in the OSS
+#: mode (distributed alongside the agent key). The default honest label.
+TRUST_MODE_SELF_ASSERTED = "self_asserted"
+#: Trust mode of a separately vouched statement (a registry-anchored
+#: passport countersigned by an issuer the verifier resolves).
+TRUST_MODE_AUTHORITY_ISSUED = "authority_issued"
+_TRUST_MODES = frozenset({TRUST_MODE_SELF_ASSERTED, TRUST_MODE_AUTHORITY_ISSUED})
+
 _DLP_ACTIONS = frozenset({"blocked", "redacted", "allowed_with_findings"})
 _DLP_DIRECTIONS = frozenset({"egress_to_model", "ingress_from_model", "egress_to_tool"})
 # Bounded, versioned matched-class vocabulary (v1.2 content DLP spec,
@@ -882,6 +912,14 @@ class ProvenanceReceipt:
     corpus: str = ""
     ruleset_hash: str = ""
     guardrail_verdict: str = ""
+    #: Lane Q16 (additive): the receipt's OWN claim about its evidence
+    #: level - "gate_observed" on /gate decision receipts, "self_reported"
+    #: on application-recorded tool_call receipts. Informational only:
+    #: verifiers never upgrade a verdict from it and receipts without the
+    #: field (the legacy shape) verify unchanged. Rides the payload root
+    #: under the x_ extension namespace so the four reference
+    #: implementations keep accepting it.
+    x_evidence: str = ""
     taint: list[str] = field(default_factory=list)
     tenant: str | None = None
     issued_at: int = 0
@@ -920,6 +958,8 @@ class ProvenanceReceipt:
             out["ruleset_hash"] = self.ruleset_hash
         if self.guardrail_verdict:
             out["guardrail_verdict"] = self.guardrail_verdict
+        if self.x_evidence:
+            out["x_evidence"] = self.x_evidence
         if self.tenant is not None:
             out["tenant"] = self.tenant
         if self.x_bilateral is not None:
@@ -1068,6 +1108,7 @@ class ProvenanceReceipt:
             corpus=payload.get("corpus", ""),
             ruleset_hash=payload.get("ruleset_hash", ""),
             guardrail_verdict=payload.get("guardrail_verdict", ""),
+            x_evidence=payload.get("x_evidence", ""),
             taint=list(payload.get("taint", [])),
             tenant=payload.get("tenant"),
             issued_at=payload.get("iat", 0),
@@ -1357,7 +1398,12 @@ class ProvenanceLogger:
         output: Any,
         extra_taint: set[str] | None = None,
     ) -> str:
-        """Record a tool / function invocation."""
+        """Record a tool / function invocation.
+
+        Lane Q16: receipts minted by this application-recorded path carry
+        ``x_evidence`` = ``self_reported`` (the executing application's own
+        attestation, additive informational metadata).
+        """
         self._check_tool_permission(tool)
         receipt = self._build(
             operation=Operation.TOOL_CALL,
@@ -1366,6 +1412,7 @@ class ProvenanceLogger:
             input_hash=hash_obj(input_args),
             output_hash=hash_obj(output),
             taint=self._inherit_taint(parents, extra_taint),
+            x_evidence=EVIDENCE_SELF_REPORTED,
         )
         return self._emit(receipt)
 
@@ -1506,6 +1553,7 @@ class ProvenanceLogger:
         corpus: str = "",
         ruleset_hash: str = "",
         guardrail_verdict: str = "",
+        x_evidence: str = "",
     ) -> ProvenanceReceipt:
         return ProvenanceReceipt(
             agent_id=self._agent.agent_id,
@@ -1519,6 +1567,7 @@ class ProvenanceLogger:
             corpus=corpus,
             ruleset_hash=ruleset_hash,
             guardrail_verdict=guardrail_verdict,
+            x_evidence=x_evidence,
             taint=sorted(taint),
             tenant=self._tenant,
             issued_at=int(dt.datetime.now(dt.timezone.utc).timestamp()),
@@ -1597,6 +1646,15 @@ class VerificationReport:
     # (named only by digest) nor the stored input, so the row says not
     # re-run rather than guessing or upgrading the claim.
     counterfactual_evidence: list[dict[str, Any]] = field(default_factory=list)
+    # Lane Q16 (additive, informational): the trust mode of every capability
+    # statement the verifier actually resolved while checking a chain,
+    # keyed by agent_key_id. ``self_asserted`` is the honest default (the
+    # statement rides alongside the agent key, self-signed); a caller that
+    # resolved a statement through a passport marks it ``authority_issued``
+    # at construction. The modes never change any check outcome; the field
+    # is omitted from to_dict() when empty so the v1.0 report body stays
+    # byte-stable for consumers that pin it.
+    capability_trust_modes: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -1617,6 +1675,8 @@ class VerificationReport:
         # and the v1.0 shape is byte-preserved.
         if self.counterfactual_evidence:
             d["counterfactual_evidence"] = self.counterfactual_evidence
+        if self.capability_trust_modes:
+            d["capability_trust_modes"] = dict(self.capability_trust_modes)
         return d
 
 
@@ -1665,6 +1725,15 @@ class ProvenanceVerifier:
         receipt with neither evidence nor the absent sentinel marks
         INVALID with a named reason. Without it the x_state blocks stay
         structural (the off-deployment residual, nothing fabricated).
+    capability_trust_modes : dict[str, str], optional
+        Lane Q16, INFORMATIONAL: mapping ``agent_key_id -> trust mode`` for
+        the supplied capability statements, ``self_asserted`` (default for
+        every statement marked neither) or ``authority_issued`` (the
+        statement was resolved through a separately vouched, registry-
+        anchored passport). Unknown mode names are refused here, fail-closed;
+        the labels never change any check outcome and the report carries
+        them under ``capability_trust_modes`` only when statements were
+        actually resolved.
     """
 
     def __init__(
@@ -1675,6 +1744,7 @@ class ProvenanceVerifier:
         require_pq: bool = False,
         executor_keys: dict[str, bytes] | None = None,
         state_pairings: dict[str, dict[str, Any]] | None = None,
+        capability_trust_modes: dict[str, str] | None = None,
     ) -> None:
         from cryptography.hazmat.primitives import serialization
 
@@ -1688,6 +1758,20 @@ class ProvenanceVerifier:
             for kid, pem in (executor_keys or {}).items()
         }
         self._caps: dict[str, CapabilityStatement] = dict(capabilities or {})
+        # Lane Q16: informational trust-mode labels for the supplied
+        # statements. The vocabulary is validated here (fail-closed on a
+        # mistyped label) but the modes never influence any check below:
+        # they exist so the verify verdict can HONESTLY say how each
+        # resolved statement was vouched instead of letting a cryptographic
+        # self-signature imply organisational authorisation.
+        self._trust_modes: dict[str, str] = {}
+        for kid, mode in (capability_trust_modes or {}).items():
+            if mode not in _TRUST_MODES:
+                raise ValueError(
+                    f"unknown trust mode {mode!r} for {kid!r}; expected "
+                    f"{TRUST_MODE_SELF_ASSERTED!r} or {TRUST_MODE_AUTHORITY_ISSUED!r}"
+                )
+            self._trust_modes[kid] = mode
         # ML-DSA-65 keys for pq1 hybrid receipts: pq_key_id -> PEM bytes.
         # A pq1 receipt whose pqk is not in this mapping fails closed.
         self._pq_keys: dict[str, Any] = {}
@@ -1771,6 +1855,12 @@ class ProvenanceVerifier:
             )
             report.valid = False
             return
+        # Lane Q16: the statement resolved, so the verdict names how it was
+        # vouched (informational only, never an input to any check).
+        report.capability_trust_modes.setdefault(
+            receipt.agent_key_id,
+            self._trust_modes.get(receipt.agent_key_id, TRUST_MODE_SELF_ASSERTED),
+        )
         # Identity binding: the receipt's agent_id must be the
         # identity the capability statement (and thus the key)
         # speaks for. (round-3 #5 identity spoof).
