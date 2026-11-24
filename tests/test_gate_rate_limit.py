@@ -244,11 +244,32 @@ class TestServingModeRateLimitRefusal:
 
         monkeypatch.setitem(sys.modules, "slowapi", None)
         monkeypatch.delenv("RAUCLE_DISABLE_RATE_LIMIT", raising=False)
+        # Q15 verdict remedy (Sonar S5778): construction and factory call are
+        # each exception-capable, so the raises guard holds exactly one - the
+        # factory call. Construction runs first, outside the guard.
+        gateway = self._gateway(tmp_path)
         with pytest.raises(ConfigurationError) as excinfo:
-            create_gateway_app(self._gateway(tmp_path))
+            create_gateway_app(gateway)
         message = str(excinfo.value)
         assert "slowapi" in message, message
         assert "RAUCLE_DISABLE_RATE_LIMIT" in message, message
+
+    def test_factory_refusal_independent_of_gateway_construction(self, tmp_path, monkeypatch):
+        """Q15 verdict remedy (Sonar S5778 companion pin): the serving-mode
+        refusal is a factory-call-time check, not a construction side effect.
+        The gateway constructs cleanly while slowapi is importable, and the
+        factory still refuses when slowapi is missing only at its own call."""
+        import sys
+
+        from raucle.errors import ConfigurationError
+
+        monkeypatch.delenv("RAUCLE_DISABLE_RATE_LIMIT", raising=False)
+        gateway = self._gateway(tmp_path)  # slowapi importable: construction succeeds
+        monkeypatch.setitem(sys.modules, "slowapi", None)
+        with pytest.raises(ConfigurationError) as excinfo:
+            create_gateway_app(gateway)
+        message = str(excinfo.value)
+        assert "slowapi" in message, message
 
     def test_serving_boot_with_slowapi_present_boots(self, tmp_path, monkeypatch):
         monkeypatch.delenv("RAUCLE_DISABLE_RATE_LIMIT", raising=False)

@@ -10103,6 +10103,7 @@ source = { editable = "." }
 agent-framework = [
     { name = "agent-framework", version = "1.11.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "agent-framework", version = "1.24.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "cryptography" },
 ]
 all = [
     { name = "asn1crypto" },
@@ -10126,12 +10127,14 @@ all = [
 ]
 autogen = [
     { name = "autogen-agentchat" },
+    { name = "cryptography" },
 ]
 compliance = [
     { name = "cryptography" },
 ]
 crewai = [
     { name = "crewai" },
+    { name = "cryptography" },
 ]
 dev = [
     { name = "asn1crypto" },
@@ -10154,6 +10157,7 @@ dev = [
     { name = "z3-solver" },
 ]
 google-adk = [
+    { name = "cryptography" },
     { name = "google-adk", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "google-adk", version = "2.14.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
@@ -10174,9 +10178,11 @@ kms-vault = [
     { name = "hvac" },
 ]
 langchain = [
+    { name = "cryptography" },
     { name = "langchain-core" },
 ]
 langgraph = [
+    { name = "cryptography" },
     { name = "langgraph" },
 ]
 ml = [
@@ -10192,6 +10198,7 @@ multimodal = [
     { name = "pytesseract" },
 ]
 openai-agents = [
+    { name = "cryptography" },
     { name = "openai-agents", version = "0.20.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "openai-agents", version = "0.24.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
@@ -10202,6 +10209,7 @@ proof = [
     { name = "z3-solver" },
 ]
 pydantic-ai = [
+    { name = "cryptography" },
     { name = "pydantic-ai", version = "2.31.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pydantic-ai", version = "2.38.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
@@ -10233,8 +10241,16 @@ requires-dist = [
     { name = "boto3", marker = "extra == 'kms'", specifier = ">=1.26" },
     { name = "boto3", marker = "extra == 'kms-all'", specifier = ">=1.26" },
     { name = "crewai", marker = "extra == 'crewai'", specifier = ">=1.0,<1.16" },
+    { name = "cryptography", marker = "extra == 'agent-framework'", specifier = ">=42.0" },
+    { name = "cryptography", marker = "extra == 'autogen'", specifier = ">=42.0" },
     { name = "cryptography", marker = "extra == 'compliance'", specifier = ">=42.0" },
+    { name = "cryptography", marker = "extra == 'crewai'", specifier = ">=42.0" },
+    { name = "cryptography", marker = "extra == 'google-adk'", specifier = ">=42.0" },
+    { name = "cryptography", marker = "extra == 'langchain'", specifier = ">=42.0" },
+    { name = "cryptography", marker = "extra == 'langgraph'", specifier = ">=42.0" },
+    { name = "cryptography", marker = "extra == 'openai-agents'", specifier = ">=42.0" },
     { name = "cryptography", marker = "extra == 'pq'", specifier = ">=48.0" },
+    { name = "cryptography", marker = "extra == 'pydantic-ai'", specifier = ">=42.0" },
     { name = "cryptography", marker = "extra == 'timestamp'", specifier = ">=42.0" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.100" },
     { name = "google-adk", marker = "extra == 'google-adk'", specifier = ">=1.39,<3" },

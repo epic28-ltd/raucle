@@ -62,8 +62,14 @@ The compose refuses to start without `RAUCLE_GATE_AUTH` set to `apikey` or
 `token`: the supplied deployment requires an explicit authentication choice
 (the code keeps the `off` default for local dev, with a boot banner).
 Provision per-agent keys with `raucle agents issue-key` (Step 1 of
-`docs/getting-started/20-production-hardening.md`); until keys exist, the
-demo traffic earns receipted DENYs, which is itself the honest posture.
+`docs/getting-started/20-production-hardening.md`). Until keys exist, demo
+traffic is refused: each call gets an unauthenticated pre-gate refusal, an
+HTTP deny decision with `receipt_id` null and no receipt behind it. Be
+precise about what is receipted (the Q15 external review flagged exactly
+this overclaim): the gateway receipt trail starts at `check_tool_call`, so
+unauthenticated pre-gate refusals are transport-layer refusals, not
+receipted evidence. A deny receipt exists exactly when the caller
+presented a verifiable credential and the gate verdict itself was deny.
 
 The gateway loads all six example policy sets (banking, fintech, healthcare,
 insurance, ecommerce, data-ops — 80 rules) from `policies/examples/`, mounted

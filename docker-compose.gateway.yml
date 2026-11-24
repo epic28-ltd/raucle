@@ -77,9 +77,12 @@ services:
       timeout: 5s
       retries: 3
   # Demo traffic simulator. NOTE: it carries no credentials, so once
-  # RAUCLE_GATE_AUTH is set to apikey or token, every demo call earns a
-  # receipted DENY (an unauthenticated attempt is itself evidence). For a
-  # closed deployment remove this service.
+  # RAUCLE_GATE_AUTH is set to apikey or token, every demo call is refused
+  # unauthenticated pre-gate: the HTTP answer is a deny decision with
+  # receipt_id null, and NO receipt is written - unauthenticated pre-gate
+  # refusals are transport-layer refusals, not receipted evidence (only an
+  # authenticated caller's gate deny is receipted). For a closed
+  # deployment remove this service.
   demo-agents:
     build:
       context: .
