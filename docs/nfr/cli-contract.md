@@ -52,6 +52,7 @@ docstrings of the `_cmd_*` handlers in `raucle/cli.py`.)
 | counterfactual | replay under alternative policy; 1 on malformed record |
 | analytics | drift: 0 with the report (signals or none), 2 on missing subcommand, 1 on missing source |
 | records | lifecycle ops; 1 on state conflicts |
+| policy | seal writes the .meta sidecar (0 sealed, 1 on bad input); verify: 0 verified or unsealed, 2 refused |
 | timestamp | TSA anchor ops; 1 on token failure |
 | containment | hold/resume/status; 1 on missing subcommand, state errors and refused transitions (ContainmentError path) |
 | compliance | map receipts→controls; 1 on unreadable chain |
