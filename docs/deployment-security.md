@@ -184,6 +184,7 @@ If rate limits are exceeded, the API returns HTTP 429 with a JSON body:
 | Audit chain single-writer promise | RAUCLE_AUDIT_SINGLE_WRITER | Optional |
 | Audit chain strict signed mode | RAUCLE_REQUIRE_SIGNED_AUDIT | Optional |
 | Delegation strict ancestry mode | RAUCLE_REQUIRE_ANCESTRY_RESOLVER | Optional |
+| Provenance verifier resource bounds (default ON; `RAUCLE_VERIFY_BOUNDS=off` opt-out, per-bound `RAUCLE_VERIFY_MAX_*` overrides) | Named refusals + memoised ancestry walk | Included |
 | API key expiry | expires_at field | Optional |
 | WAF | ModSecurity + OWASP CRS | External |
 | Secret management | Docker secrets / Vault | External |

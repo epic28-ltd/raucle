@@ -1382,20 +1382,56 @@ class DelegationLedger:
     resolve; a tampered ledger row fails closed.
     """
 
-    def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
+    def __init__(self, path: str | Path | None = None) -> None:
+        # ``path=None`` is the in-memory shape (RAU-05): :meth:`from_jsonl`
+        # builds the ledger from bytes the file cache already read and
+        # (RAU-02) seal-checked, so no instance re-reads the disk behind
+        # the cache's back.
+        self.path = Path(path) if path is not None else None
         self._records: dict[str, dict[str, Any]] = {}
         self._control_rows: list[dict[str, Any]] = []
         self._mtime: float | None = None
-        if self.path.exists():
+        if self.path is not None and self.path.exists():
             self._load()
+
+    @classmethod
+    def from_jsonl(cls, text: str) -> DelegationLedger:
+        """In-memory ledger from JSONL text: last-record-wins, same as _load.
+
+        The gateway's file cache hands over bytes it read once (and,
+        RAU-02, verified against the operator's ``.meta`` seal when the
+        file carries one); this parse sees those bytes and nothing else.
+        The returned ledger has no path: ``_ensure_loaded`` never
+        consults the disk, so the resolver serves exactly the verified
+        snapshot.
+        """
+        import json as _json
+
+        ledger = cls(None)
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            rec = _json.loads(line)
+            if "capability" not in rec:
+                # Containment control row (hold/resume marker): never a
+                # delegateable capability - kept in order for the
+                # hold-state consult in :meth:`register`.
+                ledger._control_rows.append(rec)
+                continue
+            cap_id = rec["capability"].get("token_id", "")
+            ledger._records[cap_id] = rec
+        return ledger
 
     def _load(self) -> None:
         import json as _json
 
+        path = self.path
+        if path is None:
+            return
         self._records = {}
         self._control_rows = []
-        with open(self.path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
@@ -1409,9 +1445,11 @@ class DelegationLedger:
                     continue
                 cap_id = rec["capability"].get("token_id", "")
                 self._records[cap_id] = rec
-        self._mtime = self.path.stat().st_mtime
+        self._mtime = path.stat().st_mtime
 
     def _ensure_loaded(self) -> None:
+        if self.path is None:
+            return
         mtime = self.path.stat().st_mtime if self.path.exists() else None
         if mtime != self._mtime:
             self._load()
@@ -1433,6 +1471,14 @@ class DelegationLedger:
 
         token = capability.to_dict()
         signature = token.get("signature", "")
+        if self.path is None:
+            # An in-memory from_jsonl ledger is a resolver snapshot over
+            # seal-checked bytes; appending through it would write behind
+            # the cache's back. Fail closed instead.
+            raise ValueError(
+                "delegation ledger: in-memory (from_jsonl) ledgers are "
+                "read-only; register on a path-backed ledger"
+            )
         if not signature:
             raise ValueError("delegation ledger: refusing unsigned capability record")
         key = verifying_key
