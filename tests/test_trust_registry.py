@@ -453,3 +453,233 @@ class TestRetirement:
         rec = reg.resolve(kid)
         assert rec is not None
         assert rec.retired and rec.revoked
+
+
+def _read_entries(path) -> list[dict]:
+    import json as _json
+
+    return [
+        _json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+
+
+def _write_entries(path, entries: list[dict]) -> None:
+    import json as _json
+
+    path.write_text(
+        "\n".join(_json.dumps(e, ensure_ascii=False, separators=(",", ":")) for e in entries)
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _key_id_of(public_pem: bytes) -> str:
+    """The canonical key_id for a public key PEM (first 16 hex of SHA-256)."""
+    import hashlib as _hl
+
+    return _hl.sha256(public_pem).hexdigest()[:16]
+
+
+def _rechain(entries: list[dict], from_position: int) -> None:
+    """Recompute index, prev_hash and hash forward from a position: exactly
+    what a tamperer CAN do with the public algorithm (no secret needed),
+    short of the operator signature that a signed registry carries."""
+    from raucle.audit import _canonical_json, _sha256_hex
+
+    prev = entries[from_position - 1]["hash"]
+    for i in range(from_position, len(entries)):
+        e = entries[i]
+        e["index"] = i
+        e["prev_hash"] = prev
+        body = {
+            k: v
+            for k, v in e.items()
+            if k not in ("hash", "operator_sig", "operator_pq_key_id", "operator_pq_sig")
+        }
+        e["hash"] = _sha256_hex(_canonical_json(body))
+        prev = e["hash"]
+
+
+class TestConstructorVerifiesIntegrity:
+    """Q10 (a second external review of the main branch, P0): the
+    CONSTRUCTOR path verifies integrity by default.
+
+    The gateway boot builds the caller issuer map by constructing the
+    registry DIRECTLY from its path, so a parseable-but-tampered history
+    (reordered entries, swapped key material) loaded unverified; only
+    ``load()`` and ``from_jsonl()`` checked. The constructor now refuses
+    with the same named error, and the operator-key-registry boot guard
+    refuses the tampered-history class too.
+    """
+
+    def _signed_registry(self, tmp_path):
+        op = Ed25519Signer.generate()
+        path = tmp_path / "r.jsonl"
+        reg = TrustRegistry(path, operator_signer=op)
+        iss_a = _issuer("org-a")
+        iss_b = _issuer("org-b")
+        reg.publish(iss_a.public_key_pem, issuer="Org A")
+        reg.publish(iss_b.public_key_pem, issuer="Org B")
+        return path, op, iss_a, iss_b
+
+    def test_constructor_refuses_reordered_entries(self, tmp_path):
+        """Reordering two signed entries breaks the index/prev_hash chain:
+        the constructor refuses with the named error and the exact mechanism."""
+        path, _op, _iss_a, _iss_b = self._signed_registry(tmp_path)
+        entries = _read_entries(path)
+        entries[1], entries[2] = entries[2], entries[1]
+        _write_entries(path, entries)
+
+        with pytest.raises(RegistryIntegrityError) as excinfo:
+            TrustRegistry(path)
+        assert "index mismatch" in str(excinfo.value)
+        with pytest.raises(RegistryIntegrityError):
+            TrustRegistry.load(path)
+
+    def test_constructor_refuses_swapped_key_material_despite_rechained_hashes(self, tmp_path):
+        """The attacker-grade swap: new key material, a re-derived key_id, and
+        the whole chain recomputed (all doable without a secret). The operator
+        signature is over the ORIGINAL entry hash, so a deployment whose
+        authorisation surface holds the operator key refuses it (a signed
+        registry without the operator key is the documented integrity-only
+        model)."""
+        path, op, iss_a, _iss_b = self._signed_registry(tmp_path)
+        entries = _read_entries(path)
+        attacker = Ed25519Signer.generate()
+        entries[1]["public_key_pem"] = attacker.public_key_pem().decode()
+        entries[1]["key_id"] = _key_id_of(attacker.public_key_pem())
+        _rechain(entries, from_position=1)
+        _write_entries(path, entries)
+
+        with pytest.raises(RegistryIntegrityError) as excinfo:
+            TrustRegistry(path, operator_signer=op)
+        assert "operator signature invalid" in str(excinfo.value)
+        # A SIGNED registry built WITHOUT the operator key stays on the
+        # documented integrity-only model: construction passes, the chain
+        # verifies, but the source is not authenticated (the operator key
+        # is what authenticates a local file).
+        assert TrustRegistry(path).verify_integrity()
+        # The honest key never resolved from the tampered file.
+        reg_ok = TrustRegistry(tmp_path / "clean.jsonl")
+        reg_ok.publish(iss_a.public_key_pem, issuer="Org A")
+        assert reg_ok.resolve(iss_a.key_id) is not None
+
+    def test_constructor_refuses_swapped_key_material_unsigned(self, tmp_path):
+        """Unsigned registry, tampered entry WITHOUT rechain: the entry hash
+        no longer matches its content (the base tamper-evidence class)."""
+        path, _op, _iss_a, _iss_b = self._signed_registry(tmp_path)
+        entries = _read_entries(path)
+        for e in entries:
+            e.pop("operator_sig", None)
+            e.pop("operator_pq_key_id", None)
+            e.pop("operator_pq_sig", None)
+        entries[1]["public_key_pem"] = Ed25519Signer.generate().public_key_pem().decode()
+        _write_entries(path, entries)
+
+        with pytest.raises(RegistryIntegrityError) as excinfo:
+            TrustRegistry(path)
+        assert "hash mismatch" in str(excinfo.value)
+
+    def test_unsigned_rechained_swap_caught_by_key_id_binding(self, tmp_path):
+        """Unsigned registry WITH recomputed hashes: the codex #6 binding
+        (key_id is the digest of its own published PEM) still refuses the
+        swapped key material - the resolution surface cannot be forked."""
+        path, _op, _iss_a, _iss_b = self._signed_registry(tmp_path)
+        entries = _read_entries(path)
+        for e in entries:
+            e.pop("operator_sig", None)
+        entries[1]["public_key_pem"] = Ed25519Signer.generate().public_key_pem().decode()
+        _rechain(entries, from_position=1)
+        _write_entries(path, entries)
+
+        with pytest.raises(RegistryIntegrityError) as excinfo:
+            TrustRegistry(path)
+        assert "key_id does not match" in str(excinfo.value)
+
+    def test_constructor_loads_the_honest_clean_registry(self, tmp_path):
+        path, _op, iss_a, iss_b = self._signed_registry(tmp_path)
+        reg = TrustRegistry(path)
+        assert reg.public_key(iss_a.key_id) == iss_a.public_key_pem
+        assert reg.public_key(iss_b.key_id) == iss_b.public_key_pem
+        assert set(reg.as_issuer_map()) == {iss_a.key_id, iss_b.key_id}
+
+    def test_verify_false_is_the_named_escape_hatch(self, tmp_path):
+        """The one escape hatch is explicit and named (verify=False) for
+        authoring/repair tooling only: it constructs the tampered file and
+        leaves the refusal one verify_integrity() call away."""
+        path, _op, _iss_a, _iss_b = self._signed_registry(tmp_path)
+        entries = _read_entries(path)
+        entries[1]["public_key_pem"] = Ed25519Signer.generate().public_key_pem().decode()
+        _write_entries(path, entries)
+
+        reg = TrustRegistry(path, verify=False)
+        with pytest.raises(RegistryIntegrityError):
+            reg.verify_integrity()
+
+
+class TestGatewayIssuerMapConstructionSite:
+    """Q10 item (5): every construction site is verified. The gateway boot
+    issuer-map path (gateway._ensure_caller_gate constructing the registry
+    DIRECTLY from its path) refuses a tampered registry into fail-closed
+    fallback instead of folding attacker-issued keys into caller auth."""
+
+    def _config(self, tmp_path, *, registry_path):
+        from raucle.gateway import GatewayConfig
+
+        return GatewayConfig(
+            host="127.0.0.1",
+            signer_backend="local",
+            policy_file="",
+            signer_key_path=str(tmp_path / "gateway-signing-key.pem"),
+            receipt_store=str(tmp_path / "receipts.jsonl"),
+            receipt_store_dir="",
+            audit_chain=str(tmp_path / "audit.jsonl"),
+            audit_persist=True,
+            audit_log_file=str(tmp_path / "gateway-audit.jsonl"),
+            registry_path=str(registry_path),
+            operator_key_registry="",
+        )
+
+    def test_tampered_registry_never_reaches_the_issuer_map(self, tmp_path):
+        """A registry whose register entry carries ATTACKER key material (the
+        entry hash left stale by the swap) is refused at the constructor: the
+        caller gate falls back to the gateway's own issuer and the attacker's
+        token does not verify."""
+        from raucle.capability import CapabilityIssuer
+        from raucle.gateway import RaucleGateway
+
+        path = tmp_path / "caller-registry.jsonl"
+        org_a = _issuer("org-a")
+        TrustRegistry(path).publish(org_a.public_key_pem, issuer="Org A")
+
+        attacker = CapabilityIssuer.generate(issuer="Org A")
+        entries = _read_entries(path)
+        entries[1]["public_key_pem"] = attacker.public_key_pem
+        entries[1]["key_id"] = attacker.key_id
+        _write_entries(path, entries)  # NO rechain: the hash is left stale
+
+        config = self._config(tmp_path, registry_path=path)
+        gate = RaucleGateway(config)._ensure_caller_gate()
+
+        attacker_token = attacker.mint(
+            agent_id="agent:evil.bot", tool="transfer_funds", constraints={}
+        )
+        decision = gate.check(
+            attacker_token, tool="transfer_funds", args={}, agent_id="agent:evil.bot"
+        )
+        assert not decision.allowed
+
+    def test_honest_registry_still_supplies_the_issuer_map(self, tmp_path):
+        """The clean path keeps working end to end: a published org's token
+        verifies through the boot issuer map after constructor verification."""
+        from raucle.gateway import RaucleGateway
+
+        path = tmp_path / "caller-registry.jsonl"
+        reg = TrustRegistry(path)
+        org_a = _issuer("org-a")
+        reg.publish(org_a.public_key_pem, issuer="Org A")
+
+        config = self._config(tmp_path, registry_path=path)
+        gate = RaucleGateway(config)._ensure_caller_gate()
+        token = org_a.mint(agent_id="agent:a", tool="t", constraints={})
+        assert gate.check(token, tool="t", args={}, agent_id="agent:a").allowed

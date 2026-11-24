@@ -53,8 +53,15 @@ before the rotation keep verifying without re-signing history.
    a signed canary verifies against the registry's active entry.
 6. **Boot split-brain guard** (`KeyStoreRegistryMismatch`,
    restart-required, local signer backend only, when a registry is
-   configured): registry missing or failing integrity verification; local
-   key unregistered, revoked or retired. Each refusal is named and
+   configured): registry missing, unparseable or failing integrity
+   verification (the tampered-history class too: reordered entries,
+   swapped key material); the registry moving BACKWARD or SIDEWAYS
+   against the head the guard last served on (a truncated or rolled-back
+   tail verifies on its own, so the guard records the head it serves on
+   in `<registry>.head-pin` and refuses a shorter or differently-hashed
+   one; deleting that pin is the documented consumer reset for a
+   legitimately re-initialised registry); local key unregistered, revoked
+   or retired. Each refusal is named and
    restart-required; the unregistered and retired refusals point at
    `raucle operator rotate-keys` (reconciliation the command can do),
    while the missing, unverifiable-registry and revoked refusals point

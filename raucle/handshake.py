@@ -25,7 +25,9 @@ is a cross-org receipt pair anchored in the registry — the interop primitive f
 multi-agent ecosystems.
 
 Fail-closed throughout: an initiator key that is unknown or revoked in the
-registry is rejected before the gate ever runs.
+registry is rejected before the gate ever runs. Replay protection is
+mandatory: ``accept_call`` requires a persistent, atomic :class:`~raucle.
+replay_store.ReplayStore`, and a request without a nonce is refused.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from typing import Any
 
 from raucle.audit import Ed25519Signer, _canonical_json, _sha256_hex
 from raucle.capability import Capability, CapabilityGate, GateDecision
+from raucle.replay_store import ReplayStore
 from raucle.trust_registry import TrustRegistry
 
 logger = logging.getLogger(__name__)
@@ -135,21 +138,40 @@ def accept_call(
     registry: TrustRegistry,
     responder_signer: Ed25519Signer,
     responder_id: str,
-    seen: set[str] | None = None,
+    replay: ReplayStore,
 ) -> HandshakeResult:
     """Responder side (org B): resolve the initiator's key from the **registry**,
     capability-gate the call, and return a signed acknowledgement.
 
+    ``replay`` is REQUIRED (Q10, a second external review of the main branch,
+    P0): replay detection must be a persistent, atomic
+    :class:`~raucle.replay_store.ReplayStore`, never an optional set. Pass a
+    :class:`~raucle.replay_store.SqliteReplayStore` over a durable path; a
+    ``None`` store is refused by name.
+
     Steps (fail-closed):
 
     1. Parse the presented token; read its ``key_id``.
-    2. Resolve ``key_id`` from the shared registry. Unknown or revoked → REJECT
-       (no gate runs). This is the cross-org trust decision, made with no prior
-       key exchange.
-    3. Build a gate anchored on the resolved key and check the call.
-    4. Emit a signed ack receipt (the responder's own key, also registry-
-       published) stating ACCEPT/REJECT, so the initiator can verify the outcome.
+    2. Refuse a request without a nonce: it cannot key the replay store.
+    3. Consume the replay key BEFORE any decision is recorded (an atomic
+       check-and-insert): the first handler of a (token, nonce) proceeds,
+       every later caller is refused, and a nonce consumed for a request
+       whose handling then crashed is NOT re-handled after a restart. The
+       signed ack receipt proves the unique handling.
+    4. Resolve ``key_id`` from the shared registry. Unknown or revoked →
+       REJECT (no gate runs). This is the cross-org trust decision, made
+       with no prior key exchange.
+    5. Build a gate anchored on the resolved key and check the call.
+    6. Emit a signed ack receipt (the responder's own key, also registry-
+       published) stating ACCEPT/REJECT, so the initiator can verify the
+       outcome.
     """
+    if replay is None:
+        raise ValueError(
+            "accept_call requires a replay store (raucle.replay_store.SqliteReplayStore): "
+            "replay protection is mandatory in production, and a None store would "
+            "silently disable it"
+        )
     try:
         token = Capability.from_dict(request.capability_token)
     except Exception as exc:
@@ -162,33 +184,32 @@ def accept_call(
             request=request,
         )
 
-    # Responder-side replay protection (codex r6): the responder rejects a request
-    # it has already accepted. Pass a persistent ``seen`` set keyed across calls;
-    # the replay key binds the issuer key, token, and per-handshake nonce. A
-    # missing/empty nonce is itself a replay risk, so it is refused when dedup is on.
-    if seen is not None:
-        if not request.nonce:
-            return _ack(
-                responder_signer,
-                responder_id,
-                accepted=False,
-                reason="request has no nonce (required for replay protection)",
-                initiator_key_id=token.key_id,
-                request=request,
-                token=token,
-            )
-        replay_key = f"{token.key_id}:{token.token_id}:{request.nonce}"
-        if replay_key in seen:
-            return _ack(
-                responder_signer,
-                responder_id,
-                accepted=False,
-                reason="replayed request (this (token, nonce) was already handled)",
-                initiator_key_id=token.key_id,
-                request=request,
-                token=token,
-            )
-        seen.add(replay_key)
+    # Responder-side replay protection (codex r6), now MANDATORY and durable
+    # (Q10): the consume is an atomic check-and-insert BEFORE any decision is
+    # recorded, and the key binds the issuer key, token, and per-handshake
+    # nonce. A missing/empty nonce is itself a replay risk, so it is refused
+    # unconditionally: it cannot key the store.
+    if not request.nonce:
+        return _ack(
+            responder_signer,
+            responder_id,
+            accepted=False,
+            reason="request has no nonce (required for replay protection)",
+            initiator_key_id=token.key_id,
+            request=request,
+            token=token,
+        )
+    replay_key = f"{token.key_id}:{token.token_id}:{request.nonce}"
+    if not replay.consume(replay_key):
+        return _ack(
+            responder_signer,
+            responder_id,
+            accepted=False,
+            reason="replayed request (this (token, nonce) was already handled)",
+            initiator_key_id=token.key_id,
+            request=request,
+            token=token,
+        )
 
     key_id = token.key_id
     record = registry.resolve(key_id)  # fail-closed: None for unknown

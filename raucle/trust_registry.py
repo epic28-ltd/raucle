@@ -137,6 +137,10 @@ class TrustRegistry:
     operator_signer : Ed25519Signer | None
         If given, the registry is authenticated: a signed head entry is appended
         and consumers can verify the whole log against the operator public key.
+    verify : bool
+        Verify integrity at load (default True). THE explicit escape hatch for
+        authoring/repair tooling only (Q10): a registry constructed for an
+        authorisation path must never pass ``verify=False``.
     """
 
     def __init__(
@@ -144,6 +148,7 @@ class TrustRegistry:
         path: str | Path | None = None,
         *,
         operator_signer: Ed25519Signer | None = None,
+        verify: bool = True,
     ) -> None:
         self._path = Path(path) if path is not None else None
         self._signer = operator_signer
@@ -152,6 +157,16 @@ class TrustRegistry:
         self._authenticated: bool | None = None
         if self._path is not None and self._path.exists():
             self._load_existing()
+            # Q10 (a second external review of the main branch, P0): the
+            # constructor verifies integrity BY DEFAULT. The gateway boot
+            # issuer-map path and every other caller that constructs the
+            # registry DIRECTLY from its path used to load a
+            # parseable-but-tampered history (reordered entries, swapped key
+            # material) without any check; only load() and from_jsonl()
+            # verified. The constructor now refuses with the same named
+            # error, so no construction path bypasses verification.
+            if verify:
+                self.verify_integrity()
         else:
             self._append_header()
 
@@ -181,10 +196,31 @@ class TrustRegistry:
         self._tail_hash = self._entries[-1].get("hash", _GENESIS)
 
     @classmethod
-    def load(cls, path: str | Path) -> TrustRegistry:
-        """Load and integrity-check a registry from disk."""
+    def load(
+        cls,
+        path: str | Path,
+        *,
+        operator_public_pem: bytes | None = None,
+        operator_pq_public_pem: bytes | str | None = None,
+        min_index: int | None = None,
+        expected_head_hash: str | None = None,
+        max_age_seconds: int | None = None,
+        now: int | None = None,
+    ) -> TrustRegistry:
+        """Load and integrity-check a registry from disk (anchors optional).
+
+        The constructor already verifies (Q10); the anchors here are the
+        freshness pins a consumer records from a trusted source
+        (``min_index`` / ``expected_head_hash`` / ``max_age_seconds``)."""
         reg = cls(path)
-        reg.verify_integrity()
+        reg.verify_integrity(
+            operator_public_pem=operator_public_pem,
+            operator_pq_public_pem=operator_pq_public_pem,
+            min_index=min_index,
+            expected_head_hash=expected_head_hash,
+            max_age_seconds=max_age_seconds,
+            now=now,
+        )
         return reg
 
     @classmethod
