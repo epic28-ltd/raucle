@@ -38,7 +38,7 @@ services:
       - CMD
       - curl
       - -f
-      - http://localhost:8081/health
+      - http://localhost:8080/livez
       interval: 30s
       timeout: 5s
       retries: 3
@@ -68,7 +68,11 @@ services:
     networks:
     - raucle-internal
   caddy:
-    image: caddy:2-alpine
+    # Digest-pinned (Q9 review item 2): caddy:2-alpine floated to
+    # v2.11.9-alpine at pin time (24 Nov 2026; linux/amd64 manifest digest,
+    # docker buildx imagetools inspect). The stock image ships NO rate-limit
+    # module (verified: caddy list-modules) - see the Caddyfile.
+    image: caddy:2-alpine@sha256:fc9cbc100585871d18d4e451cca7021785c90a7006087427ae5ceb3e4efe6424
     container_name: raucle-caddy
     ports:
     - 80:80

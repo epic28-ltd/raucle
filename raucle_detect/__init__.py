@@ -4,8 +4,12 @@ The package was renamed in v0.22.0. This shim keeps existing code working
 (``import raucle_detect`` and ``from raucle_detect.scanner import ...``) by
 aliasing the old names to the new package. Submodules resolve to the SAME
 module objects as their ``raucle.*`` counterparts, so mixed old/new imports
-share class identity. The shim will be removed in a future major release —
-migrate imports to ``raucle``.
+share class identity.
+
+Removal schedule (house deprecation convention, named up front): the shim
+will be removed in v0.26.0. Until then ``import raucle_detect`` keeps
+working with this DeprecationWarning; from v0.26.0 it raises ImportError
+and the module no longer exists. Migrate imports to ``raucle`` now.
 """
 
 import importlib
@@ -18,7 +22,7 @@ import raucle as _raucle
 
 warnings.warn(
     "the 'raucle_detect' package has been renamed to 'raucle'; "
-    "update imports (this shim will be removed in a future release)",
+    "update imports now (this shim will be removed in v0.26.0)",
     DeprecationWarning,
     stacklevel=2,
 )

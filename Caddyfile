@@ -12,10 +12,34 @@
 # The compose file passes DOMAIN=... from the environment.
 # Caddy will automatically provision a Let's Encrypt certificate.
 #
-# NOTE: no rate_limit directive is used here on purpose: stock caddy:2-alpine
-# does not ship the rate_limit plugin, and an unrecognized directive makes the
-# Caddy container crash-loop on boot. Use a plugin build of Caddy if you need
-# in-proxy rate limiting, or rate-limit at your edge (e.g. Cloudflare).
+# RATE LIMITING (Q9 review, admin exposure): the admin surface is limited
+# IN APP - per-image verification of the digest-pinned stock image
+# (caddy v2.11.9-alpine, pinned in docker-compose.gateway.yml) shows it
+# ships no rate_limit module, and an unrecognized directive makes the
+# Caddy container crash-loop on boot. So this file still carries no
+# rate_limit directive on purpose. Instead: the admin plane enforces
+# 120 requests/minute per client by default (RAUCLE_ADMIN_RATE_LIMIT
+# overrides), the gateway plane keeps its slowapi limits
+# (RAUCLE_GATE_RATE_LIMIT / RAUCLE_GATE_ROUTE_LIMIT). For per-IP limits
+# at the proxy, run a Caddy plugin build or rate-limit at your edge
+# (Cloudflare).
+#
+# PRODUCTION ADMIN EXPOSURE: keeping the admin plane on the same public
+# hostname is a legitimate operator choice; if you keep it, prefer
+# narrowing who can reach it - an IP allowlist on the admin route
+# (remote_ip matcher) or a SEPARATE listener (a different port or
+# subdomain scoped by firewall or VPN) over full public exposure.
+#
+# CONTENT-SECURITY-POLICY (Q9 review): owned by the APP, never the proxy.
+# The admin app serves a per-build, hash-pinned CSP on EVERY response
+# (`_panel_csp()` in raucle/gateway_app.py; the RED-033 fix pins
+# script-src to the build's inline-script hashes, no unsafe-inline). A
+# static CSP here cannot know those per-build hashes: restating one
+# would either kill the panel's inline scripts or - set with
+# unsafe-inline for compatibility - silently weaken the hash pinning.
+# The proxy therefore deliberately sets no CSP header on the admin
+# route; the app-owned policy always arrives from upstream, and this
+# site block carries the transport-level headers below.
 
 {$DOMAIN} {
 	# Gateway API
