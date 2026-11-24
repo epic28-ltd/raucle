@@ -63,6 +63,19 @@ fail-closed doctrine applies at the boundaries: no token, empty agent
 identity, or a receipt-sink failure — the ALLOW is aborted (an action
 without its receipt is treated as unauthorised).
 
+Argument normalisation
+----------------------
+
+The wrapped invocation is bound against the tool's signature
+(``inspect.signature(...).bind(...)``, defaults applied) before the gate
+evaluates it: a single positional binds to the tool's REAL parameter name,
+so the gate evaluation, the receipt digest and the executed arguments
+carry the same semantic arguments (H(arguments_gate) ==
+H(arguments_executor)). When no signature can be resolved, the earlier
+heuristic view is kept as the fallback: the receipt marks the residual
+(``args_binding: "verbatim"``) and the fallback is logged with the tool
+name.
+
 This adapter is complementary to :mod:`raucle.integrations.langchain`: the
 callback handler covers LangChain ``AgentExecutor`` graphs, this module
 covers LangGraph's tool-node layer with an identical receipt format.
@@ -148,6 +161,12 @@ def _default_resolver(_tool_name: str) -> Capability | None:
 UNKNOWN_SIGNER = "<unknown>"
 DEFAULT_LEAN_THEOREM_ID = "vcd.gate_soundness"
 
+#: Receipts bind the argument view the gate evaluated: "normalised" when the
+#: invocation was bound against the tool's signature, "verbatim" when no
+#: usable signature resolved and the caller-shaped heuristic view rides instead.
+ARGS_BINDING_NORMALISED = "normalised"
+ARGS_BINDING_VERBATIM = "verbatim"
+
 
 def _hash_args(args: Any) -> str:
     try:
@@ -173,6 +192,7 @@ def _emit_receipt(
     args: Any,
     decision: GateDecision,
     lean_theorem_id: str,
+    args_binding: str,
 ) -> None:
     """Hand one receipt (allow OR deny) to the audit sink for the chain.
 
@@ -194,6 +214,9 @@ def _emit_receipt(
         "call_args_hash": _hash_args(args),
         "decision": "ALLOW" if decision.allowed else "DENY",
         "decision_reason": decision.reason or "",
+        # Whether the digest binds the signature-bound argument view
+        # ("normalised") or the honest caller-shaped residual ("verbatim").
+        "args_binding": args_binding,
         "framework": "langgraph",
         "timestamp": _iso_now(),
     }
@@ -233,16 +256,13 @@ def _enforce_decision(decision: GateDecision, tool_name: str, raise_on_deny: boo
     )
 
 
-def _present_call_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
-    """Present the invocation to the gate in a canonical shape.
+def _legacy_call_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+    """The pre-normalisation heuristic view (the fallback, kept honest).
 
-    Tool calls arrive as a structured kwargs dict (the normal ToolNode path);
-    a single positional argument (string-convention single-input tools) is
-    presented as ``{"input": ...}``, matching the langchain adapter's
-    convention. Anything else is presented verbatim for content binding.
+    A lone positional folds under ``input`` (the string-convention single-
+    input shape); otherwise positionals fold in by index. Positionals are
+    never dropped - the residual is marked ``verbatim`` and logged.
     """
-    if kwargs and not args:
-        return kwargs
     if args and not kwargs and len(args) == 1:
         return {"input": args[0]}
     combined: dict[str, Any] = {}
@@ -250,6 +270,56 @@ def _present_call_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         combined[str(i)] = value
     combined.update(kwargs)
     return combined
+
+
+def _present_call_args(
+    args: tuple[Any, ...], kwargs: dict[str, Any], original: Callable[..., Any], tool_name: str
+) -> tuple[dict[str, Any], str]:
+    """Bind the invocation against the tool's signature for the gate view.
+
+    The gate evaluation, the receipt digest and the executed arguments must
+    carry the SAME semantic arguments (H(arguments_gate) ==
+    H(arguments_executor)): binding against the underlying callable's
+    signature maps a single positional onto its REAL parameter name (the
+    old view wrapped it under ``input`` regardless of the tool's parameter
+    name, so name-keyed constraints could never see it) and applies
+    defaults, so a caller cannot dodge a bound field by omitting it.
+
+    Falls back to the legacy heuristic ONLY when no signature can be
+    resolved or the invocation cannot be bound; the residual is marked
+    ``verbatim`` in the receipt and logged with the tool name.
+
+    Variadic captures are spread back into the view: var-keyword members
+    carry their actual caller names (name-keyed constraints must still see
+    them - a tool declared ``**kwargs`` would otherwise fold its real field
+    names under the parameter name and the constraints would pass
+    vacuously), and var-positional members fold in by index.
+    """
+    try:
+        signature = inspect.signature(original)
+        bound = signature.bind(*args, **kwargs)
+        bound.apply_defaults()
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "raucle langgraph: unnormalised arguments for %s (no usable signature: %s); "
+            "the receipt carries the verbatim residual",
+            tool_name,
+            exc,
+        )
+        return _legacy_call_args(args, kwargs), ARGS_BINDING_VERBATIM
+    view: dict[str, Any] = {}
+    positional_index = 0
+    for name, value in bound.arguments.items():
+        param = signature.parameters[name]
+        if param.kind is inspect.Parameter.VAR_POSITIONAL:
+            for member in value:  # type: ignore[union-attr]
+                view[str(positional_index)] = member
+                positional_index += 1
+        elif param.kind is inspect.Parameter.VAR_KEYWORD:
+            view.update(value or {})  # type: ignore[arg-type]
+        else:
+            view[name] = value
+    return view, ARGS_BINDING_NORMALISED
 
 
 def _make_gated_handler(
@@ -276,16 +346,18 @@ def _make_gated_handler(
 
     def _run_decision(
         args: tuple[Any, ...], kwargs: dict[str, Any]
-    ) -> tuple[Capability | None, Any, GateDecision]:
-        call_args = _present_call_args(args, kwargs)
+    ) -> tuple[Capability | None, Any, GateDecision, str]:
+        call_args, args_binding = _present_call_args(args, kwargs, original, tool_name)
         token = resolver(tool_name)
-        return token, call_args, _evaluate_gate(gate, token, tool_name, call_args, agent_id)
+        decision = _evaluate_gate(gate, token, tool_name, call_args, agent_id)
+        return token, call_args, decision, args_binding
 
     def _finish(
         run_original: Callable[[], Any],
         token: Capability | None,
         call_args: Any,
         decision: GateDecision,
+        args_binding: str,
     ) -> Any:
         # Emission comes before enforcement and before any execution: a
         # sink failure therefore also aborts an in-flight ALLOW
@@ -302,21 +374,26 @@ def _make_gated_handler(
             args=call_args,
             decision=decision,
             lean_theorem_id=lean_theorem_id,
+            args_binding=args_binding,
         )
         _enforce_decision(decision, tool_name, raise_on_deny)
         return run_original()
 
     @functools.wraps(original)
     def gated_sync(*args: Any, **kwargs: Any) -> Any:
-        token, call_args, decision = _run_decision(args, kwargs)
-        return _finish(lambda: original(*args, **kwargs), token, call_args, decision)
+        token, call_args, decision, args_binding = _run_decision(args, kwargs)
+        return _finish(lambda: original(*args, **kwargs), token, call_args, decision, args_binding)
 
     @functools.wraps(original)
     async def gated_async(*args: Any, **kwargs: Any) -> Any:
-        token, call_args, decision = _run_decision(args, kwargs)
+        token, call_args, decision, args_binding = _run_decision(args, kwargs)
         if not inspect.iscoroutinefunction(original):
-            return _finish(lambda: original(*args, **kwargs), token, call_args, decision)
-        return await _finish(lambda: original(*args, **kwargs), token, call_args, decision)
+            return _finish(
+                lambda: original(*args, **kwargs), token, call_args, decision, args_binding
+            )
+        return await _finish(
+            lambda: original(*args, **kwargs), token, call_args, decision, args_binding
+        )
 
     wrapper = gated_async if inspect.iscoroutinefunction(original) else gated_sync
     functools.wraps(original)(wrapper)
