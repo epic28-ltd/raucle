@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -103,6 +104,11 @@ class ActivationApprovalManager:
     def __init__(self, ttl_seconds: int = 300) -> None:
         self._ttl = ttl_seconds
         self._requests: dict[str, ActivationRequest] = {}
+        # Q17 (phase-3 review close 1): the activation twin carries the
+        # same compare-and-set consume as ApprovalManager - the whole
+        # read-validate-consume sequence runs under one lock per manager
+        # instance, in-process atomicity by design (see approvals.py).
+        self._consume_lock = threading.Lock()
 
     @property
     def ttl_seconds(self) -> int:
@@ -174,12 +180,26 @@ class ActivationApprovalManager:
         return request
 
     def consume(self, request_id: str) -> ActivationRequest:
-        """Single-shot: an approved request pays for exactly one activation."""
-        request = self._get(request_id)
-        if request.status != "approved":
-            raise ActivationError(f"activation request {request_id} is not approved")
-        request.status = "consumed"
-        return request
+        """Single-shot: an approved request pays for exactly one activation.
+
+        Q17 (phase-3 review close 1): consumption is a compare-and-set
+        under the manager's lock, mirroring ApprovalManager.consume. The
+        status re-check happens under the lock, so a second caller of an
+        already-consumed request is named refused ("already consumed"),
+        never served, and an approved request whose validity window has
+        passed refuses with the 410 class instead of paying out.
+        """
+        with self._consume_lock:
+            request = self._get(request_id)
+            if request.status == "consumed":
+                raise ActivationError(f"activation request {request_id} already consumed", 409)
+            if request.status != "approved":
+                raise ActivationError(f"activation request {request_id} is not approved")
+            if request.expires_at <= int(time.time()):
+                request.status = "expired"
+                raise ActivationError(f"activation request {request_id} expired", 410)
+            request.status = "consumed"
+            return request
 
     def get(self, request_id: str) -> ActivationRequest:
         return self._get(request_id)

@@ -1441,6 +1441,14 @@ class RaucleGateway:
         self._agent_creds = None
         self._caller_gate = None
         self._file_cache = _FileCache()
+        # Q17 gate hardening (phase-3 review close 2): identity-level
+        # quarantine state bound from quarantined-trace refusals.
+        # agent_id -> {"trace_ids": [trace_id, ...]}. Guarded by a lock:
+        # gate calls arrive on concurrent request threads. In-process by
+        # design - the durable control stays the trace-quarantine registry
+        # file; lifting follows the registry state of the binding traces.
+        self._agent_quarantines: dict[str, dict[str, Any]] = {}
+        self._agent_quarantine_lock = threading.Lock()
         self._init_receipt_projection(config)
         if self._gate_auth_mode == "off":
             logger.warning(
@@ -3325,7 +3333,7 @@ class RaucleGateway:
         # quarantined trace / suspended lease cannot be bypassed by a
         # valid token. Denials flow through the standard receipted deny
         # path (nothing about containment is a special channel).
-        trace_refusal = self._trace_quarantine_refusal(trace_id)
+        trace_refusal = self._trace_quarantine_refusal(trace_id, agent_id)
         if trace_refusal:
             return self._deny_result(result, trace_refusal, start)
         lease_refusal = self._lease_suspension_refusal(agent_id)
@@ -3371,6 +3379,30 @@ class RaucleGateway:
                 denied = self._deny_result(result, session_reason, start)
                 self._emit_session_rule_finding(denied, tool, args, session_rule_id)
                 return denied
+        elif self._session_rules:
+            # Q17 gate hardening (phase-3 review close 3): when session
+            # behavioural rules are CONFIGURED (rules exist and parsed), a
+            # request that omits the session id refuses with a named reason
+            # - a configured control cannot be silently disabled by the
+            # caller dropping the field. Deriving the session key
+            # server-side (agent identity + trace id) was considered and
+            # rejected: the bounded windows are keyed on the caller-supplied
+            # key, so a derived key hands a fresh trace a fresh empty window
+            # and weakens exactly the rate semantics the rules enforce.
+            # Refuse-with-name is the honest closure; session values stay
+            # caller-supplied until the server-issued workflow-identity
+            # work (registered follow-up family). Deployments with no rules
+            # parsed (none declared, or the block failed to load) keep
+            # today's shape for session-free calls; a malformed config
+            # already denies session-bearing calls fail-closed by name.
+            return self._deny_result(
+                result,
+                "session_binding_required: session behavioural rules are "
+                "configured on this gateway; requests must declare a "
+                "session_id (a configured control cannot be disabled by "
+                "the caller's omission)",
+                start,
+            )
 
         if _token_decision is not None and not _token_decision.allowed:
             # Attributable token denial (receipts v1.1): the caller is
@@ -4263,23 +4295,84 @@ class RaucleGateway:
                     states[str(record[id_field])] = str(record.get("state", ""))
         return states
 
-    def _trace_quarantine_refusal(self, trace_id: str) -> str:
-        """Named deny reason when *trace_id* is currently quarantined.
+    def _trace_quarantine_refusal(self, trace_id: str, agent_id: str = "") -> str:
+        """Named deny reason when *trace_id* is currently quarantined, or
+        when *agent_id* is under identity-level quarantine bound from
+        quarantined-trace work.
+
+        Q17 gate hardening (phase-3 review close 2): quarantine binds to
+        the agent identity as well as the trace, so a quarantined agent
+        cannot walk past containment by re-rolling its X-Trace-Id. When a
+        call is refused because its trace is quarantined, the refusal
+        records the caller's agent_id - the authenticated identity when
+        gate auth is on, the declared one when it is off (the documented
+        off-mode limitation) - into an identity-level quarantine state. A
+        later call from the same identity with a fresh trace id is then
+        refused too. Trace-level state stays keyed by trace_id and shared
+        by whoever presents it.
+
+        Lift semantics stay anchored on the durable registry: a binding
+        trace whose registry state is no longer quarantined (released, or
+        the registry file absent) drops its binding, and an identity with
+        no bindings left is fully released. The identity state itself is
+        per-process; a durable shared identity store is a registered
+        follow-up, not built here.
 
         Checked BEFORE constraint evaluation (and before the delegated
         authority shortcut): quarantine only ever denies, so ordering it
         first can never widen authority, and it cannot be bypassed by a
-        valid token. Existing receipts are untouched — no history rewrite.
+        valid token. Existing receipts are untouched - no history rewrite.
         """
-        if not trace_id:
-            return ""
-        states = self._load_registry_last_state(self.config.trace_quarantine_file or "", "trace_id")
-        if states.get(trace_id) == "quarantined":
+        states: dict[str, str] = {}
+        if trace_id or agent_id or self._agent_quarantines:
+            states = self._load_registry_last_state(
+                self.config.trace_quarantine_file or "", "trace_id"
+            )
+        trace_quarantined = bool(trace_id) and states.get(trace_id) == "quarantined"
+        if trace_quarantined and agent_id:
+            self._bind_agent_quarantine(agent_id, trace_id)
+        agent_refusal = self._identity_quarantine_refusal(agent_id, states)
+        if trace_quarantined:
             return (
                 f"trace quarantine: trace_id '{trace_id}' is quarantined; "
                 "new work on this trace is denied (existing receipts remain verifiable)"
             )
-        return ""
+        return agent_refusal
+
+    def _bind_agent_quarantine(self, agent_id: str, trace_id: str) -> None:
+        """Bind one agent identity into identity-level quarantine: its call
+        was refused because the trace it presented is quarantined."""
+        with self._agent_quarantine_lock:
+            state = self._agent_quarantines.get(agent_id)
+            if state is None:
+                state = {"trace_ids": []}
+                self._agent_quarantines[agent_id] = state
+            if trace_id not in state["trace_ids"]:
+                state["trace_ids"].append(trace_id)
+
+    def _identity_quarantine_refusal(self, agent_id: str, states: dict[str, str]) -> str:
+        """Named refusal for an identity-level quarantine, maintaining the
+        lift semantics: a binding whose trace is no longer registered
+        quarantined drops off, and an identity with no bindings left lifts."""
+        if not agent_id:
+            return ""
+        with self._agent_quarantine_lock:
+            state = self._agent_quarantines.get(agent_id)
+            if not state:
+                return ""
+            live_ids = [tid for tid in state["trace_ids"] if states.get(tid) == "quarantined"]
+            if not live_ids:
+                del self._agent_quarantines[agent_id]
+                return ""
+            state["trace_ids"] = live_ids
+            bound = ", ".join(f"'{tid}'" for tid in sorted(live_ids))
+            return (
+                "agent quarantine: agent "
+                f"'{agent_id}' is identity-quarantined by work presented on "
+                f"quarantined trace(s) {bound}; re-rolling the trace id does "
+                "not escape containment; the refusal lifts when every "
+                "binding trace is released"
+            )
 
     def _lease_suspension_refusal(self, agent_id: str) -> str:
         """Named deny reason when *agent_id*'s credential lease is
