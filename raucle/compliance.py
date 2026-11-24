@@ -89,8 +89,10 @@ def _verify_chain_evidence(
 ) -> None:
     """Run the AuditVerifier and populate the verification fields on *ev*."""
     # A signed chain cannot be CONCLUSIVELY verified without the operator key:
-    # AuditVerifier(no key) on a signed chain returns invalid because it cannot
-    # authenticate the checkpoints. Treat that as inconclusive, NOT as failed —
+    # AuditVerifier(no key) on a signed chain reports signed_mode="unverifiable"
+    # (hash-integrity best effort, no checkpoint authentication) rather than
+    # invalid, per the verifier's documented no-key contract. Treat that as
+    # inconclusive, NOT as failed —
     # claiming "tampered" when we simply lack the key would itself be dishonest.
     try:
         from raucle.audit import AuditVerifier
