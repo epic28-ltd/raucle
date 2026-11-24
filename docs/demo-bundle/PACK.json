@@ -1,33 +1,33 @@
 {
   "kind": "raucle-audit-pack/v1",
   "generated_at": 1762500000,
-  "tool_version": "0.23.8",
-  "audit_key_id": "22cae565c207f910",
+  "tool_version": "0.23.9",
+  "audit_key_id": "b09c3fbe65acd50a",
   "require_pq": false,
   "members": [
     {
       "path": "chain.jsonl",
       "role": "receipt-chain",
-      "sha256": "sha256:6d86aa8b6cdbdc48298634076b44bc7916f32c2a4d9a4209cdfd7ce26e0f7204"
+      "sha256": "sha256:00fc9afedc8d1ad9bb23e79bb984475fe028cc3ffe34adab43351cdf3075e52a"
     },
     {
       "path": "manifest.json",
       "role": "signed-manifest",
-      "sha256": "sha256:1d98217de5c0c7a18bde70aec92e3146ac615d28c53579bded0238b5c407ec32"
+      "sha256": "sha256:c18b943a5bf71a430b8ea980d2af5439f5c8d7a9310b7aa408ca91e857eec719"
     },
     {
       "path": "report.html",
       "role": "human-report",
-      "sha256": "sha256:ce1cd97465bcb925bf176d4e0e93c19a4132c5e0d9df7a24437d9be102c95eb5"
+      "sha256": "sha256:e606e514eec896d9a63d0b2266e184aebf9c0e014328ea5a46601dbba7bba8a8"
     },
     {
-      "path": "pubkeys/28c2096320baaf1f.pem",
+      "path": "pubkeys/43bc059e82435e80.pem",
       "role": "public-key",
-      "sha256": "sha256:28c2096320baaf1f52dcc4297c48fe44753970ae41180bab4ed391b719f61fd4",
-      "key_id": "28c2096320baaf1f"
+      "sha256": "sha256:43bc059e82435e80e3eed91ab363f4d30bb8afac9520575408e6fd3a6d17406c",
+      "key_id": "43bc059e82435e80"
     }
   ],
   "verify": "raucle audit-pack verify <dir>",
-  "audit_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAd6TbdSUCmW8vTOh/bacO8KOpIELlvOXlcNf4idZkAlA=\n-----END PUBLIC KEY-----\n",
-  "index_signature": "IlOR6tWi3iUQ60NVXG4FBbeVnRLZY2nvQbZGcmM1CY3meOcHaAQxd3k5FVRz9B2+5VikMWXpa09+xig5k9QYCQ=="
+  "audit_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAOHZBbjCEY7E0SVedoMpZtzISq5LBU8Xfp/TT1M7HocM=\n-----END PUBLIC KEY-----\n",
+  "index_signature": "0G0wFWw7lpNwB5dfjFcOA/roIrhddutJK3BYX8PAENgh1NZg07Oq7O8HRg4K0ga20o73kgDezwXFcvpANfFYCA=="
 }
