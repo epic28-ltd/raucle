@@ -1,8 +1,16 @@
 // raucle sidecar — Bicep template for Azure AI Foundry MCP gateway integration.
 //
-// Provisions a Container App running the raucle HTTP server inside
-// the same VNet as the customer's Foundry-attached APIM instance, plus
-// an APIM Backend pool member pointing at it. Run via:
+// PROPOSED INTEGRATION state (M2-class artefact; see README "Status"):
+// the Container App provisioned here runs the SHIPPED entry point
+// (`raucle serve`, the detection REST server). The receipt-emitting
+// Foundry MCP forwarder and its issuer-key/audit-blob wiring are
+// marked PROPOSED (commented) pending the registered proxy
+// integration, and the managed identity + role assignments below back
+// that proposed state.
+//
+// Provisions the Container App inside the same VNet as the customer's
+// Foundry-attached APIM instance, plus an APIM Backend pool member
+// pointing at it and the Named Values the policy XML expects. Run via:
 //
 //   az deployment group create \
 //     -g <resource-group> \
@@ -38,8 +46,34 @@ param auditStorageAccountId string
 @description('Blob container name for the hash-chained audit log.')
 param auditContainerName string = 'raucle-audit'
 
-@description('raucle container image. Defaults to the latest GA tag on GHCR.')
-param raucleImage string = 'ghcr.io/epic28-ltd/raucle:v0.12.0'
+@description('raucle container image. Default pins the current release tag; see the pin comment below for the digest capture and provenance discipline.')
+param raucleImage string = 'ghcr.io/epic28-ltd/raucle:v0.23.7'
+// IMAGE PIN DISCIPLINE (Q21, per the Q9 digest-pinning convention):
+//   - The default above pins the CURRENT release tag. The previous
+//     default (ghcr.io/epic28-ltd/raucle:v0.12.0) was an antique mutable
+//     tag and is deliberately gone.
+//   - Provenance: release tag v0.23.7 resolves to source commit
+//     eafba15c3c0d896d284518011bebd3c8c3be5932 (verified at pin time,
+//     24 Nov 2026, against the PEP 740 provenance attestation of the
+//     raucle 0.23.7 PyPI release: the Sigstore publishing certificate
+//     of https://pypi.org/integrity/raucle/0.23.7/raucle-0.23.7.tar.gz/provenance
+//     binds the tag push of publish.yml to that commit; the git tag
+//     points at the same commit).
+//   - Digest: pin the immutable digest IN ADDITION to the tag (Q9
+//     convention, Dockerfile.gateway / docker-compose.gateway.yml
+//     style) once the image is present in a registry this deployment
+//     can pull from, i.e. change the default to
+//     '<registry>/raucle:v0.23.7@sha256:<digest>' recorded via:
+//       docker buildx imagetools inspect <registry>/raucle:v0.23.7
+//   - Honest caveats at pin time: this repository's own pipelines
+//     publish to PyPI only (publish.yml) - no workflow publishes a
+//     container image - and ghcr.io/epic28-ltd/raucle did not resolve
+//     for anonymous pulls when this template was updated, so no digest
+//     is recorded here. Build the image from the pinned source commit
+//     (Dockerfile.gateway: docker build -f Dockerfile.gateway .) and
+//     push it to YOUR registry, then set this parameter (template is
+//     deployable as-is against your registry) and record the digest
+//     captured with the command above.
 
 @description('Issuer string (e.g. "acme.bank.kyc-platform"). Embedded in every emitted receipt.')
 param issuerId string
@@ -109,12 +143,16 @@ resource sidecar 'Microsoft.App/containerApps@2025-01-01' = {
         allowInsecure: false
       }
       secrets: [
-        // Key Vault reference; resolved at runtime via the managed identity.
-        {
-          name: 'issuer-key-pem'
-          keyVaultUrl: '${reference(keyVaultId, '2024-11-01').vaultUri}secrets/${issuerKeySecretName}'
-          identity: sidecarIdentity.id
-        }
+        // PROPOSED (unshipped forwarder): the issuer-key secret backs the
+        // receipt-signing forwarder (RAUCLE_ISSUER_KEY_PEM in the proposed
+        // env block above). The shipped detection server reads no secret,
+        // so the shipped container config carries none. Re-enable the
+        // entry below together with the proposed env block.
+        // {
+        //   name: 'issuer-key-pem'
+        //   keyVaultUrl: '${reference(keyVaultId, '2024-11-01').vaultUri}secrets/${issuerKeySecretName}'
+        //   identity: sidecarIdentity.id
+        // }
       ]
     }
     template: {
@@ -126,33 +164,46 @@ resource sidecar 'Microsoft.App/containerApps@2025-01-01' = {
             cpu: json('0.5')
             memory: '1Gi'
           }
+          // The SHIPPED entry point: `raucle serve` flags are
+          // --host / --port / --mode with choices strict|standard|
+          // permissive (raucle/cli.py). The proposed forwarder command
+          // (--mode foundry-sidecar) is an unshipped executable and is
+          // deliberately NOT presented here: this template deploys the
+          // detection REST server today (proposed-state labelling per
+          // README "Status").
           command: [
             'raucle'
             'serve'
+            '--host'
+            '0.0.0.0'   // bind the ingress-facing interface, not 127.0.0.1
             '--port'
             '8080'
             '--mode'
-            'foundry-sidecar'
+            'standard'
           ]
           env: [
-            { name: 'RAUCLE_BACKEND_URL', value: mcpBackendUrl }
-            { name: 'RAUCLE_ISSUER_ID', value: issuerId }
-            { name: 'RAUCLE_ISSUER_KEY_PEM', secretRef: 'issuer-key-pem' }
-            { name: 'RAUCLE_AUDIT_BLOB_ACCOUNT', value: split(auditStorageAccountId, '/')[8] }
-            { name: 'RAUCLE_AUDIT_BLOB_CONTAINER', value: auditContainerName }
-            { name: 'RAUCLE_VERIFICATION_BASE_URL', value: verificationBaseUrl }
-            { name: 'AZURE_CLIENT_ID', value: sidecarIdentity.properties.clientId }
+            // Shipped detection server: no extra environment required.
+            //
+            // PROPOSED (unshipped forwarder — do not enable until the
+            // registered proxy integration lands; see README "Status"):
+            //   { name: 'RAUCLE_BACKEND_URL', value: mcpBackendUrl }
+            //   { name: 'RAUCLE_ISSUER_ID', value: issuerId }
+            //   { name: 'RAUCLE_ISSUER_KEY_PEM', secretRef: 'issuer-key-pem' }
+            //   { name: 'RAUCLE_AUDIT_BLOB_ACCOUNT', value: split(auditStorageAccountId, '/')[8] }
+            //   { name: 'RAUCLE_AUDIT_BLOB_CONTAINER', value: auditContainerName }
+            //   { name: 'RAUCLE_VERIFICATION_BASE_URL', value: verificationBaseUrl }
+            //   { name: 'AZURE_CLIENT_ID', value: sidecarIdentity.properties.clientId }
           ]
           probes: [
             {
               type: 'Liveness'
-              httpGet: { path: '/healthz', port: 8080 }
+              httpGet: { path: '/health', port: 8080 }  // GET /health is the shipped liveness route
               initialDelaySeconds: 10
               periodSeconds: 30
             }
             {
               type: 'Readiness'
-              httpGet: { path: '/readyz', port: 8080 }
+              httpGet: { path: '/health', port: 8080 }  // single public health route ships today; readiness and liveness share it
               initialDelaySeconds: 3
               periodSeconds: 5
             }
@@ -160,7 +211,7 @@ resource sidecar 'Microsoft.App/containerApps@2025-01-01' = {
         }
       ]
       scale: {
-        minReplicas: 2  // keep one warm for sub-100µs gate latency target
+        minReplicas: 2  // capacity headroom; the sub-100µs gate-latency target belongs to the proposed forwarder
         maxReplicas: 20
         rules: [
           {
@@ -206,6 +257,18 @@ resource nvMcpPath 'Microsoft.ApiManagement/service/namedValues@2024-05-01' = {
   properties: {
     displayName: 'raucle-mcp-path'
     value: '/mcp'
+    secret: false
+  }
+}
+
+resource nvMcpBackendHost 'Microsoft.ApiManagement/service/namedValues@2024-05-01' = {
+  name: '${apimServiceName}/raucle-mcp-backend-host'
+  properties: {
+    displayName: 'raucle-mcp-backend-host'
+    // The MCP server's own hostname, derived from mcpBackendUrl. The
+    // policy's direct-route guard denies requests whose Host header
+    // names this host (see apim-policy.xml block 5).
+    value: split(mcpBackendUrl, '/')[2]
     secret: false
   }
 }
