@@ -2,8 +2,16 @@
 """Raucle Gateway demo traffic simulator.
 
 Feeds the gateway a continuous, realistic mix of agent tool calls so the
-admin panel, topology view, connection log, and receipts stay live for
+admin panel, topology view and connection log stay live for
 demonstrations (Sovereign AI demonstrator stage, evaluator accounts).
+Receipts stay live only while the gateway runs in gate-auth off mode
+(the gateway_auth code default, where the declared identity is trusted): that is the only mode
+where this credential-free agent's calls are receipted. Under apikey or
+token auth every demo call is refused unauthenticated pre-gate: the
+answer denies with receipt_id null and no receipt is written
+(unauthenticated pre-gate refusals are transport-layer refusals, not
+receipted evidence; only an authenticated caller's gate decision is
+receipted).
 
 Scenarios (choose one with --scenario):
   banking    — payments, cards, loans, sanctions (banking-payments.yaml)
@@ -813,10 +821,14 @@ def gate_call(
 # synthetic, obviously-canned sensitive values (a Luhn-valid test card
 # number, a reserved-documentation email domain, the canonical example
 # national id, an obviously-demo bearer token and API key) and drive
-# them through the real gate. In demo mode the gateway's advisory
-# redaction engine scans each call, collars the matched spans and mints
-# an x_dlp receipt citing the gate receipt; the Data Protection screen
-# reads those receipts. Nothing here is or resembles customer data.
+# them through the real gate. When demo mode is on and the gate decision
+# is receipted (gate-auth off mode: declared identity trusted), the
+# gateway's advisory redaction engine scans the call, collars the
+# matched spans and mints an x_dlp receipt citing that gate receipt; the
+# Data Protection screen reads those receipts. Under apikey or token
+# auth these credential-free calls are refused unauthenticated pre-gate,
+# so there is no gate receipt to cite and nothing is minted (never
+# fabricated). Nothing here is or resembles customer data.
 # ---------------------------------------------------------------------
 
 DLP_DEMO_AGENT = {
@@ -886,7 +898,11 @@ def run_dlp_pii_burst(gateway: str, cycle: int, quiet: bool = False) -> dict:
 # rule cuts the loop. The tool carries no allow rule, so every attempt
 # is denied by policy first; once the window holds threshold-1 denied
 # attempts, the runaway_tool_loop rule denies the next call and the
-# gateway receipts a session-monitor finding citing that deny.
+# gateway receipts a session-monitor finding citing that deny. That
+# story runs in gate-auth off mode, where every gate deny is receipted;
+# under apikey or token auth the credential-free calls are refused
+# unauthenticated pre-gate, mint no receipts and never reach the session
+# rules (unauthenticated pre-gate refusals mint no receipts).
 # ---------------------------------------------------------------------
 
 SESSION_RUNAWAY_AGENT = {
@@ -1045,7 +1061,10 @@ def main() -> None:
 
             # Scripted runaway-loop burst (D16): every --session-every
             # cycles, one declared session retries a failing export until
-            # the session rule cuts it. Real gate calls, real receipts.
+            # the session rule cuts it. Real gate calls; real receipts only
+            # in gate-auth off mode (under apikey or token auth these
+            # credential-free calls are refused unauthenticated pre-gate
+            # and mint no receipts).
             if args.session_every and this_cycle % args.session_every == 0:
                 burst = run_session_runaway(args.gateway, this_cycle, quiet=args.quiet)
                 with stats_lock:
@@ -1060,9 +1079,12 @@ def main() -> None:
 
             # Scripted PII/DLP burst (D2): every --dlp-every cycles, the
             # demo agents drive the canned synthetic patterns through the
-            # real gate so the advisory redaction engine leaves x_dlp
-            # receipts for the Data Protection screen. Real gate calls,
-            # synthetic values, real evidence.
+            # real gate so that in gate-auth off mode the advisory
+            # redaction engine leaves x_dlp receipts for the Data
+            # Protection screen. Real gate calls, synthetic values; real
+            # evidence only where the decision is receipted (gate-auth off
+            # mode; under apikey or token auth these credential-free calls
+            # are refused unauthenticated pre-gate and mint no receipts).
             if args.dlp_every and this_cycle % args.dlp_every == 0:
                 burst = run_dlp_pii_burst(args.gateway, this_cycle, quiet=args.quiet)
                 with stats_lock:
