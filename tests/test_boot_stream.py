@@ -191,10 +191,14 @@ class TestBoundedTailResume:
         start_offset, entries = read_last_lines(path, window_bytes=4096)
         assert start_offset > 0  # genuinely a partial window, not the file
         sink = HashChainSink(path, signer=None, checkpoint_every=50, scan_window_bytes=4096)
-        assert sink.event_count == 400
+        assert sink.head_index == 400
+        # Q11 D: the resume adopts the chain head; it does not inflate the
+        # count of records this sink appended.
+        assert sink.event_count == 0
         # The resumed sink appends seamlessly: the chain stays whole.
         sink.append({"event": "gate_decision", "seq": 400})
-        assert sink.event_count == 401
+        assert sink.head_index == 401
+        assert sink.event_count == 1
         sink.close()
         # The file was only appended to, never rewritten.
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -290,7 +294,7 @@ class TestBoundedTailResume:
         # An absurdly small first window sees no event record; the resume
         # must grow the window rather than guess the tail state.
         sink2 = HashChainSink(path, signer=signer, checkpoint_every=1, scan_window_bytes=16)
-        assert sink2.event_count == 2
+        assert sink2.head_index == 2
         sink2.close()
 
     def test_missing_frontier_sidecar_degrades_checkpointing_by_name(self, tmp_path, caplog):
@@ -347,7 +351,7 @@ class TestBoundedTailResume:
         sidecar.write_text(json.dumps(state), encoding="utf-8")
 
         sink2 = HashChainSink(path, signer=signer, checkpoint_every=1000)
-        assert sink2.event_count == 5
+        assert sink2.head_index == 5
         assert not sink2.frontier_ready  # degraded by name, never trusted
 
 

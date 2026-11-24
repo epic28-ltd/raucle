@@ -164,6 +164,29 @@ class TestChainHeader:
         assert report.chain_key_id == signer.key_id()
         assert report.valid
 
+    def test_verifier_surfaces_signed_mode_unverifiable_without_key(self, tmp_path):
+        """A keyless AuditVerifier on a hash-intact SIGNED genesis reports
+        ``signed_mode == "unverifiable"`` with ``valid=True`` - the documented
+        no-key contract (best-effort integrity; checkpoint authentication not
+        possible). The pin guards against the dangerous regression of a keyless
+        verifier minting ``"signed"`` without having authenticated anything.
+        (Q11 checker D1, 24 Nov.)
+        """
+        signer = Ed25519Signer.generate()
+        path = tmp_path / "chain.jsonl"
+        with HashChainSink(path, signer=signer, checkpoint_every=1) as sink:
+            sink.append({"v": "a"})
+            sink.append({"v": "b"})
+
+        report = AuditVerifier().verify_chain(path)
+        assert report.signed_mode == "unverifiable"
+        assert report.valid is True
+        assert report.chain_key_id is not None
+
+        # The deception shape: a keyless verifier must NEVER mint "signed" -
+        # that label is reserved for key-carrying checkpoint authentication.
+        assert report.signed_mode != "signed"
+
     def test_verifier_surfaces_signed_mode_unsigned(self, tmp_path):
         path = tmp_path / "chain.jsonl"
         with HashChainSink(path) as sink:

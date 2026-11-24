@@ -114,6 +114,33 @@ export RAUCLE_AUDIT_LOG=/data/gateway-audit.jsonl
 The audit log file is rotated manually (copy + truncate) or by an external
 log shipper (Filebeat, Fluentd).
 
+### Audit chain enforcement modes (Q11)
+
+The hash-chained audit chain (`RAUCLE_AUDIT_CHAIN`, the offline-verifiable
+chain of record) carries three opt-in enforcement modes. All are unset by
+default: development affordances (an unsigned chain warns and runs, a
+deployment without a delegation ledger serves depth-one delegations) are
+unchanged when the flags are absent.
+
+- `RAUCLE_AUDIT_SINGLE_WRITER=1`: the operator promises exactly one writer
+  to the chain file (the receipts sidecar is the single-writer precedent for
+  receipt chains). Boot takes an exclusive lock on the chain and refuses a
+  second writer by name instead of forking the chain. Without the flag,
+  concurrent writers interleave safely: each append re-reads the chain head
+  from disk under a file lock, and a writer killed mid-append leaves the
+  torn last line named in the sink's status channel while the chain
+  continues from the last complete record.
+- `RAUCLE_REQUIRE_SIGNED_AUDIT=1`: production strict signed mode. Boot
+  refuses by name when the signer is unavailable or when the audit chain's
+  genesis is unsigned; `raucle rotate-chain` is the recovery path it names.
+  The signing state of the chain's genesis (state and key id) is reported
+  honestly in the `/health` readiness payload under `readiness.audit_chain`.
+- `RAUCLE_REQUIRE_ANCESTRY_RESOLVER=1`: production strict ancestry mode for
+  the delegation ledger. Boot refuses when no delegation ledger is
+  configured to back the ancestry resolver, so delegations deeper than one
+  level are never served without resolvable ancestry; with the resolver
+  wired, revoking a root or mid-chain token denies every descendant.
+
 ## API Key Rotation
 
 Admin panel API keys support optional expiry timestamps. Create a key that
@@ -154,6 +181,9 @@ If rate limits are exceeded, the API returns HTTP 429 with a JSON body:
 | SIEM token redaction | token_configured bool | Included |
 | Health check auth | RAUCLE_HEALTH_KEY | Optional |
 | Audit log persistence | RAUCLE_AUDIT_PERSIST | Optional |
+| Audit chain single-writer promise | RAUCLE_AUDIT_SINGLE_WRITER | Optional |
+| Audit chain strict signed mode | RAUCLE_REQUIRE_SIGNED_AUDIT | Optional |
+| Delegation strict ancestry mode | RAUCLE_REQUIRE_ANCESTRY_RESOLVER | Optional |
 | API key expiry | expires_at field | Optional |
 | WAF | ModSecurity + OWASP CRS | External |
 | Secret management | Docker secrets / Vault | External |

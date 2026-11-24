@@ -212,6 +212,11 @@ class GatewayConfig:
     # Receipts
     receipt_store: str = "/data/receipts.jsonl"
     audit_chain: str = "/data/audit.jsonl"
+    # Q11 F: production strict signed audit mode (opt-in). When set, boot
+    # refuses an audit chain whose genesis is unsigned and a boot whose
+    # signer is unavailable, naming RAUCLE_REQUIRE_SIGNED_AUDIT. Unset
+    # keeps the development affordances: an unsigned chain warns and runs.
+    require_signed_audit: bool = False
 
     # X3 slice 4: the single-writer receipt sidecar. When the URL is set
     # this gateway no longer writes the chain or the index; it submits
@@ -255,6 +260,11 @@ class GatewayConfig:
     # Receipts v1.1: append-only ledger of delegated capability records; when
     # set, gate auth token mode resolves attenuated chains against it.
     delegations_file: str = ""
+    # Q11 E: production strict ancestry mode (opt-in). When set, boot refuses
+    # a delegation ledger the ancestry resolver cannot be backed with,
+    # naming RAUCLE_REQUIRE_ANCESTRY_RESOLVER. Unset keeps the development
+    # affordances: the no-resolver deny stays as today.
+    require_ancestry_resolver: bool = False
     signer_key_path: str = ""  # empty = <data-dir>/gateway-signing-key.pem
 
     # Signed gate receipts (PR-B): every /gate decision is emitted as a
@@ -415,6 +425,17 @@ class GatewayConfig:
             data_root=os.environ.get("RAUCLE_DATA_ROOT", ""),
             gate_auth=os.environ.get("RAUCLE_GATE_AUTH", "off"),
             revocations_file=os.environ.get("RAUCLE_REVOCATIONS_FILE", ""),
+            # Q11 E: the deployment ledger the ancestry resolver is backed
+            # with. The variable was documented in prod.env.example but was
+            # never loaded; the strict ancestry mode reads this field, so
+            # the wiring lands with it.
+            delegations_file=os.environ.get("RAUCLE_DELEGATIONS_FILE", ""),
+            require_signed_audit=os.environ.get("RAUCLE_REQUIRE_SIGNED_AUDIT", "").strip().lower()
+            in ("1", "true", "yes"),
+            require_ancestry_resolver=os.environ.get("RAUCLE_REQUIRE_ANCESTRY_RESOLVER", "")
+            .strip()
+            .lower()
+            in ("1", "true", "yes"),
             trace_quarantine_file=os.environ.get("RAUCLE_TRACE_QUARANTINE_FILE", ""),
             lease_suspensions_file=os.environ.get("RAUCLE_LEASE_SUSPENSIONS_FILE", ""),
             agent_credentials_file=os.environ.get(
@@ -1330,6 +1351,31 @@ def _attach_rebuilt_frontier_to_sink(audit_path, frontier) -> None:
         sink.close()
 
 
+def _audit_chain_genesis_state(audit_path: Path) -> tuple[str, str | None]:
+    """The honest signed state of an audit chain's genesis (Q11 F).
+
+    Reads the ``chain_meta`` header, the only record that self-describes
+    the chain's signed mode and key id: a signed genesis returns
+    ``(signed, key_id)``. Anything else (unsigned genesis, missing or
+    unreadable header) returns ``(unsigned, None)``: never a claimed
+    signature the file does not carry.
+    """
+    try:
+        with open(audit_path, encoding="utf-8") as fh:
+            first = fh.readline().strip()
+        if not first:
+            return "unsigned", None
+        rec = json.loads(first)
+    except (OSError, ValueError):
+        return "unsigned", None
+    if not isinstance(rec, dict) or not rec.get("chain_meta"):
+        return "unsigned", None
+    if rec.get("signed"):
+        key_id = rec.get("key_id")
+        return "signed", str(key_id) if key_id else None
+    return "unsigned", None
+
+
 class RaucleGateway:
     """The gateway core: policy engine + gate + receipt store + stats.
 
@@ -1430,8 +1476,46 @@ class RaucleGateway:
         self._last_tool_receipt: dict[str, tuple[str, str]] = {}
 
         # Bootstrap from config
-        self._init_signer()
+        try:
+            self._init_signer()
+        except Exception as exc:
+            if self.config.require_signed_audit:
+                # Q11 F: under the strict signed audit mode an unavailable
+                # signer refuses with the mode named, not the generic
+                # signer error (the production deployment promised an
+                # attributed audit chain).
+                from raucle.audit import ENV_AUDIT_REQUIRE_SIGNED
+                from raucle.errors import ConfigurationError
+
+                raise ConfigurationError(
+                    f"audit strict signed mode ({ENV_AUDIT_REQUIRE_SIGNED}=1): "
+                    f"the audit chain's signer is unavailable ({exc}); refusing "
+                    f"to boot without the promised signed-audit property; "
+                    f"restore the signer and restart"
+                ) from exc
+            raise
+        # Q11 F: the strict signed audit gates: an audit chain on disk
+        # whose genesis is unsigned refuses by name with the rotate path
+        # as the recovery. Unset, the development affordances hold (the
+        # boot warns and the chain runs unsigned).
+        self._enforce_require_signed_audit()
+        # Q11 E: the strict ancestry mode refuses at boot when the config
+        # enables delegation but the ledger cannot back the resolver.
+        self._enforce_require_ancestry_resolver()
+        # Q11 F: the readiness payload reports what the audit chain on
+        # disk actually is (an honest field, not the config's wish); an
+        # unset or missing chain stays at its pending default.
+        if self.boot_readiness is not None:
+            audit_path = Path(config.audit_chain) if config.audit_chain else None
+            if audit_path is not None and audit_path.exists():
+                state, key_id = _audit_chain_genesis_state(audit_path)
+                self.boot_readiness.set_audit_chain(state=state, key_id=key_id)
         self._init_gate_identity()
+        # Q8: the gateway's persistent gate identity signs the store's seal
+        # metas (house signing path). The store was constructed earlier in
+        # boot order, before the identity existed, so the signer binds here.
+        if self._receipt_store is not None:
+            self._receipt_store.set_seal_signer(self._gate_identity)
         self._load_policies()
         # EPIC W lane W1: bind the policy file's state_pairings section
         # against the tool schema registry AFTER both are loaded, so a
@@ -1536,6 +1620,11 @@ class RaucleGateway:
                 base_dir=config.receipt_store_dir,
                 max_segment_bytes=config.receipt_segment_max_bytes,
             )
+            # The seal identity binds later: _init_receipt_projection runs
+            # BEFORE the signer/identity bootstrap in boot order, so the
+            # gateway attaches its persistent gate identity right after
+            # _init_gate_identity (see __init__). Until a signer is bound,
+            # sealed metas record ``unsigned: true`` honestly.
         self._receipt_index = None
         self.boot_readiness: Any = None
         self._boot_compactor: Any = None
@@ -1933,6 +2022,68 @@ class RaucleGateway:
         signer = Ed25519Signer(private_key)
         logger.info("generated new gateway signing key %s (key_id=%s)", key_path, signer.key_id())
         return signer
+
+    def _enforce_require_signed_audit(self) -> None:
+        """Q11 F: the boot-time strict signed audit gate.
+
+        The signer-unavailable leg wraps ``_init_signer`` at its call site;
+        this leg refuses an audit chain whose genesis is unsigned: the
+        chain's writer key cannot attest it, so a production deployment
+        promised an attributed audit chain refuses by name with the rotate
+        path as the recovery. Unset, the boot keeps today's behaviour.
+        """
+        if not self.config.require_signed_audit:
+            return
+        from raucle.audit import ENV_AUDIT_REQUIRE_SIGNED
+        from raucle.errors import ConfigurationError
+
+        audit_path = Path(self.config.audit_chain) if self.config.audit_chain else None
+        if audit_path is None or not audit_path.exists():
+            # No chain on disk yet: the first writer creates the genesis.
+            return
+        state, _key_id = _audit_chain_genesis_state(audit_path)
+        if state == "signed":
+            return
+        raise ConfigurationError(
+            f"audit strict signed mode ({ENV_AUDIT_REQUIRE_SIGNED}=1): the audit "
+            f"chain {audit_path} carries an unsigned genesis (the writer's key "
+            f"cannot attest it); refusing to run a production audit chain that "
+            f"is not attributed. Rotate with 'raucle rotate-chain' and restart "
+            f"with a signer configured (RAUCLE_AUDIT_PRIVATE_KEY_PEM)."
+        )
+
+    def _enforce_require_ancestry_resolver(self) -> None:
+        """Q11 E: the boot-time strict ancestry gate.
+
+        A config that unambiguously enables delegation (the strict flag
+        set) must have a delegation ledger backing the ancestry resolver:
+        a ledger that is not configured, or configured but missing on
+        disk, refuses the boot by name instead of serving depth-beyond-
+        one-level delegations without resolvable ancestry. Unset, the
+        development affordances hold.
+        """
+        if not self.config.require_ancestry_resolver:
+            return
+        from raucle.capability import ENV_REQUIRE_ANCESTRY_RESOLVER
+        from raucle.errors import ConfigurationError
+
+        delegations = self.config.delegations_file
+        if not delegations:
+            raise ConfigurationError(
+                f"strict ancestry mode ({ENV_REQUIRE_ANCESTRY_RESOLVER}=1): no "
+                f"delegation ledger is configured; refusing to boot without the "
+                f"ancestry resolver the strict mode promises (set "
+                f"RAUCLE_DELEGATIONS_FILE or unset the strict flag)"
+            )
+        ledger_path = Path(delegations)
+        if not ledger_path.exists():
+            raise ConfigurationError(
+                f"strict ancestry mode ({ENV_REQUIRE_ANCESTRY_RESOLVER}=1): the "
+                f"configured delegation ledger {ledger_path} does not exist; "
+                f"refusing to boot without the ledger backing the ancestry "
+                f"resolver (register the delegation chain or unset the strict "
+                f"flag)"
+            )
 
     def _sign_and_store_receipt(self, payload: dict[str, Any], *, advisory: bool = False) -> str:
         """Sign a receipt payload with the gate identity and append it to

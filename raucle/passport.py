@@ -39,6 +39,8 @@ from typing import Any
 
 from raucle._paths import validate_path
 from raucle.audit import Ed25519Signer, _canonical_json, _sha256_hex
+from raucle.provenance import CapabilityStatement
+from raucle.trust_registry import _MAX_CLOCK_SKEW_SECONDS
 
 #: Passport format identifier.
 PASSPORT_VERSION = "agent-passport/v1"
@@ -141,15 +143,30 @@ def issue_passport(
     ``statement`` is a ``CapabilityStatement`` (or its ``.to_dict()``). The
     issuing org signs the passport body with ``issuer_signer``; that issuer key
     must be published to the trust registry for verifiers to resolve it.
+
+    ``ttl_seconds`` must be a POSITIVE integer when given (Q10, a second
+    external review of the main branch, P1): ``0`` never means "no expiry"
+    (it is refused by name, because the old ``if ttl_seconds else None``
+    shape silently turned it into a never-expiring passport) and a negative
+    ttl is refused rather than minting an already-expired passport. ``None``
+    is the documented no-expiry mode (the CLI's ``--ttl`` default) and keeps
+    its meaning.
     """
     stmt = statement.to_dict() if hasattr(statement, "to_dict") else dict(statement)
     issued_at = _now()
+    if ttl_seconds is not None and (
+        isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int) or ttl_seconds <= 0
+    ):
+        raise ValueError(
+            f"ttl_seconds must be a positive integer number of seconds, got "
+            f"{ttl_seconds!r}; pass None for the documented no-expiry mode"
+        )
     passport = AgentPassport(
         statement=stmt,
         issuer=issuer,
         issuer_key_id=_issuer_key_id(issuer_signer.public_key_pem()),
         issued_at=issued_at,
-        expires_at=(issued_at + ttl_seconds) if ttl_seconds else None,
+        expires_at=(issued_at + ttl_seconds) if ttl_seconds is not None else None,
     )
     passport.issuer_signature = _b64(issuer_signer.sign(_canonical_json(passport.body())))
     return passport
@@ -198,10 +215,13 @@ def verify_passport(
 ) -> PassportVerdict:
     """Verify a passport **fail-closed** against the shared trust registry.
 
-    Checks, in order: known version → issuer key resolves to an *active* key in
-    the registry (unknown/revoked → invalid) → issuer signature verifies →
-    not expired. On success the verdict carries the vouched agent identity and
-    its allowed tools/models, ready for a framework integration to enforce.
+    Checks, in order: known version → the vouched statement passes structural
+    validation (the production ``CapabilityStatement`` parser, Q10) → issuer
+    key resolves to an *active* key in the registry (unknown/revoked →
+    invalid) → issuer signature verifies → issued_at not in the future beyond
+    the clock-skew allowance (Q10) → not expired. On success the verdict
+    carries the vouched agent identity and its allowed tools/models, ready
+    for a framework integration to enforce.
     """
     # Fail-closed on ANY malformed input — a parse/shape error must yield an
     # invalid verdict, never an exception (codex #7).
@@ -212,6 +232,15 @@ def verify_passport(
 
     if p.body().get("version") != PASSPORT_VERSION:
         return PassportVerdict(False, f"unknown passport version {p.body().get('version')!r}")
+
+    # Structural validation of the vouched statement (Q10, P1): reuse the
+    # production ``CapabilityStatement`` parser rather than re-implementing
+    # it. A statement with unknown fields or wrong shapes fails with a named
+    # reason DISTINCT from unknown statements/issuers.
+    try:
+        CapabilityStatement.from_dict(p.statement)
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        return PassportVerdict(False, f"passport statement failed structural validation: {exc}")
 
     # Resolve the registry RECORD (not just the key) so we can check the
     # authoritative issuer identity, not the passport's self-asserted one.
@@ -235,6 +264,15 @@ def verify_passport(
         )
 
     ts = now if now is not None else _now()
+    # issued_at must not sit in the future beyond a small clock-skew
+    # allowance (Q10, P1): the same allowance the trust registry applies
+    # to signed heads, so warm clocks do not fail closed.
+    if p.issued_at > ts + _MAX_CLOCK_SKEW_SECONDS:
+        return PassportVerdict(
+            False,
+            f"passport issued_at {p.issued_at} is in the future (now {ts}, "
+            f"allowed skew {_MAX_CLOCK_SKEW_SECONDS}s)",
+        )
     if p.expires_at is not None and ts >= p.expires_at:
         return PassportVerdict(False, f"passport expired at {p.expires_at}")
 

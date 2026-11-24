@@ -22,12 +22,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from raucle.audit import Ed25519Signer
 from raucle.capability import CapabilityIssuer
 from raucle.handshake import accept_call, build_request, verify_ack
+from raucle.replay_store import SqliteReplayStore
 from raucle.trust_registry import TrustRegistry
 
 
 def main() -> int:
     workdir = Path(tempfile.mkdtemp(prefix="raucle-cross-org-"))
     reg_path = workdir / "registry.jsonl"
+    replay_store = SqliteReplayStore(workdir / "replay.sqlite3")
 
     print("=" * 72)
     print("Setup — one shared Trust Registry; two orgs publish their keys")
@@ -57,7 +59,7 @@ def main() -> int:
     req = build_request(
         token, tool="transfer_funds", args={"to": "acct:b-co", "amount": 50}, nonce="h1"
     )
-    res = accept_call(req, registry=registry, responder_signer=org_b, responder_id="org-b.gateway")
+    res = accept_call(req, registry=registry, responder_signer=org_b, responder_id="org-b.gateway", replay=replay_store)
     print(
         f"  Org B resolved Org A from the registry, then: {'ACCEPT' if res.accepted else 'REJECT'}"
     )
@@ -70,7 +72,7 @@ def main() -> int:
     bad = build_request(
         token, tool="transfer_funds", args={"to": "acct:attacker", "amount": 9900}, nonce="h2"
     )
-    res2 = accept_call(bad, registry=registry, responder_signer=org_b, responder_id="org-b.gateway")
+    res2 = accept_call(bad, registry=registry, responder_signer=org_b, responder_id="org-b.gateway", replay=replay_store)
     print(f"  Org B decision: {'ACCEPT' if res2.accepted else 'REJECT'} ({res2.reason})")
     ack2_ok = verify_ack(res2.ack_receipt, registry=registry)[0]
     print(f"  The signed REJECT ack still verifies: {ack2_ok}\n")
@@ -79,7 +81,16 @@ def main() -> int:
     print("Scene 3 — Org A's key is revoked in the registry")
     print("=" * 72)
     registry.revoke(ka, reason="key compromised")
-    res3 = accept_call(req, registry=registry, responder_signer=org_b, responder_id="org-b.gateway")
+    req3 = build_request(
+        token, tool="transfer_funds", args={"to": "acct:b-co", "amount": 50}, nonce="h3"
+    )  # a fresh nonce: scene 1's nonce is consumed and its replay would be refused
+    res3 = accept_call(
+        req3,
+        registry=registry,
+        responder_signer=org_b,
+        responder_id="org-b.gateway",
+        replay=replay_store,
+    )
     verdict3 = "ACCEPT" if res3.accepted else "REJECT"
     print(f"  Org B rejects BEFORE the gate even runs: {verdict3} ({res3.reason})")
 
