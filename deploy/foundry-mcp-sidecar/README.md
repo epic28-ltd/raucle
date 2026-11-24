@@ -56,6 +56,7 @@ Before deploying, you need:
 | | What | Why |
 |---|---|---|
 | 1 | An existing Foundry-attached APIM instance | The sidecar sits behind APIM as a backend pool member. |
+| 1a | The raucle install carrying the right extras | `raucle[server]` supplies the detection server this directory deploys; `raucle[compliance]` supplies the capability/audit primitives the PROPOSED forwarder (M2/M4) will need when it ships. `Dockerfile.gateway` installs both extras plus `rules`. |
 | 2 | A Container App Environment in the APIM VNet | The sidecar runs as a Container App that the APIM ingress can reach over private networking. |
 | 3 | A Key Vault entry with your raucle issuer Ed25519 private key | The PROPOSED forwarder signs receipts with this. Generate with `raucle cap keygen` and store via `az keyvault secret set --vault-name ... --name raucle-issuer-private-key --file issuer.key`. Prepare it now; the shipped detection server reads no secret. |
 | 4 | A Storage Account + Blob container for the audit log | The PROPOSED forwarder writes the hash-chained receipt log here. A 1 GB container is more than enough for ~10⁷ receipts. |
