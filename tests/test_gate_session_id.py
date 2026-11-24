@@ -155,6 +155,155 @@ class TestGateSessionId:
             assert resp.status_code in (400, 422), (bad, resp.status_code)
 
 
+class TestSessionBindingRequired:
+    """Q17 gate hardening (phase-3 review close 3): when session behavioural
+    rules are CONFIGURED, the gate refuses requests that omit a session ID.
+
+    A configured control cannot be silently disabled by the caller dropping
+    the field. Choice pinned (read from the rule evaluation): the session
+    key is caller-supplied and the bounded windows are keyed on it, so
+    deriving the key server-side from agent identity + trace id would hand
+    a fresh trace a fresh empty window and weaken exactly the rate
+    semantics the rules enforce. The honest closure is refuse-with-name.
+    Session values themselves stay caller-supplied until the server-issued
+    workflow identity work (registered follow-up family).
+    """
+
+    SESSION_RULES_POLICY = (
+        POLICY
+        + """
+session_rules:
+  - id: ban-balance-read-chain
+    kind: forbidden_tool_chain
+    window_seconds: 60
+    sequence: [lookup_balance]
+"""
+    )
+
+    @pytest.fixture
+    def rules_gw(self, tmp_path):
+        """A gateway whose policy configures one session rule."""
+        policy = tmp_path / "policies.yaml"
+        policy.write_text(self.SESSION_RULES_POLICY)
+        config = GatewayConfig(
+            host="127.0.0.1",
+            admin_api_key="k",
+            signer_backend="local",
+            policy_file=str(policy),
+            receipt_store=str(tmp_path / "receipts.jsonl"),
+            receipt_store_dir=str(tmp_path / "segments"),
+            receipt_index_path=str(tmp_path / "index.sqlite"),
+            audit_chain=str(tmp_path / "audit.jsonl"),
+            registry_path=str(tmp_path / "registry.jsonl"),
+            emit_receipts=True,
+        )
+        return RaucleGateway(config)
+
+    @pytest.fixture
+    def rules_client(self, rules_gw):
+        return TestClient(create_gateway_app(rules_gw))
+
+    def test_rules_configured_session_omitted_refuses_named(self, rules_client):
+        """(a) Session rules configured + no session ID = the named
+        session_binding_required refusal (a configured control cannot be
+        silently disabled by the caller's omission)."""
+        resp = rules_client.post(
+            "/gate",
+            json={
+                "tool": "lookup_balance",
+                "args": {"account": "ACC-001"},
+                "agent_id": "agent:svc",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["decision"] == "deny", body
+        assert "session_binding_required" in body["reason"]
+
+    def test_rules_configured_session_supplied_evaluates_as_today(self, rules_client):
+        """(b) Rules configured + session supplied: rule evaluation is
+        unchanged - the configured forbidden chain fires on the balance
+        read by its own rule id, not by the binding refusal."""
+        resp = rules_client.post(
+            "/gate",
+            json={
+                "tool": "lookup_balance",
+                "args": {"account": "ACC-001"},
+                "agent_id": "agent:svc",
+                "session_id": "run-1",
+            },
+        )
+        body = resp.json()
+        assert body["decision"] == "deny", body
+        assert "ban-balance-read-chain" in body["reason"]
+        assert "session_binding_required" not in body["reason"]
+
+    def test_no_rules_configured_session_omitted_unchanged(self, client):
+        """(c) Zero regression for unconfigured deployments: no session
+        rules configured + no session ID is exactly today's behaviour (the
+        call evaluates and allows; no refusal is minted)."""
+        resp = client.post(
+            "/gate",
+            json={
+                "tool": "lookup_balance",
+                "args": {"account": "ACC-001"},
+                "agent_id": "agent:svc",
+            },
+        )
+        body = resp.json()
+        assert body["decision"] == "allow", body
+        assert "session_binding_required" not in body["reason"]
+
+    def test_malformed_rules_block_session_free_calls_unchanged(self, tmp_path):
+        """A session_rules block that fails to parse produces NO rules: the
+        binding requirement keys on rules existing and parsing, so
+        session-free calls keep today's shape - while session-bearing calls
+        still deny fail-closed on the config error, as before the close."""
+        policy = tmp_path / "policies.yaml"
+        policy.write_text(
+            POLICY
+            + """
+session_rules:
+  - 42
+"""
+        )
+        config = GatewayConfig(
+            host="127.0.0.1",
+            admin_api_key="k",
+            signer_backend="local",
+            policy_file=str(policy),
+            receipt_store=str(tmp_path / "receipts.jsonl"),
+            receipt_store_dir=str(tmp_path / "segments"),
+            receipt_index_path=str(tmp_path / "index.sqlite"),
+            audit_chain=str(tmp_path / "audit.jsonl"),
+            registry_path=str(tmp_path / "registry.jsonl"),
+            emit_receipts=True,
+        )
+        client = TestClient(create_gateway_app(RaucleGateway(config)))
+        free = client.post(
+            "/gate",
+            json={
+                "tool": "lookup_balance",
+                "args": {"account": "ACC-001"},
+                "agent_id": "agent:svc",
+            },
+        ).json()
+        assert free["decision"] == "allow", free
+        assert "session_binding_required" not in free["reason"]
+        # the fail-closed leg of the malformed config is unchanged
+        sessioned = client.post(
+            "/gate",
+            json={
+                "tool": "lookup_balance",
+                "args": {"account": "ACC-001"},
+                "agent_id": "agent:svc",
+                "session_id": "run-1",
+            },
+        ).json()
+        assert sessioned["decision"] == "deny", sessioned
+        assert "session rule config malformed" in sessioned["reason"]
+
+
 class TestReceiptIndexV3:
     def test_schema_version_is_three(self):
         assert ReceiptIndex.SCHEMA_VERSION == 3

@@ -1,4 +1,47 @@
-FROM python:3.12-slim
+# Raucle Gateway image (multi-stage, locked runtime install).
+#
+# Build:  docker compose -f docker-compose.gateway.yml build raucle-gateway
+#
+# Pinned bases (Q9 review item 2): the floating tags python:3.12-slim and
+# caddy:2-alpine resolve to different bytes over time; the digest pin below
+# makes the build inputs immovable. The pins are the linux/amd64 manifest
+# digests on docker.io, recorded at pin time on 24 Nov 2026 via
+# `docker buildx imagetools inspect`:
+#   - python:3.12-slim resolved to python 3.12.16-slim-trixie
+#   - caddy:2-alpine (runtime side, pinned in docker-compose.gateway.yml)
+#     resolved to caddy v2.11.9-alpine
+FROM python:3.12-slim@sha256:4a68d3169325c47e1bafbb86425220f03fbdff6f079a419e8d39407183288217 AS builder
+
+WORKDIR /app
+
+# uv pinned to an exact release, itself digest-pinned (ghcr manifest, amd64).
+COPY --from=ghcr.io/astral-sh/uv:0.13.9@sha256:49fe3c925d4b7a84ba2ef19883307bba2bbcf929a22040afb46f2dd092d13aeb /uv /usr/local/bin/uv
+
+# Build inputs. The lock file drives resolution: `uv sync --locked` refuses
+# the build when pyproject.toml has drifted from uv.lock (Q9 review item 1).
+COPY pyproject.toml uv.lock README.md ./
+COPY raucle/ raucle/
+COPY raucle_detect/ raucle_detect/
+
+# Lock resolution, no dev tooling, non-editable project install:
+#   --locked -> dependency versions come EXACTLY from uv.lock (drift fails)
+#   --no-dev -> pytest/ruff/mypy and the language-integration extras stay
+#               OUT of the runtime image (the old image installed
+#               ".[dev,compliance,rules,server]" EDITABLE, shipping dev
+#               tooling plus langchain/proof/openai-agents in production)
+#   --no-editable -> the project installs as a wheel, never as a source path
+# Runtime extras only: compliance (signing/verification), rules (policy
+# YAML), server (FastAPI/uvicorn/slowapi surface).
+ENV UV_PYTHON_PREFERENCE=only-system \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_NO_CACHE=1 \
+    UV_COMPILE_BYTECODE=1
+RUN uv sync --locked --no-dev --no-editable \
+      --extra compliance --extra rules --extra server
+
+# Runtime stage: same digest-pinned base as the builder, so the copied venv
+# targets the interpreter it was built against.
+FROM python:3.12-slim@sha256:4a68d3169325c47e1bafbb86425220f03fbdff6f079a419e8d39407183288217
 
 LABEL org.opencontainers.image.title="Raucle Gateway"
 LABEL org.opencontainers.image.description="Enterprise AI agent governance gateway"
@@ -12,13 +55,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy project files
-COPY pyproject.toml README.md ./
-COPY raucle/ raucle/
-COPY scripts/ scripts/
+# Runtime layer: the locked venv from the builder plus the demo-agent
+# scripts (not part of the wheel). The raucle source tree is deliberately
+# NOT copied: the package is installed non-editable into /opt/venv.
+COPY --from=builder /opt/venv /opt/venv
+COPY scripts/ /app/scripts/
 
-# Install raucle with gateway extras
-RUN pip install --no-cache-dir -e ".[dev,compliance,rules,server]"
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Create data directories and non-root user
 RUN mkdir -p /data /etc/raucle && \
@@ -32,7 +75,9 @@ ENV RAUCLE_GATEWAY_HOST=0.0.0.0
 ENV RAUCLE_GATEWAY_PORT=8080
 ENV RAUCLE_ADMIN_PORT=8081
 ENV RAUCLE_ADMIN_KEY=
-# ADMIN KEY MUST be set at runtime via -e RAUCLE_ADMIN_KEY=your-key
+# ADMIN KEY MUST be set at runtime via -e RAUCLE_ADMIN_KEY=your-key: the
+# gateway REFUSES to boot in serving mode without one (compose and Helm
+# enforce it too; a keyless serving boot exits 1 before binding).
 ENV RAUCLE_SIGNER=local
 ENV RAUCLE_POLICY_FILE=/etc/raucle/policies.yaml
 ENV RAUCLE_RECEIPT_STORE=/data/receipts.jsonl
@@ -41,7 +86,12 @@ ENV RAUCLE_COMPLIANCE_FRAMEWORK=eu-ai-act
 
 EXPOSE 8080 8081
 
+# Q9 review item 4: the healthcheck polls the PUBLIC /livez route on the
+# agent-facing port, not the admin port. /livez serves no aggregates and
+# needs no token, so the check survives RAUCLE_HEALTH_KEY being set
+# (which would 401 the old /health poll) and does not depend on the admin
+# plane being reachable.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:8081/health || exit 1
+    CMD curl -f http://localhost:8080/livez || exit 1
 
 CMD ["python", "-m", "raucle.gateway_server"]

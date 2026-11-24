@@ -104,15 +104,25 @@ class TestTraceQuarantine:
         assert quarantined["status"] == "quarantined"
         assert quarantined["receipt_id"]
 
+        # the presenting identity is refused on the quarantined trace (and
+        # its identity-level binding accrues from that refusal); a
+        # THROWAWAY presenting identity is used so the policy-covered
+        # agent:svc stays unbound for the fresh-trace assertion below
         denied = gw.check_tool_call(
-            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc", trace_id="t-incident"
+            "lookup_balance",
+            {"account": "ACC-001"},
+            agent_id="agent:incident-worker",
+            trace_id="t-incident",
         )
         assert denied["decision"] == "deny"
         assert "quarantined" in denied["reason"]
         # quarantine fires BEFORE constraint evaluation / policy lookup
         assert "quarantined" in denied["reason"]
 
-        # another trace on the same agent is untouched
+        # another agent's fresh trace is untouched: the identity binding
+        # the refusal accrued belongs to the presenting agent only (the
+        # SAME agent re-rolling its trace id is identity-refused now, which
+        # is the Q17 close-2 contract pinned in TestAgentIdentityQuarantine)
         ok = gw.check_tool_call(
             "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc", trace_id="t-other"
         )
@@ -254,6 +264,160 @@ class TestTraceQuarantine:
             mgr.quarantine_trace("t-1")
         with pytest.raises(ContainmentError, match="lease_suspensions_file is not configured"):
             mgr.suspend_lease("agent:svc")
+
+
+class TestAgentIdentityQuarantine:
+    """Q17 gate hardening (phase-3 review close 2): quarantine binds to the
+    agent identity as well as the trace, so a quarantined agent cannot walk
+    past the containment by re-rolling its X-Trace-Id.
+
+    Semantics pinned here:
+    - trace-level state stays keyed by trace_id and is shared by whoever
+      presents it: ANY caller presenting a quarantined trace is refused;
+    - when a quarantined-trace refusal names an agent identity, that
+      identity accrues an identity-level quarantine bound to the refusal's
+      trace; fresh trace IDs from that identity are refused until every
+      binding trace is released;
+    - the identity-level state is a per-process enforcement layer over the
+      durable trace registry: the registry file remains the durable
+      control, and lifting follows the release of the binding trace.
+    """
+
+    def test_rerolled_trace_id_is_refused_named(self, tmp_path, gw):
+        """(a) The exploit close: quarantine a trace; the same agent on a
+        DIFFERENT (fresh) trace ID is refused with the named identity
+        quarantine reason."""
+        cfg = _config(tmp_path)
+        mgr = ContainmentManager(cfg)
+        mgr.quarantine_trace("t-incident", reason="prompt injection")
+
+        denied = gw.check_tool_call(
+            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc", trace_id="t-incident"
+        )
+        assert denied["decision"] == "deny"
+        assert "quarantined" in denied["reason"]
+
+        rerolled = gw.check_tool_call(
+            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc", trace_id="t-fresh"
+        )
+        assert rerolled["decision"] == "deny"
+        assert "quarantine" in rerolled["reason"]
+        assert "no policy configured" not in rerolled["reason"]
+
+    def test_rerolled_trace_id_refused_through_the_http_handler(self, tmp_path, gw):
+        """(a) handler surface: X-Trace-Id re-rolls no longer walk past
+        quarantine through POST /gate either. The identity the handler
+        resolves (the declared one with gate auth off, as the off-mode
+        banner names) is what the binding accrues against."""
+        from fastapi.testclient import TestClient
+
+        from raucle.gateway_app import create_gateway_app
+
+        mgr = ContainmentManager(_config(tmp_path))
+        mgr.quarantine_trace("t-http", reason="prompt injection")
+        client = TestClient(create_gateway_app(gw))
+        payload = {
+            "tool": "lookup_balance",
+            "args": {"account": "ACC-001"},
+            "agent_id": "agent:svc",
+        }
+
+        first = client.post("/gate", json=payload, headers={"X-Trace-Id": "t-http"})
+        assert first.json()["decision"] == "deny"
+
+        second = client.post("/gate", json=payload, headers={"X-Trace-Id": "t-uuid-re-roll"})
+        body = second.json()
+        assert body["decision"] == "deny"
+        assert "quarantine" in body["reason"].lower()
+
+    def test_shared_trace_state_refuses_any_presenter(self, tmp_path, gw):
+        """(b) Trace-level quarantine is shared by whoever presents the
+        trace ID: a different agent presenting the quarantined trace is
+        refused too, by the trace-quarantine reason (and its presentation
+        binds that identity for its own later traces)."""
+        mgr = ContainmentManager(_config(tmp_path))
+        mgr.quarantine_trace("t-incident")
+
+        denied = gw.check_tool_call(
+            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:other", trace_id="t-incident"
+        )
+        assert denied["decision"] == "deny"
+        assert "quarantined" in denied["reason"]
+
+    def test_clean_agent_not_under_quarantine_is_unaffected(self, tmp_path, gw):
+        """(c) An agent never observed presenting quarantined-trace work
+        keeps working: the identity binding only forms through
+        quarantined-trace refusals. (The agent identity is policy-covered
+        here; only no quarantine ever binds it.)"""
+        mgr = ContainmentManager(_config(tmp_path))
+        mgr.quarantine_trace("t-incident")
+
+        untouched = gw.check_tool_call(
+            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc", trace_id="t-clean"
+        )
+        assert untouched["decision"] == "allow"
+        still_ok = gw.check_tool_call(
+            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc", trace_id="t-clean-2"
+        )
+        assert still_ok["decision"] == "allow"
+
+    def test_release_lifts_trace_and_identity_binding(self, tmp_path, gw):
+        """(d) Lift behaviour unchanged for the trace, and the identity
+        state lifts with it: releasing the binding trace drops the last
+        binding, and the agent is no longer identity-quarantined."""
+        mgr = ContainmentManager(_config(tmp_path))
+        mgr.quarantine_trace("t-incident", reason="drill")
+
+        # bind: the refusal on the quarantined trace accrues the identity
+        first = gw.check_tool_call(
+            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc", trace_id="t-incident"
+        )
+        assert first["decision"] == "deny"
+        assert "quarantined" in first["reason"]
+
+        # the bound identity is refused on a fresh trace while bound
+        rerolled = gw.check_tool_call(
+            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc", trace_id="t-fresh"
+        )
+        assert rerolled["decision"] == "deny"
+        assert "quarantine" in rerolled["reason"]
+
+        released = mgr.release_trace("t-incident")
+        assert released["status"] == "released"
+
+        # the trace itself resumes exactly as before the close
+        resumed = gw.check_tool_call(
+            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc", trace_id="t-incident"
+        )
+        assert resumed["decision"] == "allow"
+
+        # and the identity lifted with the release of its binding trace
+        after_lift = gw.check_tool_call(
+            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc", trace_id="t-fresh-2"
+        )
+        assert after_lift["decision"] == "allow"
+
+    def test_receipt_failure_rolls_quarantine_back_leaves_no_binding(
+        self, tmp_path, gw, monkeypatch
+    ):
+        """A rolled-back quarantine (receipt emission failed) never bound
+        the agent either: the gate keeps allowing afterwards."""
+        cfg = _config(tmp_path)
+        mgr = ContainmentManager(cfg)
+
+        def boom(*a, **k):
+            raise OSError("receipt stream unavailable")
+
+        monkeypatch.setattr(ContainmentManager, "_emit_receipt", boom)
+        with pytest.raises(ContainmentError, match="receipt emission failed"):
+            mgr.quarantine_trace("t-incident")
+        gw.check_tool_call(
+            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc", trace_id="t-incident"
+        )
+        ok = gw.check_tool_call(
+            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc", trace_id="t-later"
+        )
+        assert ok["decision"] == "allow"
 
 
 class TestLeaseSuspension:

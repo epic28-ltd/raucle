@@ -122,6 +122,7 @@ dev = [
     "pytest-cov>=4.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
+    "mypy>=2.4",
 ]
 all = ["raucle[rules,ml,server,compliance,timestamp,multimodal,proof]"]
 
@@ -158,3 +159,11 @@ testpaths = ["tests"]
 # Decorate-only: tests that need the async loop must use @pytest.mark.asyncio
 # explicitly. (Switch to ``auto`` later if every async test is the same shape.)
 asyncio_mode = "strict"
+
+[tool.mypy]
+# Q9 (external v0.23.7 review): type checking introduced as a baseline gate,
+# minimal config. The whole package is NOT yet clean; CI runs the
+# currently-clean module allowlist (tools/mypy-clean-modules.txt) so NEW
+# errors in those modules fail the build. raucle package only, day one.
+python_version = "3.12"
+ignore_missing_imports = true
