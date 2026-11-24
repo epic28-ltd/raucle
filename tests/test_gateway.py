@@ -107,6 +107,25 @@ class TestGatewayConfig:
         assert config.admin_port == 9998
         assert config.admin_api_key == "secret"
 
+    def test_from_env_enforcement_mode_flags(self, monkeypatch):
+        """Q11 D/F/E: the strict and advisory audit modes wire from env
+        (set env var, assert the field) - a config change has four parts
+        and the loader is one of them. RAUCLE_DELEGATIONS_FILE rides here
+        too: it was documented in prod.env.example but was never loaded."""
+        monkeypatch.setenv("RAUCLE_REQUIRE_SIGNED_AUDIT", "true")
+        monkeypatch.setenv("RAUCLE_REQUIRE_ANCESTRY_RESOLVER", "yes")
+        monkeypatch.setenv("RAUCLE_DELEGATIONS_FILE", "/data/delegations.jsonl")
+        config = GatewayConfig.from_env()
+        assert config.require_signed_audit is True
+        assert config.require_ancestry_resolver is True
+        assert config.delegations_file == "/data/delegations.jsonl"
+
+        monkeypatch.setenv("RAUCLE_REQUIRE_SIGNED_AUDIT", "")
+        monkeypatch.setenv("RAUCLE_REQUIRE_ANCESTRY_RESOLVER", "0")
+        config = GatewayConfig.from_env()
+        assert config.require_signed_audit is False
+        assert config.require_ancestry_resolver is False
+
     def test_defaults(self):
         config = GatewayConfig()
         assert config.port == 8080

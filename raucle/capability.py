@@ -92,6 +92,11 @@ logger = logging.getLogger(__name__)
 # Canonicalisation + crypto helpers (mirrors feed.py / provenance.py)
 # ---------------------------------------------------------------------------
 
+#: Q11 E: the named production strict ancestry mode (opt-in env flag). When
+#: set, a token that cites a parent refuses by name unless a parent_resolver
+#: is configured to verify the delegation chain.
+ENV_REQUIRE_ANCESTRY_RESOLVER = "RAUCLE_REQUIRE_ANCESTRY_RESOLVER"
+
 #: JS safe-integer range — values outside this are not exactly representable
 #: in all five reference implementations (parity with provenance.py).
 _MAX_SAFE_INT = 2**53 - 1
@@ -1621,6 +1626,14 @@ class CapabilityGate:
         cannot verify the chain, so it does not trust that the issuer minted it
         correctly. Supply a resolver to use attenuated/derived tokens. Root
         tokens (no ``parent_id``) are unaffected.
+    require_ancestry_resolver
+        Q11 E: the named production strict mode (env
+        ``RAUCLE_REQUIRE_ANCESTRY_RESOLVER``). When set, a token that cites a
+        parent is denied BY NAME when no ``parent_resolver`` is configured,
+        stating the strict mode the deployment promised: delegation-affected
+        calls refuse until an ancestry resolver is wired. Unset (the
+        development affordance) keeps the established no-resolver deny
+        unchanged. Root tokens (no ``parent_id``) are unaffected either way.
     """
 
     def __init__(
@@ -1628,6 +1641,7 @@ class CapabilityGate:
         *,
         trusted_issuers: dict[str, str],
         parent_resolver: Any = None,
+        require_ancestry_resolver: bool = False,
         proof_enforcement_mode: str = "off",
         trusted_proofs: dict[str, ProofResult] | None = None,
         revoked_token_ids: set[str] | None = None,
@@ -1677,6 +1691,7 @@ class CapabilityGate:
             )
         self._issuers = dict(trusted_issuers)
         self._resolver = parent_resolver
+        self._require_ancestry_resolver = bool(require_ancestry_resolver)
         self._proof_mode = proof_enforcement_mode
         self._trusted_proofs: dict[str, ProofResult] = dict(trusted_proofs or {})
         self._revoked: set[str] = set(revoked_token_ids or ())
@@ -1927,6 +1942,19 @@ class CapabilityGate:
         if token.parent_id is None:
             return chain, None
         if self._resolver is None:
+            if self._require_ancestry_resolver:
+                # Q11 E: the strict mode the deployment promised refuses
+                # delegation-affected calls by name until an ancestry
+                # resolver is wired (the root token is not
+                # delegation-affected and stays servable).
+                return chain, GateDecision(
+                    False,
+                    f"strict ancestry mode ({ENV_REQUIRE_ANCESTRY_RESOLVER}=1): "
+                    f"token cites parent {token.parent_id!r} but no parent_resolver "
+                    f"is configured; delegation depth beyond one level is served "
+                    f"only with an ancestry resolver wired (deny)",
+                    token.token_id,
+                )
             return chain, GateDecision(
                 False,
                 f"token cites parent {token.parent_id!r} but no parent_resolver "
