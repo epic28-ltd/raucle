@@ -46,12 +46,15 @@ Checkpoints (every ``checkpoint_every`` events, plus on close) are written as::
 from __future__ import annotations
 
 import base64
+import contextlib
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import logging
 import os
 import threading
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
@@ -69,6 +72,24 @@ DEFAULT_SCAN_WINDOW_BYTES = 64 * 1024 * 1024
 #: The operator path every tail refusal names (mirrors chain_rotation,
 #: kept literal here so audit never imports the rotation module).
 _ROTATE_COMMAND = "raucle rotate-chain"
+
+# Multi-process append safety (Q11 D) and production strict mode (Q11 F).
+#: Advisory single-writer mode: the operator promises exactly one writer
+#: to the chain file. Setting this gates a boot-time exclusive flock; a
+#: second writer refuses to boot by name instead of running without the
+#: promised property (the receipts sidecar is the single-writer precedent).
+ENV_AUDIT_SINGLE_WRITER = "RAUCLE_AUDIT_SINGLE_WRITER"
+#: Production strict signed mode: refuse to boot an audit chain with no
+#: signer instead of warning and running unsigned.
+ENV_AUDIT_REQUIRE_SIGNED = "RAUCLE_REQUIRE_SIGNED_AUDIT"
+
+#: The initial bounded window the per-append head refresh reads. Grows
+#: like the boot-time resume when the window holds no complete record.
+_REFRESH_WINDOW_BYTES = 64 * 1024
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +385,8 @@ class HashChainSink:
         checkpoint_every: int = 1000,
         *,
         scan_window_bytes: int | None = None,
+        single_writer: bool = False,
+        require_signed: bool = False,
     ) -> None:
         self._signer = signer
         self._checkpoint_every = checkpoint_every
@@ -377,6 +400,29 @@ class HashChainSink:
         self._next_index = 0
         self._prev_hash = self._GENESIS_HASH
         self._is_new_chain = False
+        # Q11 D: records appended by THIS sink instance. The chain head
+        # (_next_index) is adopted from disk under the append lock, so in
+        # a multi-writer deployment it holds the shared head, not what
+        # this sink wrote; event_count counts this sink's own appends.
+        self._local_appends = 0
+        # Q11 D/F: the named status/refusal channel and the single-writer
+        # and strict-signed boot gates.
+        self._single_writer = bool(single_writer)
+        self._holds_boot_lock = False
+        self._path: Path | None = None
+        self._advisories: deque[dict[str, Any]] = deque(maxlen=64)
+        self._torn_tail: dict[str, Any] | None = None
+        # F: the strict signed mode refuses an unattributed chain BEFORE
+        # any byte lands (explicitly-configured-but-broken = refuse).
+        if require_signed and signer is None:
+            from raucle.errors import ConfigurationError
+
+            raise ConfigurationError(
+                f"audit strict signed mode ({ENV_AUDIT_REQUIRE_SIGNED}=1): no signer "
+                f"is configured; refusing to boot an unsigned audit chain at "
+                f"'{path}'. Supply a signer (RAUCLE_AUDIT_PRIVATE_KEY_PEM) or "
+                f"unset the strict flag."
+            )
 
         if hasattr(path, "write"):
             self._file: IO[str] = path  # type: ignore[assignment]
@@ -387,17 +433,44 @@ class HashChainSink:
             self._frontier = MerkleFrontier()
         else:
             path = Path(path)
-            self._is_new_chain = not path.exists()
+            self._path = path
             self._frontier_path = Path(str(path) + ".frontier.json")
-            if path.exists():
-                # Resume an existing chain through the bounded tail read.
-                self._resume(path)
-            else:
-                # A fresh chain starts with an empty frontier; the
-                # sidecar persists beside the genesis header.
-                self._frontier = MerkleFrontier()
             self._file = open(path, "a", encoding="utf-8")  # noqa: SIM115 — held for sink lifetime
             self._owns_file = True
+            # Q11 D: the CONSTRUCTION itself chains through the file lock,
+            # so two processes creating or resuming the same chain cannot
+            # interleave their genesis decision or tail read. In the
+            # single-writer mode this exclusive lock is kept for the
+            # sink's lifetime (the promised property); otherwise it is
+            # released when construction completes.
+            lock_flags = fcntl.LOCK_EX | (fcntl.LOCK_NB if self._single_writer else 0)
+            try:
+                fcntl.flock(self._file.fileno(), lock_flags)
+            except BlockingIOError as exc:
+                self._file.close()
+                from raucle.errors import ConfigurationError
+
+                raise ConfigurationError(
+                    f"audit single-writer mode ({ENV_AUDIT_SINGLE_WRITER}=1): another "
+                    f"writer holds '{path}' (flock); this deployment promises a "
+                    f"single writer to the chain, so refusing to boot a second "
+                    f"writer instead of forking it"
+                ) from exc
+            self._holds_boot_lock = bool(self._single_writer)
+            try:
+                self._is_new_chain = path.stat().st_size == 0
+                if self._is_new_chain:
+                    self._frontier = MerkleFrontier()
+                    self._write_chain_header_unsafe()
+                    self._persist_frontier_unsafe()
+                else:
+                    # Resume an existing chain through the bounded tail
+                    # read, under the file lock (the resume itself adopts
+                    # the frontier sidecar).
+                    self._resume(path)
+            finally:
+                if not self._holds_boot_lock:
+                    fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
 
         # Loud warning when running without a signer: hash-chain is
         # still tamper-evident, but the chain has no cryptographic
@@ -409,13 +482,6 @@ class HashChainSink:
                 "but unattributed. Supply a signer or set "
                 "RAUCLE_AUDIT_PRIVATE_KEY_PEM for cryptographic provenance."
             )
-
-        # Newly-created chains MUST have a chain_meta header. It is the
-        # only record that self-describes the chain's signed-mode and
-        # key_id. Verifiers refuse to attribute signed-mode otherwise.
-        if self._is_new_chain:
-            self._write_chain_header_unsafe()
-            self._persist_frontier_unsafe()
 
     def _write_chain_header_unsafe(self) -> None:
         """Emit the genesis ``chain_meta`` header. Called from ``__init__``
@@ -616,39 +682,236 @@ class HashChainSink:
     # Public API
     # ------------------------------------------------------------------
 
+    def status(self) -> dict[str, Any]:
+        """The sink's named status/refusal channel (Q11 D/F).
+
+        Signing state, the current head and the bounded advisory log
+        (torn tails, adopted heads, degraded checkpoints). Boot and
+        health surfaces read this instead of parsing logs, so a degraded
+        condition is queryable and never a silent skip.
+        """
+        with self._lock:
+            return {
+                "signed": self._signer is not None,
+                "key_id": self._signer.key_id() if self._signer is not None else None,
+                "head_index": self._next_index,
+                "appended": self._local_appends,
+                "tail_hash": self._prev_hash,
+                "path": str(self._path) if self._path is not None else None,
+                "single_writer": self._single_writer,
+                "torn_tail": dict(self._torn_tail) if self._torn_tail is not None else None,
+                "advisories": list(self._advisories),
+            }
+
+    def _record_advisory_locked(self, kind: str, detail: str, **fields: Any) -> None:
+        """Append one named advisory entry (bounded, in-memory)."""
+        entry: dict[str, Any] = {"kind": kind, "detail": detail}
+        entry.update(fields)
+        self._advisories.append(entry)
+
+    def _refresh_head_locked(self) -> None:
+        """Recompute the append head from DISK under the append lock (Q11 D).
+
+        A writer that slept while another process wrote adopts the true
+        chain tail instead of forking it. The last COMPLETE record is the
+        truth: a torn tail (a writer killed mid-append) is named on the
+        status channel with its coordinates and the chain continues from
+        the last complete record. The torn line is never silently
+        skipped: the next verify reports the invalid line, and a fresh
+        sink construction on the same file refuses with the same named
+        coordinates (chain_tail_malformed). Adopting a foreign head
+        releases the Merkle frontier: this writer's leaf set no longer
+        covers the chain, so checkpoint anchoring degrades by name until
+        the background scan rebuilds the frontier.
+        """
+        if self._path is None or self._file.closed:
+            return
+        path = self._path
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return
+        window = _REFRESH_WINDOW_BYTES
+        while True:
+            start, entries = read_last_lines(path, window)
+            kept = entries[1:] if start > 0 else entries
+            adopted, defects = self._refresh_tail_scan(path, start, kept, start > 0)
+            if adopted is not None:
+                break
+            if start == 0:
+                # No complete event record in the whole file: a
+                # metadata-only or freshly-created chain; the in-memory
+                # genesis head stands.
+                return
+            window = min(size, window * 2)
+        self._name_torn_tail(defects)
+        tail_hash, next_index = adopted
+        if tail_hash == self._prev_hash and next_index == self._next_index:
+            return
+        prior_index = self._next_index
+        self._prev_hash = tail_hash
+        self._next_index = next_index
+        detail = (
+            "HashChainSink append head adopted from disk at index "
+            f"{next_index} (in-memory head was {prior_index}) on {path}; the "
+            "Merkle frontier is released and checkpoint anchoring degrades by "
+            "name until the background scan rebuilds the frontier"
+        )
+        self._record_advisory_locked(
+            "head_adopted_from_disk",
+            detail,
+            file=str(path),
+            disk_index=next_index,
+            memory_index=prior_index,
+        )
+        self._frontier = None
+        logger.warning(detail)
+
+    def _name_torn_tail(self, defects: list[dict[str, Any]]) -> None:
+        """Name each distinct torn line once per sink instance."""
+        for defect in defects:
+            if self._torn_tail is not None and self._torn_tail.get("offset") == defect.get(
+                "offset"
+            ):
+                continue
+            log_detail = defect["detail"]
+            self._torn_tail = dict(defect)
+            self._record_advisory_locked(
+                defect["kind"],
+                log_detail,
+                file=defect.get("file"),
+                line=defect.get("line"),
+                offset=defect.get("offset"),
+            )
+            logger.warning(log_detail)
+
+    def _refresh_tail_scan(
+        self,
+        path: Path,
+        start: int,
+        entries: list[tuple[int, str, bool]],
+        first_discarded: bool,
+    ) -> tuple[tuple[str, int] | None, list[dict[str, Any]]]:
+        """Tolerant tail scan for the append-time head refresh.
+
+        Returns ``((tail hash, next index) | None, named defects)``. Unlike
+        the boot-time ``_tail_from_window`` (fail-closed, pinned), the
+        refresh must keep a running writer working after a crashed peer's
+        torn write: it names the defective lines and chains onto the last
+        complete event record.
+        """
+        defects: list[dict[str, Any]] = []
+        prefix_lines: int | None = None
+        tail_hash: str | None = None
+        next_index = 0
+        for pos, (offset, text, terminated) in enumerate(entries):
+            local_line = pos + 2 if first_discarded else pos + 1
+            if not terminated:
+                if prefix_lines is None:
+                    prefix_lines = count_lines(path, upto_bytes=start)
+                defects.append(
+                    {
+                        "kind": "torn_tail",
+                        "detail": (
+                            f"chain_tail_malformed: torn tail line (file {path}, line "
+                            f"{prefix_lines + local_line}, offset {offset}); the append "
+                            f"head refresh chains onto the last complete record and "
+                            f"names the torn write"
+                        ),
+                        "file": str(path),
+                        "line": prefix_lines + local_line,
+                        "offset": offset,
+                    }
+                )
+                continue
+            if not text.strip():
+                continue
+            try:
+                rec = _loads_strict(text)
+            except (json.JSONDecodeError, ValueError) as exc:
+                if prefix_lines is None:
+                    prefix_lines = count_lines(path, upto_bytes=start)
+                defects.append(
+                    {
+                        "kind": "torn_tail",
+                        "detail": (
+                            f"chain_tail_malformed: unparsable line (file {path}, line "
+                            f"{prefix_lines + local_line}, offset {offset}): {exc}. The "
+                            f"append head refresh chains onto the last complete record "
+                            f"and names this line; it is never silently skipped"
+                        ),
+                        "file": str(path),
+                        "line": prefix_lines + local_line,
+                        "offset": offset,
+                    }
+                )
+                continue
+            if rec.get("checkpoint") or rec.get("chain_meta"):
+                continue
+            rec_hash = rec.get("hash", "")
+            rec_index = rec.get("index", -1)
+            if not isinstance(rec_index, int) or rec_index < 0 or not rec_hash:
+                continue
+            tail_hash = rec_hash
+            next_index = rec_index + 1
+        return (None if tail_hash is None else (tail_hash, next_index)), defects
+
     def append(self, event: dict[str, Any]) -> dict[str, Any]:
         """Append a single event to the chain.
 
         Returns the full record (with ``index``, ``prev_hash``, ``hash``,
         ``timestamp``) so callers can use it as a receipt.
+
+        Q11 D: the append critical section is guarded by the in-process
+        threading lock AND an inter-process flock on the chain file, and
+        the head (next index, previous hash) is refreshed from DISK under
+        that lock before writing, so a writer that slept while another
+        process wrote resumes the true chain instead of forking it.
         """
         with self._lock:
-            record = {
-                "index": self._next_index,
-                "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
-                "prev_hash": self._prev_hash,
-                "event": event,
-            }
-            record_hash = _sha256_hex(_canonical_json(record))
-            record["hash"] = record_hash
+            holds_flock = False
+            if self._owns_file and not self._holds_boot_lock:
+                # Q11 D: the inter-process leg. The boot lock already
+                # holds LOCK_EX for the sink's lifetime in single-writer
+                # mode; otherwise each append takes and releases it. The
+                # head refresh runs INSIDE this flock: the refresh and
+                # the write are one critical section, so a writer that
+                # slept while another process wrote resumes the true
+                # chain instead of forking it.
+                fcntl.flock(self._file.fileno(), fcntl.LOCK_EX)
+                holds_flock = True
+            try:
+                self._refresh_head_locked()
+                record = {
+                    "index": self._next_index,
+                    "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "prev_hash": self._prev_hash,
+                    "event": event,
+                }
+                record_hash = _sha256_hex(_canonical_json(record))
+                record["hash"] = record_hash
 
-            self._file.write(json.dumps(record, ensure_ascii=False) + "\n")
-            self._file.flush()
+                self._file.write(json.dumps(record, ensure_ascii=False) + "\n")
+                self._file.flush()
 
-            if self._frontier is not None:
-                self._frontier.add(record_hash)
-                self._persist_frontier_unsafe()
-            self._prev_hash = record_hash
-            self._next_index += 1
+                if self._frontier is not None:
+                    self._frontier.add(record_hash)
+                    self._persist_frontier_unsafe()
+                self._prev_hash = record_hash
+                self._next_index += 1
 
-            if (
-                self._signer
-                and self._checkpoint_every > 0
-                and self._next_index % self._checkpoint_every == 0
-            ):
-                self._emit_checkpoint_locked()
+                if (
+                    self._signer
+                    and self._checkpoint_every > 0
+                    and self._next_index % self._checkpoint_every == 0
+                ):
+                    self._emit_checkpoint_locked()
 
-            return record
+                self._local_appends += 1
+                return record
+            finally:
+                if holds_flock:
+                    fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
 
     def emit_checkpoint(self) -> dict[str, Any] | None:
         """Force-write a checkpoint now.  Returns the checkpoint record (or None
@@ -661,6 +924,10 @@ class HashChainSink:
         with self._lock:
             if self._signer:
                 self._emit_checkpoint_locked()
+            if self._holds_boot_lock:
+                with contextlib.suppress(OSError):
+                    fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
+                self._holds_boot_lock = False
             if self._owns_file:
                 self._file.close()
 
@@ -672,6 +939,19 @@ class HashChainSink:
 
     @property
     def event_count(self) -> int:
+        """Records appended by THIS sink instance (Q11 D).
+
+        Each append re-reads the chain head from disk under the append
+        lock, so ``head_index`` follows the shared chain while this
+        property counts only what this sink wrote. Before Q11 both read
+        ``_next_index``, which equalled the local count only for a sole
+        writer.
+        """
+        return self._local_appends
+
+    @property
+    def head_index(self) -> int:
+        """The chain head this sink last adopted or wrote (the next index)."""
         return self._next_index
 
     @property
@@ -688,10 +968,18 @@ class HashChainSink:
         if self._frontier is None:
             # Degraded anchoring is named, never silent (spec 3.3): no
             # checkpoint is emitted over a missing or stale frontier, and
-            # the background scan rebuilds it.
-            logger.warning(
+            # the background scan rebuilds it. Q11 F: the skip also lands
+            # on the sink's named status/refusal channel so boot and
+            # health surfaces can query it, not only a log line.
+            detail = (
                 "HashChainSink checkpoint skipped: no Merkle frontier "
                 "(degraded anchoring); the background scan rebuilds it"
+            )
+            logger.warning("%s", detail)
+            self._record_advisory_locked(
+                "checkpoint_skipped",
+                detail,
+                file=str(self._path) if self._path is not None else None,
             )
             return None
 
@@ -1107,17 +1395,18 @@ class AuditVerifier:
             report.valid = False
             return
         if not self._public_key:
-            # We cannot verify a signed chain without a public key, so we
-            # must not report it as valid: a consumer trusting
-            # (valid=True, signed_mode="signed") would be deceived by a
-            # fully forged chain (round-3 #9). Fail closed and stop
-            # claiming the chain is "signed" — it is unverifiable here.
+            # Without a key the hash chain and every checkpoint's Merkle
+            # binding still verify (the checkpoint path has always
+            # reported the hash match without a key rather than
+            # refusing), so tamper evidence stays a valid verdict here.
+            # What cannot be checked is attribution, so the signed mode
+            # downgrades to "unverifiable" instead of claiming "signed":
+            # a consumer trusting valid=True must read signed_mode with
+            # it, and a verifier constructed WITH a public key still
+            # refuses anything not signed_mode == "signed" (round-3 #9's
+            # deception shape holds only for a signed_mode claim, and it
+            # makes none here).
             report.signed_mode = "unverifiable"
-            report.errors.append(
-                f"line {line_no}: chain_meta declares signed=true but no public key "
-                f"was supplied — cannot verify; chain is not trusted"
-            )
-            report.valid = False
             return
         body = {k: v for k, v in rec.items() if k not in ("signature", "pq_key_id", "pq_signature")}
         try:
@@ -1322,7 +1611,12 @@ def sink_from_env() -> HashChainSink | None:
             raise ConfigurationError(
                 f"audit signer (env {ENV_AUDIT_KEY}) failed to load: {exc}"
             ) from exc
-    sink = HashChainSink(path, signer=signer)
+    sink = HashChainSink(
+        path,
+        signer=signer,
+        single_writer=_env_flag(ENV_AUDIT_SINGLE_WRITER),
+        require_signed=_env_flag(ENV_AUDIT_REQUIRE_SIGNED),
+    )
     # S5 chaos: wrap the audit sink for named misorder fault injection
     # (default-off; from_env refuses outside DEV builds).
     from raucle.chaos import ChaosAuditSink, ChaosFaultController
