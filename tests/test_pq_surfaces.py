@@ -54,8 +54,9 @@ def pq_keys():
 class TestAuditHybridCheckpoints:
     def test_hybrid_chain_verifies(self, hybrid_signer):
         # The verifier's PQ key must be the SIGNER's key (the fixtures are
-        # independent keypairs), resolved from the signer itself.
-        pq_pub = hybrid_signer._pq_private.public_key()
+        # independent keypairs), resolved from the signer itself via the
+        # named accessor (never the private _pq_private attribute).
+        pq_pub = hybrid_signer.pq_public_key()
         pq_kid = hybrid_signer.pq_key_id()
         chain = _fresh_path()
         sink = HashChainSink(chain, signer=hybrid_signer, checkpoint_every=2)

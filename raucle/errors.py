@@ -62,6 +62,24 @@ class BootMemoryCeilingExceeded(Exception):
     """
 
 
+class AdminKeyMissingError(Exception):
+    """A gateway SERVING boot refused: no admin key is configured.
+
+    Raised by ``raucle.gateway_server.main`` (the container entry point,
+    ``python -m raucle.gateway_server``) when ``RAUCLE_ADMIN_KEY`` /
+    ``RAUCLE_ADMIN_KEY_FILE`` provide no key, BEFORE any server binds.
+    The admin panel behind a keyless serving boot is a login page that
+    accepts no credentials, so the serving boot refuses with this named
+    error and the operator's escape route in the message (the same
+    print-and-exit shape as :class:`BootMemoryCeilingExceeded`).
+
+    Scope discipline (external v0.23.7 review): only the SERVING entry
+    point refuses. Library use, ``raucle serve`` (the standalone detector
+    server) and tests construct gateways without an admin key and keep
+    working unchanged.
+    """
+
+
 class RotationRefusedError(Exception):
     """A chain rotation refused before touching anything.
 

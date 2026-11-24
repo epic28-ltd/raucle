@@ -86,6 +86,8 @@ Every hash above is real except the `...` width trims; the second record's `prev
 
 **Deploy for real:** [`docs/getting-started/20-production-hardening.md`](docs/getting-started/20-production-hardening.md) — the 90-minute path: agent authentication, signed receipts with segmented storage, the restart test, offline verification, query + ancestry, and the security checklist. Architecture: [`docs/deployment-topologies.md`](docs/deployment-topologies.md); keys: [`docs/security/key-operations.md`](docs/security/key-operations.md); Helm: [`deploy/helm/raucle-gateway/`](deploy/helm/raucle-gateway/). Single-process deployment (gateway API + admin panel in one container): `docker-compose -f docker-compose.gateway.yml up`, entry point `python -m raucle.gateway_server` (see `Dockerfile.gateway`).
 
+**Admin plane exposure:** the single-process compose deployment serves the admin panel on the same public hostname as the gate (through Caddy). That is a legitimate operator choice, but narrow who can reach it: keep the admin route behind an IP allowlist, or move it to a separate listener (a different port or subdomain scoped by firewall or VPN) for production. The admin plane rate-limits in the application itself (120 requests/minute per client by default, `RAUCLE_ADMIN_RATE_LIMIT`) because the stock Caddy image ships no rate-limit module; see the `Caddyfile` comments.
+
 **Trust boundaries:** [`docs/security-model.md`](docs/security-model.md) states the guarantees and depend-on assumptions; the STRIDE-style review of the suite's own trust boundaries — per-boundary assets, threats, controls and honest residual risks with a prioritised mitigation register — lives in [`docs/threat-model/v1.md`](docs/threat-model/v1.md).
 
 ---
