@@ -43,6 +43,34 @@ reason about residual trust. It reflects the hardening from the 2026-06 security
 - **Parsing:** `from_jws` caps input/payload size, rejects duplicate keys, and (in strict mode,
   used by the verifier) enforces `alg=EdDSA` and the `crit` header. `alg:none` / alg-substitution
   is not accepted.
+- **Resource bounds (Q19):** an untrusted bundle must not exhaust an auditor's verifier. A
+  `ProvenanceVerifier.verify_chain` call runs under fixed resource bounds and refuses with a
+  NAMED FAILURE, `ProvenanceVerifierBoundsExceeded`, naming the limit hit, the observed value
+  and the cap. A refused bundle is invalid; where a bound caps the walk itself (bundle bytes,
+  node budget, depth) the named refusal stops the verifier rather than grading further.
+
+  | Bound | Default | Env override | Alignment with existing receipt-size patterns |
+  |---|---|---|---|
+  | bundle bytes (whole chain file) | 256 KiB | `RAUCLE_VERIFY_MAX_BUNDLE_BYTES` | byte-for-byte the simulate/manifest pasted-input cap family (`raucle.demo_scenarios._MAX_MANIFEST_BYTES` and the panel's client-side 256 KiB refusal): a chain file is the same class of untrusted pasted bundle |
+  | parents per receipt | 256 | `RAUCLE_VERIFY_MAX_PARENTS` | the 256 family again; comfortably above any observed fan-out and below the ~420-parent ceiling the 32 KiB payload cap implies, so an oversize parent array refuses with this named bound rather than drifting into a payload parse cap |
+  | ancestry graph depth | 256 | `RAUCLE_VERIFY_MAX_DEPTH` | an order of magnitude above the chain-graph composition query windows (`raucle.chain_graph._MAX_DEPTH = 20`, a query bound, not a verification bound) while still refusing deep-chain probes by name |
+  | total receipts (node budget) | 1024 | `RAUCLE_VERIFY_MAX_NODES` | the same order as the demo chain-collection cap (`MAX_CHAIN_RECORDS = 1000`); with default bundle bytes the byte bound binds first, so this is the tail bound that bites when an operator raises the byte bound |
+
+  Ancestry walking is memoised (visit-set keyed caching): shared ancestors resolve once per
+  verify call, the work counters ride the report object as read-only diagnostics (never in the
+  report body, so the v1.0 report shape stays byte-stable), and no verdict changes for honest
+  chains. Cycles are refused by name by the traversal's defensive detector; receipt hashes are
+  content-derived, so honest chains cannot present a cycle to the walk, and the detector exists
+  so a forged or corrupted map terminates with a named refusal instead of spinning.
+
+  The bounds are **default ON**. That is the deliberate choice under this document's fail-closed
+  posture: a verifier that must be told before it protects itself is a verifier that is not
+  protecting in the deployments that forget. For the migration window only, an operator can
+  restore the legacy unbounded verifier with `RAUCLE_VERIFY_BOUNDS=off` (also `0`/`false`/`no`);
+  bounds-disabled verification reproduces the pre-Q19 behaviour exactly. Operators with genuinely
+  deep chains raise the per-bound env values instead (typically `RAUCLE_VERIFY_MAX_BUNDLE_BYTES`,
+  with the depth bound then still binding at its own default). Values are non-negative integers; a
+  malformed or ambiguous env value is refused loudly, never defaulted through.
 - **Trust labelling (Q16):** the trust assumption above is now labelled explicitly in the verify
   output. When a statement is resolved through the verifier it is reported as `self-asserted`
   unless the caller marks it `authority-issued` (resolved through a separately vouched,

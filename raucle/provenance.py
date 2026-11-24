@@ -1642,8 +1642,119 @@ class ProvenanceLogger:
 
 
 # ---------------------------------------------------------------------------
-# Verifier — walks the DAG and checks integrity
+# Verifier : walks the DAG and checks integrity
 # ---------------------------------------------------------------------------
+
+
+class ProvenanceVerifierBoundsExceeded(ValueError):
+    """Named refusal (lane Q19): an untrusted bundle exceeded a verifier
+    resource bound.
+
+    The message names the limit hit, the observed value and the cap, so an
+    auditor (or a caller matching on the report's errors) can tell exactly
+    which bound refused the bundle. ``verify_chain`` converts every refusal
+    into a named report error and an invalid verdict: the verifier refuses
+    the bundle, it never silently grades past a bound.
+    """
+
+    def __init__(self, limit: str, observed: Any, cap: Any, detail: str) -> None:
+        self.limit = limit
+        self.observed = observed
+        self.cap = cap
+        self.detail = detail
+        super().__init__(
+            f"ProvenanceVerifierBoundsExceeded: {detail} "
+            f"(limit={limit!r}, observed={observed!r}, cap={cap!r})"
+        )
+
+
+@dataclass(frozen=True)
+class ProvenanceVerifierBounds:
+    """The verifier's resource-contract defaults (lane Q19, Finding 67).
+
+    An untrusted evidence bundle must not exhaust an auditor's verifier:
+    verification runs under fixed bounds with named refusals. The defaults
+    align with the existing receipt-size patterns:
+
+    - ``max_bundle_bytes``: 256 KiB, byte-for-byte the simulate/manifest
+      pasted-input cap family (``raucle.demo_scenarios._MAX_MANIFEST_BYTES``
+      and the panel's client-side 256 KiB refusal): a chain file is the same
+      class of untrusted pasted bundle.
+    - ``max_parents``: 256, the 256 family again, comfortably above any
+      observed fan-out and below the ~420-parent ceiling the 32 KiB payload
+      cap implies, so an oversize parent array refuses with this named
+      bound rather than drifting into a payload parse cap.
+    - ``max_depth``: 256, an order of magnitude above the chain-graph
+      composition query windows (``raucle.chain_graph._MAX_DEPTH = 20``,
+      a query bound, not a verification bound) while still refusing
+      deep-chain probes by name.
+    - ``max_nodes``: 1024, the same order as ``MAX_CHAIN_RECORDS``; with
+      default bundle bytes the byte bound binds first, so this is the tail
+      bound that bites when an operator raises the byte bound.
+
+    Every bound is env-overridable for operators with genuinely deep
+    chains (``RAUCLE_VERIFY_MAX_BUNDLE_BYTES``, ``RAUCLE_VERIFY_MAX_PARENTS``,
+    ``RAUCLE_VERIFY_MAX_DEPTH``, ``RAUCLE_VERIFY_MAX_NODES``;
+    ``RAUCLE_DETECT_*`` legacy names keep working via the shared env
+    helper). The bounds are ON by default (fail-closed posture, stated in
+    docs/security-model.md); ``RAUCLE_VERIFY_BOUNDS=off`` restores the
+    legacy unbounded verifier for the documented migration window. A
+    malformed or ambiguous env value is refused, never defaulted through.
+    """
+
+    max_bundle_bytes: int = 256 * 1024
+    max_parents: int = 256
+    max_depth: int = 256
+    max_nodes: int = 1024
+
+    @classmethod
+    def from_env(cls) -> ProvenanceVerifierBounds | None:
+        """Resolve the bounds from the environment.
+
+        Returns ``None`` when the operator disabled the bounds (documented
+        migration window). Unset bounds fall through to the defaults; a
+        malformed value raises; a security control must not silently
+        default through a mistyped configuration.
+        """
+        from raucle._env import env as _env
+
+        mode = _env("VERIFY_BOUNDS")
+        if mode is not None:
+            cleaned = mode.strip().lower()
+            off_values = {"off", "0", "false", "no"}
+            on_values = {"on", "1", "true", "yes", ""}
+            if cleaned in off_values:
+                return None
+            if cleaned not in on_values:
+                raise ValueError(
+                    f"env RAUCLE_VERIFY_BOUNDS {mode!r} is not a recognised "
+                    f"verifier-bounds mode (off values: {sorted(off_values)}); "
+                    "the verifier refuses an ambiguous opt-out"
+                )
+        kwargs: dict[str, int] = {}
+        for name, attr in (
+            ("VERIFY_MAX_BUNDLE_BYTES", "max_bundle_bytes"),
+            ("VERIFY_MAX_PARENTS", "max_parents"),
+            ("VERIFY_MAX_DEPTH", "max_depth"),
+            ("VERIFY_MAX_NODES", "max_nodes"),
+        ):
+            raw = _env(name)
+            if raw is None or raw.strip() == "":
+                continue
+            try:
+                value = int(raw.strip())
+            except ValueError:
+                raise ValueError(
+                    f"env RAUCLE_{name} {raw!r} is not an integer; the verifier "
+                    "refuses a malformed resource bound (fail-closed)"
+                ) from None
+            if value < 0:
+                raise ValueError(
+                    f"env RAUCLE_{name} {raw!r} is negative; resource bounds "
+                    "are non-negative integers"
+                )
+            kwargs[attr] = value
+        return cls(**kwargs)
 
 
 @dataclass
@@ -1674,6 +1785,14 @@ class VerificationReport:
     # is omitted from to_dict() when empty so the v1.0 report body stays
     # byte-stable for consumers that pin it.
     capability_trust_modes: dict[str, str] = field(default_factory=dict)
+    # Lane Q19 (diagnostics only): the bounded ancestry traversal's work
+    # counters. ``traversal_receipts_expanded`` counts receipts whose
+    # memoised depth was computed; ``traversal_edges_examined`` counts
+    # parent adjacency entries examined. Read as attributes: the keys are
+    # deliberately absent from to_dict() so the v1.0 report body stays
+    # byte-stable for pack reproducibility and fixture digests.
+    traversal_receipts_expanded: int = 0
+    traversal_edges_examined: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -1719,6 +1838,18 @@ class ProvenanceVerifier:
        cross-check; without the statements the verifier cannot perform it
        (the producer-side check in :class:`ProvenanceLogger` is cooperative
        and a malicious producer can skip it).
+    5. **Resource bounds** (lane Q19): an untrusted bundle is verified under
+       fixed bounds (bundle bytes, parents per receipt, ancestry graph
+       depth, total receipts) with named refusals
+       (:class:`ProvenanceVerifierBoundsExceeded`, naming the limit hit and
+       the observed value). Defaults align with the existing receipt-size
+       patterns and are documented in docs/security-model.md; operators
+       override them with ``RAUCLE_VERIFY_MAX_*``, or restore the legacy
+       unbounded verifier with ``RAUCLE_VERIFY_BOUNDS=off`` (bounds ON by
+       default, fail-closed). The ancestry walk is memoised (visit-set
+       keyed caching): shared ancestors resolve once per verify call, the
+       work counters ride the report as diagnostics, and no verdict
+       changes for honest chains.
 
     Parameters
     ----------
@@ -1825,6 +1956,12 @@ class ProvenanceVerifier:
             for row in self._state_pairings.values()
             if row.get("write_tool")
         }
+        # Lane Q19: verifier resource bounds. Defaults plus RAUCLE_VERIFY_MAX_*
+        # operator overrides; RAUCLE_VERIFY_BOUNDS=off restores the legacy
+        # unbounded verifier for the documented migration window. None here
+        # disables every added pass (bounds, memoised traversal, cycle
+        # refusal) and reproduces the pre-Q19 verdict behaviour exactly.
+        self._bounds = ProvenanceVerifierBounds.from_env()
 
     @staticmethod
     def _parse_chain_line(
@@ -1934,6 +2071,90 @@ class ProvenanceVerifier:
                     report.valid = False
             self._check_taint(receipt, receipts_by_hash, report)
 
+    def _verify_ancestry_bounds(
+        self,
+        receipts_by_hash: dict[str, ProvenanceReceipt],
+        report: VerificationReport,
+    ) -> None:
+        """Lane Q19: the bounded, memoised ancestry pass.
+
+        Iterative (explicit worklist, so a deep chain never reaches
+        Python's recursion limit) and memoised: each receipt's ancestry
+        depth is computed exactly once and cached by receipt hash, so
+        shared subgraphs resolve once per verify call and every parent
+        adjacency entry is examined exactly once. Two named refusals can
+        fire during the walk, each raising
+        :class:`ProvenanceVerifierBoundsExceeded`:
+
+        - ``graph_depth``: a receipt's ancestry depth (longest cited
+          parent path from this bundle's resolvable receipts) exceeds
+          ``max_depth``; observed is the offending depth.
+        - ``cycle``: the walk's in-flight set (grey state) is re-entered
+          by a cited parent, i.e. the parent graph is not acyclic. Honest
+          chains cannot reach this through the public API: receipt hashes
+          are content-derived, so a true cycle would need a hash fixed
+          point; the detector is defensive (a forged or corrupted map
+          must terminate with a named refusal, never spin).
+
+        Raises :class:`ProvenanceVerifierBoundsExceeded`; ``verify_chain``
+        converts a refusal into a named report error and an invalid
+        verdict, and stops the walk (a bounded walk refuses, it does not
+        grade every receipt of a refused bundle). Mutates the report's
+        traversal counters in place; with bounds disabled the pass is a
+        no-op and the counters stay zero (legacy behaviour).
+        """
+        bounds = self._bounds
+        if bounds is None:
+            return
+        _white, _grey, _black = 0, 1, 2
+        state: dict[str, int] = {}
+        depth_memo: dict[str, int] = {}
+        for start in sorted(receipts_by_hash):
+            if state.get(start, _white) == _black:
+                continue
+            stack: list[tuple[str, bool]] = [(start, False)]
+            while stack:
+                node, ready = stack.pop()
+                receipt = receipts_by_hash.get(node)
+                if receipt is None:
+                    # cited-but-absent parents are per-line parent-link
+                    # failures already; nothing is walkable here.
+                    continue
+                if ready:
+                    best = 0
+                    for parent in receipt.parents:
+                        best = max(best, depth_memo.get(parent, 0))
+                    depth_memo[node] = best + 1
+                    state[node] = _black
+                    report.traversal_receipts_expanded += 1
+                    if depth_memo[node] > bounds.max_depth:
+                        raise ProvenanceVerifierBoundsExceeded(
+                            "graph_depth",
+                            depth_memo[node],
+                            bounds.max_depth,
+                            f"receipt {node} ancestry depth exceeds the verify bound",
+                        )
+                    continue
+                if state.get(node, _white) != _white:
+                    # a duplicate pending entry: the node is already in
+                    # flight below, or already done (memo hit). Not a cycle.
+                    continue
+                state[node] = _grey
+                stack.append((node, True))
+                for parent in receipt.parents:
+                    report.traversal_edges_examined += 1
+                    pstate = state.get(parent, _white)
+                    if pstate == _grey:
+                        raise ProvenanceVerifierBoundsExceeded(
+                            "cycle",
+                            parent,
+                            "n/a",
+                            f"parent graph is not acyclic: receipt {node} "
+                            f"cites in-flight ancestor {parent}",
+                        )
+                    if pstate == _white and parent in receipts_by_hash:
+                        stack.append((parent, False))
+
     def _validate_chain_record(
         self, raw: dict[str, Any], line_no: int, report: VerificationReport
     ) -> ProvenanceReceipt | None:
@@ -1987,6 +2208,23 @@ class ProvenanceVerifier:
         # no output_hash, etc., is malformed and must be rejected.
         for serr in _structural_errors(receipt):
             report.errors.append(f"line {line_no}: {serr}")
+            report.valid = False
+
+        # Lane Q19: per-receipt fan-out bound, named per-line like the
+        # structural errors so an auditor can find every offending receipt;
+        # the rest of the bundle still grades.
+        if self._bounds is not None and len(receipt.parents) > self._bounds.max_parents:
+            report.errors.append(
+                f"line {line_no}: "
+                + str(
+                    ProvenanceVerifierBoundsExceeded(
+                        "parent_count",
+                        len(receipt.parents),
+                        self._bounds.max_parents,
+                        "receipt parent array exceeds the verify fan-out bound",
+                    )
+                )
+            )
             report.valid = False
 
         return receipt
@@ -3587,12 +3825,33 @@ class ProvenanceVerifier:
         state_evidence_by_write: dict[str, dict[str, Any]] = {}
         covered_writes: dict[str, dict[str, Any]] = {}
         gate_tools_by_hash: dict[str, str] = {}
+        # Lane Q19: the bundle byte bound streams with the read, so an
+        # oversize bundle refuses before its remaining lines are parsed.
+        bounds = self._bounds
+        bundle_bytes_seen = 0
 
         with open(path, encoding="utf-8") as fh:
             for line_no, line in enumerate(fh, start=1):
                 line = line.strip()
                 if not line:
                     continue
+                if bounds is not None:
+                    bundle_bytes_seen += len(line.encode("utf-8")) + 1
+                    if bundle_bytes_seen > bounds.max_bundle_bytes:
+                        report.errors.append(
+                            str(
+                                ProvenanceVerifierBoundsExceeded(
+                                    "bundle_bytes",
+                                    bundle_bytes_seen,
+                                    bounds.max_bundle_bytes,
+                                    f"chain bundle exceeds the verify byte bound "
+                                    f"at line {line_no}; the verifier stops "
+                                    "reading and refuses the bundle",
+                                )
+                            )
+                        )
+                        report.valid = False
+                        return report
 
                 raw = self._parse_chain_line(line, line_no, report)
                 if raw is None:
@@ -3630,8 +3889,34 @@ class ProvenanceVerifier:
                 receipts_by_hash[receipt.receipt_hash] = receipt
                 report.receipt_count += 1
 
+        # Q19: the node budget is a fail-fast refusal: an operator who raised
+        # the byte bound for deep chains still gets a bounded walk. The
+        # verifier refuses the bundle rather than grading past its budget.
+        if bounds is not None and len(receipts_by_hash) > bounds.max_nodes:
+            report.errors.append(
+                str(
+                    ProvenanceVerifierBoundsExceeded(
+                        "node_count",
+                        len(receipts_by_hash),
+                        bounds.max_nodes,
+                        "chain receipt count exceeds the verify node budget; "
+                        "the verifier refuses the bundle and stops",
+                    )
+                )
+            )
+            report.valid = False
+            return report
+
         # Second pass: DAG integrity + taint monotonicity
         self._verify_dag_and_taint(receipts_by_hash, report)
+        # Q19: the bounded, memoised ancestry pass (depth bound, named cycle
+        # refusal, work counters). Pure performance and bounds on honest
+        # bundles: refusal names the limit, the observed value and the cap.
+        try:
+            self._verify_ancestry_bounds(receipts_by_hash, report)
+        except ProvenanceVerifierBoundsExceeded as exc:
+            report.errors.append(str(exc))
+            report.valid = False
         # Receipts v1.2 (EPIC W lane W2): pin the LATEST definition block
         # per tool against the on-disk manifest (the registry state).
         self._verify_tool_definition_pins(tool_definition_latest, tool_definition_drift, report)
