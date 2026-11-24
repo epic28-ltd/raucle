@@ -1,7 +1,7 @@
 {
   "id": "raucle",
   "name": "Raucle",
-  "description": "AI security guardrails — prompt injection detection, output scanning, tool call validation",
+  "description": "AI security guardrails: prompt injection detection, output scanning, tool call validation",
   "version": "0.1.0",
   "uiHints": {
     "mode": {
@@ -23,6 +23,18 @@
     "blockOnMalicious": {
       "label": "Block Malicious",
       "help": "Block messages/tool calls that score as MALICIOUS (default: true)"
+    },
+    "failureMode": {
+      "label": "Scanner Failure Mode",
+      "help": "closed (default): scanner unavailability BLOCKS protected operations with named advisories; open: continue unscreened. Note: the OpenClaw runner defaults to fail-open for before_tool_call, so fail-closed behaviour requires this setting."
+    },
+    "scanTimeoutMs": {
+      "label": "Scan Deadline (ms)",
+      "help": "Per-call scan deadline; fires before the host's 15s hook budget (default: 10000, max: 12000)"
+    },
+    "scanSecret": {
+      "label": "Scan Secret",
+      "help": "Optional shared scan secret. When set, start the standalone scanner with RAUCLE_PLUGIN_SCAN_SECRET=<the same value>; when unset a per-boot random secret is generated and no pre-existing service will be adopted."
     },
     "scanInbound": {
       "label": "Scan Inbound Messages",
@@ -56,6 +68,18 @@
       "rulesDir": { "type": "string" },
       "alertChannel": { "type": "string" },
       "blockOnMalicious": { "type": "boolean", "default": true },
+      "failureMode": {
+        "type": "string",
+        "enum": ["closed", "open"],
+        "default": "closed"
+      },
+      "scanTimeoutMs": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 12000,
+        "default": 10000
+      },
+      "scanSecret": { "type": "string" },
       "scanInbound": { "type": "boolean", "default": true },
       "scanOutbound": { "type": "boolean", "default": true },
       "scanToolCalls": { "type": "boolean", "default": true },
