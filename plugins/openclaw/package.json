@@ -1,12 +1,18 @@
 {
   "name": "@raucle/raucle",
   "version": "0.1.0",
-  "description": "AI security guardrails plugin for OpenClaw — prompt injection detection, output scanning, tool call validation",
+  "description": "AI security guardrails plugin for OpenClaw: prompt injection detection, output scanning, tool call validation",
   "type": "module",
   "main": "index.ts",
   "files": ["index.ts", "src/**/*.ts", "openclaw.plugin.json"],
   "openclaw": {
-    "extensions": ["./index.ts"]
+    "extensions": ["./index.ts"],
+    "install": {
+      "minHostVersion": ">=2026.4.22"
+    }
+  },
+  "scripts": {
+    "test": "node --test test/"
   },
   "peerDependencies": {
     "openclaw": "*"
