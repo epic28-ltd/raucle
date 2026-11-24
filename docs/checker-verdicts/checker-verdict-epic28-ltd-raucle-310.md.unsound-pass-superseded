@@ -1,0 +1,1 @@
+PASS 23 Nov (third re-check deleg_31bad926, on aligned head 9538a9c): regression fix falsification-genuine, 19 Sonar blockers cleared, bare-JWS + statement-free parity pins green, suites 3142/3199 both heads, CI 19/19. Merge authorized under standing approval.

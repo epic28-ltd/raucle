@@ -36,7 +36,17 @@ from raucle.provenance import (
 
 REPO = Path(__file__).resolve().parent.parent
 DEMO_BUNDLE_CHAIN = REPO / "docs/demo-bundle/chain.jsonl"
-DEMO_BUNDLE_PUBKEY = REPO / "docs/demo-bundle/pubkeys/b5fc7cdc4daecad1.pem"
+
+
+def _demo_bundle_pubkey() -> Path:
+    """The shipped corpus's custodian public key, resolved from the bundle's
+    own PACK index: the bundle regenerates with a FRESH custodian key at every
+    release, so a hardcoded key id would break every regeneration."""
+    pack = json.loads((REPO / "docs/demo-bundle/PACK.json").read_text(encoding="utf-8"))
+    members = [m for m in pack["members"] if m.get("role") == "public-key"]
+    assert len(members) == 1, "the demo bundle ships exactly one custodian public key"
+    return REPO / "docs/demo-bundle" / members[0]["path"]
+
 
 _mint_counter = count()
 
@@ -404,7 +414,7 @@ def test_demo_bundle_corpus_verifies_unchanged_under_bounds(monkeypatch):
     with the bounds ON exactly as without them: field-for-field parity."""
     import base64
 
-    pubkey_pem = DEMO_BUNDLE_PUBKEY.read_bytes()
+    pubkey_pem = _demo_bundle_pubkey().read_bytes()
     first = json.loads(DEMO_BUNDLE_CHAIN.read_text().splitlines()[0])
     seg = first["jws"].split(".")[1]
     payload = json.loads(base64.urlsafe_b64decode(seg + "=" * ((4 - len(seg) % 4) % 4)))
