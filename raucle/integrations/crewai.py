@@ -50,6 +50,7 @@ Install with ``pip install 'raucle[crewai]'``.
 from __future__ import annotations
 
 import contextvars
+import inspect
 import logging
 from typing import Any
 
@@ -62,6 +63,12 @@ from raucle.audit import (
 from raucle.capability import Capability, CapabilityGate, GateDecision
 
 logger = logging.getLogger(__name__)
+
+#: Receipts bind the argument view the gate evaluated: "normalised" when the
+#: invocation was bound against the wrapped tool's signature, "verbatim" when
+#: no usable signature resolved and the caller-shaped view rides instead.
+ARGS_BINDING_NORMALISED = "normalised"
+ARGS_BINDING_VERBATIM = "verbatim"
 
 try:  # pragma: no cover - import-time check
     from crewai.tools import BaseTool  # type: ignore[import-not-found]
@@ -110,6 +117,71 @@ def _hash_args(args: dict[str, Any]) -> str:
         return _sha256_hex(repr(sorted(args.items())).encode("utf-8"))
 
 
+def _verbatim_call_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+    """The caller-shaped argument view used when no signature can bind.
+
+    Positionals fold in by index so the gate sees every argument the
+    executor will receive (the old ``dict(kwargs)`` view dropped them
+    silently); the residual is marked ``verbatim`` in the receipt and
+    logged.
+    """
+    combined: dict[str, Any] = {str(i): value for i, value in enumerate(args)}
+    combined.update(kwargs)
+    return combined
+
+
+def _normalise_call_args(
+    exec_target: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    tool_name: str,
+) -> tuple[dict[str, Any], str]:
+    """Bind the invocation against the executor's signature.
+
+    The gate evaluation, the receipt digest and the executed arguments must
+    carry the SAME semantic arguments (H(arguments_gate) ==
+    H(arguments_executor)): binding against ``exec_target``'s signature -
+    the implementation the call forwards to - maps positionals onto real
+    parameter names and applies defaults, so a positional call cannot slip
+    past the gate's argument view while executing with arguments the gate
+    never saw.
+
+    Variadic captures are spread back into the view: var-keyword members
+    carry their actual caller names (name-keyed constraints must still see
+    them - a tool declared ``**kwargs`` would otherwise fold its real field
+    names under the parameter name and the constraints would pass
+    vacuously), and var-positional members fold in by index. Falls back to
+    the caller-shaped verbatim view ONLY when no signature can be resolved
+    or the invocation cannot be bound; the residual is marked ``verbatim``
+    in the receipt and logged with the tool name.
+    """
+    try:
+        signature = inspect.signature(exec_target)
+        bound = signature.bind(*args, **kwargs)
+        bound.apply_defaults()
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "raucle crewai: unnormalised arguments for %s (no usable signature: %s); "
+            "the receipt carries the verbatim residual",
+            tool_name,
+            exc,
+        )
+        return _verbatim_call_args(args, kwargs), ARGS_BINDING_VERBATIM
+    view: dict[str, Any] = {}
+    positional_index = 0
+    for name, value in bound.arguments.items():
+        param = signature.parameters[name]
+        if param.kind is inspect.Parameter.VAR_POSITIONAL:
+            for member in value:  # type: ignore[union-attr]
+                view[str(positional_index)] = member
+                positional_index += 1
+        elif param.kind is inspect.Parameter.VAR_KEYWORD:
+            view.update(value or {})  # type: ignore[arg-type]
+        else:
+            view[name] = value
+    return view, ARGS_BINDING_NORMALISED
+
+
 def _emit_receipt(
     sink: HashChainSink | NullSink,
     *,
@@ -118,6 +190,7 @@ def _emit_receipt(
     tool: str,
     args: dict[str, Any],
     decision: GateDecision,
+    args_binding: str,
 ) -> None:
     receipt = {
         "kind": "capability_receipt",
@@ -128,6 +201,9 @@ def _emit_receipt(
         "call_args_hash": _hash_args(args),
         "decision": "ALLOW" if decision.allowed else "DENY",
         "decision_reason": decision.reason or "",
+        # Whether the digest binds the signature-bound argument view
+        # ("normalised") or the honest caller-shaped residual ("verbatim").
+        "args_binding": args_binding,
         "framework": "crewai",
     }
     try:
@@ -191,6 +267,15 @@ def guard_tool(
     denies with the decision receipted - the guard never runs a call it
     cannot attribute, and the deny receipt carries an honest null
     ``agent_id`` rather than a placeholder.
+
+    The invocation is bound against the wrapped tool's implementation
+    signature (``inspect.signature(...).bind(...)``, defaults applied)
+    before the gate evaluates it: positionals land on real parameter
+    names, so the gate evaluation, the receipt digest and the executed
+    arguments carry the same semantic arguments. When no signature can be
+    resolved the call falls back to the caller-shaped verbatim view, and
+    the receipt records the residual (``args_binding: "verbatim"``) plus a
+    log line naming the tool.
     """
     if not _HAS_CREWAI:
         raise RuntimeError("guard_tool requires crewai. Install with: pip install 'raucle[crewai]'")
@@ -208,7 +293,11 @@ def guard_tool(
         args_schema: type = wrapped.args_schema
 
         def _run(self, *args: Any, **kwargs: Any) -> Any:
-            call_args: dict[str, Any] = dict(kwargs)
+            # Gate on the SIGNATURE-BOUND argument view: positionals bind to
+            # the wrapped tool's real parameter names (defaults applied), so
+            # the gate evaluation, the receipt digest and the executed
+            # arguments carry the same semantic arguments.
+            call_args, args_binding = _normalise_call_args(wrapped._run, args, kwargs, tool_name)
             token = get_in_force_token()
             decision = _evaluate_gate(gate, token, tool_name, call_args, agent_id)
             _emit_receipt(
@@ -218,6 +307,7 @@ def guard_tool(
                 tool=tool_name,
                 args=call_args,
                 decision=decision,
+                args_binding=args_binding,
             )
 
             if not decision.allowed:
@@ -228,8 +318,10 @@ def guard_tool(
 
         async def _arun(self, *args: Any, **kwargs: Any) -> Any:
             # Gate synchronously (the decision is CPU-bound), then await the
-            # wrapped async impl if it has one.
-            call_args: dict[str, Any] = dict(kwargs)
+            # wrapped async impl if it has one. The binding target matches
+            # the implementation the call forwards to.
+            exec_target = wrapped._arun if wrapped_arun is not None else wrapped._run
+            call_args, args_binding = _normalise_call_args(exec_target, args, kwargs, tool_name)
             token = get_in_force_token()
             decision = _evaluate_gate(gate, token, tool_name, call_args, agent_id)
             _emit_receipt(
@@ -239,6 +331,7 @@ def guard_tool(
                 tool=tool_name,
                 args=call_args,
                 decision=decision,
+                args_binding=args_binding,
             )
             if not decision.allowed:
                 raise CapabilityDenied(tool_name, decision.reason or "denied")

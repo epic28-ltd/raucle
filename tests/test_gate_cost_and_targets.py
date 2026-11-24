@@ -16,6 +16,7 @@ Four bounded fixes from the 8 Nov review:
 from __future__ import annotations
 
 import json
+import socket
 
 import pytest
 from fastapi.testclient import TestClient
@@ -64,13 +65,13 @@ class TestRegistryCache:
         revocations.write_text("")
         gateway = RaucleGateway(_config(tmp_path, revocations_file=str(revocations)))
         reads = {"n": 0}
-        original = gateway._read_revoked_ids
+        original = gateway._revoked_ids_from_bytes
 
-        def counting(path):
+        def counting(data):
             reads["n"] += 1
-            return original(path)
+            return original(data)
 
-        monkeypatch.setattr(gateway, "_read_revoked_ids", counting)
+        monkeypatch.setattr(gateway, "_revoked_ids_from_bytes", counting)
         assert gateway._load_revoked_ids() == set()
         assert gateway._load_revoked_ids() == set()
         assert reads["n"] == 1  # second call served from the cache
@@ -157,6 +158,15 @@ class TestSiemTarget:
 
     def test_public_https_is_allowed(self, monkeypatch):
         monkeypatch.delenv("RAUCLE_SIEM_ALLOW_PRIVATE", raising=False)
+        # RAU-04: validation resolves the name now - point the seam at a
+        # public record instead of a real lookup in tests
+        from raucle import siem_pinned
+
+        monkeypatch.setattr(
+            siem_pinned,
+            "resolve_siem_host",
+            lambda host: [(socket.AF_INET, "93.184.216.34")],
+        )
         assert siem_target_allowed("https://splunk.example.com:8088/services/collector")
 
     def test_private_allowed_by_explicit_opt_in(self, monkeypatch):

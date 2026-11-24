@@ -528,6 +528,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--pubkey", help="Operator public PEM (else the receipt's embedded key)"
     )
 
+    # -- policy seal lifecycle (RAU-02: operator-signed control-plane seals) --
+    pol_p = subparsers.add_parser("policy", help="Seal + verify enforcement config files")
+    pol_sub = pol_p.add_subparsers(dest="policy_command")
+    pol_seal = pol_sub.add_parser(
+        "seal", help="Write a signed .meta sidecar seal for a control-plane file"
+    )
+    pol_seal.add_argument("path", help="The file to seal (policy YAML, registry JSONL)")
+    pol_seal.add_argument("--key", required=True, help="Operator Ed25519 private PEM")
+    pol_verify = pol_sub.add_parser("verify", help="Verify a file's sidecar seal")
+    pol_verify.add_argument("path", help="The sealed file")
+    pol_verify.add_argument("--pubkey", required=True, help="Operator public PEM")
+
     # -- timestamp (G1 time-source anchoring: RFC 3161 + OTS) -----------
     ts_p = subparsers.add_parser("timestamp", help="Time-source anchoring: RFC 3161 TSA tokens")
     ts_sub = ts_p.add_subparsers(dest="timestamp_command")
@@ -1735,6 +1747,65 @@ def _cmd_records(args: argparse.Namespace) -> int:
         return _records_verify(args)
     print("error: records needs a subcommand (destroy | verify)", file=sys.stderr)
     return 2
+
+
+def _cmd_policy(args: argparse.Namespace) -> int:
+    """RAU-02: operator-signed control-plane seals (seal | verify)."""
+    cmd = getattr(args, "policy_command", None)
+    if cmd == "seal":
+        return _policy_seal(args)
+    if cmd == "verify":
+        return _policy_verify(args)
+    print("error: policy needs a subcommand (seal | verify)", file=sys.stderr)
+    return 2
+
+
+def _policy_seal(args: argparse.Namespace) -> int:
+    """RAU-02 seal leg: sign the file's bytes into a ``.meta`` sidecar.
+
+    The signature covers the file's on-disk bytes; the sidecar records
+    the digest, the signer's key id and the sealing epoch. Nothing but
+    the sidecar is written.
+    """
+    from raucle.audit import Ed25519Signer
+    from raucle.policy_seal import seal_file, seal_path
+
+    try:
+        signer = Ed25519Signer.from_pem(validate_path(args.key).read_bytes())
+        record = seal_file(validate_path(args.path), signer)
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"sealed: {record.path}")
+    print(f"  content_sha256: {record.content_sha256}")
+    print(f"  key_id:         {record.key_id}")
+    print(f"  sealed_at:      {record.sealed_at}")
+    print(f"  sidecar:        {seal_path(record.path)}")
+    return 0
+
+
+def _policy_verify(args: argparse.Namespace) -> int:
+    """RAU-02 verify leg: state + named refusal, exit 2 when refused.
+
+    Verification trusts only the operator's public key supplied here:
+    the key id derived from it (house convention) must be the key id the
+    sidecar records, and the signature must verify over the current
+    bytes.
+    """
+    from raucle.policy_seal import public_key_id, verify_file_seal
+
+    try:
+        pem = validate_path(args.pubkey).read_bytes()
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    verdict = verify_file_seal(args.path, {public_key_id(pem): pem})
+    print(f"seal: {verdict.state} ({args.path})")
+    if verdict.reason:
+        print(f"  reason: {verdict.reason}")
+    if verdict.content_sha256:
+        print(f"  content_sha256: {verdict.content_sha256}")
+    return 2 if verdict.state == "refused" else 0
 
 
 def _timestamp_stamp(args: argparse.Namespace) -> int:
@@ -3751,6 +3822,8 @@ def _dispatch(argv: list[str] | None = None) -> int:
 
     # Subcommand dispatch: (command, subcommand) -> handler.
     _SUBCOMMANDS: dict[tuple[str, str | None], Any] = {
+        ("policy", "seal"): _cmd_policy,
+        ("policy", "verify"): _cmd_policy,
         ("rules", "list"): _cmd_rules,
         ("rules", "fuzz"): _cmd_rules_fuzz,
         ("audit", "verify"): _cmd_audit_verify,

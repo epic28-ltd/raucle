@@ -123,6 +123,14 @@ spec:
               value: {{ .Values.config.policyFile | quote }}
             - name: RAUCLE_POLICY_DIR
               value: {{ .Values.config.policyDir | quote }}
+            # RAU-02: operator-signed control-plane seals. advisory boots
+            # unsigned policy with a named banner; required refuses it.
+            - name: RAUCLE_POLICY_SEALING
+              value: {{ .Values.config.policySealing | quote }}
+            {{- if .Values.config.policySealPublicKey }}
+            - name: RAUCLE_POLICY_SEAL_PUBLIC_KEY
+              value: {{ .Values.config.policySealPublicKey | quote }}
+            {{- end }}
             - name: RAUCLE_COMPLIANCE_FRAMEWORK
               value: {{ .Values.config.complianceFramework | quote }}
             - name: RAUCLE_TRACE_HEADER
