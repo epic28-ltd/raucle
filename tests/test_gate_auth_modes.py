@@ -239,3 +239,54 @@ class TestAuthConfigValidation:
         base_config.gate_auth = "magic"
         with pytest.raises(ValueError, match="RAUCLE_GATE_AUTH"):
             RaucleGateway(base_config)
+
+
+class TestReceiptBoundary:
+    """Q15 verdict remedy (D3 truth-up): pin exactly what is receipted.
+
+    An unauthenticated pre-gate refusal denies with receipt_id null and
+    writes nothing to the store; an authenticated caller's gate deny (a
+    valid credential whose call breaks the applicable policy) IS receipted."""
+
+    def test_unauthenticated_pregate_refusal_writes_no_receipt(self, base_config, policy_file):
+        from pathlib import Path
+
+        base_config.policy_file = policy_file
+        base_config.gate_auth = "apikey"
+        gw = RaucleGateway(base_config)
+        client = _client(gw)
+        for headers in ({}, {"X-Api-Key": "rak_0000000000000000000000000000000"}):
+            resp = client.post(
+                "/gate",
+                json={"tool": "lookup_balance", "args": {"account": "ACC-001"}},
+                headers=headers,
+            )
+            assert resp.status_code == 200
+            assert resp.json()["decision"] == "deny"
+            assert resp.json()["receipt_id"] is None
+        store = Path(base_config.receipt_store)
+        assert not store.exists() or store.read_text(encoding="utf-8").strip() == ""
+
+    def test_authenticated_gate_deny_is_receipted(self, base_config, policy_file):
+        from pathlib import Path
+
+        base_config.policy_file = policy_file
+        base_config.gate_auth = "apikey"
+        gw = RaucleGateway(base_config)
+        assert gw._agent_creds is not None
+        key = gw._agent_creds.issue(agent_id="agent:svc")
+        client = _client(gw)
+        store = Path(base_config.receipt_store)
+        before = len(store.read_text(encoding="utf-8").splitlines()) if store.exists() else 0
+        resp = client.post(
+            "/gate",
+            json={
+                "tool": "lookup_balance",
+                "args": {"account": "ACC-999"},
+            },  # outside the allowlist
+            headers={"X-Api-Key": key},
+        )
+        assert resp.json()["decision"] == "deny"
+        assert resp.json()["receipt_id"] is not None
+        after = len(store.read_text(encoding="utf-8").splitlines())
+        assert after == before + 1

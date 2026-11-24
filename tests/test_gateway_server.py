@@ -41,7 +41,7 @@ class _StubUvicornServer:
         self.served = True
 
 
-@pytest.fixture()
+@pytest.fixture
 def stub_uvicorn(monkeypatch) -> type[_StubUvicornServer]:
     monkeypatch.setattr(gateway_server.uvicorn, "Server", _StubUvicornServer)
     _StubUvicornServer.built = []

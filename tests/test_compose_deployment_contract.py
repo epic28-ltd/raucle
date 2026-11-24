@@ -73,9 +73,17 @@ class TestComposeRequiresAnAuthChoice:
         assert "issue-key" in text
 
     def test_demo_service_honestly_discloses_its_auth_gap(self):
+        """Q15 verdict remedy (receipted-DENY truth-up): the demo service
+        carries no credentials, so its calls are refused unauthenticated
+        pre-gate and are NOT receipted. Pin the truthful claim, not the old
+        receipted-DENY overclaim."""
         text = _compose_text()
         assert "demo-agents" in text
-        assert "receipted DENY" in text
+        assert "no credentials" in text
+        assert "receipt_id null" in text
+        assert "transport-layer refusals" in text
+        assert "not receipted evidence" in text
+        assert "receipted DENY" not in text
 
 
 class TestComposeRateLimitPosture:
