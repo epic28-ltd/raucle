@@ -261,7 +261,12 @@ export function registerPlugin(api: Record<string, unknown>, deps: PluginDeps = 
   // blocking is unreliable because the host runner defaults to fail-open
   // for before_tool_call (F95).
   // -----------------------------------------------------------------
-  /** Bounded, separated-field decision record for the tool gate (2b iii). */
+  /**
+   * Bounded, separated-field decision record for the tool gate (2b iii).
+   * D3 (PR #322 verdict remedy): `authority` is the ACTUAL outcome of the
+   * exposed admission-authority acknowledgement (what acknowledgeAuthority(ctx)
+   * returned) - recorded truthfully, never a hardcoded true/false.
+   */
   type ToolDecisionInput = {
     toolName: string;
     agentId?: string;
@@ -293,14 +298,15 @@ export function registerPlugin(api: Record<string, unknown>, deps: PluginDeps = 
     reasonClass: ScanReasonClass,
     toolName: string,
     agentId?: string,
-    detail = ""
+    detail = "",
+    acknowledged = false
   ): ToolGateResult | undefined => {
     advisoryLog(logger, failureMode, "before_tool_call", reasonClass, detail);
     if (failureMode === "open") {
       recordToolDecision({
         toolName,
         agentId,
-        authority: true,
+        authority: acknowledged,
         outcome: "unknown",
         coverageState: "unknown",
         reasonCode: "plugin_hook_failed_open",
@@ -312,7 +318,7 @@ export function registerPlugin(api: Record<string, unknown>, deps: PluginDeps = 
     recordToolDecision({
       toolName,
       agentId,
-      authority: true,
+      authority: acknowledged,
       outcome: "denied",
       coverageState: "enforced",
       reasonCode: "plugin_hook_blocked",
@@ -483,12 +489,12 @@ export function registerPlugin(api: Record<string, unknown>, deps: PluginDeps = 
       // ready has REFUSED activation; every gated call is then blocked by
       // name instead of silently passing.
       if (startupState.refused) {
-        ack();
+        const acked = ack();
         const reason = startupState.reason ?? "scanner-not-ready";
         recordToolDecision({
           toolName,
           agentId,
-          authority: true,
+          authority: acked,
           outcome: "denied",
           coverageState: "enforced",
           reasonCode: "plugin_hook_blocked",
@@ -505,23 +511,24 @@ export function registerPlugin(api: Record<string, unknown>, deps: PluginDeps = 
       // the client then reports (F95 advisory vocabulary includes
       // process-dead).
       if (!manager.isRunning) {
-        ack();
+        const acked = ack();
         return scanFailureTool(
           "process-dead" as ScanReasonClass,
           toolName,
           agentId,
-          "scanner process not running"
+          "scanner process not running",
+          acked
         );
       }
 
       // The owning tool call being already cancelled: no scan runs, and no
       // receipt implying the call proceeded is persisted (2b ii).
       if (ctx?.abortSignal?.aborted) {
-        ack();
+        const acked = ack();
         recordToolDecision({
           toolName,
           agentId,
-          authority: true,
+          authority: acked,
           outcome: "denied",
           coverageState: "unknown",
           reasonCode: "plugin_hook_blocked",
@@ -560,7 +567,7 @@ export function registerPlugin(api: Record<string, unknown>, deps: PluginDeps = 
         signal,
       });
 
-      const recordLateArrival = (late?: ScanResult): void => {
+      const recordLateArrival = (acknowledged: boolean, late?: ScanResult): void => {
         const scanner: ScannerEvidence = late
           ? {
               verdict: late.verdict,
@@ -576,13 +583,16 @@ export function registerPlugin(api: Record<string, unknown>, deps: PluginDeps = 
         // scan under closed mode blocked the call (denied/enforced); under
         // open mode the call continued unscreened (unknown/failed_open) -
         // never mint a denied+failed_open pair the host would not write.
+        // D5 (PR #322 verdict remedy): the reason stays in the declared
+        // DecisionReasonCode vocabulary - the sealed call blocked, so the
+        // host-shaped reason code is plugin_hook_blocked.
         const lateOutcome = failureMode === "closed" ? "denied" : "unknown";
         const lateCoverage = failureMode === "closed" ? "enforced" : "unknown";
-        const lateReason = failureMode === "closed" ? "scanner_unavailable" : "plugin_hook_failed_open";
+        const lateReason = failureMode === "closed" ? "plugin_hook_blocked" : "plugin_hook_failed_open";
         recordToolDecision({
           toolName,
           agentId,
-          authority: false,
+          authority: acknowledged,
           outcome: lateOutcome,
           coverageState: lateCoverage,
           reasonCode: lateReason,
@@ -603,11 +613,11 @@ export function registerPlugin(api: Record<string, unknown>, deps: PluginDeps = 
           );
 
           if (config.blockOnMalicious) {
-            ack();
+            const acked = ack();
             recordToolDecision({
               toolName,
               agentId,
-              authority: true,
+              authority: acked,
               outcome: "denied",
               coverageState: "enforced",
               reasonCode: "plugin_hook_blocked",
@@ -625,11 +635,11 @@ export function registerPlugin(api: Record<string, unknown>, deps: PluginDeps = 
             };
           }
         }
-        ack();
+        const acked = ack();
         recordToolDecision({
           toolName,
           agentId,
-          authority: true,
+          authority: acked,
           outcome: "allowed",
           coverageState: "enforced",
           reasonCode: "plugin_hook_allowed",
@@ -648,20 +658,21 @@ export function registerPlugin(api: Record<string, unknown>, deps: PluginDeps = 
         if (deadlineFired.value) {
           // Deadline sealed the call. Attach the late watcher exactly once:
           // whenever the abandoned scan settles, it records a discarded
-          // entry with NO allow-equivalent receipt.
+          // entry with NO allow-equivalent receipt, carrying THIS call's
+          // actual acknowledgement state (D3).
+          const acked = ack();
           scanPromise.then(
-            (late) => recordLateArrival(late),
+            (late) => recordLateArrival(acked, late),
             (err: unknown) => {
               void err;
-              recordLateArrival();
+              recordLateArrival(acked);
             }
           );
-          ack();
           if (failureMode === "open") {
             recordToolDecision({
               toolName,
               agentId,
-              authority: true,
+              authority: acked,
               outcome: "unknown",
               coverageState: "unknown",
               reasonCode: "plugin_hook_failed_open",
@@ -673,7 +684,7 @@ export function registerPlugin(api: Record<string, unknown>, deps: PluginDeps = 
           recordToolDecision({
             toolName,
             agentId,
-            authority: true,
+            authority: acked,
             outcome: "denied",
             coverageState: "enforced",
             reasonCode: "plugin_hook_blocked",
@@ -685,8 +696,8 @@ export function registerPlugin(api: Record<string, unknown>, deps: PluginDeps = 
               `(${Math.round(deadlineMs)}ms, failureMode closed); tool call blocked.`
           );
         }
-        ack();
-        return scanFailureTool(classifyScanError(e), toolName, agentId, detail);
+        const acked = ack();
+        return scanFailureTool(classifyScanError(e), toolName, agentId, detail, acked);
       }
     };
     on(TypedHookNames.beforeToolCall, handler, {
@@ -722,7 +733,7 @@ export function registerPlugin(api: Record<string, unknown>, deps: PluginDeps = 
     capture(TypedHookNames.llmOutput, "raucle.llm-output", handler, { registrationId: "raucle.llm-output" });
   }
 
-  // Debug + observation hooks (typed catalog names)
+  // Debug + observation hooks (typed catalogue names)
   {
     const handler = (event: Record<string, unknown>): void => {
       logger.info(`[raucle] message_received: keys=${Object.keys(event).join(",")}`);

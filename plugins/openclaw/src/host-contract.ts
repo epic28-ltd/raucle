@@ -35,7 +35,7 @@
 /** The minimum OpenClaw release that provides the typed plugin hook API. */
 export const MIN_HOST_VERSION = ">=2026.4.22";
 
-/** Registered hook names (the typed plugin hook catalog names we use). */
+/** Registered hook names (the typed plugin hook catalogue names we use). */
 export const TypedHookNames = {
   beforePromptBuild: "before_prompt_build",
   messageSending: "message_sending",

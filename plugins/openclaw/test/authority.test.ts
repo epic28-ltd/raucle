@@ -15,8 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import raucleClaw from "../index.ts";
-import type { ManagerLike, PluginDeps } from "../index.ts";
+import raucleClaw, { registerPlugin, type ManagerLike, type PluginDeps } from "../index.ts";
 import {
   hostDecisionForPluginOutcome,
   renderHostOutcomeForPluginEvidence,
@@ -139,6 +138,96 @@ test("a missing authority callback degrades gracefully (plugin-side evidence onl
     unknown
   >;
   assert.equal(result?.block, undefined, "the allow path still returns a decision");
+});
+
+test("the decision log records the ACTUAL authority acknowledgement (D3 truth)", async () => {
+  // (a) an exposed callback that succeeds records authorityAcknowledged: true.
+  const hostOk = createMockHostApi({ pluginConfig: {} });
+  const handleOk = registerPlugin(hostOk.api as never, {
+    skipStartup: true,
+    createManager: () => okManager(),
+    createScanner: () => stubOk(scanResult("CLEAN")) as never,
+  });
+  const regOk = hostOk.typed.find((r) => r.name === "before_tool_call");
+  if (!regOk) throw new Error("tool gate must be registered");
+  const handlerOk = regOk.handler as (event: unknown, ctx: unknown) => Promise<unknown>;
+  await handlerOk({ toolName: "exec", params: {} }, {
+    agentId: "a1",
+    receiptAuthority: () => undefined,
+  });
+  assert.equal(
+    handleOk.decisionLog.entries()[0].authorityAcknowledged,
+    true,
+    "a successful host acknowledgement records true"
+  );
+
+  // (b) a FAILING host authority fence records false, never a hardcoded true.
+  const hostThrow = createMockHostApi({ pluginConfig: {} });
+  const handleThrow = registerPlugin(hostThrow.api as never, {
+    skipStartup: true,
+    createManager: () => okManager(),
+    createScanner: () => stubOk(scanResult("CLEAN")) as never,
+  });
+  const regThrow = hostThrow.typed.find((r) => r.name === "before_tool_call");
+  if (!regThrow) throw new Error("tool gate must be registered");
+  const handlerThrow = regThrow.handler as (event: unknown, ctx: unknown) => Promise<unknown>;
+  await handlerThrow({ toolName: "exec", params: {} }, {
+    agentId: "a1",
+    receiptAuthority: () => {
+      throw new Error("host authority fence failed");
+    },
+  });
+  assert.equal(
+    handleThrow.decisionLog.entries()[0].authorityAcknowledged,
+    false,
+    "a throwing fence is recorded truthfully"
+  );
+  assert.equal(
+    handleThrow.decisionLog.entries()[0].receipt.bound,
+    "allowed",
+    "the fence failure does not change the scan outcome itself"
+  );
+
+  // (c) no exposed callback at all: plugin-side evidence only -> false.
+  const hostNone = createMockHostApi({ pluginConfig: {} });
+  const handleNone = registerPlugin(hostNone.api as never, {
+    skipStartup: true,
+    createManager: () => okManager(),
+    createScanner: () => stubOk(scanResult("CLEAN")) as never,
+  });
+  const regNone = hostNone.typed.find((r) => r.name === "before_tool_call");
+  if (!regNone) throw new Error("tool gate must be registered");
+  const handlerNone = regNone.handler as (event: unknown, ctx: unknown) => Promise<unknown>;
+  await handlerNone({ toolName: "exec", params: {} }, { agentId: "a1" });
+  assert.equal(
+    handleNone.decisionLog.entries()[0].authorityAcknowledged,
+    false,
+    "an absent callback is recorded as NOT acknowledged"
+  );
+});
+
+test("closed-mode scanner failure records the real ack state, never a hardcoded true (D3)", async () => {
+  const host = createMockHostApi({ pluginConfig: { failureMode: "closed" } });
+  const handle = registerPlugin(host.api as never, {
+    skipStartup: true,
+    createManager: () => okManager(),
+    createScanner: () => stubFailing(new Error("scanner down")) as never,
+  });
+  const reg = host.typed.find((r) => r.name === "before_tool_call");
+  if (!reg) throw new Error("tool gate must be registered");
+  const handler = reg.handler as (event: unknown, ctx: unknown) => Promise<unknown>;
+  const result = (await handler({ toolName: "exec", params: {} }, {
+    agentId: "a1",
+    receiptAuthority: () => {
+      throw new Error("host authority fence failed");
+    },
+  })) as Record<string, unknown>;
+  assert.equal(result?.block, true, "closed mode still returns the explicit block decision");
+  assert.equal(
+    handle.decisionLog.entries()[0].authorityAcknowledged,
+    false,
+    "the failing fence is recorded truthfully in the scan-failure path too"
+  );
 });
 
 function stubOk(result: ScanResult) {

@@ -51,7 +51,8 @@ class TestIdentityEndpoint:
         body = resp.json()
         assert body["kind"] == "raucle"
         assert body["status"] == "ok"
-        assert isinstance(body["version"], str) and body["version"]
+        assert isinstance(body["version"], str)
+        assert body["version"]
         assert isinstance(body["mode"], str)
         assert isinstance(body["rules_loaded"], int)
         assert body["scan_secret_required"] is False
