@@ -20,8 +20,12 @@ raucle agents revoke-key --agent-id agent:pay --store /data/agent-credentials.js
 ```
 
 Agents send `X-Api-Key: rak_...` (apikey) or `X-Capability-Token: {...}`
-(token mode). Auth failures return a **receipted DENY**, not a bare 401 -
-an unauthenticated attempt is itself evidence.
+(token mode). An auth failure (no credential, wrong key, malformed token)
+is refused pre-gate: the HTTP answer is a deny decision with `receipt_id`
+null and no receipt behind it, because the receipt trail starts at
+`check_tool_call` - unauthenticated pre-gate refusals are transport-layer
+refusals, not evidence. A **receipted DENY** is what an authenticated
+caller earns when the gate verdict itself is deny.
 
 ## Step 2: turn on segmented receipts + index (5 min)
 
