@@ -24,8 +24,42 @@ services:
     - RAUCLE_SIEM_URL=${RAUCLE_SIEM_URL:-}
     - RAUCLE_SIEM_TOKEN=${RAUCLE_SIEM_TOKEN:-}
     - RAUCLE_POLICY_DIR=/etc/raucle/policies-demo
+    # Authentication. The CODE default stays RAUCLE_GATE_AUTH=off (a
+    # deliberate backwards-compatible local-dev posture with a boot banner),
+    # but this compose publishes the gate behind Caddy on a public HTTPS
+    # listener, so the supplied deployment must require an explicit
+    # authentication choice: compose refuses to start until you set
+    # RAUCLE_GATE_AUTH here or in your .env. Pick "apikey" (per-agent
+    # X-Api-Key credentials) or "token" (capability tokens verified against
+    # the trust registry), provision the credentials with
+    # `raucle agents issue-key --agent-id agent:<id> --store
+    # /data/agent-credentials.jsonl`, and follow Step 1 of
+    # docs/getting-started/20-production-hardening.md for the full story.
+    - RAUCLE_GATE_AUTH=${RAUCLE_GATE_AUTH:?Set to apikey or token}
+    # Rate limiting posture. The image installs the [server] extra, so
+    # slowapi is always present and the serving-mode refusal in
+    # raucle/gateway_app.py cannot fire here; RAUCLE_DISABLE_RATE_LIMIT is
+    # deliberately not set.
+    - RAUCLE_GATE_RATE_LIMIT=${RAUCLE_GATE_RATE_LIMIT:-200/minute}
+    # The per-route limit on /gate (defaults to the same 200/minute posture;
+    # the code default matches).
+    - RAUCLE_GATE_ROUTE_LIMIT=${RAUCLE_GATE_ROUTE_LIMIT:-200/minute}
+    # The gateway sits behind the Caddy service in this file: without
+    # trust-proxy, every request's socket peer is Caddy itself, so ALL
+    # external callers collapse into one SHARED rate-limit bucket and one
+    # noisy tenant starves everyone else (a shared-bucket DoS on legitimate
+    # agents). With it, the left-most X-Forwarded-For entry becomes the
+    # rate-limit key. Only enable when the proxy is trusted: a caller that
+    # reaches the gateway directly can forge that header.
+    - RAUCLE_TRUST_PROXY=${RAUCLE_TRUST_PROXY:-1}
+    # Schema binding is opt-in. Point RAUCLE_TOOL_SCHEMA_MANIFEST at YOUR
+    # tool manifest (a tool name to JSON-Schema map) and mount the file
+    # read-only beside the policy volumes to bind /gate receipts to the
+    # declared definition digests; unset preserves the legacy behaviour (no
+    # schema binding). The volume is not pre-wired: add it when you enable
+    # the entry below.
+    # - RAUCLE_TOOL_SCHEMA_MANIFEST=/etc/raucle/tools-manifest.json
     - RATE_LIMIT=${RATE_LIMIT:-6000}
-    - RAUCLE_GATE_RATE_LIMIT=${RAUCLE_GATE_RATE_LIMIT:-60000/minute}
     volumes:
     - ./policies:/etc/raucle/policies:ro
     - ./policies/examples:/etc/raucle/policies-demo:ro
@@ -38,10 +72,14 @@ services:
       - CMD
       - curl
       - -f
-      - http://localhost:8081/health
+      - http://localhost:8080/livez
       interval: 30s
       timeout: 5s
       retries: 3
+  # Demo traffic simulator. NOTE: it carries no credentials, so once
+  # RAUCLE_GATE_AUTH is set to apikey or token, every demo call earns a
+  # receipted DENY (an unauthenticated attempt is itself evidence). For a
+  # closed deployment remove this service.
   demo-agents:
     build:
       context: .
@@ -68,7 +106,11 @@ services:
     networks:
     - raucle-internal
   caddy:
-    image: caddy:2-alpine
+    # Digest-pinned (Q9 review item 2): caddy:2-alpine floated to
+    # v2.11.9-alpine at pin time (24 Nov 2026; linux/amd64 manifest digest,
+    # docker buildx imagetools inspect). The stock image ships NO rate-limit
+    # module (verified: caddy list-modules) - see the Caddyfile.
+    image: caddy:2-alpine@sha256:fc9cbc100585871d18d4e451cca7021785c90a7006087427ae5ceb3e4efe6424
     container_name: raucle-caddy
     ports:
     - 80:80

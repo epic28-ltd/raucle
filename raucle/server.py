@@ -643,7 +643,7 @@ def audit_status() -> dict[str, Any]:
         return {"enabled": False}
     return {
         "enabled": True,
-        "event_count": _audit_sink.event_count,
+        "event_count": _audit_sink.head_index,
         "tail_hash": _audit_sink.tail_hash,
     }
 

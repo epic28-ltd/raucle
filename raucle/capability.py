@@ -92,6 +92,11 @@ logger = logging.getLogger(__name__)
 # Canonicalisation + crypto helpers (mirrors feed.py / provenance.py)
 # ---------------------------------------------------------------------------
 
+#: Q11 E: the named production strict ancestry mode (opt-in env flag). When
+#: set, a token that cites a parent refuses by name unless a parent_resolver
+#: is configured to verify the delegation chain.
+ENV_REQUIRE_ANCESTRY_RESOLVER = "RAUCLE_REQUIRE_ANCESTRY_RESOLVER"
+
 #: JS safe-integer range — values outside this are not exactly representable
 #: in all five reference implementations (parity with provenance.py).
 _MAX_SAFE_INT = 2**53 - 1
@@ -1377,20 +1382,56 @@ class DelegationLedger:
     resolve; a tampered ledger row fails closed.
     """
 
-    def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
+    def __init__(self, path: str | Path | None = None) -> None:
+        # ``path=None`` is the in-memory shape (RAU-05): :meth:`from_jsonl`
+        # builds the ledger from bytes the file cache already read and
+        # (RAU-02) seal-checked, so no instance re-reads the disk behind
+        # the cache's back.
+        self.path = Path(path) if path is not None else None
         self._records: dict[str, dict[str, Any]] = {}
         self._control_rows: list[dict[str, Any]] = []
         self._mtime: float | None = None
-        if self.path.exists():
+        if self.path is not None and self.path.exists():
             self._load()
+
+    @classmethod
+    def from_jsonl(cls, text: str) -> DelegationLedger:
+        """In-memory ledger from JSONL text: last-record-wins, same as _load.
+
+        The gateway's file cache hands over bytes it read once (and,
+        RAU-02, verified against the operator's ``.meta`` seal when the
+        file carries one); this parse sees those bytes and nothing else.
+        The returned ledger has no path: ``_ensure_loaded`` never
+        consults the disk, so the resolver serves exactly the verified
+        snapshot.
+        """
+        import json as _json
+
+        ledger = cls(None)
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            rec = _json.loads(line)
+            if "capability" not in rec:
+                # Containment control row (hold/resume marker): never a
+                # delegateable capability - kept in order for the
+                # hold-state consult in :meth:`register`.
+                ledger._control_rows.append(rec)
+                continue
+            cap_id = rec["capability"].get("token_id", "")
+            ledger._records[cap_id] = rec
+        return ledger
 
     def _load(self) -> None:
         import json as _json
 
+        path = self.path
+        if path is None:
+            return
         self._records = {}
         self._control_rows = []
-        with open(self.path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if not line:
@@ -1404,9 +1445,11 @@ class DelegationLedger:
                     continue
                 cap_id = rec["capability"].get("token_id", "")
                 self._records[cap_id] = rec
-        self._mtime = self.path.stat().st_mtime
+        self._mtime = path.stat().st_mtime
 
     def _ensure_loaded(self) -> None:
+        if self.path is None:
+            return
         mtime = self.path.stat().st_mtime if self.path.exists() else None
         if mtime != self._mtime:
             self._load()
@@ -1428,6 +1471,14 @@ class DelegationLedger:
 
         token = capability.to_dict()
         signature = token.get("signature", "")
+        if self.path is None:
+            # An in-memory from_jsonl ledger is a resolver snapshot over
+            # seal-checked bytes; appending through it would write behind
+            # the cache's back. Fail closed instead.
+            raise ValueError(
+                "delegation ledger: in-memory (from_jsonl) ledgers are "
+                "read-only; register on a path-backed ledger"
+            )
         if not signature:
             raise ValueError("delegation ledger: refusing unsigned capability record")
         key = verifying_key
@@ -1621,6 +1672,14 @@ class CapabilityGate:
         cannot verify the chain, so it does not trust that the issuer minted it
         correctly. Supply a resolver to use attenuated/derived tokens. Root
         tokens (no ``parent_id``) are unaffected.
+    require_ancestry_resolver
+        Q11 E: the named production strict mode (env
+        ``RAUCLE_REQUIRE_ANCESTRY_RESOLVER``). When set, a token that cites a
+        parent is denied BY NAME when no ``parent_resolver`` is configured,
+        stating the strict mode the deployment promised: delegation-affected
+        calls refuse until an ancestry resolver is wired. Unset (the
+        development affordance) keeps the established no-resolver deny
+        unchanged. Root tokens (no ``parent_id``) are unaffected either way.
     """
 
     def __init__(
@@ -1628,6 +1687,7 @@ class CapabilityGate:
         *,
         trusted_issuers: dict[str, str],
         parent_resolver: Any = None,
+        require_ancestry_resolver: bool = False,
         proof_enforcement_mode: str = "off",
         trusted_proofs: dict[str, ProofResult] | None = None,
         revoked_token_ids: set[str] | None = None,
@@ -1677,6 +1737,7 @@ class CapabilityGate:
             )
         self._issuers = dict(trusted_issuers)
         self._resolver = parent_resolver
+        self._require_ancestry_resolver = bool(require_ancestry_resolver)
         self._proof_mode = proof_enforcement_mode
         self._trusted_proofs: dict[str, ProofResult] = dict(trusted_proofs or {})
         self._revoked: set[str] = set(revoked_token_ids or ())
@@ -1927,6 +1988,19 @@ class CapabilityGate:
         if token.parent_id is None:
             return chain, None
         if self._resolver is None:
+            if self._require_ancestry_resolver:
+                # Q11 E: the strict mode the deployment promised refuses
+                # delegation-affected calls by name until an ancestry
+                # resolver is wired (the root token is not
+                # delegation-affected and stays servable).
+                return chain, GateDecision(
+                    False,
+                    f"strict ancestry mode ({ENV_REQUIRE_ANCESTRY_RESOLVER}=1): "
+                    f"token cites parent {token.parent_id!r} but no parent_resolver "
+                    f"is configured; delegation depth beyond one level is served "
+                    f"only with an ancestry resolver wired (deny)",
+                    token.token_id,
+                )
             return chain, GateDecision(
                 False,
                 f"token cites parent {token.parent_id!r} but no parent_resolver "

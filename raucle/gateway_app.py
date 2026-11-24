@@ -51,6 +51,12 @@ _MIN_ADMIN_KEY_CHARS = 24
 # for large-args deployments with RAUCLE_GATE_MAX_PAYLOAD_CHARS.
 _MAX_GATE_PAYLOAD_CHARS = 1_000_000
 
+# Q15 (RED-037 round two): rate limiting is mandatory on the SERVING path.
+# When slowapi is absent a serving boot refuses with a named error; this
+# variable is the deliberate opt-out (the null limiter stands in and the
+# boot still logs the warning).
+ENV_RATE_LIMIT_DISABLE = "RAUCLE_DISABLE_RATE_LIMIT"
+
 
 def _gate_payload_limit() -> int:
     import os
@@ -59,10 +65,21 @@ def _gate_payload_limit() -> int:
     if raw:
         try:
             value = int(raw)
-            if value > 0:
-                return value
         except ValueError:
-            pass
+            logger.warning(
+                "RAUCLE_GATE_MAX_PAYLOAD_CHARS=%r is not an integer; keeping the default %d",
+                raw,
+                _MAX_GATE_PAYLOAD_CHARS,
+            )
+            return _MAX_GATE_PAYLOAD_CHARS
+        if value <= 0:
+            logger.warning(
+                "RAUCLE_GATE_MAX_PAYLOAD_CHARS=%r is not a positive integer; keeping the default %d",
+                raw,
+                _MAX_GATE_PAYLOAD_CHARS,
+            )
+            return _MAX_GATE_PAYLOAD_CHARS
+        return value
     return _MAX_GATE_PAYLOAD_CHARS
 
 
@@ -582,6 +599,10 @@ class _NullLimiter:
     slowapi is an optional dependency. When it is absent the gateway logs a
     warning and this object makes ``@_limiter.limit(...)`` a no-op, rather than
     the route definition branching on whether the library imported.
+
+    Q15: reaching this stand-in on the serving path requires an explicit
+    ``RAUCLE_DISABLE_RATE_LIMIT=1`` opt-out - without it the app factory
+    refuses the boot (nothing serves unlimited silently).
     """
 
     def limit(self, *_args: Any, **_kwargs: Any) -> Any:
@@ -655,7 +676,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
             ),
         )
         app.add_middleware(SlowAPIMiddleware)
-    except ImportError:
+    except ImportError as _import_error:
         _limiter = _NullLimiter()
         # RED-037: silently running without a rate limit is the failure mode
         # worth shouting about, because the deployment believes it has one.
@@ -663,6 +684,21 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
             "slowapi is not installed: the gateway is running WITHOUT rate limiting. "
             'Install the "server" extra (pip install "raucle[server]") to enable it.'
         )
+        # Q15 (RED-037 round two): creating the gateway app IS serving mode,
+        # so a serving boot without the limiter refuses by name unless the
+        # operator explicitly opts out. Local dev/CLI paths never construct
+        # this app, so they are unaffected.
+        import os as _os
+
+        if _os.environ.get(ENV_RATE_LIMIT_DISABLE, "").lower() not in ("1", "true", "yes"):
+            from raucle.errors import ConfigurationError
+
+            raise ConfigurationError(
+                "serving the gateway without a rate limiter is refused: slowapi is "
+                "not installed. Install the [server] extra "
+                '(pip install "raucle[server]"), or set '
+                "RAUCLE_DISABLE_RATE_LIMIT=1 to serve without limiting deliberately."
+            ) from _import_error
 
     _install_security_headers(app)
 
@@ -709,6 +745,18 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
             if not _hmac.compare_digest(key, gateway.config.health_check_token):
                 raise HTTPException(status_code=401, detail="Health check unauthorized")
         return _health_payload(gateway)
+
+    @app.get("/livez")
+    def livez() -> dict[str, str]:
+        """Liveness probe (Q9 review, container healthcheck): process-up only.
+
+        Deliberately no auth and no admin-plane dependency, unlike /health
+        (aggregate payload, honours health_check_token): the container
+        healthcheck polls THIS route on the agent-facing gateway port, so a
+        deployment that token-gates /health, or that runs without the admin
+        plane bound, still reports live. Aggregate detail stays on /health.
+        """
+        return {"status": "live"}
 
     @app.post(
         "/api/revoke",
@@ -1055,6 +1103,38 @@ def create_admin_app(gateway: RaucleGateway, users: UserManager) -> FastAPI:
     )
 
     _install_security_headers(app)
+
+    # Q9 review (admin exposure): the admin plane is rate limited IN APP,
+    # because the digest-pinned stock Caddy image ships no rate-limit module
+    # (verified against caddy 2.11.9-alpine: caddy list-modules). Default is
+    # 120 requests per minute per client, comfortably above the panel's
+    # bounded polling; operators override with RAUCLE_ADMIN_RATE_LIMIT. Same
+    # shape as the gateway app's limiter: slowapi when installed, a loud
+    # warning when not (the deployment must not believe it has a limit).
+    try:
+        import os
+
+        from slowapi import Limiter
+        from slowapi.errors import RateLimitExceeded
+        from slowapi.middleware import SlowAPIMiddleware
+
+        _admin_limit_default = os.environ.get("RAUCLE_ADMIN_RATE_LIMIT", "120/minute")
+        app.state.limiter = Limiter(key_func=_client_key, default_limits=[_admin_limit_default])
+        app.add_exception_handler(
+            RateLimitExceeded,
+            lambda req, exc: JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded", "retry_after": "60"},
+            ),
+        )
+        app.add_middleware(SlowAPIMiddleware)
+    except ImportError:
+        logger.warning(
+            "slowapi is not installed: the admin panel is running WITHOUT rate "
+            'limiting. Install the "server" extra (pip install "raucle[server]") '
+            "to enable it."
+        )
+
     _register_health_routes(app, gateway)
     _register_stats_routes(app, gateway, check_auth, check_access)
     _register_demo_findings_routes(app, check_auth, check_access)

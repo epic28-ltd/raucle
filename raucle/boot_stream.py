@@ -104,6 +104,10 @@ class BootReadiness:
             "indexed_rows": 0,
             "progress": 0.0,
         }
+        # Q11 F: the signing state of the audit chain's genesis (state and
+        # the key id the genesis is attributed to), set honestly from the
+        # chain on disk at boot, never from the config's wish.
+        self._audit_chain: dict[str, Any] = {"state": _PENDING, "key_id": None}
 
     def snapshot(self) -> dict[str, Any]:
         """A deep copy of the readiness block (safe to serve on /health)."""
@@ -113,7 +117,13 @@ class BootReadiness:
                 "session_continuity": self._session_continuity,
                 "chain_scan": dict(self._chain_scan),
                 "receipt_index": dict(self._receipt_index),
+                "audit_chain": dict(self._audit_chain),
             }
+
+    def set_audit_chain(self, state: str, key_id: str | None = None) -> None:
+        """Q11 F: record the audit chain's actual signing state."""
+        with self._lock:
+            self._audit_chain = {"state": state, "key_id": key_id}
 
     def set_session_continuity(self, state: str) -> None:
         with self._lock:

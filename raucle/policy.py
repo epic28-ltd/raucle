@@ -33,6 +33,7 @@ Compile and mint::
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from dataclasses import dataclass, field
@@ -480,6 +481,55 @@ class PolicyFile:
     # shape is validated here, the tool-reference bind runs at gateway
     # load against the tool schema registry, SchemaPolicyLoadError).
     state_pairings: list[dict[str, Any]] = field(default_factory=list)
+    # RAU-02 (seal-on-load): populated only by :meth:`load_sealed`. The
+    # sha256 of the bytes that were VERIFIED (or, unsealed, the bytes that
+    # were parsed) and whether an operator seal covers them. Plain
+    # :meth:`load` keeps both empty; every existing constructor is
+    # byte-identical.
+    content_sha256: str = ""
+    sealed: bool = False
+
+    @classmethod
+    def load_sealed(
+        cls,
+        path: str | Path,
+        *,
+        keys: dict[str, bytes],
+        mode: str = "advisory",
+    ) -> PolicyFile:
+        """Seal-aware load for enforcement config (RAU-02, M5/R5).
+
+        ONE read: the bytes that are verified are the bytes that are
+        parsed, so there is no window between verification and parse.
+        With ``mode="off"`` the seal mechanism is inactive and this
+        degrades to a plain bytes parse. Under ``advisory``/``required``
+        a PRESENT seal that fails verification raises
+        :class:`raucle.errors.PolicySealRefused` in every mode (tamper
+        evidence), and an ABSENT seal raises only under ``required``.
+        """
+        from raucle import policy_seal
+        from raucle.errors import PolicySealRefused
+
+        data = Path(path).read_bytes()
+        if mode == "off":
+            policy = cls.from_dict(yaml.safe_load(data.decode("utf-8")))
+            policy.content_sha256 = hashlib.sha256(data).hexdigest()
+            policy.sealed = False
+            return policy
+        verdict = policy_seal.verify_bytes(path, data, keys)
+        if verdict.state == "refused":
+            raise PolicySealRefused(f"policy seal refused for {Path(path)}: {verdict.reason}")
+        if verdict.state == "unsealed" and mode == "required":
+            raise PolicySealRefused(
+                f"{Path(path)} has no seal: no sidecar seal exists and "
+                f"RAUCLE_POLICY_SEALING=required refuses unsigned enforcement "
+                f"config until the file is sealed (raucle policy seal) or the "
+                f"mode is advisory/off"
+            )
+        policy = cls.from_dict(yaml.safe_load(data.decode("utf-8")))
+        policy.content_sha256 = verdict.content_sha256
+        policy.sealed = verdict.state == "verified"
+        return policy
 
     @classmethod
     def load(cls, path: str | Path) -> PolicyFile:

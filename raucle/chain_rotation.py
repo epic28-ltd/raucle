@@ -450,7 +450,7 @@ def _verify_fresh_boot(config: GatewayConfig) -> dict[str, Any]:
     signer = _gate_signer(config)
     sink = HashChainSink(Path(config.audit_chain), signer=signer, checkpoint_every=0)
     boot["audit_chain"] = str(config.audit_chain)
-    boot["audit_chain_genesis"] = sink.tail_hash == "0" * 64 or sink.event_count == 0
+    boot["audit_chain_genesis"] = sink.tail_hash == "0" * 64 or sink.head_index == 0
     sink.close()
 
     if config.receipt_store_dir:

@@ -280,9 +280,11 @@ class TestDemoSessionRulesCorpus:
             report = verifier.verify_chain(str(seg))
             assert report.valid, report.errors
 
-    def test_no_session_id_never_trips_a_rule(self, demo):
-        """The same deny storm with no session declared stays a plain
-        policy matter: continuity is never fabricated."""
+    def test_no_session_id_refuses_named_and_never_fires_a_rule(self, demo):
+        """Q17 gate hardening (close 3): with the demo session rules
+        configured, a call with no session declared refuses by name before
+        any rule can fire, and no session rule finding is minted from it
+        (continuity is never fabricated from trace ids)."""
         _gw, client = demo
         for _ in range(4):
             body = client.post(
@@ -293,9 +295,11 @@ class TestDemoSessionRulesCorpus:
                     "agent_id": "agent:svc",
                 },
             ).json()
-            assert body["decision"] == "deny"
-            # the tool policy denied it; no session rule ever fired
-            assert "demo-" not in body["rule_id"], body
+            assert body["decision"] == "deny", body
+            assert "session_binding_required" in body["reason"], body
+            # no rule fired, nothing was fabricated: the refusal carries no
+            # demo session rule id and mints no session-rule finding
+            assert "demo-" not in str(body.get("rule_id", "")), body
 
 
 def finding_cites(findings: list[dict], receipts: list[str]) -> bool:

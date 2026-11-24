@@ -81,6 +81,14 @@ config:
   healthKey: ""
   policyFile: /etc/raucle/policies.yaml
   policyDir: /etc/raucle/policies-demo
+  # RAU-02: the operator-signed policy-seal mechanism. policySealing is
+  # required | advisory | off (default advisory for one release cycle:
+  # unsigned policy boots with a named banner and refuses under
+  # required). policySealPublicKey points at the operator's public PEM
+  # for seal verification (empty = unconfigured; a present seal then
+  # refuses until keys are configured).
+  policySealing: "advisory"
+  policySealPublicKey: ""
   complianceFramework: "eu-ai-act"
   traceHeader: "X-Trace-Id"
 

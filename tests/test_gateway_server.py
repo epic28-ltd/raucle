@@ -133,11 +133,15 @@ def test_demo_key_without_demo_mode_is_not_registered(stub_uvicorn, tmp_path, mo
     assert mgr.get_user("k-demo") is None
 
 
-def test_main_without_admin_key_still_boots_both_servers(
-    stub_uvicorn, tmp_path, monkeypatch
+def test_main_without_admin_key_refuses_to_boot(
+    stub_uvicorn, tmp_path, monkeypatch, capsys
 ) -> None:
-    """No RAUCLE_ADMIN_KEY: the documented open-admin warning path still
-    boots both servers rather than dying (deployments must see it coming)."""
+    """Q9 review (external v0.23.7): a keyless SERVING boot is refused with
+    the named error before any server is built. The pre-Q9 behaviour
+    (warn, then boot both servers anyway) shipped a login page that
+    accepts no credentials behind the public proxy; compose and Helm
+    already required the key, so a bare ``docker run`` without one now
+    exits 1 like the boot memory ceiling does."""
     for var in ("RAUCLE_ADMIN_KEY", "RAUCLE_DEMO_KEY"):
         monkeypatch.setenv(var, "")
     monkeypatch.setenv("RAUCLE_GATEWAY_PORT", "8182")
@@ -150,8 +154,34 @@ def test_main_without_admin_key_still_boots_both_servers(
     monkeypatch.setenv("RAUCLE_AGENT_CREDENTIALS", str(tmp_path / "creds.jsonl"))
     monkeypatch.setenv("RAUCLE_USERS_FILE", str(tmp_path / "users.jsonl"))
 
-    gateway_server.main()
-    assert [s.config.port for s in _StubUvicornServer.built] == [8182, 8183]
+    with pytest.raises(SystemExit) as excinfo:
+        gateway_server.main()
+
+    assert excinfo.value.code == 1
+    # The refusal happened before any server was built.
+    assert _StubUvicornServer.built == []
+    err = capsys.readouterr().err
+    assert "error:" in err
+    assert "RAUCLE_ADMIN_KEY" in err
+
+
+def test_require_admin_key_raises_and_passes_by_name(tmp_path) -> None:
+    """The refusal helper: named error when the key is missing, silent
+    pass-through when one is configured (the serving path's contract)."""
+    from raucle.errors import AdminKeyMissingError
+
+    with pytest.raises(AdminKeyMissingError, match="admin key"):
+        gateway_server._require_admin_key(_config(tmp_path, admin_api_key=""))
+    gateway_server._require_admin_key(_config(tmp_path))  # key set: no raise
+
+
+def test_keyless_dev_paths_still_construct_the_gateway(tmp_path) -> None:
+    """Q9 scope discipline: the refusal lives in the SERVING entry point
+    only. Library use, the CLI detector server and tests construct a
+    gateway with no admin key and keep working unchanged."""
+    cfg = _config(tmp_path, admin_api_key="")
+    gw = RaucleGateway(cfg)
+    assert gw.config.admin_api_key == ""
 
 
 def test_boot_memory_preflight_refusal_exits_cleanly_without_serving(
@@ -175,6 +205,9 @@ def test_boot_memory_preflight_refusal_exits_cleanly_without_serving(
     monkeypatch.setenv("RAUCLE_REGISTRY_PATH", str(tmp_path / "registry.jsonl"))
     monkeypatch.setenv("RAUCLE_USERS_FILE", str(tmp_path / "users.jsonl"))
     monkeypatch.setenv("RAUCLE_BOOT_MEM_CEILING_MB", "1")
+    # Q9: the admin-key refusal runs BEFORE the memory preflight; give the
+    # boot a key so this test reaches the ceiling refusal it is about.
+    monkeypatch.setenv("RAUCLE_ADMIN_KEY", "k-admin")
 
     with pytest.raises(SystemExit) as excinfo:
         gateway_server.main()
@@ -183,3 +216,32 @@ def test_boot_memory_preflight_refusal_exits_cleanly_without_serving(
     # No servers were built: the refusal happened before any serve.
     assert _StubUvicornServer.built == []
     assert "raucle rotate-chain" in capsys.readouterr().err
+
+
+def test_serving_boot_without_slowapi_refuses_cleanly_without_serving(
+    stub_uvicorn, tmp_path, monkeypatch, capsys
+) -> None:
+    """Q15: a SERVING boot without slowapi refuses with the named dependency
+    before any server is built (the disable env is deliberately NOT set, so
+    the deployment cannot silently lose its limiter)."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "slowapi", None)
+    monkeypatch.delenv("RAUCLE_DISABLE_RATE_LIMIT", raising=False)
+    monkeypatch.setenv("RAUCLE_ADMIN_KEY", "k-admin")
+    monkeypatch.setenv("RAUCLE_SIGNER", "local")
+    monkeypatch.setenv("RAUCLE_POLICY_FILE", "")
+    monkeypatch.setenv("RAUCLE_RECEIPT_STORE", str(tmp_path / "receipts.jsonl"))
+    monkeypatch.setenv("RAUCLE_AUDIT_CHAIN", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv("RAUCLE_REGISTRY_PATH", str(tmp_path / "registry.jsonl"))
+    monkeypatch.setenv("RAUCLE_AGENT_CREDENTIALS", str(tmp_path / "creds.jsonl"))
+    monkeypatch.setenv("RAUCLE_USERS_FILE", str(tmp_path / "users.jsonl"))
+
+    with pytest.raises(SystemExit) as excinfo:
+        gateway_server.main()
+
+    assert excinfo.value.code == 1
+    assert _StubUvicornServer.built == []
+    captured = capsys.readouterr()
+    assert "slowapi" in captured.err
+    assert "RAUCLE_DISABLE_RATE_LIMIT" in captured.err

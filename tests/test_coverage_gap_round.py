@@ -89,13 +89,18 @@ def test_azure_siem_sends_when_configured(monkeypatch):
     sent: list[tuple[str, dict]] = []
     event = {"decision": "DENY", "tool": "t"}
 
-    class _FakeRequests:
+    class _FakeSession:
         @staticmethod
         def post(url, data=None, headers=None, timeout=None):
             sent.append((url, headers))
             return None
 
-    monkeypatch.setitem(sys.modules, "requests", _FakeRequests)
+    from raucle.gateway import SIEMForwarder
+
+    # RAU-04: the forwarder POSTs through its pinned session; stub the
+    # session seam, not sys.modules (a fake requests module poisons
+    # raucle.siem_pinned's import binding for later tests)
+    monkeypatch.setattr(SIEMForwarder, "_pinned_session", lambda self: _FakeSession())
     _azure_forwarder(monkeypatch).forward(event)
     assert sent, "expected a Log Analytics post"
     url, headers = sent[0]
@@ -116,12 +121,14 @@ def test_azure_siem_noop_without_creds(monkeypatch):
     monkeypatch.delenv("AZURE_LOG_ANALYTICS_SHARED_KEY", raising=False)
     sent: list = []
 
-    class _FakeRequests:
+    class _FakeSession:
         @staticmethod
         def post(*a, **k):  # pragma: no cover - must not be called
             sent.append(1)
 
-    monkeypatch.setitem(sys.modules, "requests", _FakeRequests)
+    from raucle.gateway import SIEMForwarder
+
+    monkeypatch.setattr(SIEMForwarder, "_pinned_session", lambda self: _FakeSession())
     _azure_forwarder(monkeypatch).forward({"decision": "DENY"})
     assert not sent
 
