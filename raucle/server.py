@@ -15,6 +15,14 @@ also accepted) to require callers to pass ``Authorization: Bearer <key>`` on
 every request.  If the variable is unset the server runs unauthenticated
 (suitable for localhost-only use).
 
+Embedded/plugin consumers (OpenClaw) share a per-boot scan secret instead:
+setting ``RAUCLE_PLUGIN_SCAN_SECRET`` requires the ``X-Raucle-Scan-Token``
+header on every ``/scan*`` request and on ``GET /identity`` (401 without,
+403 wrong, constant-time compare). ``GET /identity`` returns the schema-strict
+raucle identity body embedding managers use as the trust probe before
+adopting an already-answering service. ``/health`` stays an open liveness
+probe in both modes.
+
 Rate limiting
 -------------
 Set ``RAUCLE_RATE_LIMIT`` (requests per minute per IP, default 120) and
@@ -50,7 +58,7 @@ from raucle.scanner import Scanner, ScanResult
 logger = logging.getLogger(__name__)
 
 try:
-    from fastapi import FastAPI, HTTPException, Request  # type: ignore[import-untyped]
+    from fastapi import Depends, FastAPI, HTTPException, Request  # type: ignore[import-untyped]
     from fastapi.responses import JSONResponse, PlainTextResponse  # type: ignore[import-untyped]
     from pydantic import BaseModel, Field  # type: ignore[import-untyped]
 except ImportError as exc:
@@ -67,6 +75,11 @@ except ImportError as exc:
 _mode = _env("MODE", "standard")
 _rules_dir = _env("RULES_DIR")
 _api_key = _env("API_KEY", "")  # empty = no auth
+# Per-boot scan secret for embedded/plugin consumers (OpenClaw plugin): when
+# set, every scan endpoint AND the /identity trust probe require the
+# X-Raucle-Scan-Token header (constant-time compare). Unset keeps the
+# documented localhost posture.
+_scan_token = os.environ.get("RAUCLE_PLUGIN_SCAN_SECRET", "")
 _rate_limit_rpm = int(_env("RATE_LIMIT", "120"))
 _burst_limit = int(_env("BURST_LIMIT", "20"))
 _model_version = _env("MODEL_VERSION", "")
@@ -227,6 +240,17 @@ class HealthResponse(BaseModel):
     auth_enabled: bool
 
 
+class IdentityResponse(BaseModel):
+    """Schema-strict raucle identity body (the plugin's adoption probe)."""
+
+    kind: str
+    status: str
+    version: str
+    mode: str
+    rules_loaded: int
+    scan_secret_required: bool
+
+
 # ---------------------------------------------------------------------------
 # Prometheus-style metrics counters
 # ---------------------------------------------------------------------------
@@ -342,6 +366,29 @@ def _client_key(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+def _require_scan_token(request: Request) -> None:
+    """Dependency: enforce the per-boot scan secret on protected endpoints.
+
+    401 without the header, 403 on a wrong value (constant-time compare).
+    Counted under the shared auth-failure metric.
+    """
+    if not _scan_token:
+        return
+    provided = request.headers.get("x-raucle-scan-token", "")
+    if not provided:
+        _counters["raucle_auth_failures_total"] += 1
+        raise HTTPException(
+            status_code=401,
+            detail="Missing X-Raucle-Scan-Token header.",
+        )
+    if not secrets.compare_digest(provided.encode(), _scan_token.encode()):
+        _counters["raucle_auth_failures_total"] += 1
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid scan token.",
+        )
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -439,7 +486,10 @@ async def _auth_and_rate_limit(request: Request, call_next):  # type: ignore[no-
 
 
 @app.post("/scan")
-def scan_prompt(req: ScanRequest) -> ScanResponse:
+def scan_prompt(
+    req: ScanRequest,
+    _scan_auth: None = Depends(_require_scan_token),
+) -> ScanResponse:
     """Scan a single prompt for injection attacks."""
     start = time.perf_counter()
     result: ScanResult = _scanner.scan(req.prompt, context=req.context, mode=req.mode)
@@ -449,7 +499,10 @@ def scan_prompt(req: ScanRequest) -> ScanResponse:
 
 
 @app.post("/scan/batch", responses={400: {"description": "Too many prompts"}})
-def scan_batch(req: BatchScanRequest) -> BatchScanResponse:
+def scan_batch(
+    req: BatchScanRequest,
+    _scan_auth: None = Depends(_require_scan_token),
+) -> BatchScanResponse:
     """Scan multiple prompts concurrently."""
     if len(req.prompts) > 1000:
         raise HTTPException(status_code=400, detail="Maximum 1000 prompts per batch")
@@ -467,7 +520,10 @@ def scan_batch(req: BatchScanRequest) -> BatchScanResponse:
 
 
 @app.post("/scan/output")
-def scan_output(req: OutputScanRequest) -> ScanResponse:
+def scan_output(
+    req: OutputScanRequest,
+    _scan_auth: None = Depends(_require_scan_token),
+) -> ScanResponse:
     """Scan LLM output for data leakage, injection, and exfiltration."""
     start = time.perf_counter()
     result: ScanResult = _scanner.scan_output(
@@ -481,7 +537,10 @@ def scan_output(req: OutputScanRequest) -> ScanResponse:
 
 
 @app.post("/scan/tool")
-def scan_tool_call(req: ToolCallScanRequest) -> ScanResponse:
+def scan_tool_call(
+    req: ToolCallScanRequest,
+    _scan_auth: None = Depends(_require_scan_token),
+) -> ScanResponse:
     """Scan tool call arguments for dangerous patterns."""
     start = time.perf_counter()
     result: ScanResult = _scanner.scan_tool_call(
@@ -509,6 +568,25 @@ def health() -> HealthResponse:
         mode=_scanner.mode,
         rules_loaded=len(_scanner.list_rules()),
         auth_enabled=bool(_api_key),
+    )
+
+
+@app.get("/identity", responses={401: {"description": "Scan token required"}})
+def identity(_scan_auth: None = Depends(_require_scan_token)) -> IdentityResponse:
+    """Schema-strict raucle identity proof for the plugin's adoption probe.
+
+    When ``RAUCLE_PLUGIN_SCAN_SECRET`` is set this endpoint is
+    secret-protected (401 without / 403 with a wrong ``X-Raucle-Scan-Token``
+    header); the strict body lets an embedding manager prove it is talking to
+    a real raucle scanner before adopting an already-answering service.
+    """
+    return IdentityResponse(
+        kind="raucle",
+        status="ok",
+        version=__version__,
+        mode=_scanner.mode,
+        rules_loaded=len(_scanner.list_rules()),
+        scan_secret_required=bool(_scan_token),
     )
 
 
