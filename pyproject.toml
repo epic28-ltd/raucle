@@ -127,6 +127,18 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
     "mypy>=2.4",
+    # F143 (external re-check): the independent JOSE interop proof
+    # (tests/test_pq_interop.py) verifies pq1 receipts with joserfc, the
+    # library whose crit handling demonstrably rejects unknown critical
+    # headers (RFC 7515 §4.1.11). Verified span: joserfc 1.8.0 (24 Nov 2026,
+    # py3.13, cryptography 50.0.2), with the verify-path crit rejection
+    # re-verified on 1.7.7 (the resolution 3.10 environments get; it shares
+    # the crit behaviour but not the default signature size bound). The
+    # bounds record VERIFICATION, not a behavioural limit: lift deliberately
+    # after re-running the interop test on the newer minor. PyJWT was probed
+    # first and DISQUALIFIED (it silently accepts unknown crit on a valid
+    # signature).
+    "joserfc>=1.7.7,<2",
 ]
 all = ["raucle[rules,ml,server,compliance,timestamp,multimodal,proof]"]
 

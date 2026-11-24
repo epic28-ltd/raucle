@@ -47,24 +47,24 @@ param auditStorageAccountId string
 param auditContainerName string = 'raucle-audit'
 
 @description('raucle container image. Default pins the current release tag; see the pin comment below for the digest capture and provenance discipline.')
-param raucleImage string = 'ghcr.io/epic28-ltd/raucle:v0.23.7'
+param raucleImage string = 'ghcr.io/epic28-ltd/raucle:v0.23.8'
 // IMAGE PIN DISCIPLINE (Q21, per the Q9 digest-pinning convention):
 //   - The default above pins the CURRENT release tag. The previous
 //     default (ghcr.io/epic28-ltd/raucle:v0.12.0) was an antique mutable
 //     tag and is deliberately gone.
-//   - Provenance: release tag v0.23.7 resolves to source commit
-//     eafba15c3c0d896d284518011bebd3c8c3be5932 (verified at pin time,
+//   - Provenance: release tag v0.23.8 resolves to source commit
+//     27fce30497ad07e6605558c2566ccd0da1b9c658 (verified at pin time,
 //     24 Nov 2026, against the PEP 740 provenance attestation of the
-//     raucle 0.23.7 PyPI release: the Sigstore publishing certificate
-//     of https://pypi.org/integrity/raucle/0.23.7/raucle-0.23.7.tar.gz/provenance
+//     raucle 0.23.8 PyPI release: the Sigstore publishing certificate
+//     of https://pypi.org/integrity/raucle/0.23.8/raucle-0.23.8.tar.gz/provenance
 //     binds the tag push of publish.yml to that commit; the git tag
 //     points at the same commit).
 //   - Digest: pin the immutable digest IN ADDITION to the tag (Q9
 //     convention, Dockerfile.gateway / docker-compose.gateway.yml
 //     style) once the image is present in a registry this deployment
 //     can pull from, i.e. change the default to
-//     '<registry>/raucle:v0.23.7@sha256:<digest>' recorded via:
-//       docker buildx imagetools inspect <registry>/raucle:v0.23.7
+//     '<registry>/raucle:v0.23.8@sha256:<digest>' recorded via:
+//       docker buildx imagetools inspect <registry>/raucle:v0.23.8
 //   - Honest caveats at pin time: this repository's own pipelines
 //     publish to PyPI only (publish.yml) - no workflow publishes a
 //     container image - and ghcr.io/epic28-ltd/raucle did not resolve

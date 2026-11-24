@@ -64,7 +64,7 @@ jobs:
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1  # pypa's official maintained ref for OIDC trusted publishing
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1 (resolved to release tag v1.14.3, 24 Nov 2026)
         with:
           repository-url: https://test.pypi.org/legacy/
 
@@ -84,4 +84,4 @@ jobs:
         with:
           name: dist
           path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1  # pypa's official maintained ref for OIDC trusted publishing
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # release/v1 (resolved to release tag v1.14.3, 24 Nov 2026)
