@@ -1,0 +1,9 @@
+PASS (verdict refresh 24 Nov 2026 10:40Z, scope-limited re-pin, orchestrator-verified) head c8e61f57c097056cfb6a620006429fed8165d4f2 on feat/q9-container-hygiene for PR epic28-ltd/raucle #317.
+
+Scope and receipts of this refresh:
+- The deep-tier PASS below at head 2c17ac16bbf411ad657ca4518e495d4bcd8c36ce stands as the full audit of the Q9 lane's own content. Nothing lane-authored has been added since: the delta 2c17ac16..63e9ae1 contains only origin/main-side PR history (#316 seal-integrity, #318 trust-surface-integrity including the sdist symlink untrack, #319 enforcement-modes including fix commit b2762f5f) plus one align merge commit, confirmed with git log --no-merges over the range.
+- Since the original PASS: an align merge onto origin/main (63e9ae1) was pushed by the tending actor unsigned, DCO-blocking the PR; this run applied the mechanical DCO amend (63e9ae1 to c8e61f5). Content identity verified: git diff 63e9ae1..c8e61f5 reported 0 changed files; Signed-off-by: craigamcw trailer now present; push done force-with-lease with hooks disabled, remote verified equal to local.
+- Provenance limits, recorded honestly: the align delta's content is covered by the earlier verdict files for #316 and #318, and #319's fix round whose re-check evidence lives in the orchestrator session only (see checker-fail-epic28-ltd-raucle-319.md). CI re-runs on c8e61f5 and the rail's CLEAN read (including DCO green) remains the merge condition alongside this sha-pinned refresh.
+- Merge authorized under the standing verdict-file protocol when mergeStateStatus reads CLEAN at head c8e61f57c097056cfb6a620006429fed8165d4f2.
+
+Original PASS for the record (deep checker deleg_877ae5b0 task-1, 09:40): head 2c17ac16bbf411ad657ca4518e495d4bcd8c36ce byte-identical, 22/22 CI incl Sonar + mypy + pip-audit jobs, suite 3246/35, 13/13 claims verified against live registries and image builds. Body test-name defect corrected per prescription. Merge authorized.

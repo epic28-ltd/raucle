@@ -1,33 +1,33 @@
 {
   "kind": "raucle-audit-pack/v1",
   "generated_at": 1762500000,
-  "tool_version": "0.23.7",
-  "audit_key_id": "300d3ff7283e1244",
+  "tool_version": "0.23.8",
+  "audit_key_id": "22cae565c207f910",
   "require_pq": false,
   "members": [
     {
       "path": "chain.jsonl",
       "role": "receipt-chain",
-      "sha256": "sha256:6d2579b08166c9370fc474c84905f6c89c9f2368d7b25801193c8b3f7d610185"
+      "sha256": "sha256:6d86aa8b6cdbdc48298634076b44bc7916f32c2a4d9a4209cdfd7ce26e0f7204"
     },
     {
       "path": "manifest.json",
       "role": "signed-manifest",
-      "sha256": "sha256:d2342ada86bc2aa074679fd48fc64de0ee10fc57091f0121b12ffef9d20a77c1"
+      "sha256": "sha256:1d98217de5c0c7a18bde70aec92e3146ac615d28c53579bded0238b5c407ec32"
     },
     {
       "path": "report.html",
       "role": "human-report",
-      "sha256": "sha256:7753929b3865de5ec74353d2e8d4f41843e31a9112368d0aa56249000ad131c7"
+      "sha256": "sha256:ce1cd97465bcb925bf176d4e0e93c19a4132c5e0d9df7a24437d9be102c95eb5"
     },
     {
-      "path": "pubkeys/b5fc7cdc4daecad1.pem",
+      "path": "pubkeys/28c2096320baaf1f.pem",
       "role": "public-key",
-      "sha256": "sha256:b5fc7cdc4daecad1ad4d09820f66c36c5ba17b5ec84e394c748bbabb78f84a9a",
-      "key_id": "b5fc7cdc4daecad1"
+      "sha256": "sha256:28c2096320baaf1f52dcc4297c48fe44753970ae41180bab4ed391b719f61fd4",
+      "key_id": "28c2096320baaf1f"
     }
   ],
   "verify": "raucle audit-pack verify <dir>",
-  "audit_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAs0EodGHZ8S3yfBBW6MCxBMEniaweuhkiHX0RGk4tMtg=\n-----END PUBLIC KEY-----\n",
-  "index_signature": "5WyxcnGOjiCIyOXvmIDZdA3DATWESx/ipSxawgHBSOJc6K07Ff317nvlco3V8V7QchD0NkDNlYFY7N/iXPBVBQ=="
+  "audit_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAd6TbdSUCmW8vTOh/bacO8KOpIELlvOXlcNf4idZkAlA=\n-----END PUBLIC KEY-----\n",
+  "index_signature": "IlOR6tWi3iUQ60NVXG4FBbeVnRLZY2nvQbZGcmM1CY3meOcHaAQxd3k5FVRz9B2+5VikMWXpa09+xig5k9QYCQ=="
 }

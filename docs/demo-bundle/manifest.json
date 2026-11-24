@@ -2,7 +2,7 @@
   "body": {
     "kind": "raucle-audit-export/v1",
     "generated_at": 1762500000,
-    "tool_version": "0.23.7",
+    "tool_version": "0.23.8",
     "chain_verdict": {
       "valid": true,
       "receipt_count": 3,
@@ -24,8 +24,8 @@
           "chain verified clean for this node's receipts"
         ],
         "receipt_hashes": [
-          "sha256:e59f071ac05102af5559cfe1341e8e6e3298be48be1fa47dcedf35746adad157",
-          "sha256:e15dd9d4a2ac152b3503fa670b38ca9d76cb8fd8d43c4fd79d4a36294c5940ff"
+          "sha256:ee5b2ed743252d9134b92221fa6ce85dae0f2e1832877335a5dc6d73c6e30ec6",
+          "sha256:af2cfd1f630397c8adfca9d14bb8cf5e088d3c3b056a88ccc886ecc61d0f6a16"
         ],
         "proof_certificate": "",
         "proof_status": "",
@@ -40,7 +40,7 @@
           "chain verified clean for this node's receipts"
         ],
         "receipt_hashes": [
-          "sha256:d5ee3155ab662d9cd14a42e9478d3056389b28cd76d4e4750ceb4d737a777b9f"
+          "sha256:5e21ec6fb8391e3c7e9c6ba77b773c16a630c7cbc83b0858a93f0027f42211ce"
         ],
         "proof_certificate": "",
         "proof_status": "",
@@ -58,15 +58,15 @@
       "red": 0
     },
     "input_hashes": {
-      "chain_sha256": "sha256:6d2579b08166c9370fc474c84905f6c89c9f2368d7b25801193c8b3f7d610185",
+      "chain_sha256": "sha256:6d86aa8b6cdbdc48298634076b44bc7916f32c2a4d9a4209cdfd7ce26e0f7204",
       "public_keys": {
-        "b5fc7cdc4daecad1": "sha256:b5fc7cdc4daecad1ad4d09820f66c36c5ba17b5ec84e394c748bbabb78f84a9a"
+        "28c2096320baaf1f": "sha256:28c2096320baaf1f52dcc4297c48fe44753970ae41180bab4ed391b719f61fd4"
       },
       "capability_statements": {},
       "proofs": []
     }
   },
-  "signature": "ed25519:3851fdecade2c9087415bdc6baae11075ec03d623fe8a10c2e10ffefdaa61596e7c020de8872b4ccd008431fb4fa6744fa57ae9e213f606578f00ea388802a09",
-  "signer_key_id": "300d3ff7283e1244",
-  "signer_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAs0EodGHZ8S3yfBBW6MCxBMEniaweuhkiHX0RGk4tMtg=\n-----END PUBLIC KEY-----\n"
+  "signature": "ed25519:cd9d238fdd83ce801f8c53af6d802e063f9ba7a4c73d41b3fc358aecfca9adbf6787a7fdba168d2239c057065f85c852520e2b1619def99dab6bb97e8c559a01",
+  "signer_key_id": "22cae565c207f910",
+  "signer_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAd6TbdSUCmW8vTOh/bacO8KOpIELlvOXlcNf4idZkAlA=\n-----END PUBLIC KEY-----\n"
 }
