@@ -21,7 +21,11 @@ from pathlib import Path
 
 import uvicorn
 
-from raucle.errors import BootMemoryCeilingExceeded, ConfigurationError
+from raucle.errors import (
+    AdminKeyMissingError,
+    BootMemoryCeilingExceeded,
+    ConfigurationError,
+)
 from raucle.gateway import GatewayConfig, RaucleGateway, UserManager
 from raucle.gateway_app import create_admin_app, create_gateway_app
 
@@ -67,15 +71,36 @@ async def run_both_servers(
     )
 
 
+def _require_admin_key(config: GatewayConfig) -> None:
+    """Refuse a keyless SERVING boot with the named error (Q9 review).
+
+    The compose file (``${RAUCLE_ADMIN_KEY:?...}``) and the Helm chart
+    (``required "config.adminKey is REQUIRED"``) already demand an admin
+    key; this closes the bare ``docker run`` hole where the image boots
+    anyway and serves a login page that accepts no credentials behind the
+    public proxy. Dev/CLI paths never enter this module and are untouched.
+    """
+    if config.admin_api_key:
+        return
+    raise AdminKeyMissingError(
+        "gateway serving mode requires an admin key: set RAUCLE_ADMIN_KEY "
+        "(or RAUCLE_ADMIN_KEY_FILE pointing at a 0600 file holding the key) "
+        "and restart. Without it the admin panel serves a login page that "
+        "accepts no credentials, so the serving boot refuses instead of "
+        "shipping a dead admin plane."
+    )
+
+
 def main() -> None:
     config = GatewayConfig.from_env()
 
-    if not config.admin_api_key:
-        logger.warning(
-            "No admin key configured (RAUCLE_ADMIN_KEY / RAUCLE_ADMIN_KEY_FILE). "
-            "The admin panel will serve its login page but accept no credentials "
-            "until a user exists. Set one to administer the gateway."
-        )
+    # Q9 (external v0.23.7 review): a keyless serving boot is a refusal,
+    # not a warning. Same print-and-exit shape as the boot memory ceiling.
+    try:
+        _require_admin_key(config)
+    except AdminKeyMissingError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     # Initialise gateway
     logger.info("Initialising Raucle Gateway...")

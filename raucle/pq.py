@@ -408,6 +408,16 @@ class HybridRecordSigner:
         working unchanged when the signer is upgraded to hybrid."""
         return self._classical.public_key_pem()
 
+    def pq_public_key(self) -> Any:
+        """The ML-DSA-65 PUBLIC key of the hybrid pair.
+
+        Named accessor for surfaces that need the PQ public key (the trust
+        registry verifies the ML-DSA-65 operator signature component
+        against it); callers must not reach into the private
+        ``_pq_private`` attribute to derive it.
+        """
+        return self._pq_private.public_key()
+
     def sign(self, data: bytes) -> bytes:
         """Classical-only signing, mirroring Ed25519Signer.sign. Surfaces
         that have not migrated to hybrid records keep working; hybrid

@@ -51,14 +51,20 @@ when, the gateway sits behind a proxy that sets `X-Forwarded-For`; the
 left-most entry is then used as the client identity. This is the same
 convention `raucle/server.py` uses for its token bucket.
 
-`slowapi` ships in the `[server]` extra. A SERVING boot without it refuses
+`slowapi` ships in the `server` extra. A SERVING boot without it refuses
 with a named error (the missing dependency and the escape hatch are both
 named in the refusal) rather than serving unlimited: rate limiting is not
 optional on a served deployment. Setting `RAUCLE_DISABLE_RATE_LIMIT=1` is the
 deliberate opt-out (the boot then warns and runs without limiting); the
 supplied `docker-compose.gateway.yml` image always installs the extra, so the
-refusal cannot fire there. The shipped Caddyfile note deliberately carries no
-rate limiting; edge-level limits stay an operator choice.
+refusal cannot fire there.
+
+The admin panel is rate-limited the same way: 120 requests/minute per client
+by default, overridable with `RAUCLE_ADMIN_RATE_LIMIT`. The stock Caddy image
+(`caddy:2-alpine`, digest-pinned in the reference compose file) ships no
+rate-limit module, so the reference Caddyfile deliberately carries no
+`rate_limit` directive; for per-IP limits at the proxy run a Caddy plugin
+build or rate-limit at the edge (e.g. Cloudflare).
 
 ## API Key Management
 
@@ -208,6 +214,34 @@ as residual R16 in `docs/threat-model/v1.md` and shares its fix with the
 unsigned-policy file residual (R5/M5 there): work them together, not
 twice.
 
+### Trace quarantine identity binding (Q17)
+
+Trace quarantine (RED-040) binds to the agent identity as well as the
+trace id. The registry stays what it was: a JSONL of last-record-wins
+trace states consulted before any decision that could widen authority,
+with releases paired to quarantines. What changed: when a call is refused
+because its trace is quarantined, the refusal records the presenting
+agent_id - the authenticated identity when gate auth is on, the declared
+one when it is off (the off-mode limitation the auth banner already
+names) - into an identity-level quarantine bound to the refusal's trace.
+A later call from that identity presenting a fresh X-Trace-Id is refused
+too: re-rolling the trace id no longer walks past containment. Trace
+level state remains keyed by trace_id and shared by whoever presents it,
+so a different agent presenting a quarantined trace is refused as before.
+
+Lift stays anchored on the durable registry: a binding trace whose
+registry state is no longer quarantined (released, or the registry file
+absent) drops its binding, and an identity with no bindings left is fully
+released. Residuals, named plainly: the identity-level state is a
+per-process enforcement layer over the durable trace registry (a restart
+of the gateway process re-arms it on the next quarantined-trace refusal,
+and a different process has observed nothing to bind); the durable
+registry remains the trace-level control. A durable, shared
+identity-quarantine store and server-issued workflow identity (which
+would close the auth-off re-declaration residual) are the registered
+follow-up family; the identity work is shared with the session-binding
+follow-up above.
+
 ## Signed gate receipts
 
 Every `/gate` decision, allow, deny or escalate, is emitted as a signed
@@ -272,7 +306,19 @@ Semantics and limits, stated plainly:
   to approval is a named follow-up, not shipped.
 - Rules never see content: windows hold decision summaries only
   (decision, tool, timestamp, trace id, destination class). Absent
-  `session_id` means no session evaluation at all.
+  `session_id` means no session evaluation at all on a deployment with no
+  session rules configured (none declared, or a declared block that fails
+  to parse) - that shape is unchanged. When session rules ARE configured,
+  a request that omits the session id
+  refuses by name (`session_binding_required`, RED-041): a configured
+  control cannot be silently disabled by the caller dropping the field.
+  The refusal is chosen over deriving a session key server-side (agent
+  identity + trace id) because the bounded windows are keyed on the
+  caller-supplied key, and a derived key would hand a fresh trace a fresh
+  empty window, weakening exactly the rate semantics the rules enforce.
+  Session values themselves stay caller-supplied until the server-issued
+  workflow-identity work (registered follow-up family, shared with the
+  identity-quarantine residual below).
 - Window state is process memory, config-bounded
   (`RAUCLE_SESSION_WINDOW_TTL_SECONDS`, `..._MAX_KEYS`, `..._MAX_ENTRIES`)
   and replayed from the receipt index on boot within the TTL window.
@@ -420,6 +466,17 @@ Approvals live in memory; the receipts are the durable record. A restart
 drops the pending list (in-flight escalations are re-requested) but no
 evidence is lost.
 
+Consumption is single-shot and atomic (RED-039): the whole
+read-validate-consume sequence runs as a compare-and-set under a lock, so
+concurrent re-submissions of one approved request pay out exactly once -
+exactly one action is authorised and every other caller is named refused
+(`already consumed`). A validation mismatch (wrong tool, agent or
+arguments) refuses without burning the approval, and an approved request
+whose validity window has passed refuses with the same 410 class as a
+never-decided one instead of paying out a stale approval. The lock is per
+gateway process: in-process atomicity only, and a shared transactional
+approval store across gateway workers is a registered follow-up.
+
 ### Policy change ledger
 
 Set `RAUCLE_POLICY_LEDGER` to a file path. Every policy write through
@@ -474,6 +531,17 @@ the call and creates an approval request:
 Approvals live in memory; the receipts are the durable record. A restart
 drops the pending list (in-flight escalations are re-requested) but no
 evidence is lost.
+
+Consumption is single-shot and atomic (RED-039): the whole
+read-validate-consume sequence runs as a compare-and-set under a lock, so
+concurrent re-submissions of one approved request pay out exactly once -
+exactly one action is authorised and every other caller is named refused
+(`already consumed`). A validation mismatch (wrong tool, agent or
+arguments) refuses without burning the approval, and an approved request
+whose validity window has passed refuses with the same 410 class as a
+never-decided one instead of paying out a stale approval. The lock is per
+gateway process: in-process atomicity only, and a shared transactional
+approval store across gateway workers is a registered follow-up.
 
 ### Policy change ledger
 
