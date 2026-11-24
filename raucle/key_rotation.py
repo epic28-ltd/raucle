@@ -211,7 +211,7 @@ def rotate_keys(
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     from raucle.chain_rotation import _digest_file, _gate_signer, _store_tail_receipt_hash
-    from raucle.trust_registry import TrustRegistry, _canon_issuer
+    from raucle.trust_registry import RegistryIntegrityError, TrustRegistry, _canon_issuer
 
     # -- refusals, all before any side effect (all-or-nothing) ------------
     operator = operator.strip() or os.environ.get("RAUCLE_OPERATOR", "").strip()
@@ -260,7 +260,15 @@ def rotate_keys(
 
     old_signer = _gate_signer(config)
     old_key_id = old_signer.key_id()
-    registry = TrustRegistry(reg_path, operator_signer=registry_signer)
+    try:
+        registry = TrustRegistry(reg_path, operator_signer=registry_signer)
+    except RegistryIntegrityError as exc:
+        raise KeyRotationRefusedError(
+            f"key rotation refused: the operator key registry {reg_path} fails "
+            f"integrity verification ({exc}); a rotation must never build on a "
+            "registry that cannot be verified. Restore a verifiable registry "
+            "first, then rotate."
+        ) from exc
     old_record = registry.resolve(old_key_id)
     if old_record is None:
         raise KeyRotationRefusedError(
@@ -419,11 +427,19 @@ def verify_boot_key_against_registry(config: GatewayConfig, signer: Any) -> None
     When an operator key registry is configured, the local signing key
     must be the registry's vouched-for ACTIVE entry. The boot refuses,
     with a named restart-required :class:`KeyStoreRegistryMismatch`, when
-    the registry never saw the key, or it retired or revoked it: a
-    rotation whose registry update landed but whose key-store update did
-    not, or a hand-restored old key. Receipts must never split from the
-    registry state that vouches for them, and the guard binds at
-    construction, so every reconcile names the restart.
+
+    * the registry file is missing, unparseable, or fails integrity
+      verification (Q10: the tampered-HISTORY class too - reordered
+      entries, swapped key material - not just unparseable bytes),
+    * the registry moved backward or sideways against the head the guard
+      last served on (Q10: a truncated or rolled-back tail verifies on
+      its own, so the guard records the head it served on in a
+      ``<registry>.head-pin`` file and refuses a shorter or changed one),
+    * the registry never saw the key, or it retired or revoked it.
+
+    Receipts must never split from the registry state that vouches for
+    them, and the guard binds at construction, so every reconcile names
+    the restart.
     """
     from raucle.trust_registry import RegistryIntegrityError, TrustRegistry
 
@@ -444,6 +460,7 @@ def verify_boot_key_against_registry(config: GatewayConfig, signer: Any) -> None
             f"the operator key registry {path} failed verification: {exc}. "
             "Restore a verifiable registry, then restart the gateway."
         ) from exc
+    head = _check_recorded_head(path, registry)
     record = registry.resolve(key_id)
     if record is None:
         raise KeyStoreRegistryMismatch(
@@ -474,12 +491,101 @@ def verify_boot_key_against_registry(config: GatewayConfig, signer: Any) -> None
         path,
         key_id,
     )
+    # The guard served on this head: record it, so a later truncation or
+    # rollback (a prefix that verifies on its own) is refused at boot.
+    _write_head_pin(registry_head_pin_path(path), head)
+
+
+def registry_head_pin_path(registry_path: str | Path) -> Path:
+    """The guard's recorded consumer anchor for an operator key registry:
+    the file holding the head (``index`` + ``hash``) the guard last served
+    on, written beside the registry itself."""
+    return Path(str(registry_path) + ".head-pin")
+
+
+def _read_head_pin(pin_path: Path) -> dict[str, Any] | None:
+    """The recorded head, or None when the guard has never served on this
+    registry. An unreadable pin is a named restart-required refusal: it is
+    trust state, never silently discarded."""
+    if not pin_path.is_file():
+        return None
+    try:
+        pin = json.loads(pin_path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(pin, dict)
+            or not isinstance(pin.get("index"), int)
+            or not isinstance(pin.get("hash"), str)
+        ):
+            raise ValueError("the pin is not an index/hash object")
+    except (OSError, ValueError) as exc:
+        raise KeyStoreRegistryMismatch(
+            f"the operator key registry's recorded head pin {pin_path.name} is "
+            f"unreadable ({type(exc).__name__}): the boot cannot tell a truncation "
+            "from an honest registry. Restore the pin file from the registry's "
+            "last verified head, or remove it ONLY after confirming no rollback "
+            "happened, then restart the gateway."
+        ) from None
+    return pin
+
+
+def _write_head_pin(pin_path: Path, head: dict[str, Any]) -> None:
+    """Record the head the guard just served on (atomic write, so a crash
+    mid-write never leaves a half pin). A failure to record is a warning,
+    not a refusal: the pin deepens the guard, it does not gate it."""
+    tmp = pin_path.with_suffix(pin_path.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps({"index": head["index"], "hash": head["hash"]}), encoding="utf-8")
+        os.replace(tmp, pin_path)
+    except OSError:
+        logger.warning(
+            "could not record the operator key registry head pin at %s: the next "
+            "boot cannot detect a truncated or rolled-back registry",
+            pin_path,
+        )
+
+
+def _check_recorded_head(path: str, registry: Any) -> dict[str, Any]:
+    """Refuse a registry that moved BACKWARD or SIDEWAYS relative to the
+    head the guard last served on (Q10): a truncated or rolled-back TAIL
+    verifies on its own (every remaining entry is chain-legal), so chain
+    verification alone cannot see it. Forward growth is honest and re-records
+    the head; the same index with a different hash is tampering.
+
+    Returns the head (for pin recording). Raises KeyStoreRegistryMismatch on
+    a refusal; the remedy for a legitimately re-initialised registry is the
+    documented consumer reset (delete the pin file, restart)."""
+    head = registry.head()
+    pin_path = registry_head_pin_path(path)
+    pin = _read_head_pin(pin_path)
+    if pin is None:
+        return head
+    if head["index"] < pin["index"]:
+        raise KeyStoreRegistryMismatch(
+            f"the operator key registry {path} moved BACKWARD: its head index "
+            f"{head['index']} is below the recorded pin ({pin['index']}). A shorter "
+            "registry prefix verifies on its own (a truncated or rolled-back tail), "
+            "so the boot refuses it as tampering or a rollback. Restore the fuller "
+            "registry, or - only after confirming it was legitimately "
+            f"re-initialised - remove the recorded pin ({pin_path}) and restart "
+            "the gateway."
+        )
+    if head["index"] == pin["index"] and head["hash"] != pin["hash"]:
+        raise KeyStoreRegistryMismatch(
+            f"the operator key registry {path} moved SIDEWAYS: the head hash at "
+            f"index {head['index']} differs from the recorded pin. Same-length "
+            "history with different content is tampering the chain cannot see on "
+            "its own. Restore the registry the boot served on, or - only after "
+            "confirming it was legitimately re-initialised - remove the recorded "
+            f"pin ({pin_path}) and restart the gateway."
+        )
+    return head
 
 
 __all__ = [
     "ROTATE_COMMAND",
     "KeyStoreRegistryMismatch",
     "key_store_path",
+    "registry_head_pin_path",
     "retired_key_name",
     "rotate_keys",
     "verify_boot_key_against_registry",

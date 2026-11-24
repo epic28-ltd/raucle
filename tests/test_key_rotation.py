@@ -512,8 +512,10 @@ class TestBootKeyRegistryGuard:
         from raucle.trust_registry import TrustRegistry
 
         config = self._guarded_config(tmp_path)
-        signer = _registry_signer_pem_path(tmp_path)[1]
-        reg = TrustRegistry(config.operator_key_registry, operator_signer=signer)
+        reg = TrustRegistry(
+            config.operator_key_registry,
+            operator_signer=self._bootstrap_operator_signer(tmp_path),
+        )
         local_kid = RaucleGateway(config)._signer.key_id()
         reg.retire(local_kid, reason="rotation landed, store did not")
 
@@ -563,8 +565,10 @@ class TestBootKeyRegistryGuard:
         from raucle.trust_registry import TrustRegistry
 
         config = self._guarded_config(tmp_path)
-        signer = _registry_signer_pem_path(tmp_path)[1]
-        reg = TrustRegistry(config.operator_key_registry, operator_signer=signer)
+        reg = TrustRegistry(
+            config.operator_key_registry,
+            operator_signer=self._bootstrap_operator_signer(tmp_path),
+        )
         local_kid = RaucleGateway(config)._signer.key_id()
         reg.revoke(local_kid, reason="compromised")
 
@@ -593,6 +597,158 @@ class TestBootKeyRegistryGuard:
         # The simulated enclave generates its own key: the guard must not
         # refuse it against a registry that never saw it.
         assert RaucleGateway(config)._signer is not None
+
+    # -- Q10: the tampered-history class and the recorded head pin ----------
+
+    def _bootstrap_operator_signer(self, tmp_path):
+        """The registry's ORIGINAL bootstrap operator key: reload the PEM the
+        bootstrap wrote. A fresh signer would turn the registry into a
+        mixed-operator log that constructor verification refuses."""
+        from raucle.audit import Ed25519Signer
+
+        pem_path = Path(tmp_path) / "registry-operator-key.pem"
+        return Ed25519Signer.from_pem(pem_path.read_bytes())
+
+    def _append_auditor_entry(self, config: GatewayConfig, tmp_path) -> None:
+        """A second issuer entry AFTER the gateway key's register: tail
+        material a truncation can drop while the gateway key stays resolvable.
+        Appends with the registry's own operator key, so the file stays
+        verifiable as one signed log."""
+        from raucle.audit import Ed25519Signer
+        from raucle.trust_registry import TrustRegistry
+
+        reg = TrustRegistry(
+            config.operator_key_registry, operator_signer=self._bootstrap_operator_signer(tmp_path)
+        )
+        reg.publish(Ed25519Signer.generate().public_key_pem().decode(), issuer="auditor")
+
+    def test_boot_refuses_reordered_registry(self, tmp_path):
+        """Q10: parseable BUT tampered (entries reordered). The guard refuses
+        with the same named restart-required error as the unparseable class:
+        integrity failure is a triggering condition, not just parse failure."""
+        from raucle.key_rotation import KeyStoreRegistryMismatch
+
+        config = self._guarded_config(tmp_path)
+        self._append_auditor_entry(config, tmp_path)
+        reg_path = Path(config.operator_key_registry)
+        entries = [json.loads(line) for line in reg_path.read_text().splitlines() if line.strip()]
+        entries[1], entries[2] = entries[2], entries[1]
+        reg_path.write_text(
+            "".join(json.dumps(e, separators=(",", ":")) + "\n" for e in entries),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(KeyStoreRegistryMismatch) as excinfo:
+            RaucleGateway(config)
+        assert "failed verification" in str(excinfo.value)
+
+    def test_boot_refuses_truncated_tail_via_recorded_head(self, tmp_path):
+        """Q10: a chain prefix that lost its LAST entries verifies on its own
+        (chain checks cannot see truncation), so the guard pins the head it
+        last served on. Boot once (the head is recorded), drop the tail
+        entry, boot again: refused as a registry that moved BACKWARD."""
+        from raucle.key_rotation import KeyStoreRegistryMismatch
+
+        config = self._guarded_config(tmp_path)
+        self._append_auditor_entry(config, tmp_path)
+        # A boot over the GROWN registry passes (forward movement is honest).
+        assert RaucleGateway(config)._signer.key_id()
+
+        reg_path = Path(config.operator_key_registry)
+        entries = [json.loads(line) for line in reg_path.read_text().splitlines() if line.strip()]
+        reg_path.write_text(
+            "".join(json.dumps(e, separators=(",", ":")) + "\n" for e in entries[:-1]),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(KeyStoreRegistryMismatch) as excinfo:
+            RaucleGateway(config)
+        message = str(excinfo.value)
+        assert "restart" in message
+
+    def test_boot_accepts_registry_growth(self, tmp_path):
+        """Forward movement (an operator append between boots) is honest:
+        the guard passes and re-records the new head."""
+        config = self._guarded_config(tmp_path)
+        self._append_auditor_entry(config, tmp_path)
+        assert RaucleGateway(config)._signer.key_id()
+
+    def test_boot_refuses_same_index_different_head(self, tmp_path):
+        """An UNSIGNED registry tampered consistently (a recomputed hash over
+        swapped content): chain verification passes, the key stays registered,
+        and the recorded head alone refuses it - it moved sideways."""
+        from raucle.audit import _canonical_json, _sha256_hex
+        from raucle.key_rotation import KeyStoreRegistryMismatch
+        from raucle.trust_registry import TrustRegistry
+
+        tmp = Path(tmp_path)
+        config = GatewayConfig(
+            host="127.0.0.1",
+            signer_backend="local",
+            policy_file="",
+            signer_key_path=str(tmp / "gateway-signing-key.pem"),
+            receipt_store=str(tmp / "receipts.jsonl"),
+            receipt_store_dir="",
+            audit_chain=str(tmp / "audit.jsonl"),
+            audit_persist=True,
+            audit_log_file=str(tmp / "gateway-audit.jsonl"),
+            registry_path=str(tmp / "registry.jsonl"),
+            operator_key_registry="",
+        )
+        gateway = RaucleGateway(config)
+        kid = gateway._signer.key_id()
+        config.operator_key_registry = str(tmp / "op-reg.jsonl")
+        reg_path = Path(config.operator_key_registry)
+        TrustRegistry(reg_path).publish(gateway._signer.public_key_pem(), issuer="raucle-gateway")
+        # Boot 1 (the head is recorded), then a consistent tamper at the SAME
+        # index: the issuer name changes and the hash is recomputed over it.
+        assert RaucleGateway(config)._signer.key_id() == kid
+        entries = [json.loads(line) for line in reg_path.read_text().splitlines() if line.strip()]
+        entry = entries[1]
+        entry["issuer"] = "somebody-else"
+        body = {
+            k: v
+            for k, v in entry.items()
+            if k not in ("hash", "operator_sig", "operator_pq_key_id", "operator_pq_sig")
+        }
+        entry["hash"] = _sha256_hex(_canonical_json(body))
+        reg_path.write_text(
+            "".join(json.dumps(e, separators=(",", ":")) + "\n" for e in entries),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(KeyStoreRegistryMismatch):
+            RaucleGateway(config)
+
+    def test_head_pin_refuses_a_reinitialised_registry_and_names_the_reset(self, tmp_path):
+        """A legitimately re-initialised registry (fresh file, same gateway
+        key re-published) is a SIDEWAYS move to the recorded head: refused,
+        with the pin file named as the consumer reset. Deleting the recorded
+        pin is the documented remedy and the boot then passes."""
+        from raucle.key_rotation import KeyStoreRegistryMismatch
+        from raucle.trust_registry import TrustRegistry
+
+        config = self._guarded_config(tmp_path)
+        reg_path = Path(config.operator_key_registry)
+        gateway_pem = RaucleGateway(config)._signer.public_key_pem()
+
+        # The operator starts the registry over and re-publishes the SAME key.
+        reg_path.unlink()
+        fresh = TrustRegistry(reg_path, operator_signer=_registry_signer_pem_path(tmp_path)[1])
+        fresh.publish(gateway_pem, issuer="raucle-gateway")
+
+        with pytest.raises(KeyStoreRegistryMismatch) as excinfo:
+            RaucleGateway(config)
+        message = str(excinfo.value)
+        assert "pin" in message.lower()
+        assert "restart" in message
+
+        # The documented reset: the operator removes the recorded pin ...
+        from raucle.key_rotation import registry_head_pin_path
+
+        registry_head_pin_path(reg_path).unlink()
+        # ... and the boot then serves on the re-initialised registry.
+        assert RaucleGateway(config)._signer.key_id()
 
 
 class TestRotateKeysCli:
