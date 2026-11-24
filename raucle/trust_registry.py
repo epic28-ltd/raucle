@@ -630,7 +630,7 @@ class TrustRegistry:
                 from raucle.pq import HybridRecordSigner
 
                 if isinstance(self._signer, HybridRecordSigner):
-                    operator_pq_key = self._signer._pq_private.public_key()
+                    operator_pq_key = self._signer.pq_public_key()
             except ImportError:
                 pass
         return operator_pq_key

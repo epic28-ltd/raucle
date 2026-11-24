@@ -22,7 +22,9 @@ Caddy provides:
 - Automatic TLS via Let's Encrypt
 - HTTP-to-HTTPS redirect
 - Security headers (HSTS, X-Content-Type-Options, X-Frame-Options)
-- Rate limiting (100 requests/minute per IP)
+- Rate limiting (120 requests/minute per client, enforced in the application
+  via slowapi: the stock Caddy image ships no rate-limit module, so the
+  reference Caddyfile deliberately carries no `rate_limit` directive)
 - JSON access logs
 
 ## Docker Network Isolation

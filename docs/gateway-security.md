@@ -55,8 +55,15 @@ convention `raucle/server.py` uses for its token bucket.
 
 `slowapi` ships in the `server` extra. If it is not installed the gateway logs
 a warning at boot and runs without limiting; it does not pretend to have a
-limit it does not have. Caddy provides a separate per-IP limit at the proxy
-layer (100 requests/minute in the reference Caddyfile).
+limit it does not have.
+
+The admin panel is rate-limited the same way: 120 requests/minute per client
+by default, overridable with `RAUCLE_ADMIN_RATE_LIMIT` (Q9 review, admin
+exposure). The stock Caddy image (`caddy:2-alpine`, digest-pinned in the
+reference compose file) ships no rate-limit module, so the reference
+Caddyfile deliberately carries no `rate_limit` directive; for per-IP limits
+at the proxy run a Caddy plugin build or rate-limit at the edge (e.g.
+Cloudflare).
 
 ## API Key Management
 

@@ -26,6 +26,7 @@ import base64
 import datetime as dt
 import hashlib
 import json
+import os
 import sqlite3
 import statistics
 import sys
@@ -77,11 +78,25 @@ _K1_EPOCH = dt.datetime(2026, 11, 18, 12, 0, 0, tzinfo=dt.timezone.utc)
 _K1_IAT_SPREAD_SECONDS = 4 * 3600
 
 
+#: Sane fallback where os.sysconf cannot answer (platforms without the
+#: syscall surface): the 4 KiB page size the x86/ARM default expects.
+_FALLBACK_PAGE_SIZE = 4096
+
+
 def _statm_rss_mb() -> float:
-    """Resident size in MB from /proc (0.0 where unavailable)."""
+    """Resident size in MB from /proc (0.0 where unavailable).
+
+    Page size comes from the syscall (os.sysconf), not a hard-coded 4096:
+    /proc/self/statm reports resident pages, so the multiplier must be
+    whatever SC_PAGESIZE the RUNNING kernel actually uses.
+    """
+    try:
+        page_size = os.sysconf("SC_PAGESIZE")
+    except (AttributeError, OSError, ValueError):
+        page_size = _FALLBACK_PAGE_SIZE
     try:
         with open("/proc/self/statm", encoding="ascii") as fh:
-            return int(fh.read().split()[1]) * 4096 / (1024 * 1024)
+            return int(fh.read().split()[1]) * page_size / (1024 * 1024)
     except (OSError, ValueError, IndexError):
         return 0.0
 
