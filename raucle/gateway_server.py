@@ -21,7 +21,7 @@ from pathlib import Path
 
 import uvicorn
 
-from raucle.errors import BootMemoryCeilingExceeded
+from raucle.errors import BootMemoryCeilingExceeded, ConfigurationError
 from raucle.gateway import GatewayConfig, RaucleGateway, UserManager
 from raucle.gateway_app import create_admin_app, create_gateway_app
 
@@ -124,6 +124,12 @@ def main() -> None:
 
     try:
         asyncio.run(run_both_servers(config, gateway, users))
+    except ConfigurationError as exc:
+        # Q15: the serving-mode limiter refusal names the missing dependency
+        # and the escape hatch; exit cleanly instead of a traceback, the
+        # same shape the boot memory preflight uses.
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(1)
     except KeyboardInterrupt:
         logger.info("Shutting down...")
         sys.exit(0)

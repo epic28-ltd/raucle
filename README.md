@@ -208,19 +208,21 @@ The registry, handshake, passport, and compliance modules went through nine roun
 pip install raucle
 ```
 
-Optional extras:
+Optional extras (which extra carries what):
 
-```bash
-pip install 'raucle[rules]'        # YAML rule loading (PyYAML)
-pip install 'raucle[server]'       # REST API server (FastAPI + uvicorn)
-pip install 'raucle[ml]'           # Transformer-based classifier (torch + transformers)
-pip install 'raucle[compliance]'   # Capability tokens, signed audit chain, receipts (cryptography)
-pip install 'raucle[proof]'        # SMT prover for prove-a-policy (Z3)
-pip install 'raucle[agent-framework]'  # Microsoft Agent Framework adapter
-pip install 'raucle[all]'          # rules + ml + server + compliance + multimodal + proof
-```
+| Extra | Carries |
+|---|---|
+| `rules` | YAML rule loading (PyYAML). Detection rules only. |
+| `server` | The REST API server: FastAPI + uvicorn, slowapi rate limiting, TOTP MFA. This is the detection engine the OpenClaw plugin talks to. |
+| `ml` | Transformer-based classifier (torch + transformers). |
+| `compliance` | Capability tokens, signed audit chain, receipts (cryptography). |
+| `proof` | SMT prover for prove-a-policy (Z3). |
+| `agent-framework` | The Microsoft Agent Framework adapter, plus `cryptography>=42.0`: the adapter emits signed capability receipts. |
+| Other adapters | `openai-agents`, `langchain`, `autogen`, `crewai`, `langgraph`, `pydantic-ai`, `google-adk`: framework adapters, each also carrying `cryptography>=42.0` for the same reason. |
+| `all` | The engine extras (`rules`, `ml`, `server`, `compliance`, `multimodal`, `proof`), **not** the framework adapters. |
+| `timestamp`, `pq`, `kms`/`kms-*` | RFC 3161 timestamping, ML-DSA-65 hybrid signatures, and KMS signer backends. |
 
-> The `[all]` extra bundles the engine extras (`rules`, `ml`, `server`, `compliance`, `multimodal`, `proof`) but **not** the framework adapters — install `[agent-framework]` separately if you use the Microsoft Agent Framework integration.
+> The `[all]` extra bundles the engine extras but **not** the framework adapters: install the adapter extra you need separately. A detection-only install (`rules` + `server`) powers scanner integrations such as the OpenClaw plugin; receipt-grade enforcement needs `compliance` and lives in the gate-based integration paths.
 
 Requires Python 3.10+.
 
@@ -588,27 +590,30 @@ git commit -s -m "Add new detection rule"
 
 ## OpenClaw Plugin
 
-The `plugins/openclaw/` directory contains the **Raucle plugin for OpenClaw** — emits a capability receipt for every agent action and blocks tool calls outside the in-force capability. The same plugin gives you audit-grade evidence and runtime protection in one configuration.
+The `plugins/openclaw/` directory contains the **Raucle plugin for OpenClaw**: a detection-layer scanner integration. It scans inbound prompts, outbound messages, and tool call arguments through OpenClaw's hooks and blocks MALICIOUS content (`blockOnMalicious`; on its own scan failure a hook logs and lets the call proceed, so a raucle outage degrades to unmonitored traffic rather than blocking it). The plugin issues **no capability receipts and performs no capability enforcement**; it calls the scanning API in [`raucle/server.py`](raucle/server.py). For receipt-grade enforcement, use the gate-based integration paths: the gateway's `/gate` endpoint, the framework adapters under [`raucle/integrations/`](raucle/integrations/), and the capability, audit and receipt primitives in the main package (see the extras table under [Install](#install)).
 
 ### Quick install
 
 ```bash
-# 1. Install the detection engine
+# 1. Install the detection engine (scanner only; see the boundary notes below)
 pip install raucle[server,rules]
 
-# 2. Copy the plugin
+# 2. Copy the plugin (it starts and finds the scanner server itself)
 cp -r plugins/openclaw/ ~/.openclaw/extensions/raucle/
 
-# 3. Enable it (one command)
+# 3. Enable it (one command; the hook permission grant is part of the step)
 openclaw config set plugins.allow+=raucle \
   plugins.load.paths+=~/.openclaw/extensions/raucle \
   plugins.entries.raucle.enabled=true \
   plugins.entries.raucle.config.mode=standard \
-  plugins.entries.raucle.config.blockOnMalicious=true
+  plugins.entries.raucle.config.blockOnMalicious=true \
+  plugins.entries.raucle.hooks.allowConversationAccess=true
 
 # 4. Restart
 openclaw gateway restart
 ```
+
+`plugins.entries.raucle.hooks.allowConversationAccess=true` is the permission grant current OpenClaw hosts require for the `before_prompt_build` hook (inbound prompt scanning and the SUSPICIOUS warning injection). Without it the prompt hook is not authorised to run on current hosts.
 
 Or manually add to `openclaw.json`:
 
@@ -623,27 +628,32 @@ Or manually add to `openclaw.json`:
         "config": {
           "mode": "standard",
           "blockOnMalicious": true
-        }
+        },
+        "hooks": { "allowConversationAccess": true }
       }
     }
   }
 }
 ```
 
-That's it — all agents are now protected. No per-agent configuration needed.
-
-### What it does
+### What it does, and where its boundary is
 
 | Hook | Action |
 |---|---|
-| `before_prompt_build` | Scans every inbound message; injects security warning for SUSPICIOUS, hard blocks MALICIOUS |
+| `before_prompt_build` | Scans every inbound message; injects a security warning for SUSPICIOUS, hard blocks MALICIOUS. Requires the `allowConversationAccess` grant above. |
 | `message_sending` | Scans outbound agent responses for data leakage |
-| `before_tool_call` | Validates tool arguments before execution (shell injection, path traversal, SQLi, SSRF) |
-| `llm_output` | Monitors large LLM outputs for anomalies |
+| `before_tool_call` | Validates tool arguments before execution (shell injection, path traversal, SQL injection, SSRF) |
+| `llm_output` | Logs large LLM outputs for visibility (observational; full output scanning happens in `message_sending`) |
+
+**Enforcement boundary.** The plugin scans and blocks only the calls OpenClaw dispatches through the typed `before_tool_call` hook. Hook availability depends on the emitting harness, as OpenClaw's own documentation notes: the Claude CLI backend executes configured `mcp.servers` tools directly, bypassing gateway hooks (an open OpenClaw issue), and `after_tool_call` is observational, so it cannot serve as a fallback boundary. A deployment that needs MCP enforcement should gate at the MCP server or run a mandatory MCP gateway rather than rely on this plugin. The plugin covers the agents whose calls reach these hooks; it does not protect every agent and it is not a capability gate.
+
+**Server lifecycle.** The plugin starts and finds the local raucle scanner server itself ([`src/server-manager.ts`](plugins/openclaw/src/server-manager.ts)): installing `raucle[server,rules]` provides the code, and the plugin spawns the server (or reuses one already running on the configured port, default 8900). No separate server start is required.
+
+**Detection engine versus receipts.** `raucle[server,rules]` installs the detection engine (the scanner the hooks call). The capability, audit and receipt primitives require `raucle[compliance]` and live in the gate-based integration paths, not in this plugin. Agents on this plugin are scanned; their decisions are not receipted. Use the gateway `/gate` integration or a framework adapter when you need receipts.
 
 ### Per-agent sensitivity
 
-Override detection sensitivity for specific agents:
+`agentOverrides` override the global mode for the named agents; agents without an override inherit the global mode. `scanToolCalls` (like `scanInbound` and `scanOutbound`) can be toggled globally or per agent.
 
 ```json
 "agentOverrides": {
@@ -659,10 +669,10 @@ Modes: `strict` (lowest false negatives), `standard` (balanced), `permissive` (l
 
 Agents cannot disable Raucle by modifying their own configuration. The plugin:
 
-- **Runs at the gateway level**, not inside the agent sandbox — agents cannot access the plugin process
-- **Hooks fire before the agent sees the prompt** — the security scan completes before the LLM is called
-- **Configuration is in `openclaw.json`** which is owned by the gateway process, not individual agents
-- **The raucle server runs as a separate process** on a fixed port — agents cannot stop or modify it
+- **Runs at the gateway level**, not inside the agent sandbox: agents cannot access the plugin process
+- **Hooks fire before the agent sees the prompt**: the security scan completes before the LLM is called
+- **Configuration is in `openclaw.json`**, which is owned by the gateway process, not individual agents
+- **The raucle server runs as a separate process** on a fixed port: agents cannot stop or modify it
 
 To prevent agents from using tools to modify `openclaw.json` and disable the plugin, add the config file to your sandbox deny list or set `exec.security` appropriately. The plugin itself has no mechanism for agents to disable it from within a conversation.
 

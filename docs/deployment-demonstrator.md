@@ -54,8 +54,16 @@ enabled on the account the same way as any user
 ## Deploy
 
 ```bash
-RAUCLE_ADMIN_KEY=<admin-key> RAUCLE_DOMAIN=<domain> docker compose -f docker-compose.gateway.yml up -d --build
+RAUCLE_ADMIN_KEY=<admin-key> RAUCLE_GATE_AUTH=apikey
+docker compose -f docker-compose.gateway.yml up -d --build
 ```
+
+The compose refuses to start without `RAUCLE_GATE_AUTH` set to `apikey` or
+`token`: the supplied deployment requires an explicit authentication choice
+(the code keeps the `off` default for local dev, with a boot banner).
+Provision per-agent keys with `raucle agents issue-key` (Step 1 of
+`docs/getting-started/20-production-hardening.md`); until keys exist, the
+demo traffic earns receipted DENYs, which is itself the honest posture.
 
 The gateway loads all six example policy sets (banking, fintech, healthcare,
 insurance, ecommerce, data-ops — 80 rules) from `policies/examples/`, mounted

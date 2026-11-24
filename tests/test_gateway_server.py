@@ -183,3 +183,32 @@ def test_boot_memory_preflight_refusal_exits_cleanly_without_serving(
     # No servers were built: the refusal happened before any serve.
     assert _StubUvicornServer.built == []
     assert "raucle rotate-chain" in capsys.readouterr().err
+
+
+def test_serving_boot_without_slowapi_refuses_cleanly_without_serving(
+    stub_uvicorn, tmp_path, monkeypatch, capsys
+) -> None:
+    """Q15: a SERVING boot without slowapi refuses with the named dependency
+    before any server is built (the disable env is deliberately NOT set, so
+    the deployment cannot silently lose its limiter)."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "slowapi", None)
+    monkeypatch.delenv("RAUCLE_DISABLE_RATE_LIMIT", raising=False)
+    monkeypatch.setenv("RAUCLE_ADMIN_KEY", "k-admin")
+    monkeypatch.setenv("RAUCLE_SIGNER", "local")
+    monkeypatch.setenv("RAUCLE_POLICY_FILE", "")
+    monkeypatch.setenv("RAUCLE_RECEIPT_STORE", str(tmp_path / "receipts.jsonl"))
+    monkeypatch.setenv("RAUCLE_AUDIT_CHAIN", str(tmp_path / "audit.jsonl"))
+    monkeypatch.setenv("RAUCLE_REGISTRY_PATH", str(tmp_path / "registry.jsonl"))
+    monkeypatch.setenv("RAUCLE_AGENT_CREDENTIALS", str(tmp_path / "creds.jsonl"))
+    monkeypatch.setenv("RAUCLE_USERS_FILE", str(tmp_path / "users.jsonl"))
+
+    with pytest.raises(SystemExit) as excinfo:
+        gateway_server.main()
+
+    assert excinfo.value.code == 1
+    assert _StubUvicornServer.built == []
+    captured = capsys.readouterr()
+    assert "slowapi" in captured.err
+    assert "RAUCLE_DISABLE_RATE_LIMIT" in captured.err

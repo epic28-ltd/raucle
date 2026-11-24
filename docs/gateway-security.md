@@ -36,8 +36,6 @@ location / {
 }
 ```
 
-## Rate Limiting
-
 ## Rate limiting
 
 The gateway includes built-in rate limiting via `slowapi`:
@@ -53,10 +51,14 @@ when, the gateway sits behind a proxy that sets `X-Forwarded-For`; the
 left-most entry is then used as the client identity. This is the same
 convention `raucle/server.py` uses for its token bucket.
 
-`slowapi` ships in the `server` extra. If it is not installed the gateway logs
-a warning at boot and runs without limiting; it does not pretend to have a
-limit it does not have. Caddy provides a separate per-IP limit at the proxy
-layer (100 requests/minute in the reference Caddyfile).
+`slowapi` ships in the `[server]` extra. A SERVING boot without it refuses
+with a named error (the missing dependency and the escape hatch are both
+named in the refusal) rather than serving unlimited: rate limiting is not
+optional on a served deployment. Setting `RAUCLE_DISABLE_RATE_LIMIT=1` is the
+deliberate opt-out (the boot then warns and runs without limiting); the
+supplied `docker-compose.gateway.yml` image always installs the extra, so the
+refusal cannot fire there. The shipped Caddyfile note deliberately carries no
+rate limiting; edge-level limits stay an operator choice.
 
 ## API Key Management
 
