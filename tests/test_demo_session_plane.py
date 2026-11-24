@@ -399,14 +399,23 @@ class TestSessionFindingsView:
 # ---------------------------------------------------------------------------
 
 
-def _drive_canned_dlp_call(gate_client: TestClient, ticket: str = "TCK-DLP-0001") -> dict:
+def _drive_canned_dlp_call(
+    gate_client: TestClient, ticket: str = "TCK-DLP-0001", session: str = "sess-demo-dlp-001"
+) -> dict:
     """One demo gate call whose arguments carry the canned synthetic
     patterns: the same traffic shape the demo sidecar's scripted DLP burst
-    generates. Returns the gate response (decision + receipt id)."""
+    generates. Declares its session id (Q17: the demo policy configures
+    session rules, so gate traffic declares sessions). Returns the gate
+    response (decision + receipt id)."""
     args = dict(DLP_CANNED_ARGS, ticket_ref=ticket)
     return gate_client.post(
         "/gate",
-        json={"tool": DLP_TOOL, "args": args, "agent_id": "agent:svc"},
+        json={
+            "tool": DLP_TOOL,
+            "args": args,
+            "agent_id": "agent:svc",
+            "session_id": session,
+        },
     ).json()
 
 
@@ -510,7 +519,12 @@ class TestDataProtectionPlane:
         gate = TestClient(create_gateway_app(gw))
         body = gate.post(
             "/gate",
-            json={"tool": DLP_TOOL, "args": DLP_CANNED_ARGS, "agent_id": "agent:svc"},
+            json={
+                "tool": DLP_TOOL,
+                "args": DLP_CANNED_ARGS,
+                "agent_id": "agent:svc",
+                "session_id": "sess-demo-dlp-off-001",
+            },
         ).json()
         assert body["decision"] == "allow", body
         x_dlp_payloads = [payload for _rec, payload in _store_payloads(gw) if "x_dlp" in payload]
@@ -547,12 +561,14 @@ class TestDataProtectionPlane:
 
 def gate_client_clean_call(gate_client: TestClient) -> dict:
     """A demo gate call carrying no canned patterns: nothing to detect,
-    so no x_dlp receipt must exist (honest empty, never padded)."""
+    so no x_dlp receipt must exist (honest empty, never padded). Declares
+    its session id (Q17: the demo policy configures session rules)."""
     return gate_client.post(
         "/gate",
         json={
             "tool": "lookup_balance",
             "args": {"account": "ACC-001"},
             "agent_id": "agent:svc",
+            "session_id": "sess-demo-dlp-clean-001",
         },
     ).json()

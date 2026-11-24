@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -75,6 +76,12 @@ class ApprovalManager:
     def __init__(self, ttl_seconds: int = 300) -> None:
         self._ttl = ttl_seconds
         self._requests: dict[str, ApprovalRequest] = {}
+        # Q17 (phase-3 review close 1): consumption is a compare-and-set
+        # under a lock - the read-validate-consume sequence is serialised
+        # per manager instance, mirroring the SegmentedReceiptStore write
+        # pattern. In-process atomicity by design; a shared transactional
+        # approval store across gateway workers is a registered follow-up.
+        self._consume_lock = threading.Lock()
 
     @property
     def ttl_seconds(self) -> int:
@@ -123,16 +130,38 @@ class ApprovalManager:
         Raises ApprovalError with a reason when the reference cannot
         authorise this call; returns the request and marks it consumed
         when it can.
+
+        Consumption is a compare-and-set under a lock (Q17, phase-3 review
+        close 1): the whole read-validate-consume sequence runs inside one
+        lock held by the manager, so exactly ONE caller of an approved
+        request can consume it even under concurrent re-submission. The
+        lock is re-checked on entry: a second caller of an
+        already-consumed request is named refused ("already consumed"),
+        never served. An approved request whose validity window has
+        passed refuses with the same 410 class as a never-decided one.
+
+        Residual (honest scope): the lock protects one manager instance,
+        i.e. in-process atomicity only. There is no file-backed approval
+        store to serialise with (requests are in-memory by design, the
+        module docstring above names it), and a shared transactional
+        approval store across gateway workers is a registered follow-up,
+        not built here.
         """
-        request = self._get(request_id)
-        if request.status != "approved":
-            raise ApprovalError(f"approval request {request_id} is not approved")
-        if request.tool != tool or request.agent_id != agent_id:
-            raise ApprovalError("approval does not match this tool or agent")
-        if request.args_hash != _args_hash(args):
-            raise ApprovalError("approval does not match these arguments")
-        request.status = "consumed"
-        return request
+        with self._consume_lock:
+            request = self._get(request_id)
+            if request.status == "consumed":
+                raise ApprovalError(f"approval request {request_id} already consumed", 409)
+            if request.status != "approved":
+                raise ApprovalError(f"approval request {request_id} is not approved")
+            if request.expires_at <= time.time():
+                request.status = "expired"
+                raise ApprovalError(f"approval request {request_id} expired", 410)
+            if request.tool != tool or request.agent_id != agent_id:
+                raise ApprovalError("approval does not match this tool or agent")
+            if request.args_hash != _args_hash(args):
+                raise ApprovalError("approval does not match these arguments")
+            request.status = "consumed"
+            return request
 
     def pending(self) -> list[dict[str, Any]]:
         now = time.time()
