@@ -150,11 +150,19 @@ export function validateIdentityBody(raw: unknown): IdentityValidation {
       detail: "identity body rules_loaded is not a number",
     };
   }
-  if (typeof b.scan_secret_required !== "boolean") {
+  // D1 (PR #322 verdict remedy): a boolean-only check here accepted
+  // scan_secret_required:false, letting the manager adopt an UNAUTHENTICATED
+  // raucle server (one started without RAUCLE_PLUGIN_SCAN_SECRET answers 200
+  // on /identity with a valid raucle body). Adoption requires the ARMED flag:
+  // the body must carry scan_secret_required:true, which a server only emits
+  // when it enforces the secret-protected probe the adoption round-trip used.
+  if (b.scan_secret_required !== true) {
     return {
       ok: false,
       reasonClass: "identity-mismatch",
-      detail: "identity body scan_secret_required is not a boolean",
+      detail:
+        `identity body scan_secret_required is ${JSON.stringify(b.scan_secret_required)}; ` +
+        `an unarmed raucle server (one not enforcing the scan secret) must never be adopted`,
     };
   }
   return {

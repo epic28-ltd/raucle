@@ -247,6 +247,100 @@ test("the manager refuses an incompatible or foreign service and spawns its own 
   manager.stop();
 });
 
+test("the manager refuses to adopt an UNAUTHENTICATED raucle server (D1: unarmed identity)", async () => {
+  // The D1 hole: an unarmed raucle (no RAUCLE_PLUGIN_SCAN_SECRET) answers
+  // /identity with 200 and a VALID raucle body that carries
+  // scan_secret_required:false. probe.ok now requires the ARMED body, so this
+  // service is never adopted; the manager spawns its own secret-carrying one.
+  const lines: string[] = [];
+  const logger = {
+    info: (msg: string) => lines.push(msg),
+    warn: (msg: string) => lines.push(msg),
+    error: (msg: string) => lines.push(msg),
+  };
+  let spawned = false;
+  const spawnCalls: number[] = [];
+  const manager = new ServerManagerTestable({
+    port: 8900,
+    mode: "standard",
+    logger,
+    fetchFn: async (url: string) => {
+      if (String(url).endsWith("/identity")) {
+        return spawned
+          ? okJson(RAUCLE_IDENTITY_BODY)
+          : okJson({ ...RAUCLE_IDENTITY_BODY, scan_secret_required: false });
+      }
+      return notFoundJson();
+    },
+    spawnFn: ((...args: unknown[]) => {
+      spawned = true;
+      spawnCalls.push(1);
+      return fakeChild();
+    }) as never,
+  });
+  await manager.start();
+  assert.equal(spawnCalls.length, 1, "an unarmed raucle server is never adopted; spawn our own");
+  const refusal = lines.find((m) => m.includes("adoption refused"));
+  if (!refusal) {
+    throw new Error("the unarmed adoption refusal must be logged");
+  }
+  assert.match(refusal, /scan_secret_required is false/, "the refusal names the unarmed identity body");
+  assert.equal(manager.isRunning, true, "after refusal the own scanner is used");
+  manager.stop();
+});
+
+test("validateIdentityBody refuses an unarmed or non-boolean scan_secret_required (D1)", () => {
+  const unarmed = validateIdentityBody({ ...RAUCLE_IDENTITY_BODY, scan_secret_required: false });
+  assert.equal(unarmed.ok, false, "scan_secret_required:false is no longer accepted");
+  if (!unarmed.ok) {
+    assert.match(unarmed.detail, /unarmed|never be adopted/);
+    assert.equal(unarmed.reasonClass, "identity-mismatch");
+  }
+  const invalid = validateIdentityBody({ ...RAUCLE_IDENTITY_BODY, scan_secret_required: "true" });
+  assert.equal(invalid.ok, false, "a non-boolean value is still rejected");
+  for (const body of [null, 5, "x", []]) {
+    assert.equal(validateIdentityBody(body).ok, false);
+  }
+});
+
+test("a malformed response body classes as malformed-response, not identity-mismatch (D6)", async () => {
+  const { server, url } = await onceServer((_req, res) => {
+    res.setHeader("content-type", "application/json");
+    res.end("<html>gateway noise, not json</html>");
+  });
+  try {
+    const client = new ScannerClient(Number(url.split(":").pop()), {
+      secret: "boot-secret-6",
+      timeoutMs: 2000,
+    });
+    const err: unknown = await client.scanToolCall("exec", { cmd: "ls" }).then(
+      () => null,
+      (e: unknown) => e
+    );
+    const mismatch = err as Error & { reasonClass?: string };
+    if (!mismatch) throw new Error("a non-JSON scan response must fail");
+    assert.equal(mismatch.name, "IdentityMismatchError");
+    assert.match(mismatch.message, /malformed response body/);
+    assert.equal(
+      classifyScanError(mismatch),
+      "malformed-response",
+      "the wire condition is a malformed response, never an identity failure"
+    );
+    assert.notEqual(classifyScanError(mismatch), "identity-mismatch");
+  } finally {
+    server.close();
+  }
+});
+
+test("classifyScanError maps the malformed-response-body rewrap message (D6)", () => {
+  // The _post() rewrap turns a JSON-parse failure into an IdentityMismatchError
+  // whose message names the wire condition; the classifier must follow it.
+  assert.equal(
+    classifyScanError(new Error("raucle /scan/tool returned a malformed response body")),
+    "malformed-response"
+  );
+});
+
 test("per-boot secrets are random per manager and a configured secret is honoured", () => {
   const a = new ServerManagerTestable({ port: 8900, mode: "standard", logger: nullLogger() });
   const b = new ServerManagerTestable({ port: 8900, mode: "standard", logger: nullLogger() });
