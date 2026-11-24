@@ -295,7 +295,6 @@ def test_cycle_refused_by_name_at_traversal_seam(tmp_path, monkeypatch):
     }
     monkeypatch.delenv("RAUCLE_VERIFY_BOUNDS", raising=False)
     verifier = ProvenanceVerifier(public_keys=_public_keys())
-    exc_class = provenance_mod.ProvenanceVerifierBoundsExceeded  # noqa: F841
     report = provenance_mod.VerificationReport(valid=True, receipt_count=0)
     with pytest.raises(provenance_mod.ProvenanceVerifierBoundsExceeded) as excinfo:
         verifier._verify_ancestry_bounds(crafted, report)
@@ -411,11 +410,17 @@ def test_demo_bundle_corpus_verifies_unchanged_under_bounds(monkeypatch):
     payload = json.loads(base64.urlsafe_b64decode(seg + "=" * ((4 - len(seg) % 4) % 4)))
     kid = payload["agent_key_id"]
 
-    monkeypatch.delenv("RAUCLE_VERIFY_BOUNDS", raising=False)
+    # Checker D1 (24 Nov): the two legs must be built from DIFFERENT envs -
+    # the bounded leg runs with bounds on (env cleared), the legacy leg with
+    # RAUCLE_VERIFY_BOUNDS=off, so the parity claim actually compares the two
+    # traversal regimes instead of two identical bounds-on runs.
+    monkeypatch.setenv("RAUCLE_VERIFY_BOUNDS", "on")
     bounded = ProvenanceVerifier(public_keys={kid: pubkey_pem}).verify_chain(DEMO_BUNDLE_CHAIN)
+    monkeypatch.setenv("RAUCLE_VERIFY_BOUNDS", "off")
     legacy = ProvenanceVerifier(public_keys={kid: pubkey_pem}).verify_chain(DEMO_BUNDLE_CHAIN)
-    # sanity: the corpus is genuinely valid today (not parity on two refusals)
+    # sanity: the corpus is genuinely valid under BOTH regimes (not parity on two refusals)
     assert bounded.valid is True and bounded.receipt_count == 3
+    assert legacy.valid is True and legacy.receipt_count == 3
     assert bounded.errors == legacy.errors
     assert bounded.to_dict() == legacy.to_dict()
 
