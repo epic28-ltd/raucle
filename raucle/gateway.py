@@ -237,6 +237,11 @@ class GatewayConfig:
     # Receipts
     receipt_store: str = "/data/receipts.jsonl"
     audit_chain: str = "/data/audit.jsonl"
+    # Q11 F: production strict signed audit mode (opt-in). When set, boot
+    # refuses an audit chain whose genesis is unsigned and a boot whose
+    # signer is unavailable, naming RAUCLE_REQUIRE_SIGNED_AUDIT. Unset
+    # keeps the development affordances: an unsigned chain warns and runs.
+    require_signed_audit: bool = False
 
     # X3 slice 4: the single-writer receipt sidecar. When the URL is set
     # this gateway no longer writes the chain or the index; it submits
@@ -280,6 +285,11 @@ class GatewayConfig:
     # Receipts v1.1: append-only ledger of delegated capability records; when
     # set, gate auth token mode resolves attenuated chains against it.
     delegations_file: str = ""
+    # Q11 E: production strict ancestry mode (opt-in). When set, boot refuses
+    # a delegation ledger the ancestry resolver cannot be backed with,
+    # naming RAUCLE_REQUIRE_ANCESTRY_RESOLVER. Unset keeps the development
+    # affordances: the no-resolver deny stays as today.
+    require_ancestry_resolver: bool = False
     signer_key_path: str = ""  # empty = <data-dir>/gateway-signing-key.pem
 
     # Signed gate receipts (PR-B): every /gate decision is emitted as a
@@ -440,6 +450,17 @@ class GatewayConfig:
             data_root=os.environ.get("RAUCLE_DATA_ROOT", ""),
             gate_auth=os.environ.get("RAUCLE_GATE_AUTH", "off"),
             revocations_file=os.environ.get("RAUCLE_REVOCATIONS_FILE", ""),
+            # Q11 E: the deployment ledger the ancestry resolver is backed
+            # with. The variable was documented in prod.env.example but was
+            # never loaded; the strict ancestry mode reads this field, so
+            # the wiring lands with it.
+            delegations_file=os.environ.get("RAUCLE_DELEGATIONS_FILE", ""),
+            require_signed_audit=os.environ.get("RAUCLE_REQUIRE_SIGNED_AUDIT", "").strip().lower()
+            in ("1", "true", "yes"),
+            require_ancestry_resolver=os.environ.get("RAUCLE_REQUIRE_ANCESTRY_RESOLVER", "")
+            .strip()
+            .lower()
+            in ("1", "true", "yes"),
             trace_quarantine_file=os.environ.get("RAUCLE_TRACE_QUARANTINE_FILE", ""),
             lease_suspensions_file=os.environ.get("RAUCLE_LEASE_SUSPENSIONS_FILE", ""),
             agent_credentials_file=os.environ.get(
@@ -1375,6 +1396,31 @@ def _attach_rebuilt_frontier_to_sink(audit_path, frontier) -> None:
         sink.close()
 
 
+def _audit_chain_genesis_state(audit_path: Path) -> tuple[str, str | None]:
+    """The honest signed state of an audit chain's genesis (Q11 F).
+
+    Reads the ``chain_meta`` header, the only record that self-describes
+    the chain's signed mode and key id: a signed genesis returns
+    ``(signed, key_id)``. Anything else (unsigned genesis, missing or
+    unreadable header) returns ``(unsigned, None)``: never a claimed
+    signature the file does not carry.
+    """
+    try:
+        with open(audit_path, encoding="utf-8") as fh:
+            first = fh.readline().strip()
+        if not first:
+            return "unsigned", None
+        rec = json.loads(first)
+    except (OSError, ValueError):
+        return "unsigned", None
+    if not isinstance(rec, dict) or not rec.get("chain_meta"):
+        return "unsigned", None
+    if rec.get("signed"):
+        key_id = rec.get("key_id")
+        return "signed", str(key_id) if key_id else None
+    return "unsigned", None
+
+
 class RaucleGateway:
     """The gateway core: policy engine + gate + receipt store + stats.
 
@@ -1464,6 +1510,14 @@ class RaucleGateway:
                 None if self._policy_seal_mode_at_boot == "off" else self._registry_seal_checker
             )
         )
+        # Q17 gate hardening (phase-3 review close 2): identity-level
+        # quarantine state bound from quarantined-trace refusals.
+        # agent_id -> {"trace_ids": [trace_id, ...]}. Guarded by a lock:
+        # gate calls arrive on concurrent request threads. In-process by
+        # design - the durable control stays the trace-quarantine registry
+        # file; lifting follows the registry state of the binding traces.
+        self._agent_quarantines: dict[str, dict[str, Any]] = {}
+        self._agent_quarantine_lock = threading.Lock()
         self._init_receipt_projection(config)
         if self._gate_auth_mode == "off":
             logger.warning(
@@ -1499,7 +1553,40 @@ class RaucleGateway:
         self._last_tool_receipt: dict[str, tuple[str, str]] = {}
 
         # Bootstrap from config
-        self._init_signer()
+        try:
+            self._init_signer()
+        except Exception as exc:
+            if self.config.require_signed_audit:
+                # Q11 F: under the strict signed audit mode an unavailable
+                # signer refuses with the mode named, not the generic
+                # signer error (the production deployment promised an
+                # attributed audit chain).
+                from raucle.audit import ENV_AUDIT_REQUIRE_SIGNED
+                from raucle.errors import ConfigurationError
+
+                raise ConfigurationError(
+                    f"audit strict signed mode ({ENV_AUDIT_REQUIRE_SIGNED}=1): "
+                    f"the audit chain's signer is unavailable ({exc}); refusing "
+                    f"to boot without the promised signed-audit property; "
+                    f"restore the signer and restart"
+                ) from exc
+            raise
+        # Q11 F: the strict signed audit gates: an audit chain on disk
+        # whose genesis is unsigned refuses by name with the rotate path
+        # as the recovery. Unset, the development affordances hold (the
+        # boot warns and the chain runs unsigned).
+        self._enforce_require_signed_audit()
+        # Q11 E: the strict ancestry mode refuses at boot when the config
+        # enables delegation but the ledger cannot back the resolver.
+        self._enforce_require_ancestry_resolver()
+        # Q11 F: the readiness payload reports what the audit chain on
+        # disk actually is (an honest field, not the config's wish); an
+        # unset or missing chain stays at its pending default.
+        if self.boot_readiness is not None:
+            audit_path = Path(config.audit_chain) if config.audit_chain else None
+            if audit_path is not None and audit_path.exists():
+                state, key_id = _audit_chain_genesis_state(audit_path)
+                self.boot_readiness.set_audit_chain(state=state, key_id=key_id)
         self._init_gate_identity()
         # Q8: the gateway's persistent gate identity signs the store's seal
         # metas (house signing path). The store was constructed earlier in
@@ -2013,6 +2100,68 @@ class RaucleGateway:
         logger.info("generated new gateway signing key %s (key_id=%s)", key_path, signer.key_id())
         return signer
 
+    def _enforce_require_signed_audit(self) -> None:
+        """Q11 F: the boot-time strict signed audit gate.
+
+        The signer-unavailable leg wraps ``_init_signer`` at its call site;
+        this leg refuses an audit chain whose genesis is unsigned: the
+        chain's writer key cannot attest it, so a production deployment
+        promised an attributed audit chain refuses by name with the rotate
+        path as the recovery. Unset, the boot keeps today's behaviour.
+        """
+        if not self.config.require_signed_audit:
+            return
+        from raucle.audit import ENV_AUDIT_REQUIRE_SIGNED
+        from raucle.errors import ConfigurationError
+
+        audit_path = Path(self.config.audit_chain) if self.config.audit_chain else None
+        if audit_path is None or not audit_path.exists():
+            # No chain on disk yet: the first writer creates the genesis.
+            return
+        state, _key_id = _audit_chain_genesis_state(audit_path)
+        if state == "signed":
+            return
+        raise ConfigurationError(
+            f"audit strict signed mode ({ENV_AUDIT_REQUIRE_SIGNED}=1): the audit "
+            f"chain {audit_path} carries an unsigned genesis (the writer's key "
+            f"cannot attest it); refusing to run a production audit chain that "
+            f"is not attributed. Rotate with 'raucle rotate-chain' and restart "
+            f"with a signer configured (RAUCLE_AUDIT_PRIVATE_KEY_PEM)."
+        )
+
+    def _enforce_require_ancestry_resolver(self) -> None:
+        """Q11 E: the boot-time strict ancestry gate.
+
+        A config that unambiguously enables delegation (the strict flag
+        set) must have a delegation ledger backing the ancestry resolver:
+        a ledger that is not configured, or configured but missing on
+        disk, refuses the boot by name instead of serving depth-beyond-
+        one-level delegations without resolvable ancestry. Unset, the
+        development affordances hold.
+        """
+        if not self.config.require_ancestry_resolver:
+            return
+        from raucle.capability import ENV_REQUIRE_ANCESTRY_RESOLVER
+        from raucle.errors import ConfigurationError
+
+        delegations = self.config.delegations_file
+        if not delegations:
+            raise ConfigurationError(
+                f"strict ancestry mode ({ENV_REQUIRE_ANCESTRY_RESOLVER}=1): no "
+                f"delegation ledger is configured; refusing to boot without the "
+                f"ancestry resolver the strict mode promises (set "
+                f"RAUCLE_DELEGATIONS_FILE or unset the strict flag)"
+            )
+        ledger_path = Path(delegations)
+        if not ledger_path.exists():
+            raise ConfigurationError(
+                f"strict ancestry mode ({ENV_REQUIRE_ANCESTRY_RESOLVER}=1): the "
+                f"configured delegation ledger {ledger_path} does not exist; "
+                f"refusing to boot without the ledger backing the ancestry "
+                f"resolver (register the delegation chain or unset the strict "
+                f"flag)"
+            )
+
     def _sign_and_store_receipt(self, payload: dict[str, Any], *, advisory: bool = False) -> str:
         """Sign a receipt payload with the gate identity and append it to
         the receipt store. Shared core for gate, approval, stop and
@@ -2277,7 +2426,7 @@ class RaucleGateway:
         """
         if not self.config.emit_receipts:
             return None
-        from raucle.provenance import _canonical_json, _sha256_hex
+        from raucle.provenance import EVIDENCE_GATE_OBSERVED, _canonical_json, _sha256_hex
 
         # Receipts v1.2 (lane K3): the counterfactual is evaluated BEFORE
         # the payload iat is stamped, so the block can never post-date its
@@ -2293,6 +2442,11 @@ class RaucleGateway:
             "operation": "guardrail_scan",
             "parents": [],
             "taint": [_TAINT_GATE_OBSERVED],
+            # Lane Q16 (additive, informational): this receipt is the
+            # AUTHORISATION decision record, not execution proof. The
+            # receipt self-describes its own evidence level so verifiers
+            # and auditors never read it as the executor's attestation.
+            "x_evidence": EVIDENCE_GATE_OBSERVED,
             "input_hash": _sha256_hex(_canonical_json(ctx.args)),
             "ruleset_hash": ctx.ruleset_override
             or self._policy_ruleset_hash(ctx.tool, ctx.source, ctx.destination),
@@ -3327,7 +3481,7 @@ class RaucleGateway:
         # quarantined trace / suspended lease cannot be bypassed by a
         # valid token. Denials flow through the standard receipted deny
         # path (nothing about containment is a special channel).
-        trace_refusal = self._trace_quarantine_refusal(trace_id)
+        trace_refusal = self._trace_quarantine_refusal(trace_id, agent_id)
         if trace_refusal:
             return self._deny_result(result, trace_refusal, start)
         lease_refusal = self._lease_suspension_refusal(agent_id)
@@ -3373,6 +3527,30 @@ class RaucleGateway:
                 denied = self._deny_result(result, session_reason, start)
                 self._emit_session_rule_finding(denied, tool, args, session_rule_id)
                 return denied
+        elif self._session_rules:
+            # Q17 gate hardening (phase-3 review close 3): when session
+            # behavioural rules are CONFIGURED (rules exist and parsed), a
+            # request that omits the session id refuses with a named reason
+            # - a configured control cannot be silently disabled by the
+            # caller dropping the field. Deriving the session key
+            # server-side (agent identity + trace id) was considered and
+            # rejected: the bounded windows are keyed on the caller-supplied
+            # key, so a derived key hands a fresh trace a fresh empty window
+            # and weakens exactly the rate semantics the rules enforce.
+            # Refuse-with-name is the honest closure; session values stay
+            # caller-supplied until the server-issued workflow-identity
+            # work (registered follow-up family). Deployments with no rules
+            # parsed (none declared, or the block failed to load) keep
+            # today's shape for session-free calls; a malformed config
+            # already denies session-bearing calls fail-closed by name.
+            return self._deny_result(
+                result,
+                "session_binding_required: session behavioural rules are "
+                "configured on this gateway; requests must declare a "
+                "session_id (a configured control cannot be disabled by "
+                "the caller's omission)",
+                start,
+            )
 
         if _token_decision is not None and not _token_decision.allowed:
             # Attributable token denial (receipts v1.1): the caller is
@@ -4269,23 +4447,84 @@ class RaucleGateway:
                 states[str(record[id_field])] = str(record.get("state", ""))
         return states
 
-    def _trace_quarantine_refusal(self, trace_id: str) -> str:
-        """Named deny reason when *trace_id* is currently quarantined.
+    def _trace_quarantine_refusal(self, trace_id: str, agent_id: str = "") -> str:
+        """Named deny reason when *trace_id* is currently quarantined, or
+        when *agent_id* is under identity-level quarantine bound from
+        quarantined-trace work.
+
+        Q17 gate hardening (phase-3 review close 2): quarantine binds to
+        the agent identity as well as the trace, so a quarantined agent
+        cannot walk past containment by re-rolling its X-Trace-Id. When a
+        call is refused because its trace is quarantined, the refusal
+        records the caller's agent_id - the authenticated identity when
+        gate auth is on, the declared one when it is off (the documented
+        off-mode limitation) - into an identity-level quarantine state. A
+        later call from the same identity with a fresh trace id is then
+        refused too. Trace-level state stays keyed by trace_id and shared
+        by whoever presents it.
+
+        Lift semantics stay anchored on the durable registry: a binding
+        trace whose registry state is no longer quarantined (released, or
+        the registry file absent) drops its binding, and an identity with
+        no bindings left is fully released. The identity state itself is
+        per-process; a durable shared identity store is a registered
+        follow-up, not built here.
 
         Checked BEFORE constraint evaluation (and before the delegated
         authority shortcut): quarantine only ever denies, so ordering it
         first can never widen authority, and it cannot be bypassed by a
-        valid token. Existing receipts are untouched — no history rewrite.
+        valid token. Existing receipts are untouched - no history rewrite.
         """
-        if not trace_id:
-            return ""
-        states = self._load_registry_last_state(self.config.trace_quarantine_file or "", "trace_id")
-        if states.get(trace_id) == "quarantined":
+        states: dict[str, str] = {}
+        if trace_id or agent_id or self._agent_quarantines:
+            states = self._load_registry_last_state(
+                self.config.trace_quarantine_file or "", "trace_id"
+            )
+        trace_quarantined = bool(trace_id) and states.get(trace_id) == "quarantined"
+        if trace_quarantined and agent_id:
+            self._bind_agent_quarantine(agent_id, trace_id)
+        agent_refusal = self._identity_quarantine_refusal(agent_id, states)
+        if trace_quarantined:
             return (
                 f"trace quarantine: trace_id '{trace_id}' is quarantined; "
                 "new work on this trace is denied (existing receipts remain verifiable)"
             )
-        return ""
+        return agent_refusal
+
+    def _bind_agent_quarantine(self, agent_id: str, trace_id: str) -> None:
+        """Bind one agent identity into identity-level quarantine: its call
+        was refused because the trace it presented is quarantined."""
+        with self._agent_quarantine_lock:
+            state = self._agent_quarantines.get(agent_id)
+            if state is None:
+                state = {"trace_ids": []}
+                self._agent_quarantines[agent_id] = state
+            if trace_id not in state["trace_ids"]:
+                state["trace_ids"].append(trace_id)
+
+    def _identity_quarantine_refusal(self, agent_id: str, states: dict[str, str]) -> str:
+        """Named refusal for an identity-level quarantine, maintaining the
+        lift semantics: a binding whose trace is no longer registered
+        quarantined drops off, and an identity with no bindings left lifts."""
+        if not agent_id:
+            return ""
+        with self._agent_quarantine_lock:
+            state = self._agent_quarantines.get(agent_id)
+            if not state:
+                return ""
+            live_ids = [tid for tid in state["trace_ids"] if states.get(tid) == "quarantined"]
+            if not live_ids:
+                del self._agent_quarantines[agent_id]
+                return ""
+            state["trace_ids"] = live_ids
+            bound = ", ".join(f"'{tid}'" for tid in sorted(live_ids))
+            return (
+                "agent quarantine: agent "
+                f"'{agent_id}' is identity-quarantined by work presented on "
+                f"quarantined trace(s) {bound}; re-rolling the trace id does "
+                "not escape containment; the refusal lifts when every "
+                "binding trace is released"
+            )
 
     def _lease_suspension_refusal(self, agent_id: str) -> str:
         """Named deny reason when *agent_id*'s credential lease is

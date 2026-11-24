@@ -39,7 +39,10 @@ from typing import Any
 
 from raucle._paths import validate_path
 from raucle.audit import Ed25519Signer, _canonical_json, _sha256_hex
-from raucle.provenance import CapabilityStatement
+from raucle.provenance import (
+    TRUST_MODE_AUTHORITY_ISSUED,
+    CapabilityStatement,
+)
 from raucle.trust_registry import _MAX_CLOCK_SKEW_SECONDS
 
 #: Passport format identifier.
@@ -129,6 +132,12 @@ class PassportVerdict:
     issuer: str = ""
     allowed_tools: list[str] = field(default_factory=list)
     allowed_models: list[str] = field(default_factory=list)
+    # Lane Q16, informational: how the resolved capability statement was
+    # vouched. A verified passport is by construction authority-issued
+    # (registry-anchored, issuer-countersigned), so a valid verdict names
+    # that trust mode and a failure verdict resolves no trust at all.
+    # The label never upgrades the verdict from a self-signature.
+    trust_mode: str = ""
 
 
 def issue_passport(
@@ -285,6 +294,7 @@ def verify_passport(
         issuer=p.issuer,
         allowed_tools=list(stmt.get("allowed_tools") or []),
         allowed_models=list(stmt.get("allowed_models") or []),
+        trust_mode=TRUST_MODE_AUTHORITY_ISSUED,
     )
 
 

@@ -375,14 +375,18 @@ class TestRepeatedDenyStorm:
         # and the whole chain, finding included, verifies offline
         assert_chain_verifies(gw)
 
-    def test_no_session_id_means_no_session_rules(self, gw, client):
-        """Continuity is declared by the caller; without a session_id the
-        rules never fire (never fabricated from trace_id)."""
+    def test_no_session_id_refuses_named_when_rules_configured(self, gw, client):
+        """Q17 gate hardening (close 3): with rules configured, an omitted
+        session id refuses by name instead of silently skipping the
+        configured control - and no session rule finding is minted from
+        the refusal (rules never fire from trace continuity; continuity is
+        still never fabricated)."""
         for _ in range(5):
             body = call(client, "lookup_balance", {"account": "ACC-999"})
             assert body["decision"] == "deny"
+            assert "session_binding_required" in body["reason"], body
         ok = call(client, "lookup_balance", {"account": "ACC-001"})
-        assert ok["decision"] == "allow", ok
+        assert "session_binding_required" in ok["reason"], ok
         assert session_findings(gw, "sr-storm") == []
 
     def test_other_agent_same_session_is_separate(self, tmp_path):
