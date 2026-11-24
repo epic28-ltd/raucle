@@ -43,9 +43,10 @@ export interface ServerManagerOptions {
    * Respawn policy overrides (principally for tests). PR #322 verdict D2: the
    * exit-restart loop ran every 10s forever, so an adoption refusal against an
    * occupied port caused a permanent EADDRINUSE lockout. Defaults: 10s base
-   * delay doubling per consecutive round, capped; the manager gives up with a
-   * named advisory after `maxAttempts` consecutive spawn rounds that never
-   * proved identity.
+   * delay doubling per consecutive round, capped; `maxAttempts` caps the
+   * recovery respawns, and the failed spawn AFTER those trips the named
+   * give-up advisory: `maxAttempts + 1` consecutive spawn rounds in total
+   * never proved identity (the advisory reports that observed exit count).
    */
   respawn?: { baseDelayMs?: number; maxDelayMs?: number; maxAttempts?: number };
 }
@@ -178,7 +179,8 @@ export class ServerManager {
       this.ready = false;
       this.lastExitCode = typeof code === "number" ? code : null;
       // D2 (PR #322 verdict remedy): respawn on a bounded BACKOFF ladder and
-      // give up after maxAttempts consecutive failed rounds with a NAMED
+      // give up when a failed spawn lands after maxAttempts recovery respawns
+      // (maxAttempts + 1 consecutive failed spawn rounds) with a NAMED
       // advisory - an adoption refusal against an occupied port must not
       // re-enter an EADDRINUSE restart loop every few seconds forever.
       if (!this.stopped && !this.restarting) {
@@ -187,7 +189,7 @@ export class ServerManager {
           this.respawnAbandoned = true;
           this.logger.error(
             `[raucle] SCANNER RESPAWN ABANDONED (reasonClass=spawn-give-up): the raucle scanner ` +
-              `on port ${this.port} exited ${this.respawnMaxAttempts} times in a row without ` +
+              `on port ${this.port} exited ${this.respawnMaxAttempts + 1} times in a row without ` +
               `proving its identity (last exit code ${code}; most commonly the port is occupied ` +
               `by a service the adoption probe refused). Free the port or align the ` +
               `RAUCLE_PLUGIN_SCAN_SECRET; gated calls stay blocked until the scanner proves itself.`
