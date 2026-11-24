@@ -3150,7 +3150,7 @@ def _enforce_require_pq(path: str, report: Any) -> None:
     quantum-safe emission. Marks the report invalid with a clear error
     per non-pq1 receipt.
     """
-    from raucle.provenance import ProvenanceReceipt
+    from raucle.provenance import ProvenanceReceipt, _jws_declares_pq1
 
     with open(path, encoding="utf-8") as fh:
         for line_no, line in enumerate(fh, start=1):
@@ -3162,8 +3162,7 @@ def _enforce_require_pq(path: str, report: Any) -> None:
                 receipt = ProvenanceReceipt.from_jws(envelope["jws"], strict=True)
             except Exception:
                 continue
-            parts = receipt.jws.split(".")
-            if len(parts) != 4:
+            if not _jws_declares_pq1(receipt.jws):
                 report.errors.append(
                     f"line {line_no}: --require-pq failed: receipt is not a "
                     "raucle/pq1 hybrid receipt (no ML-DSA-65 component)"

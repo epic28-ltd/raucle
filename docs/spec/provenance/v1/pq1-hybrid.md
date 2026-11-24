@@ -65,24 +65,44 @@ whose signature slot holds both signatures.
 
 ### Signature encoding
 
-The JWS signature slot holds two base64url segments joined by a literal `.`:
+The receipt stays a Compact JWS (RFC 7515), whose signature component is
+EXACTLY ONE base64url segment. The pq1 slot is therefore ONE base64url
+value over the raw concatenation of the two signatures:
 
 ```
-<base64url(ed25519-signature, 64 bytes)>.<base64url(ml-dsa-65-signature, 3309 bytes)>
+<base64url(ed25519-signature (64 bytes) || ml-dsa-65-signature (3309 bytes))>
 ```
 
-The JOSE `alg` remains `EdDSA` (the classical component) so legacy
-verifiers reject gracefully on the unexpected length rather than
-mis-parsing. `raucle/pq1` in `crit` is what tells a quantum-aware verifier
-to expect and check the second segment.
+Both component lengths are constants (RFC 8032: 64 bytes; FIPS 204:
+ML-DSA-65 3309 bytes), so the framing is deterministic with no length
+prefix and no delimiter: a pq1 verifier decodes the slot and splits the
+raw bytes at the fixed offsets. Any standard JOSE parser sees a valid
+three-segment Compact JWS and rejects the receipt on the unknown
+`raucle/pq1` `crit` entry - the RFC-correct behaviour for an
+unrecognised critical profile it must not process. The JOSE `alg`
+remains `EdDSA` (the classical component).
+
+Interop note (v0.23 phase-10 review): the previous two-segment dot
+form, `<base64url(ed)>.<base64url(mldsa)>`, was NOT
+Compact-JWS-conformant - a standard JOSE parser cannot parse that slot
+as a single signature component. The wire form is now single-segment;
+the dot form is accepted for VERIFICATION ONLY during a deprecation
+window (removal scheduled with the pq1 vector freeze), and every legacy
+acceptance logs a named deprecation marker (`LEGACY_DOT_FORM_DEPRECATION`,
+logger `raucle.pq`). A legacy JWS verifier rejects pq1 receipts on the
+unknown `crit` - parse-confusion is not part of the threat model under
+either form, because the `crit` pin is load-bearing in both.
 
 ### Verification algorithm (pq1)
 
 1. Parse the JWS. Header must contain `raucle/v1: "provenance"` and
    `raucle/pq1: "ml-dsa-65"`, both listed in `crit`; otherwise reject as
    an unrecognised profile.
-2. Split the signature slot on `.` into exactly two segments. Reject on any
-   other shape.
+2. Decode the signature slot. The current form is a single base64url
+   segment; the decoded bytes MUST be exactly 64 + 3309 = 3373 bytes,
+   split at the fixed offsets (Ed25519 first). The legacy dot form
+   (`<ed>.<mldsa>`) is accepted during the deprecation window and logs
+   the deprecation marker. Reject on any other shape or length.
 3. Resolve the Ed25519 key by `kid` and the ML-DSA-65 key by `pqk` from the
    trust registry. Both must resolve; failure is fail-closed.
 4. Recompute the canonical JCS bytes of header and payload (the existing
@@ -135,15 +155,22 @@ growth is noted for SIEM forwarding budgets.
    keys in pq1 mode.
 4. **Test vectors**: `docs/spec/provenance/v1/pq1-test-vectors.json` -
    fixed seeds, the deterministic signing prefix, one reference hybrid
-   JWS, and negative vectors (downgrade-stripped, Ed25519-flipped,
-   ML-DSA-flipped). NOTE: FIPS 204 ML-DSA signing is randomised (hedged),
-   so hybrid receipts are NOT byte-reproducible the way v1 receipts are.
-   The cross-language contract is therefore verification-based: ports
-   (a) derive the same keys from seeds, (b) byte-match the deterministic
-   prefix, (c) verify the reference signature under those keys, and
-   (d) produce their own signatures that also verify. The Python
-   reference is authoritative; TS/Go/Rust/C# ports add ML-DSA via their
-   PQ libraries.
+   JWS in the current single-segment concatenation form, the legacy
+   4-segment dot-form reference carried forward byte-identically and
+   marked legacy-verify-only, and negative vectors (downgrade-stripped,
+   concatenated-slot truncated, component order swapped, Ed25519-flipped,
+   ML-DSA-flipped) covering BOTH accepted forms. NOTE: FIPS 204 ML-DSA
+   signing is randomised (hedged), so hybrid receipts are NOT
+   byte-reproducible the way v1 receipts are. The cross-language
+   contract is therefore verification-based: ports (a) derive the same
+   keys from seeds, (b) byte-match the deterministic prefix, (c) verify
+   each reference signature under those keys, and (d) produce their own
+   signatures that also verify. The Python reference is authoritative;
+   TS/Go/Rust/C# ports add ML-DSA via their PQ libraries. THE VECTOR
+   FILE IS THE PORT COORDINATION POINT: this encoding change means the
+   ports must add the single-segment split (and, for legacy receipts,
+   the dot-form split) on their next sync; until synced they keep
+   accepting the dot form only, which stays correct during the window.
 5. **No v1 breakage**: everything deployed today keeps verifying forever.
    pq1 is additive. Old vectors stay published - the version-pinned
    recomputable-evidence property, applied to this profile.

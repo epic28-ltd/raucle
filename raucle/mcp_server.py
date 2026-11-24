@@ -43,6 +43,7 @@ Claude Desktop configuration example (``claude_desktop_config.json``)::
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import sys
@@ -468,9 +469,19 @@ class MCPServer:
             return {"valid": False, "error": str(exc)}
 
         data = payload.to_dict()
-        # Surface the profile: a pq1 receipt carries the ML-DSA segment (4-part JWS)
-        # and the crit pin, so consumers can see hybrid evidence at a glance.
-        profile = data.get("profile") or ("raucle/pq1" if receipt.count(".") == 3 else "raucle/v1")
+        # Surface the profile: header-based (the crit pin is authoritative).
+        # Dot-count heuristics are wrong under the pq1 single-segment slot:
+        # a standard JWS parser sees 3 segments either way; profile comes
+        # from the parsed header, never from segmentation.
+        header_b64 = receipt.split(".")[0] if receipt.count(".") >= 2 else ""
+        profile = data.get("profile")
+        if profile is None:
+            try:
+                pad = "=" * ((4 - len(header_b64) % 4) % 4)
+                header = json.loads(base64.urlsafe_b64decode(header_b64 + pad))
+                profile = "raucle/pq1" if header.get("raucle/pq1") else "raucle/v1"
+            except Exception:
+                profile = "raucle/v1"
         return {"valid": True, "profile": profile, "payload": data}
 
     # ------------------------------------------------------------------
