@@ -127,3 +127,33 @@ class KeyStoreRegistryMismatch(Exception):
     never serves receipts on a key the registry does not vouch for, and
     the guard binds at construction, so a reconcile requires a restart.
     """
+
+
+class ReceiptStoreSealRefused(Exception):
+    """The receipt store refused to seal or resume a segment with a torn
+    or corrupt record line (external review of v0.23.7).
+
+    Raised by :class:`raucle.receipt_store.SegmentedReceiptStore` in two
+    fail-closed situations:
+
+    * sealing refuses: ``seal_now`` and the size-threshold rollover seal
+      refuse a segment containing any non-blank unparsable line. The
+      ``.meta`` sidecar is never written for a refused seal, the active
+      file stays open and writable, and the operator decides how to
+      resolve the line. Receipts keep appending into the segment.
+    * resume refuses: reopening an existing writable segment after a
+      restart (the lazy append path and the lazy seal path) refuses when
+      the segment's tail (the last non-blank line) is unparsable.
+      Appending after a torn write would chain a second record stream
+      inside one file, so the resume raises at open instead.
+
+    The message names the segment file and the offending physical line
+    number. Nothing is skipped and no seal proceeds past a torn record;
+    earlier behaviour counted torn lines as receipts, recorded a last
+    receipt hash from a torn segment, and sealed it read-only. The
+    gateway surfaces the refusal through its receipt-emission failure
+    handling (the decision downgrades to a named deny): the refusal is
+    recorded by the caller and never swallowed here. This differs from
+    :class:`ChainTailMalformed`, which guards the receipt index's chain
+    resume; this class guards the receipt store's segments and seals.
+    """

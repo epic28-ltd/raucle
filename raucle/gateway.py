@@ -1511,6 +1511,11 @@ class RaucleGateway:
                 state, key_id = _audit_chain_genesis_state(audit_path)
                 self.boot_readiness.set_audit_chain(state=state, key_id=key_id)
         self._init_gate_identity()
+        # Q8: the gateway's persistent gate identity signs the store's seal
+        # metas (house signing path). The store was constructed earlier in
+        # boot order, before the identity existed, so the signer binds here.
+        if self._receipt_store is not None:
+            self._receipt_store.set_seal_signer(self._gate_identity)
         self._load_policies()
         # EPIC W lane W1: bind the policy file's state_pairings section
         # against the tool schema registry AFTER both are loaded, so a
@@ -1615,6 +1620,11 @@ class RaucleGateway:
                 base_dir=config.receipt_store_dir,
                 max_segment_bytes=config.receipt_segment_max_bytes,
             )
+            # The seal identity binds later: _init_receipt_projection runs
+            # BEFORE the signer/identity bootstrap in boot order, so the
+            # gateway attaches its persistent gate identity right after
+            # _init_gate_identity (see __init__). Until a signer is bound,
+            # sealed metas record ``unsigned: true`` honestly.
         self._receipt_index = None
         self.boot_readiness: Any = None
         self._boot_compactor: Any = None

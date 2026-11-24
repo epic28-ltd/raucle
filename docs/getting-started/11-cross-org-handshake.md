@@ -21,8 +21,16 @@ request = build_request(
 
 # Org B (responder): resolve A's key_id from the SHARED registry (fail-closed on
 # unknown/revoked), capability-gate the call, return a SIGNED acknowledgement.
+# The replay store is REQUIRED and persists across restarts: keep one instance
+# per responder for the process lifetime (SqliteReplayStore over a durable path).
+from raucle.replay_store import SqliteReplayStore
+replay = SqliteReplayStore("/var/lib/raucle/replay.sqlite3")
 result = accept_call(
-    request, registry=shared_registry, responder_signer=org_b_signer, responder_id="org-b.gateway"
+    request,
+    registry=shared_registry,
+    responder_signer=org_b_signer,
+    responder_id="org-b.gateway",
+    replay=replay,
 )
 
 # Org A: verify B's ack by resolving B's key from the SAME registry.
@@ -44,8 +52,13 @@ registry.
 - **Mutual evidence.** Both the call decision and the acknowledgement are
   signed and registry-verifiable, so each side holds proof of the other's
   action.
-- **Anti-replay.** The `nonce` binds an ack to a specific handshake; a replayed
-  ack with a different nonce is rejected.
+- **Anti-replay.** The replay store is mandatory (`accept_call` requires a
+  persistent, atomic `ReplayStore`, by default `SqliteReplayStore`): the
+  first handler of a (token, nonce) proceeds, every replay is refused, and a
+  nonce consumed for a request whose handling then crashed is refused after a
+  restart too. A request without a nonce is refused. The `nonce` also binds an
+  ack to a specific handshake; a replayed ack with a different nonce is
+  rejected.
 
 See the runnable [examples/cross_org_demo](../../examples/cross_org_demo/)
 (no API key): legitimate call accepted, injection rejected, revoked-key rejected.

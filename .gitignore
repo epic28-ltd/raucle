@@ -45,3 +45,4 @@ reference/provenance-go/emit
 .DS_Store
 
 .scannerwork/
+.venv/

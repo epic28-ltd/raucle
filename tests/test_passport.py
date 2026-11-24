@@ -292,3 +292,131 @@ class TestCLIMalformedPassportFile:
         rc = main(["passport", "verify", str(p), "--registry", str(reg)])
         assert rc == 1
         assert "cannot load passport" in capsys.readouterr().err
+
+
+class TestTtlDiscipline:
+    """Q10 (a second external review of the main branch, P1): ttl_seconds=0
+    used to silently mean never-expiring (``if ttl_seconds else None``) and a
+    negative ttl produced an already-expired passport. Explicit refusals."""
+
+    def _registry(self, tmp_path):
+        org_signer = Ed25519Signer.generate()
+        reg = TrustRegistry(tmp_path / "reg.jsonl")
+        reg.publish(org_signer.public_key_pem().decode(), issuer="Org X")
+        return org_signer, reg
+
+    def test_ttl_zero_refused(self, tmp_path):
+        org_signer, _reg = self._registry(tmp_path)
+        agent = AgentIdentity.generate(agent_id="agent:x")
+        with pytest.raises(ValueError, match="positive"):
+            issue_passport(agent.statement, issuer_signer=org_signer, issuer="Org X", ttl_seconds=0)
+
+    def test_ttl_negative_refused(self, tmp_path):
+        org_signer, _reg = self._registry(tmp_path)
+        agent = AgentIdentity.generate(agent_id="agent:x")
+        with pytest.raises(ValueError, match="positive"):
+            issue_passport(
+                agent.statement, issuer_signer=org_signer, issuer="Org X", ttl_seconds=-1
+            )
+
+    def test_ttl_non_integer_refused(self, tmp_path):
+        """bool is an int subclass in Python; True must not pass as a ttl."""
+        org_signer, _reg = self._registry(tmp_path)
+        agent = AgentIdentity.generate(agent_id="agent:x")
+        with pytest.raises(ValueError, match="positive"):
+            issue_passport(
+                agent.statement, issuer_signer=org_signer, issuer="Org X", ttl_seconds=True
+            )
+
+    def test_ttl_none_keeps_the_documented_no_expiry_mode(self, tmp_path):
+        """The CLI documents --ttl's default as no expiry, so None stays the
+        legitimate never-expiring mode."""
+        org_signer, reg = self._registry(tmp_path)
+        agent = AgentIdentity.generate(agent_id="agent:x")
+        passport = issue_passport(
+            agent.statement, issuer_signer=org_signer, issuer="Org X", ttl_seconds=None
+        )
+        assert passport.expires_at is None
+        assert verify_passport(passport.to_dict(), registry=reg, now=10**12).valid
+
+    def test_positive_ttl_still_expires_as_before(self, tmp_path):
+        org_signer, reg = self._registry(tmp_path)
+        agent = AgentIdentity.generate(agent_id="agent:x")
+        passport = issue_passport(
+            agent.statement, issuer_signer=org_signer, issuer="Org X", ttl_seconds=3600
+        )
+        expected_expiry = passport.issued_at + 3600
+        assert passport.expires_at == expected_expiry
+        assert verify_passport(passport.to_dict(), registry=reg).valid
+        v = verify_passport(passport.to_dict(), registry=reg, now=expected_expiry + 5)
+        assert not v.valid
+        assert "expired" in v.reason
+
+
+class TestVerifyStrictness:
+    """Q10 (P1): verify_passport validates issued_at against the clock and
+    the statement structurally, reusing the existing helpers."""
+
+    def _issued(self, tmp_path):
+        org_signer = Ed25519Signer.generate()
+        reg = TrustRegistry(tmp_path / "reg.jsonl")
+        reg.publish(org_signer.public_key_pem().decode(), issuer="Org X")
+        agent = AgentIdentity.generate(agent_id="agent:x")
+        return reg, org_signer, agent
+
+    def test_future_issued_passport_refused(self, tmp_path):
+        """A passport dated in the future beyond the registry's clock-skew
+        allowance is refused with the named reason (reg, now pinned)."""
+        from raucle.audit import _canonical_json
+        from raucle.passport import _b64
+
+        reg, org_signer, agent = self._issued(tmp_path)
+        passport = issue_passport(agent.statement, issuer_signer=org_signer, issuer="Org X")
+        passport.issued_at = passport.issued_at + 100_000  # beyond the 300s skew
+        passport.expires_at = None
+        passport.issuer_signature = _b64(org_signer.sign(_canonical_json(passport.body())))
+
+        v = verify_passport(passport.to_dict(), registry=reg)
+        assert not v.valid
+        assert "future" in v.reason
+
+    def test_future_issued_within_clock_skew_still_verifies(self, tmp_path):
+        """A small forward skew is tolerated: the same allowance the trust
+        registry applies to signed heads, so warm clocks do not fail."""
+        from raucle.audit import _canonical_json
+        from raucle.passport import _b64
+
+        reg, org_signer, agent = self._issued(tmp_path)
+        passport = issue_passport(agent.statement, issuer_signer=org_signer, issuer="Org X")
+        passport.issued_at = passport.issued_at + 30  # inside the 300s skew
+        passport.expires_at = None
+        passport.issuer_signature = _b64(org_signer.sign(_canonical_json(passport.body())))
+        assert verify_passport(passport.to_dict(), registry=reg).valid
+
+    def test_structurally_invalid_statement_refused_with_named_reason(self, tmp_path):
+        """A passport vouching for a statement that fails CapabilityStatement
+        structural validation is refused with a reason DISTINCT from unknown
+        statements/issuers (from_dict is reused, not re-implemented)."""
+        from raucle.audit import _canonical_json
+        from raucle.passport import AgentPassport, _b64, _issuer_key_id
+
+        reg, org_signer, agent = self._issued(tmp_path)
+        broken = agent.statement.to_dict()
+        broken["bogus_field"] = "unknown-key smuggled in"
+        p = AgentPassport(
+            statement=broken,
+            issuer="Org X",
+            issuer_key_id=_issuer_key_id(org_signer.public_key_pem()),
+            issued_at=1,
+            expires_at=None,
+        )
+        p.issuer_signature = _b64(org_signer.sign(_canonical_json(p.body())))
+        v = verify_passport(p.to_dict(), registry=reg)
+        assert not v.valid
+        assert "structural validation" in v.reason
+
+    def test_legacy_valid_path_unchanged(self, tmp_path, issued):
+        reg, _signer, _agent, passport = issued
+        v = verify_passport(passport.to_dict(), registry=reg)
+        assert v.valid
+        assert v.reason == "passport verified against registry"

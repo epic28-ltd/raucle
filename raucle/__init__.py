@@ -63,6 +63,7 @@ from raucle.replay import (
     ReplayResult,
     StoredInput,
 )
+from raucle.replay_store import ReplayStore, SqliteReplayStore
 from raucle.scanner import Scanner, ScanResult
 from raucle.session import SessionScanner, SessionScanResult
 from raucle.trust_registry import RegistryIntegrityError, TrustRecord, TrustRegistry
@@ -129,6 +130,9 @@ __all__ = [
     "build_request",
     "accept_call",
     "verify_ack",
+    # Q10: mandatory persistent replay protection for accept_call
+    "ReplayStore",
+    "SqliteReplayStore",
     "AgentPassport",
     "PassportVerdict",
     "issue_passport",
