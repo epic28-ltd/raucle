@@ -38,9 +38,42 @@ Status
 This module is a **working skeleton** as of raucle v0.11.0a. The
 public surface (the ``RaucleFunctionMiddleware`` class, the ``TokenResolver``
 typedef, and the ``set_in_force_token`` / ``get_in_force_token`` helpers) is
-intended to be stable. Two known limitations are tracked as M4 in the design
-proposal: streaming-response receipts and downstream-middleware result
+intended to be stable. Remaining known limitations are tracked as M4 in the
+design proposal: streaming-response receipts and downstream-middleware result
 mutation. Pull requests welcome.
+
+Strict modes (house convention, opt-in via environment)
+-------------------------------------------------------
+
+- ``RAUCLE_MW_REQUIRE_DURABLE_RECEIPT=1``: durable-receipt mode. The
+  receipt for a call is persisted BEFORE the downstream call starts; a
+  sink failure refuses the call through the adapter's middleware
+  termination refusal (the receipt must be durably persisted or the
+  downstream call does not start). The default stays advisory (a sink
+  failure is caught and logged) for development continuity: ad-hoc dev
+  agents run against a console sink whose flapping must not take the
+  agent down, while production deployments that promise durable evidence
+  set the flag.
+- ``RAUCLE_MW_REQUIRE_AGENT_ID=1``: strict caller-identity mode. A call
+  whose framework context surfaces NO independent caller identity (nothing
+  at ``metadata``, ``session.state`` nor ``agent.id``) is denied by name
+  - it never falls back to the token's ``agent_id``, which would degrade
+  the gate's agent-scope check to a bearer-token model. The default is
+  off; multi-agent production deployments should enable it (an operator
+  can always bind a per-agent identity, so the strict mode costs nothing
+  where agents are first-class).
+
+Receipt schema citation
+-----------------------
+
+Receipts cite the schema registry entry the gate enforced: when the gate
+was constructed with a ``ToolSchemaRegistry`` (the registry deployments
+load from the ``RAUCLE_TOOL_SCHEMA_MANIFEST`` manifest), the receipt's
+``schema_hash`` is the digest of the exact registered definition the gate
+used, and ``schema_evidence`` reads ``"bound"``. When no schema resolution
+exists for the called tool the receipt carries ``schema_hash=None`` AND
+``schema_evidence="unbound"`` - a receipt never implies schema-bound
+verification without the hash.
 
 The integration depends on ``agent-framework>=1.0``; install with
 ``pip install 'raucle[agent-framework]'``.
@@ -51,6 +84,7 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -69,6 +103,20 @@ from raucle.capability import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Durable-receipt strict mode (Q18): refuse a call rather than proceed when
+#: the receipt could not be durably persisted. Default off (advisory).
+ENV_MW_REQUIRE_DURABLE_RECEIPT = "RAUCLE_MW_REQUIRE_DURABLE_RECEIPT"
+#: Strict caller-identity mode (Q18): deny when the framework context carries
+#: no independent caller identity instead of falling back to the token's
+#: bearer identity. Default off.
+ENV_MW_REQUIRE_AGENT_ID = "RAUCLE_MW_REQUIRE_AGENT_ID"
+
+
+def _env_flag(name: str) -> bool:
+    """Env truthiness, matching the audit strict-mode convention."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
 
 # --- Lazy host-framework import --------------------------------------------
 # We refuse to fail at import-time if `agent_framework` isn't installed; users
@@ -177,6 +225,11 @@ class CapabilityReceipt:
             "issuer": self.issuer,
             "issuer_pubkey": self.issuer_pubkey,
             "schema_hash": self.schema_hash,
+            # The honest evidence marker: a receipt only reads "bound" when a
+            # schema hash actually rides the body - unbound evidence is named
+            # rather than inferred, so no consumer can mistake a null hash
+            # for schema-bound verification.
+            "schema_evidence": ("bound" if self.schema_hash else "unbound"),
             "policy_proof_hash": self.policy_proof_hash,
             "lean_theorem_id": self.lean_theorem_id,
             "attenuation_chain": self.attenuation_chain,
@@ -193,6 +246,11 @@ class CapabilityReceipt:
 def _hash_args(args: dict[str, Any]) -> str:
     """SHA-256 of canonical-JSON-serialised tool-call arguments."""
     return "sha256:" + _sha256_hex(_canonical_json(args))
+
+
+def _receipt_event(receipt: CapabilityReceipt) -> dict[str, Any]:
+    """The audit-chain event shape for one capability receipt."""
+    return {"kind": "capability_receipt", "receipt": receipt.to_dict()}
 
 
 def _iso_now() -> str:
@@ -217,17 +275,38 @@ class RaucleFunctionMiddleware(FunctionMiddleware):
       * Look up the in-force capability token (via ``token_resolver``).
       * If no token is bound, emit a DENY receipt with reason ``"no token in
         force"`` and refuse the call.
+      * Resolve the caller identity from the framework context, in priority
+        order (``metadata``, ``session.state``, ``agent.id``). Under
+        ``RAUCLE_MW_REQUIRE_AGENT_ID=1`` a context with no identity at any
+        source is denied by name; otherwise the identity falls back to the
+        token's ``agent_id`` (a bearer-token model).
       * Else, call ``gate.check(token, tool=..., args=...)``.
-      * On ``decision.allowed``: invoke ``call_next()`` so the tool runs;
-        emit an ALLOW receipt.
-      * On ``decision.denied``: short-circuit (do *not* call ``call_next()``);
-        set ``context.result`` to a structured refusal; emit a DENY receipt.
+      * On ``decision.allowed``: PERSIST the receipt first (the receipt is
+        durably appended before ``call_next()`` runs), then invoke
+        ``call_next()`` so the tool runs. Under
+        ``RAUCLE_MW_REQUIRE_DURABLE_RECEIPT=1`` a sink failure refuses the
+        call instead of proceeding; without the flag (the advisory default)
+        a sink failure is logged loudly and the call proceeds, for
+        development continuity.
+      * On ``decision.denied``: persist the receipt, short-circuit (do *not*
+        call ``call_next()``), set ``context.result`` to a structured
+        refusal, refuse via ``MiddlewareTermination``.
+
+    Residual, recorded openly: the emitted receipt binds the CALL-TIME
+    arguments the gate evaluated; middleware downstream of raucle may mutate
+    the result afterwards, and the receipt's vantage does not extend past
+    the decision point (the M4 downstream-mutation limitation).
 
     Parameters
     ----------
     gate
         The :class:`~raucle.capability.CapabilityGate` instance the
-        middleware will check tool calls against.
+        middleware will check tool calls against. When the gate carries a
+        ``ToolSchemaRegistry`` (deployments load one from the
+        ``RAUCLE_TOOL_SCHEMA_MANIFEST`` manifest), receipts cite the digest
+        of the registered definition the gate enforced; without one the
+        receipt carries ``schema_hash=None`` and the honest
+        ``schema_evidence="unbound"`` marker.
     sink
         An audit sink that writes receipts. Defaults to a :class:`NullSink`
         (receipts are still constructed but not persisted); production
@@ -240,6 +319,22 @@ class RaucleFunctionMiddleware(FunctionMiddleware):
         The Lean 4 theorem identifier the receipts should cite as the
         soundness anchor. Defaults to ``"vcd.gate_soundness"`` (the gate-
         soundness theorem in ``paper/lean/``).
+    require_durable_receipt
+        Durable-receipt mode. ``None`` (default) resolves the
+        ``RAUCLE_MW_REQUIRE_DURABLE_RECEIPT`` environment flag at
+        construction; an explicit bool overrides the environment. When
+        truthy, the receipt must be durably persisted before the downstream
+        call starts and a sink failure refuses the call (named through the
+        middleware termination refusal); when falsy, a sink failure is
+        caught and logged (advisory default for dev continuity).
+    require_agent_id
+        Strict caller-identity mode. ``None`` (default) resolves the
+        ``RAUCLE_MW_REQUIRE_AGENT_ID`` environment flag at construction; an
+        explicit bool overrides the environment. When truthy, a framework
+        context that surfaces no independent caller identity is denied by
+        name rather than falling back to the token's ``agent_id`` (multi-
+        agent production deployments should enable this; the strict mode
+        costs nothing where operators bind per-agent identities).
     """
 
     def __init__(
@@ -249,6 +344,8 @@ class RaucleFunctionMiddleware(FunctionMiddleware):
         sink: HashChainSink | NullSink | None = None,
         token_resolver: TokenResolver | None = None,
         lean_theorem_id: str = "vcd.gate_soundness",
+        require_durable_receipt: bool | None = None,
+        require_agent_id: bool | None = None,
     ) -> None:
         if not _HAS_AGENT_FRAMEWORK:
             raise RuntimeError(
@@ -260,6 +357,19 @@ class RaucleFunctionMiddleware(FunctionMiddleware):
         self._sink: HashChainSink | NullSink = sink if sink is not None else NullSink()
         self._token_resolver: TokenResolver = token_resolver or _default_resolver
         self._lean_theorem_id = lean_theorem_id
+        # Strict modes resolve the environment once, at construction, so a
+        # deployment's promise is fixed for the middleware's lifetime (the
+        # audit sink_from_env convention).
+        self._require_durable_receipt: bool = (
+            _env_flag(ENV_MW_REQUIRE_DURABLE_RECEIPT)
+            if require_durable_receipt is None
+            else bool(require_durable_receipt)
+        )
+        self._require_agent_id: bool = (
+            _env_flag(ENV_MW_REQUIRE_AGENT_ID)
+            if require_agent_id is None
+            else bool(require_agent_id)
+        )
 
     async def process(
         self,
@@ -280,19 +390,43 @@ class RaucleFunctionMiddleware(FunctionMiddleware):
         # right token). Deployers who can surface a caller id (via
         # context.metadata / session state) get real agent_id scope enforcement.
         caller_id = self._extract_agent_id(context)
-        agent_id = caller_id or (token.agent_id if token is not None else None)
 
-        # No token bound? Fail-closed.
+        # No token bound? Fail-closed. When the context DID declare a caller
+        # identity, the deny receipt still attributes the attempt to it.
         if token is None:
             receipt = self._build_receipt(
                 token=None,
-                agent_id=agent_id,
+                agent_id=caller_id or None,
                 tool=tool_name,
                 args=call_args,
                 decision=GateDecision(allowed=False, reason="no capability token in force"),
             )
-            self._emit(receipt)
+            self._emit_receipt_for_mode(receipt, context)
             self._raise_refusal(context, "no capability token in force")
+
+        # Strict caller identity (Q18 Close 1): with no independent caller
+        # identity at ANY documented source, the gate's agent scope cannot
+        # be enforced against the caller, so the strict mode denies by name
+        # - it never falls back to the bearer identity the token carries.
+        if caller_id is None and self._require_agent_id:
+            decision = GateDecision(
+                allowed=False,
+                reason=(
+                    "no independent caller identity in the framework context "
+                    f"({ENV_MW_REQUIRE_AGENT_ID})"
+                ),
+            )
+            receipt = self._build_receipt(
+                token=token,
+                agent_id=None,
+                tool=tool_name,
+                args=call_args,
+                decision=decision,
+            )
+            self._emit_receipt_for_mode(receipt, context)
+            self._raise_refusal(context, decision.reason)
+
+        agent_id = caller_id or (token.agent_id if token is not None else None)
 
         # Gate check.
         decision = self._gate.check(token, tool=tool_name, agent_id=agent_id, args=call_args)
@@ -301,15 +435,17 @@ class RaucleFunctionMiddleware(FunctionMiddleware):
         )
 
         if decision.allowed:
-            try:
-                await call_next()
-            finally:
-                # Emit the receipt regardless of whether the tool itself
-                # raised — the gate's decision was ALLOW and the audit record
-                # should reflect that.
-                self._emit(receipt)
+            # Persist BEFORE execution: the receipt is durably appended
+            # before call_next runs, so every allowed call carries its audit
+            # record even when everything downstream fails afterwards. In
+            # durable mode a sink failure refuses the call (the downstream
+            # call does not start without its receipt); in the advisory
+            # default the failure is logged and the call proceeds (dev
+            # continuity - see the class docstring).
+            self._emit_receipt_for_mode(receipt, context)
+            await call_next()
         else:
-            self._emit(receipt)
+            self._emit_receipt_for_mode(receipt, context)
             self._raise_refusal(context, decision.reason)
 
     # --- Helpers --------------------------------------------------------
@@ -326,11 +462,16 @@ class RaucleFunctionMiddleware(FunctionMiddleware):
         return CapabilityReceipt(
             issuer=(token.issuer if token else _UNKNOWN),
             issuer_pubkey=(token.key_id if token else _UNKNOWN),
-            schema_hash=None,  # populated when policy_proof_hash is wired in
+            # Cite the EXACT schema-registry entry the gate enforced: the
+            # digest of the registered definition for this tool (the
+            # registry deployments load from RAUCLE_TOOL_SCHEMA_MANIFEST).
+            # No schema resolution for this tool -> None plus the honest
+            # "unbound" evidence marker the receipt body carries.
+            schema_hash=self._tool_definition_digest(tool),
             policy_proof_hash=(token.policy_proof_hash if token else None),
             lean_theorem_id=self._lean_theorem_id,
             attenuation_chain=(decision.chain or ([] if token is None else [token.token_id])),
-            # Honest-null contract: the receipt carries agent_id verbatim
+            # Honest null contract: the receipt carries agent_id verbatim
             # when the caller declared it, or None when it did not - a
             # fabricated placeholder would corrupt chain continuity.
             agent_id=agent_id or None,
@@ -342,17 +483,59 @@ class RaucleFunctionMiddleware(FunctionMiddleware):
             signature=None,  # populated by sink.write below
         )
 
+    def _tool_definition_digest(self, tool: str) -> str | None:
+        """The digest of the schema-registry entry the gate enforces, or None.
+
+        ``CapabilityGate`` stores the ``ToolSchemaRegistry`` it was
+        constructed with (``tool_schemas=...`` - the registry a deployment
+        loads from the ``RAUCLE_TOOL_SCHEMA_MANIFEST`` manifest); reading it
+        here is the deliberate integration seam so a receipt cites the SAME
+        definition digest the gate's schema stage checked. A gate without a
+        registry, or a tool unknown to it, yields no resolution.
+        """
+        registry = getattr(self._gate, "_tool_schemas", None)
+        if registry is None:
+            return None
+        if not registry.has_schema(tool):
+            return None
+        return registry.definition_digest(tool)
+
     def _emit(self, receipt: CapabilityReceipt) -> None:
-        """Hand the receipt to the audit sink for signing + persistence."""
+        """Hand the receipt to the audit sink (advisory failure semantics)."""
         try:
             # HashChainSink wraps each event in a hash-chain entry and
             # signs periodically; NullSink discards.
-            self._sink.append({"kind": "capability_receipt", "receipt": receipt.to_dict()})
-        except Exception:  # pragma: no cover
+            self._sink.append(_receipt_event(receipt))
+        except Exception:
             # Never let receipt emission break the agent's main path —
             # but log loudly. A deployment that silently drops receipts is a
             # broken deployment; the deployer needs to know.
             logger.exception("raucle: failed to emit capability receipt")
+
+    def _emit_receipt_for_mode(self, receipt: CapabilityReceipt, context: Any) -> None:
+        """Hand the receipt to the sink, honouring the durable-receipt mode.
+
+        Advisory default: a sink failure is logged loudly and the call
+        proceeds (development continuity). Durable mode
+        (``RAUCLE_MW_REQUIRE_DURABLE_RECEIPT=1``): the receipt must be
+        durably persisted - a sink failure refuses the call through the
+        middleware termination refusal, so the downstream call does not
+        start without its receipt.
+        """
+        if not self._require_durable_receipt:
+            self._emit(receipt)
+            return
+        try:
+            self._sink.append(_receipt_event(receipt))
+        except Exception as exc:
+            logger.exception(
+                "raucle: receipt sink failure in durable mode for tool=%s", receipt.tool
+            )
+            self._raise_refusal(
+                context,
+                "receipt persistence required "
+                f"({ENV_MW_REQUIRE_DURABLE_RECEIPT}): sink failure: {exc}",
+            )
 
     # --- Context extraction (defensive against schema variation) ---------
     # The exact shape of `FunctionInvocationContext` is stable as of Agent
@@ -388,15 +571,22 @@ class RaucleFunctionMiddleware(FunctionMiddleware):
     def _extract_agent_id(context: Any) -> str | None:
         """Resolve the independent caller identity from the framework context.
 
-        FunctionInvocationContext does not expose an agent id directly, so we
-        look at ``context.metadata["agent_id"]`` (deployer-populated) and
-        ``context.session.state["agent_id"]`` (session-state-populated).
+        ``FunctionInvocationContext``'s identity is deployer-bound, so we read
+        the documented sources in priority order:
+
+        1. ``context.metadata["agent_id"]`` - the deployer-populated primary;
+        2. ``context.session.state["agent_id"]`` - session-state-populated;
+        3. ``context.agent.id`` - the agent object the framework runs (the
+           surface the framework docs name for middleware-invoked agents;
+           previously this source was missed - Finding 80).
 
         This is the PREFERRED source for the gate's agent_id scope check: when
         present, the gate enforces that the in-force token's agent_id covers the
         actual caller. Only when the context surfaces no identity does the
         caller fall back to the token's own agent_id (a bearer-token model where
-        the holder is trusted). Returns None when no caller identity is known.
+        the holder is trusted) - or, under strict identity mode
+        (``RAUCLE_MW_REQUIRE_AGENT_ID=1``), the call is denied instead. Returns
+        None when no caller identity is known.
         """
         try:
             md = getattr(context, "metadata", None) or {}
@@ -409,6 +599,13 @@ class RaucleFunctionMiddleware(FunctionMiddleware):
             state = getattr(sess, "state", None) if sess is not None else None
             if isinstance(state, dict) and state.get("agent_id"):
                 return str(state["agent_id"])
+        except Exception:  # pragma: no cover
+            pass
+        try:
+            agent = getattr(context, "agent", None)
+            agent_id = getattr(agent, "id", None) if agent is not None else None
+            if agent_id:
+                return str(agent_id)
         except Exception:  # pragma: no cover
             pass
         return None
