@@ -191,9 +191,10 @@ Fail-closed details:
   tokens are denied; the issuer list is the trust registry's active keys,
   rebuilt per call, so a registry revocation propagates to gate auth
   within one request.
-- Authentication failures return a DENY decision with the reason
-  (receipted), not a bare 401: an unauthenticated decision attempt is
-  itself evidence.
+- An authenticated request the gate denies returns a DENY decision with the
+  reason, receipted. An unauthenticated request is refused pre-gate, before
+  any gate decision, and earns no receipt: the refusal answers with
+  `receipt_id` null, and a transport-layer refusal is not receipted evidence.
 
 In-process framework integrations (LangChain, Agent Framework, CrewAI) are
 observability and correctness controls, not a security boundary: a

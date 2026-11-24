@@ -105,14 +105,17 @@ def test_bicep_image_pinned_to_current_release_with_provenance():
     default pins the current release tag and records the release tag ->
     source-commit provenance per the PyPI attestations, plus the Q9
     digest-capture discipline."""
-    assert "ghcr.io/epic28-ltd/raucle:v0.23.7" in _BICEP
+    assert "ghcr.io/epic28-ltd/raucle:v0.23.8" in _BICEP
+    assert "param raucleImage string = 'ghcr.io/epic28-ltd/raucle:v0.23.8'" in _BICEP
     # the antique tag survives nowhere as a quoted reference (only as the
     # pin comment's history note)
-    assert "param raucleImage string = 'ghcr.io/epic28-ltd/raucle:v0.23.7'" in _BICEP
     assert "'ghcr.io/epic28-ltd/raucle:v0.12.0'" not in _BICEP
+    # the superseded pin survives nowhere as a quoted reference: the bump
+    # (re-check F148) replaces both the tag and its provenance commit
+    assert "'ghcr.io/epic28-ltd/raucle:v0.23.7'" not in _BICEP
     # provenance comment: release tag resolves to the release commit
-    # (eafba15... per the PEP 740 attestation, verified at pin time)
-    assert "eafba15c3c0d896d284518011bebd3c8c3be5932" in _BICEP
+    # (27fce30... per the PEP 740 attestation, verified at pin time)
+    assert "27fce30497ad07e6605558c2566ccd0da1b9c658" in _BICEP
     assert "imagetools inspect" in _BICEP  # capture-and-pin command
     assert "PEP 740" in _BICEP
 
