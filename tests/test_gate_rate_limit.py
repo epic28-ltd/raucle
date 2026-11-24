@@ -190,16 +190,23 @@ class TestLimiterEdgePaths:
 
         assert _NullLimiter().limit("1/minute")(handler) is handler
 
-    def test_missing_slowapi_serves_without_limiting(self, tmp_path, monkeypatch):
-        """RED-037: no slowapi must warn and keep serving, not crash."""
+    def test_missing_slowapi_with_explicit_disable_serves_without_limiting(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """Q15: serving without slowapi requires an explicit RAUCLE_DISABLE_RATE_LIMIT=1
+        opt-out; then the warning is logged and the null limiter stands in."""
+        import logging
         import sys
 
         # A None entry makes ``import slowapi`` raise ImportError at call time.
         monkeypatch.setitem(sys.modules, "slowapi", None)
-        client = _app(tmp_path)
+        monkeypatch.setenv("RAUCLE_DISABLE_RATE_LIMIT", "1")
+        with caplog.at_level(logging.WARNING, logger="raucle.gateway_app"):
+            client = _app(tmp_path)
         resp = client.post("/gate", json={"tool": "pay", "args": {"account": "ACC-001"}})
         assert resp.status_code == 200
         assert resp.json()["decision"] == "allow"
+        assert any("WITHOUT rate limiting" in r.message for r in caplog.records)
 
     def test_trusted_proxy_without_a_header_falls_back_to_peer(self, monkeypatch):
         monkeypatch.setenv("RAUCLE_TRUST_PROXY", "1")
@@ -210,6 +217,45 @@ class TestLimiterEdgePaths:
         monkeypatch.setenv("RAUCLE_TRUST_PROXY", "1")
         req = type("R", (), {"headers": {"x-forwarded-for": " , 10.0.0.9"}, "client": None})()
         assert _client_key(req) == "unknown"
+
+
+class TestServingModeRateLimitRefusal:
+    """Q15 (RED-037 round two): the warning alone let a deployment believe it
+    had a limiter it did not have. A SERVING boot without slowapi now refuses
+    with a named error; the disable env is the deliberate opt-out."""
+
+    def _gateway(self, tmp_path):
+        cfg = GatewayConfig(
+            policy_file=str(_policy(tmp_path)),
+            receipt_store=str(tmp_path / "receipts.jsonl"),
+            audit_chain=str(tmp_path / "audit.jsonl"),
+            registry_path=str(tmp_path / "registry.jsonl"),
+            signer_key_path=str(tmp_path / "signer.pem"),
+            agent_credentials_file=str(tmp_path / "creds.jsonl"),
+            gate_auth="off",
+            signer_backend="local",
+        )
+        return RaucleGateway(cfg)
+
+    def test_serving_boot_without_slowapi_refuses_named(self, tmp_path, monkeypatch):
+        import sys
+
+        from raucle.errors import ConfigurationError
+
+        monkeypatch.setitem(sys.modules, "slowapi", None)
+        monkeypatch.delenv("RAUCLE_DISABLE_RATE_LIMIT", raising=False)
+        with pytest.raises(ConfigurationError) as excinfo:
+            create_gateway_app(self._gateway(tmp_path))
+        message = str(excinfo.value)
+        assert "slowapi" in message, message
+        assert "RAUCLE_DISABLE_RATE_LIMIT" in message, message
+
+    def test_serving_boot_with_slowapi_present_boots(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("RAUCLE_DISABLE_RATE_LIMIT", raising=False)
+        client = _app(tmp_path)
+        resp = client.post("/gate", json={"tool": "pay", "args": {"account": "ACC-001"}})
+        assert resp.status_code == 200
+        assert resp.json()["decision"] == "allow"
 
 
 class TestTrustBoundaryDocs:
