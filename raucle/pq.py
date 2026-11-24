@@ -21,11 +21,20 @@ Wire format (see docs/spec/provenance/v1/pq1-hybrid.md):
   reject, not guess).
 - Header gains ``"pqk"``: the ML-DSA-65 key id (first 16 hex chars of
   sha256 over the raw public key bytes).
-- The JWS signature slot carries TWO base64url segments joined by a
-  literal ``.``: the Ed25519 signature (64 bytes) then the ML-DSA-65
-  signature (3309 bytes). The JOSE ``alg`` stays ``EdDSA`` so legacy
-  verifiers fail gracefully on the unexpected shape rather than
-  mis-parsing.
+- The JWS signature slot carries ONE base64url segment over the raw
+  concatenation of the two signature byte strings: Ed25519 (fixed 64
+  bytes) then ML-DSA-65 (fixed 3309 bytes, FIPS 204). Both lengths are
+  constants, so the framing is deterministic with no length prefix and
+  no delimiter. This keeps the receipt a conformant Compact JWS
+  (RFC 7515): a standard JOSE parser sees a valid three-segment JWS and
+  rejects on the unknown ``raucle/pq1`` crit entry - the RFC-correct
+  behaviour for an unrecognised critical profile - while pq1 verifiers
+  split the decoded bytes by the constant lengths.
+- The previous two-segment dot form (``<ed>.<mldsa>``) was not
+  Compact-conformant. :func:`parse_hybrid_signature` accepts BOTH forms
+  during a deprecation window; every legacy acceptance logs the named
+  marker :data:`LEGACY_DOT_FORM_DEPRECATION` and removal is scheduled
+  with the pq1 vector freeze.
 
 Verification is fail-closed: a pq1 receipt with a missing or invalid
 ML-DSA segment is INVALID. There is no downgrade path by design.
@@ -40,6 +49,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -56,6 +66,8 @@ try:  # pragma: no cover - import availability is backend-dependent
 except ImportError:  # pragma: no cover
     mldsa = None  # type: ignore[assignment]
     _HAS_MLDSA = False
+
+_logger = logging.getLogger(__name__)
 
 
 def _mldsa_mod() -> Any:
@@ -74,6 +86,29 @@ PQ1_PROFILE = "raucle/pq1"
 
 #: The PQ algorithm identifier for the profile (RFC 9964 name).
 PQ1_ALG = "ml-dsa-65"
+
+#: Ed25519 signature length in bytes (fixed by RFC 8032).
+ED25519_SIG_LEN = 64
+
+#: ML-DSA-65 signature length in bytes (fixed by FIPS 204).
+ML_DSA_65_SIG_LEN = 3309
+
+#: Total raw bytes of the current pq1 signature slot payload
+#: (``ED25519_SIG_LEN + ML_DSA_65_SIG_LEN``). Constant component lengths
+#: make the framing deterministic: no length prefix, no delimiter.
+PQ1_CONCAT_LEN = ED25519_SIG_LEN + ML_DSA_65_SIG_LEN
+
+#: Named deprecation marker logged on EVERY acceptance of the legacy
+#: two-segment dot form. The dot form was not Compact-JWS-conformant
+#: (RFC 7515: the signature component is exactly one segment); it stays
+#: acceptable for verification during the deprecation window and its
+#: removal is scheduled with the pq1 vector freeze.
+LEGACY_DOT_FORM_DEPRECATION = (
+    "pq1 signature slot uses the legacy two-segment dot form (deprecated): "
+    "accepted for verification only during the deprecation window; "
+    "emission switched to the single-segment concatenation form and "
+    "removal is scheduled with the pq1 vector freeze"
+)
 
 
 class PQUnavailable(RuntimeError):
@@ -222,11 +257,18 @@ class HybridSigner:
         return cls(ed25519_private=ed25519_private, pq_private=pq_private, pq_key_id=pq_kid)
 
     def sign_both(self, signing_input: bytes) -> str:
-        """Sign *signing_input* with both keys; return the two-segment
-        base64url signature slot content (``<ed>.<pq>``)."""
+        """Sign *signing_input* with both keys; return the pq1 signature
+        slot content.
+
+        The slot is ONE base64url segment over the RAW concatenation
+        ``ed25519 signature || ml_dsa_65 signature`` (64 + 3309 bytes):
+        Compact-JWS-conformant (RFC 7515) because the signature component
+        is exactly one segment, and unambiguously framed because both
+        component lengths are constants (no length prefix, no delimiter).
+        """
         ed_sig = self.ed25519_private.sign(signing_input)
         pq_sig = self.pq_private.sign(signing_input)
-        return _b64url(ed_sig) + "." + _b64url(pq_sig)
+        return _b64url(ed_sig + pq_sig)
 
 
 # ---------------------------------------------------------------------------
@@ -234,31 +276,63 @@ class HybridSigner:
 # ---------------------------------------------------------------------------
 
 
+def _require_component_lengths(ed_sig: bytes, pq_sig: bytes) -> None:
+    """Enforce the fixed component lengths (fail-closed framing)."""
+    if len(ed_sig) != ED25519_SIG_LEN:
+        raise HybridVerificationError(f"Ed25519 signature must be 64 bytes, got {len(ed_sig)}")
+    if len(pq_sig) != ML_DSA_65_SIG_LEN:
+        raise HybridVerificationError(f"ML-DSA-65 signature must be 3309 bytes, got {len(pq_sig)}")
+
+
 def parse_hybrid_signature(signature_slot: str) -> tuple[bytes, bytes]:
     """Split a pq1 signature slot into (ed25519_sig, mldsa_sig).
 
-    Rejects any shape other than exactly two non-empty segments.
+    Two shapes are accepted during the deprecation window:
+
+    - Current emission: ONE base64url segment whose decoded bytes are the
+      raw concatenation ``ed25519 (64) || ml_dsa_65 (3309)``. Constant
+      component lengths make the framing deterministic the instant the
+      slot decodes: split by the constants, no length prefix or delimiter.
+    - Legacy dot form: ``<b64url(ed)>.<b64url(ml_dsa)>`` - the pre-JOSE
+      conformance wire shape, verify-only. Every legacy acceptance logs
+      :data:`LEGACY_DOT_FORM_DEPRECATION` on the ``raucle.pq`` logger.
+
+    Fail-closed: wrong segment count, wrong length and undecodable
+    base64url all raise :class:`HybridVerificationError`.
     """
     if not isinstance(signature_slot, str):
         raise HybridVerificationError("pq1 signature slot must be a string")
-    parts = signature_slot.split(".")
-    if len(parts) != 2:
-        raise HybridVerificationError(
-            f"pq1 signature slot must hold exactly two segments, got {len(parts)}"
-        )
-    ed_b64, pq_b64 = parts
+    if "." in signature_slot:
+        # Legacy two-segment dot form (verify-only window).
+        parts = signature_slot.split(".")
+        if len(parts) != 2:
+            raise HybridVerificationError(
+                f"pq1 signature slot (legacy dot form) must hold exactly two "
+                f"segments, got {len(parts)}"
+            )
+        ed_b64, pq_b64 = parts
+        try:
+            ed_sig = _b64url_decode(ed_b64)
+            pq_sig = _b64url_decode(pq_b64)
+        except Exception as exc:
+            raise HybridVerificationError(
+                f"pq1 signature segments are not valid base64url: {exc}"
+            ) from exc
+        _require_component_lengths(ed_sig, pq_sig)
+        _logger.warning(LEGACY_DOT_FORM_DEPRECATION)
+        return ed_sig, pq_sig
+    # Current emission: one segment over the raw concatenation.
     try:
-        ed_sig = _b64url_decode(ed_b64)
-        pq_sig = _b64url_decode(pq_b64)
+        raw = _b64url_decode(signature_slot)
     except Exception as exc:
+        raise HybridVerificationError(f"pq1 signature slot is not valid base64url: {exc}") from exc
+    if len(raw) != PQ1_CONCAT_LEN:
         raise HybridVerificationError(
-            f"pq1 signature segments are not valid base64url: {exc}"
-        ) from exc
-    if len(ed_sig) != 64:
-        raise HybridVerificationError(f"Ed25519 signature must be 64 bytes, got {len(ed_sig)}")
-    if len(pq_sig) != 3309:
-        raise HybridVerificationError(f"ML-DSA-65 signature must be 3309 bytes, got {len(pq_sig)}")
-    return ed_sig, pq_sig
+            f"pq1 signature slot must decode to exactly {PQ1_CONCAT_LEN} raw bytes "
+            f"({ED25519_SIG_LEN} Ed25519 + {ML_DSA_65_SIG_LEN} ML-DSA-65), got "
+            f"{len(raw)}"
+        )
+    return raw[:ED25519_SIG_LEN], raw[ED25519_SIG_LEN:]
 
 
 def verify_hybrid(
@@ -343,6 +417,10 @@ def _b64url_decode(text: str) -> bytes:
 __all__ = [
     "PQ1_PROFILE",
     "PQ1_ALG",
+    "ED25519_SIG_LEN",
+    "ML_DSA_65_SIG_LEN",
+    "PQ1_CONCAT_LEN",
+    "LEGACY_DOT_FORM_DEPRECATION",
     "PQUnavailable",
     "HybridVerificationError",
     "HybridSigner",

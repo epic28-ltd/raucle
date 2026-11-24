@@ -14,6 +14,7 @@ support (pre-47 cryptography or non-AWS-LC backends).
 import base64
 import hashlib
 import json
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -28,6 +29,8 @@ from raucle.pq import (
     HybridSigner,
     HybridVerificationError,
     PQUnavailable,
+    _b64url,
+    _b64url_decode,
     header_is_pq1,
     parse_hybrid_signature,
     pq1_header,
@@ -134,14 +137,12 @@ class TestHybridSignVerify:
 
     def test_pq_component_tamper_rejected(self, hybrid_signer):
         """Ed25519 valid + ML-DSA flipped byte -> the AND fails."""
-        from raucle.pq import _b64url, _b64url_decode
-
         msg = b"payload"
         slot = hybrid_signer.sign_both(msg)
-        ed_b64, pq_b64 = slot.split(".")
-        pq_bytes = bytearray(_b64url_decode(pq_b64))
-        pq_bytes[5] ^= 0xFF
-        bad_slot = ed_b64 + "." + _b64url(bytes(pq_bytes))
+        ed_sig, pq_sig = parse_hybrid_signature(slot)
+        pq_sig = bytearray(pq_sig)
+        pq_sig[5] ^= 0xFF
+        bad_slot = _b64url(bytes(ed_sig) + bytes(pq_sig))
         ed_pub = hybrid_signer.ed25519_private.public_key()
         pq_pub = hybrid_signer.pq_private.public_key()
         with pytest.raises(HybridVerificationError):
@@ -149,25 +150,25 @@ class TestHybridSignVerify:
 
     def test_ed_component_tamper_rejected(self, hybrid_signer):
         """Ed25519 flipped byte + ML-DSA untouched -> the AND fails."""
-        from raucle.pq import _b64url, _b64url_decode
-
         msg = b"payload"
         slot = hybrid_signer.sign_both(msg)
-        ed_b64, pq_b64 = slot.split(".")
-        ed_bytes = bytearray(_b64url_decode(ed_b64))
-        ed_bytes[3] ^= 0xFF
-        bad_slot = _b64url(bytes(ed_bytes)) + "." + pq_b64
+        ed_sig, pq_sig = parse_hybrid_signature(slot)
+        ed_sig = bytearray(ed_sig)
+        ed_sig[3] ^= 0xFF
+        bad_slot = _b64url(bytes(ed_sig) + bytes(pq_sig))
         ed_pub = hybrid_signer.ed25519_private.public_key()
         pq_pub = hybrid_signer.pq_private.public_key()
         with pytest.raises(HybridVerificationError):
             verify_hybrid(msg, bad_slot, ed_pub, pq_pub)
 
     def test_single_segment_rejected(self, hybrid_signer):
-        """The downgrade attack: ML-DSA segment stripped entirely."""
+        """The downgrade attack: the ML-DSA component stripped entirely,
+        leaving the valid Ed25519 component alone as the slot. Refused on
+        the constant-length framing (64 bytes is not 3373)."""
         msg = b"payload"
-        slot = hybrid_signer.sign_both(msg)
-        ed_only = slot.split(".")[0]
-        with pytest.raises(HybridVerificationError, match="exactly two segments"):
+        ed_sig, _pq_sig = parse_hybrid_signature(hybrid_signer.sign_both(msg))
+        ed_only = _b64url(bytes(ed_sig))
+        with pytest.raises(HybridVerificationError, match="exactly 3373 raw bytes"):
             parse_hybrid_signature(ed_only)
 
     def test_three_segments_rejected(self, hybrid_signer):
@@ -192,6 +193,232 @@ class TestHybridSignVerify:
         ed_pub = hybrid_signer.ed25519_private.public_key()
         with pytest.raises(HybridVerificationError):
             verify_hybrid(msg, slot, ed_pub, other_pub)
+
+
+class TestJoseShapeConformance:
+    """The pq1 signature slot as Compact JWS (RFC 7515).
+
+    The signature component of a Compact JWS is EXACTLY ONE base64url
+    segment, so the pq1 slot is the base64url of the raw concatenation
+    ed25519 (64 bytes) || ml_dsa_65 (3309 bytes): constant component
+    lengths make the framing deterministic with no length prefix and no
+    delimiter. A standards-conformant JOSE parser sees a valid
+    three-segment Compact JWS and rejects on the unknown ``raucle/pq1``
+    crit entry (the RFC-correct handling of an unrecognised critical
+    profile). The previous two-segment dot form was not
+    Compact-conformant; it stays verify-only during a deprecation window
+    and every legacy acceptance logs a named deprecation marker.
+    """
+
+    #: Substring of the named deprecation marker (raucle.pq logger).
+    DEPRECATION_MARKER = "legacy two-segment dot form"
+    CONCAT_LEN = 64 + 3309
+
+    @staticmethod
+    def _flip(raw: bytes, index: int) -> bytes:
+        """Return *raw* with the byte at *index* XOR-flipped."""
+        buf = bytearray(raw)
+        buf[index] ^= 0xFF
+        return bytes(buf)
+
+    def _legacy_slot(self, slot: str) -> str:
+        """Rebuild a slot in the legacy dot form from a current one."""
+        ed_sig, pq_sig = parse_hybrid_signature(slot)
+        return _b64url(ed_sig) + "." + _b64url(pq_sig)
+
+    # -- emission shape ---------------------------------------------------
+
+    def test_new_signature_slot_is_a_single_base64url_segment(self, hybrid_signer):
+        msg = b'{"operation":"model_call"}'
+        slot = hybrid_signer.sign_both(msg)
+        assert "." not in slot, "the JWS signature slot must be one segment (RFC 7515)"
+
+    def test_new_signature_slot_decodes_to_exact_raw_concatenation(self, hybrid_signer):
+        msg = b'{"operation":"model_call"}'
+        slot = hybrid_signer.sign_both(msg)
+        raw = base64.urlsafe_b64decode(slot + "=" * (-len(slot) % 4))
+        assert len(raw) == self.CONCAT_LEN, (
+            "the slot payload is the raw 64 + 3309 byte concatenation: "
+            f"no length prefix, no delimiter, got {len(raw)} bytes"
+        )
+        ed_sig, pq_sig = parse_hybrid_signature(slot)
+        assert (ed_sig, pq_sig) == (raw[:64], raw[64:]), (
+            "the constant-length framing splits the concatenation in order: "
+            "Ed25519 first, ML-DSA-65 second"
+        )
+
+    def test_emitted_receipt_is_strict_compact_jws(self):
+        """Pin (d): the emitted receipt passes a naive 3-segment Compact
+        split - header.payload.signature, no extra dots anywhere."""
+        ident, logger, chain = self._emit_chain()
+        with open(chain, encoding="utf-8") as fh:
+            first = json.loads(fh.readline())
+        jws = first["jws"]
+        parts = jws.split(".")
+        assert len(parts) == 3, f"naive Compact split holds 3 segments, got {len(parts)}"
+        assert jws.count(".") == 2, "no extra dots anywhere in the receipt"
+        header = json.loads(base64.urlsafe_b64decode(parts[0] + "=="))
+        assert header["crit"] == ["raucle/v1", "raucle/pq1"]
+        assert header["raucle/pq1"] == "ml-dsa-65"
+        assert len(header["pqk"]) == 16
+        os.unlink(chain)
+
+    def _emit_chain(self, quantum_mode="strict"):
+        ident = AgentIdentity.generate(agent_id="agent:jose-shape")
+        fd, chain = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        logger = ProvenanceLogger(agent=ident, sink_path=chain, quantum_mode=quantum_mode)
+        logger.record_user_input(text="jose shape pin")
+        logger.close()
+        return ident, logger, chain
+
+    # -- round trips and framing refusals (new form) ----------------------
+
+    def test_new_form_round_trip_and_wrong_component_order_refused(self, hybrid_signer):
+        msg = b"compact era"
+        slot = hybrid_signer.sign_both(msg)
+        ed_pub = hybrid_signer.ed25519_private.public_key()
+        pq_pub = hybrid_signer.pq_private.public_key()
+        verify_hybrid(msg, slot, ed_pub, pq_pub)
+        ed_sig, pq_sig = parse_hybrid_signature(slot)
+        swapped = _b64url(pq_sig + ed_sig)
+        with pytest.raises(HybridVerificationError, match="Ed25519"):
+            verify_hybrid(msg, swapped, ed_pub, pq_pub)
+
+    def test_framing_refuses_wrong_lengths(self, hybrid_signer):
+        msg = b"framing"
+        ed_sig, pq_sig = parse_hybrid_signature(hybrid_signer.sign_both(msg))
+        bad_slots = [
+            _b64url(ed_sig),  # downgrade: ML-DSA half stripped
+            _b64url(pq_sig),  # Ed25519 half missing
+            _b64url(ed_sig + pq_sig[:-1]),  # one byte short
+            _b64url(ed_sig + pq_sig + b"\x00"),  # one byte long
+        ]
+        for bad in bad_slots:
+            with pytest.raises(HybridVerificationError, match="3373"):
+                parse_hybrid_signature(bad)
+
+    def test_wrong_segment_count_refused(self, hybrid_signer):
+        slot = hybrid_signer.sign_both(b"counts")
+        with pytest.raises(HybridVerificationError):
+            parse_hybrid_signature(slot + ".junk")
+        with pytest.raises(HybridVerificationError):
+            parse_hybrid_signature(slot + ".junk.more")
+        with pytest.raises(HybridVerificationError):
+            parse_hybrid_signature("")
+        with pytest.raises(HybridVerificationError):
+            parse_hybrid_signature(42)  # type: ignore[arg-type]
+
+    def test_downgrade_of_concat_slot_refused_end_to_end(self):
+        """Strip the ML-DSA half of the concatenation: the surviving Ed25519
+        component is a structurally valid 64-byte slot for the pq1 header
+        and the verifier must refuse it on framing (fail-closed)."""
+        ident, logger, chain = self._emit_chain()
+        v = self._verifier(ident, logger)
+        with open(chain, encoding="utf-8") as fh:
+            parts = json.loads(fh.readline())["jws"].split(".")
+        os.unlink(chain)
+        slot_raw = base64.urlsafe_b64decode(parts[2] + "==")
+        downgraded = parts[0] + "." + parts[1] + "." + _b64url(slot_raw[:64])
+        fd, dchain = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        with open(dchain, "w", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    "receipt_hash": "sha256:" + hashlib.sha256(downgraded.encode()).hexdigest(),
+                    "jws": downgraded,
+                },
+                fh,
+            )
+            fh.write("\n")
+        report = v.verify_chain(dchain)
+        assert not report.valid
+        os.unlink(dchain)
+
+    def _verifier(self, ident, logger):
+        pq_pub = logger._hybrid.pq_private.public_key()
+        return ProvenanceVerifier(
+            public_keys={ident.key_id: ident.public_key_pem()},
+            pq_public_keys={pq_key_id_from_public_key(pq_pub): pq_public_key_pem(pq_pub)},
+        )
+
+    # -- legacy dot form: dual acceptance in the window --------------------
+
+    def test_legacy_slot_still_verifies_with_deprecation_log(self, hybrid_signer, caplog):
+        msg = b"window"
+        legacy = self._legacy_slot(hybrid_signer.sign_both(msg))
+        ed_pub = hybrid_signer.ed25519_private.public_key()
+        pq_pub = hybrid_signer.pq_private.public_key()
+        with caplog.at_level(logging.WARNING, logger="raucle.pq"):
+            verify_hybrid(msg, legacy, ed_pub, pq_pub)
+        marker = [r for r in caplog.records if self.DEPRECATION_MARKER in r.getMessage()]
+        assert marker, "every legacy acceptance logs the named deprecation marker"
+        assert all(r.name == "raucle.pq" for r in marker)
+
+    def test_legacy_form_component_tamper_refused(self, hybrid_signer):
+        """Flip a component inside the legacy dot form: refused regardless
+        of the accepted form (fail-closed is form-independent)."""
+        msg = b"legacy tamper"
+        legacy = self._legacy_slot(hybrid_signer.sign_both(msg))
+        ed_b64, pq_b64 = legacy.split(".")
+        ed_pub = hybrid_signer.ed25519_private.public_key()
+        pq_pub = hybrid_signer.pq_private.public_key()
+        ed_flipped = _b64url(self._flip(_b64url_decode(ed_b64), 0))
+        pq_flipped = _b64url(self._flip(_b64url_decode(pq_b64), 5))
+        with pytest.raises(HybridVerificationError, match="Ed25519"):
+            verify_hybrid(msg, ed_flipped + "." + pq_b64, ed_pub, pq_pub)
+        with pytest.raises(HybridVerificationError, match="ML-DSA-65"):
+            verify_hybrid(msg, ed_b64 + "." + pq_flipped, ed_pub, pq_pub)
+        with pytest.raises(HybridVerificationError, match="3373"):
+            parse_hybrid_signature(ed_b64)  # strip-one-signature, legacy shape
+
+    # -- verifier pipeline: new form + unchanged profile policies ----------
+
+    def test_strict_chain_new_form_verifies(self):
+        ident, logger, chain = self._emit_chain()
+        v = self._verifier(ident, logger)
+        report = v.verify_chain(chain)
+        assert report.valid
+        assert report.receipt_count == 1
+        assert report.signature_failures == 0
+        os.unlink(chain)
+
+    def test_require_pq_accepts_new_form_chain(self):
+        ident, logger, chain = self._emit_chain()
+        v = self._verifier(ident, logger)
+        v._require_pq = True
+        report = v.verify_chain(chain)
+        assert report.valid, report.errors
+        os.unlink(chain)
+
+    def test_dual_profile_chain_classical_plus_hybrid_verifies(self):
+        """Verification policy unchanged across profiles: a chain carrying a
+        classical v1 receipt and a current-form pq1 receipt verifies."""
+        ident = AgentIdentity.generate(agent_id="agent:dual-profile")
+        fd, chain = tempfile.mkstemp(suffix=".jsonl")
+        os.close(fd)
+        classical = ProvenanceLogger(agent=ident, sink_path=chain)
+        root = classical.record_user_input(text="classical head")
+        classical.close()
+        hybrid = ProvenanceLogger(agent=ident, sink_path=chain, quantum_mode="strict")
+        hybrid.record_model_call(parents=[root], model="glm-5.3", input_text="q", output_text="a")
+        hybrid.close()
+        v = self._verifier(ident, hybrid)
+        report = v.verify_chain(chain)
+        assert report.valid, report.errors
+        assert report.receipt_count == 2
+        os.unlink(chain)
+
+    def test_off_mode_emission_byte_unchanged(self):
+        """v1 (classical) receipts: untouched by the pq1 encoding change."""
+        ident, logger, chain = self._emit_chain(quantum_mode="off")
+        with open(chain, encoding="utf-8") as fh:
+            first = json.loads(fh.readline())
+        parts = first["jws"].split(".")
+        assert len(parts) == 3
+        header = json.loads(base64.urlsafe_b64decode(parts[0] + "=="))
+        assert "raucle/pq1" not in header
+        os.unlink(chain)
 
 
 class TestPQ1Header:
@@ -258,7 +485,9 @@ class TestHybridReceiptEmission:
         with open(chain, encoding="utf-8") as fh:
             first = json.loads(fh.readline())
         parts = first["jws"].split(".")
-        assert len(parts) == 4, "hybrid receipts carry a two-segment signature slot"
+        assert len(parts) == 3, "hybrid receipts are 3-segment Compact JWSes"
+        slot = parts[2]
+        assert "." not in slot, "the signature slot is one segment (RFC 7515)"
         header = json.loads(base64.urlsafe_b64decode(parts[0] + "=="))
         assert header["crit"] == ["raucle/v1", "raucle/pq1"]
         assert header["raucle/pq1"] == "ml-dsa-65"
@@ -350,16 +579,15 @@ class TestDowngradeAttack:
         with open(chain, encoding="utf-8") as fh:
             lines = [json.loads(raw) for raw in fh]
         parts = lines[0]["jws"].split(".")
-        pq_bytes = bytearray(base64.urlsafe_b64decode(parts[3]))
+        slot = base64.urlsafe_b64decode(parts[2] + "==")
+        pq_bytes = bytearray(slot[64:])  # ML-DSA half of the concatenation
         pq_bytes[7] ^= 0x55
         bad_jws = (
             parts[0]
             + "."
             + parts[1]
             + "."
-            + parts[2]
-            + "."
-            + base64.urlsafe_b64encode(bytes(pq_bytes)).decode().rstrip("=")
+            + base64.urlsafe_b64encode(bytes(slot[:64]) + bytes(pq_bytes)).decode().rstrip("=")
         )
         fd, bchain = tempfile.mkstemp(suffix=".jsonl")
         os.close(fd)
@@ -427,42 +655,90 @@ class TestPQ1TestVectors:
         assert len(data["ed_seed_hex"]) == 64
         assert len(data["pq_seed_hex"]) == 64
         assert len(data["deterministic_prefix"].split(".")) == 2
+        assert "legacy_reference_jws" in data
+        assert "legacy_reference_receipt_hash" in data
+        assert "deprecation_window" in data
 
     def test_reference_jws_shape(self):
         data = json.loads(self.VECTOR_PATH.read_text())
         parts = data["reference_jws"].split(".")
-        assert len(parts) == 4
+        assert len(parts) == 3, "the current reference is a 3-segment Compact JWS"
+        assert "." not in parts[2], "the signature component is exactly one segment"
         header = json.loads(base64.urlsafe_b64decode(parts[0] + "=="))
         assert header["crit"] == ["raucle/v1", "raucle/pq1"]
         assert header["raucle/pq1"] == "ml-dsa-65"
         assert header["pqk"] == data["pq_key_id"]
+        legacy_parts = data["legacy_reference_jws"].split(".")
+        assert len(legacy_parts) == 4, "the carried legacy reference keeps its published form"
+        raw = base64.urlsafe_b64decode(parts[2] + "==")
+        assert len(raw) == 64 + 3309, "reference slot = raw 64+3309 concatenation"
 
-    def test_reference_signature_verifies(self):
-        """The cross-language contract: verify the reference instance."""
+    def test_reference_signature_verifies_both_forms(self):
+        """The cross-language contract: verify BOTH reference instances
+        (current concatenation form and legacy verify-only dot form)."""
         data = json.loads(self.VECTOR_PATH.read_text())
         ed_priv = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(data["ed_seed_hex"]))
         pq_priv = mldsa.MLDSA65PrivateKey.from_seed_bytes(bytes.fromhex(data["pq_seed_hex"]))
+        prefix = data["deterministic_prefix"].encode("ascii")
         parts = data["reference_jws"].split(".")
+        verify_hybrid(prefix, parts[2], ed_priv.public_key(), pq_priv.public_key())
+        legacy_parts = data["legacy_reference_jws"].split(".")
         verify_hybrid(
-            data["deterministic_prefix"].encode("ascii"),
-            parts[2] + "." + parts[3],
+            prefix,
+            legacy_parts[2] + "." + legacy_parts[3],
             ed_priv.public_key(),
             pq_priv.public_key(),
         )
 
-    def test_downgrade_negative_vector_rejected(self):
-        """The committed downgrade instance must fail closed at both layers."""
+    def test_reference_slot_is_concatenation_of_seed_derived_components(self):
+        """The single-segment framing is component-complete: the slot's
+        Ed25519 half verifies alone under the seed-derived public key."""
         data = json.loads(self.VECTOR_PATH.read_text())
-        downgrade = next(
-            n for n in data["negative_vectors"] if n["name"] == "downgrade_strips_pq_segment"
-        )
-        jws = downgrade["input_jws"]
-        # Shape layer: three segments are not a pq1 receipt
-        middle_segment = jws.split(".")[2]
+        ed_priv = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(data["ed_seed_hex"]))
+        parts = data["reference_jws"].split(".")
+        raw = base64.urlsafe_b64decode(parts[2] + "==")
+        ed_priv.public_key().verify(raw[:64], data["deterministic_prefix"].encode("ascii"))
+
+    def test_downgrade_negative_vector_rejected(self):
+        """The committed downgrade instances must fail closed at both layers,
+        in BOTH accepted forms."""
+        data = json.loads(self.VECTOR_PATH.read_text())
+        negatives = {n["name"]: n for n in data["negative_vectors"]}
+        ed_priv = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(data["ed_seed_hex"]))
+        pq_priv = mldsa.MLDSA65PrivateKey.from_seed_bytes(bytes.fromhex(data["pq_seed_hex"]))
+        ed_pub = ed_priv.public_key()
+        pq_pub = pq_priv.public_key()
+        prefix = data["deterministic_prefix"].encode("ascii")
+        # Legacy downgrade: v1-shaped JWS, pq1 header; the middle segment is
+        # the lone Ed25519 component and fails the pq1 slot framing.
+        legacy = negatives["downgrade_strips_pq_segment"]["input_jws"]
+        middle_segment = legacy.split(".")[2]
         with pytest.raises(HybridVerificationError):
             parse_hybrid_signature(middle_segment)
+        # Current-form downgrade: 64-byte slot for a pq1 header.
+        truncated = negatives["downgrade_truncates_concat_slot"]["input_jws"]
+        with pytest.raises(HybridVerificationError, match="exactly 3373 raw bytes"):
+            parse_hybrid_signature(truncated.split(".")[2])
+        # Current-form framing attack: reversed components stay frame-valid
+        # (3373 bytes, one segment) but fail the Ed25519 component.
+        swapped_slot = negatives["component_order_swapped"]["input_jws"].split(".")[2]
+        with pytest.raises(HybridVerificationError, match="Ed25519"):
+            verify_hybrid(prefix, swapped_slot, ed_pub, pq_pub)
+        # Current-form tamper vectors: the AND rule fails per component.
+        ed_flip = negatives["ed_component_flipped_concat"]
+        pq_flip = negatives["pq_component_flipped_concat"]
+        for vec, match in ((ed_flip, "Ed25519"), (pq_flip, "ML-DSA-65")):
+            with pytest.raises(HybridVerificationError, match=match):
+                verify_hybrid(
+                    prefix,
+                    vec["input_jws"].split(".")[2],
+                    ed_pub,
+                    pq_pub,
+                )
 
     def test_receipt_hash_matches_reference_jws(self):
         data = json.loads(self.VECTOR_PATH.read_text())
         digest = hashlib.sha256(data["reference_jws"].encode("ascii")).hexdigest()
         assert data["reference_receipt_hash"] == f"sha256:{digest}"
+        legacy_digest = hashlib.sha256(data["legacy_reference_jws"].encode("ascii")).hexdigest()
+        assert data["legacy_reference_receipt_hash"] == f"sha256:{legacy_digest}"

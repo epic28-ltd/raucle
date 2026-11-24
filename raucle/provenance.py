@@ -504,8 +504,10 @@ _RAUCLE_V1 = "raucle/v1"
 _UNDERSTOOD_CRIT = {_RAUCLE_V1}
 
 #: The post-quantum hybrid profile (docs/spec/provenance/v1/pq1-hybrid.md).
-#: Receipts declaring this in crit carry a two-signature slot (Ed25519 +
-#: ML-DSA-65) and are verified fail-closed under both keys.
+#: Receipts declaring this in crit carry a single-segment signature slot
+#: over the raw component concatenation (Ed25519 64 B || ML-DSA-65 3309 B)
+#: and are verified fail-closed under both keys. The legacy four-segment
+#: dot-form receipts stay verify-only during the deprecation window.
 _PQ1_PROFILE = "raucle/pq1"
 _PQ1_ALG = "ml-dsa-65"
 
@@ -518,6 +520,22 @@ def _has_mldsa() -> bool:
         return pq_available()
     except Exception:
         return False
+
+
+def _jws_declares_pq1(jws: str) -> bool:
+    """True when a receipt JWS's header declares the pq1 profile.
+
+    Segment-count agnostic: both the current three-segment Compact form
+    (single-segment signature slot over the raw component concatenation)
+    and the legacy four-segment dot-form receipts declare pq1 in the
+    header. Fail-closed: undecodable headers return False.
+    """
+    try:
+        parts = jws.split(".")
+        header = json.loads(_b64url_decode(parts[0]), object_pairs_hook=_reject_duplicate_keys)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(header, dict) and header.get(_PQ1_PROFILE) == _PQ1_ALG
 
 
 #: Prefix marking a sanitisation receipt's ``corpus`` removed-taint claim
@@ -971,10 +989,11 @@ class ProvenanceReceipt:
 
         With *hybrid* (a :class:`raucle.pq.HybridSigner`), the receipt is
         signed under the ``raucle/pq1`` profile instead: the header pins
-        the PQ profile in ``crit``, and the signature slot carries the
-        Ed25519 and ML-DSA-65 signatures joined by ``.``. Both must
-        verify; there is no downgrade path (see docs/spec/provenance/
-        v1/pq1-hybrid.md).
+        the PQ profile in ``crit``, and the signature slot is ONE
+        base64url segment over the raw concatenation of the Ed25519 and
+        ML-DSA-65 signatures (Compact-JWS-conformant; see raucle/pq.py).
+        Both must verify; there is no downgrade path (see docs/spec/
+        provenance/v1/pq1-hybrid.md).
 
         Returns the compact JWS string for convenience.
         """
@@ -1948,14 +1967,15 @@ class ProvenanceVerifier:
             )
             report.valid = False
 
-        # require_pq strict mode: every receipt must be pq1 hybrid
-        # (4-segment JWS). A classical-only receipt in a chain that
-        # declares quantum-safe emission fails closed - this is the
-        # ProvenanceVerifier mirror of AuditVerifier's strict mode
-        # and closes the field-stripping downgrade for pack
-        # verification: stripping the PQ segment leaves a fully
+        # require_pq strict mode: every receipt must be pq1 hybrid (a
+        # header that declares the profile - the three-segment Compact
+        # emission or the legacy four-segment dot form). A classical-only
+        # receipt in a chain that declares quantum-safe emission fails
+        # closed - this is the ProvenanceVerifier mirror of AuditVerifier's
+        # strict mode and closes the field-stripping downgrade for pack
+        # verification: stripping the PQ component leaves a fully
         # valid-looking v1 receipt, and only strict mode catches it.
-        if self._require_pq and receipt.jws.count(".") != 3:
+        if self._require_pq and not _jws_declares_pq1(receipt.jws):
             report.errors.append(
                 f"line {line_no}: require_pq: receipt is not a "
                 "raucle/pq1 hybrid receipt (no ML-DSA-65 component)"
@@ -3685,6 +3705,13 @@ class ProvenanceVerifier:
             if len(parts) == 4:
                 return self._verify_signature_hybrid(parts, key)
             if len(parts) == 3:
+                # v1 receipts and current pq1 receipts are BOTH
+                # three-segment Compact JWSes; the JOSE header names the
+                # profile. The pq1 header routes to hybrid verification
+                # (single-segment signature slot over the raw
+                # concatenation); everything else verifies classically.
+                if _jws_declares_pq1(receipt.jws):
+                    return self._verify_signature_hybrid(parts, key)
                 return self._verify_signature_v1(parts, key)
             # 1, 2, 5+ segments never reach here (from_jws rejects them);
             # but keep the verifier total: any other shape fails closed.
@@ -3704,7 +3731,14 @@ class ProvenanceVerifier:
     def _verify_signature_hybrid(self, parts: list[str], key: Any) -> bool:
         """pq1 hybrid receipt: fail-closed dual verification. No downgrade
         — both components must verify. Raises PQUnavailable when the
-        runtime cannot do ML-DSA at all."""
+        runtime cannot do ML-DSA at all.
+
+        Accepts both slot shapes during the deprecation window: the
+        current three-segment Compact receipt (signature slot is ONE
+        base64url segment over the raw component concatenation) and the
+        legacy four-segment receipts whose slot itself carries the dot
+        form; legacy acceptance logs the pq module's named deprecation
+        marker."""
         from raucle.pq import (
             PQUnavailable,
             header_is_pq1,
@@ -3727,7 +3761,9 @@ class ProvenanceVerifier:
                 )
             return False
         signing_input = (parts[0] + "." + parts[1]).encode("ascii")
-        signature_slot = parts[2] + "." + parts[3]
+        # Legacy emission (verify-only window): the slot itself is the
+        # dot-separated two-segment form; current emission is one segment.
+        signature_slot = parts[2] + "." + parts[3] if len(parts) == 4 else parts[2]
         # Shape-checked before crypto (segment sizes) for the same
         # reason as the v1 path: fail on structure before verifying.
         parse_hybrid_signature(signature_slot)

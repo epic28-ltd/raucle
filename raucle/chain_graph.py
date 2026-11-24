@@ -63,7 +63,13 @@ def _signing_input(jws: str) -> bytes:
 
 
 def _ed25519_verify(jws: str, key: Any) -> bool:
-    """Verify the Ed25519 component of a receipt JWS. Never raises."""
+    """Verify the Ed25519 component of a receipt JWS. Never raises.
+
+    Slot-shape aware: in the three-segment Compact form the slot is the
+    raw ed25519 || ml_dsa_65 concatenation and the Ed25519 component is
+    the first 64 bytes; in the legacy four-segment dot form and in pure
+    v1 receipts the third segment IS the Ed25519 signature.
+    """
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -75,13 +81,30 @@ def _ed25519_verify(jws: str, key: Any) -> bool:
             key = key.encode("ascii")
         if not isinstance(key, Ed25519PublicKey):
             key = serialization.load_pem_public_key(key)
-        key.verify(_b64d(jws.split(".")[2]), _signing_input(jws))
+        parts = jws.split(".")
+        sig = _b64d(parts[2])
+        if len(parts) == 3 and _header_declares_pq1(parts[0]):
+            if len(sig) != 64 + 3309:
+                return False
+            sig = sig[:64]
+        key.verify(sig, _signing_input(jws))
         return True
     except (InvalidSignature, ValueError, TypeError):
         return False
     except Exception:
         # Decode errors fail closed with the same explicit state.
         return False
+
+
+def _header_declares_pq1(header_b64: str) -> bool:
+    """True when the decoded JOSE header declares the pq1 profile."""
+    from raucle.pq import header_is_pq1
+
+    try:
+        header = json.loads(_b64d(header_b64))
+    except (ValueError, TypeError):
+        return False
+    return isinstance(header, dict) and header_is_pq1(header)
 
 
 class ReceiptCorpus:
@@ -112,9 +135,10 @@ class ReceiptCorpus:
         """Explicit node state: verified / key_absent / invalid / malformed.
 
         Verification is per-profile: v1 (3-segment) and pq1 hybrid
-        (4-segment; here the Ed25519 component is checked, with the
-        profile recorded so assurance knows the ML-DSA half belongs to
-        the offline hybrid verifier).
+        (3-segment Compact emission with the single-segment concatenation
+        slot, or the legacy 4-segment dot form; here the Ed25519
+        component is checked, with the profile recorded so assurance
+        knows the ML-DSA half belongs to the offline hybrid verifier).
         """
         if len(receipt.jws.split(".")) not in (3, 4):
             return {"status": "malformed", "key_id": receipt.kid}
@@ -139,7 +163,11 @@ def _decode_receipt(record: dict[str, Any]) -> Receipt | None:
         return None
     if not isinstance(payload, dict) or not isinstance(header, dict):
         return None
-    profile = "pq1" if len(parts) == 4 else "v1"
+    # Profile is named by the header, not the segment count: v1 receipts
+    # and current pq1 emissions are both 3-segment Compact JWSes.
+    from raucle.pq import header_is_pq1
+
+    profile = "pq1" if header_is_pq1(header) else "v1"
     return Receipt(
         receipt_hash=str(record.get("receipt_hash", "")),
         payload=payload,

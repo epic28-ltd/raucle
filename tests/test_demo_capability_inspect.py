@@ -193,7 +193,8 @@ class TestSigningFamilies:
         logger.record_user_input(text="simulated hybrid receipt")
         logger.close()
         lines = [json.loads(ln) for ln in store.read_text().splitlines() if ln.strip()]
-        assert all(len(rec["jws"].split(".")) == 4 for rec in lines)
+        assert all(len(rec["jws"].split(".")) == 3 for rec in lines)
+        assert all("." not in rec["jws"].split(".")[2] for rec in lines)
         with open(gateway.config.receipt_store, "a", encoding="utf-8") as fh:
             for rec in lines:
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")

@@ -2039,7 +2039,10 @@ def _envelope_signing_family(jws: str) -> str | None:
     from raucle.pq import header_is_pq1
 
     if header_is_pq1(header):
-        return "pq1-hybrid" if len(parts) == 4 else None
+        # pq1 receipts come in both slot shapes during the deprecation
+        # window: the current 3-segment Compact emission and the legacy
+        # 4-segment dot-form receipts.
+        return "pq1-hybrid" if len(parts) in (3, 4) else None
     if header.get("alg") == "EdDSA" and len(parts) == 3:
         return "classical-ed25519"
     return None
