@@ -398,37 +398,34 @@ class TestCuratedNotes:
             sync_website.parse_notes(notes)
 
     def test_strips_reference_links_shortcut_links_images_and_autolinks(self):
+        diagram = "![diagram](https://example.test/diagram.png)"
         notes = "\n".join(
             [
                 "## Features",
                 "- **Schema binding**",
                 "## What's new",
-                "Read [the migration guide][docs], [quickstart], ![diagram](https://example.test/diagram.png), <https://example.test/auto> and <strong>fast</strong>",
+                f"Read [the migration guide][docs], [quickstart], {diagram}, "
+                "<https://example.test/auto> and <strong>fast</strong>",
             ]
         )
         features, summary = sync_website.parse_notes(notes)
         assert features == ["Schema binding"]
         assert summary == (
-            "Read the migration guide, quickstart, diagram, "
-            "https://example.test/auto and fast"
+            "Read the migration guide, quickstart, diagram, https://example.test/auto and fast"
         )
 
     def test_bare_markdown_markers_in_summary_are_rejected(self):
         import pytest
 
         for marker in ("-", "*", "+", "1.", "==", "--"):
-            notes = "\n".join(
-                ["## Features", "- One feature", "## What's new", marker]
-            )
+            notes = "\n".join(["## Features", "- One feature", "## What's new", marker])
             with pytest.raises(ValueError, match="must contain prose"):
                 sync_website.parse_notes(notes)
 
     def test_mixed_space_tab_indentation_in_summary_is_rejected(self):
         import pytest
 
-        notes = "\n".join(
-            ["## Features", "- One feature", "## What's new", "  \tcode block"]
-        )
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "  \tcode block"])
         with pytest.raises(ValueError, match="must contain prose"):
             sync_website.parse_notes(notes)
 
