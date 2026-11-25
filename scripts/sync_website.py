@@ -119,14 +119,16 @@ def parse_notes(text: str) -> tuple[list[str], str]:
                 raise ValueError("'## Features' contains an empty bullet")
             features.append(feature)
         elif section == "whatsnew":
-            indent = len(line) - len(line.lstrip(" "))
+            leading = line[: len(line) - len(line.lstrip(" \t"))]
+            indent = len(leading.expandtabs(4))
             if (
                 indent >= 4
-                or line.startswith("\t")
+                or "\t" in leading
                 or stripped.startswith(("~~~", ">"))
                 or stripped.startswith(chr(96) * 3)
                 or re.match(r"^(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+)", stripped)
-                or re.fullmatch(r"(?:-\s*){3,}|\*(?:\s*\*){2,}|_(?:\s*_){2,}|={3,}", stripped)
+                or re.fullmatch(r"(?:-\s*){3,}|\*(?:\s*\*){2,}|_(?:\s*_){2,}|=+", stripped)
+                or re.fullmatch(r"(?:[-*+]|[0-9]+[.)]|#{1,6})", stripped)
                 or "|" in stripped
                 or re.match(r"^<[A-Za-z/!?]", stripped)
                 or re.match(r"^\[[^\]]+\]:", stripped)
@@ -243,6 +245,9 @@ def _strip_markdown(text: str) -> str:
     text = re.sub(r"^\[[^\]]+\]:\s*.*$", "", text)
     text = re.sub(r"!\[([^\]]*)\](?:\([^)]+\)|\[[^\]]*\])", r"\1", text)
     text = re.sub(r"\[([^\]]+)\](?:\([^)]+\)|\[[^\]]*\])", r"\1", text)
+    text = re.sub(r"\[([^\]]+)\]", r"\1", text)
+    text = re.sub(r"<(https?://[^>]+|mailto:[^>]+)>", r"\1", text)
+    text = re.sub(r"</?[A-Za-z][^>]*>", "", text)
     text = re.sub(r"`([^`]+)`", r"\1", text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     text = re.sub(r"\*([^*]+)\*", r"\1", text)
