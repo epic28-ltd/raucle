@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Sync raucle release content into the raucle.com website.
 
-Parses the curated notes file (``--notes``, the site checkout's
-``notes/<version>.md``) when provided, else ``CHANGELOG.md``'s version
-section, then injects three pieces of HTML content into the target site
-between named comment markers.  A missing notes file is an error: the
-curated release copy is the only release copy that ships.
+Parses the required curated notes file (``--notes``, the site checkout's
+``notes/<version>.md``) and validates the version against ``CHANGELOG.md``
+before injecting three pieces of HTML content into the target site.
+Missing, incomplete or malformed notes fail closed; changelog prose is
+never used as a fallback.
 
 - ``RAUCLE_DETECT:VERSION``   — release-badge with the current version
 - ``RAUCLE_DETECT:FEATURES``  — bullet list of headline features
@@ -227,6 +227,7 @@ def _select_headline_features(bullets: list[str], limit: int = 6) -> list[str]:
 
 def _strip_markdown(text: str) -> str:
     """Remove `code`, **bold**, *italic*, and stray markdown punctuation."""
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"`([^`]+)`", r"\1", text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     text = re.sub(r"\*([^*]+)\*", r"\1", text)
@@ -279,7 +280,7 @@ def render_features_list(features: list[str]) -> str:
 def render_whatsnew(version: str, section_titles: list[str], repo_url: str, summary: str | None = None) -> str:
     """Render a small 'what's new in vN' callout linking to the release notes."""
     if summary:
-        title_summary = summary
+        title_summary = html.escape(summary)
     elif not section_titles:
         title_summary = "release notes"
     else:
@@ -340,16 +341,12 @@ def main(argv: list[str] | None = None) -> int:
             " in the site checkout (## Features + ## What's new) before syncing."
         )
     notes_text = args.notes.read_text(encoding="utf-8")
-    features, summary = parse_notes(notes_text)
-    if features is None:
-        raise SystemExit(
-            "error: notes file carries no '## Features' section - refusing to "
-            "render curated release copy without a curated features list"
-        )
+    try:
+        features, summary = parse_notes(notes_text)
+    except ValueError as exc:
+        raise SystemExit(f"error: invalid curated notes: {exc}") from exc
     notes = parse_changelog(args.changelog.read_text(encoding="utf-8"), args.version)
     notes.headline_features = features
-    section_titles = [summary] if summary else notes.section_titles
-    summary_override = summary
 
     html_doc = args.website_html.read_text(encoding="utf-8")
     html_doc = _replace_block(html_doc, "VERSION", render_version_badge(notes.version))
@@ -357,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     html_doc = _replace_block(
         html_doc,
         "WHATSNEW",
-        render_whatsnew(notes.version, section_titles, args.repo_url, summary=summary),
+        render_whatsnew(notes.version, [], args.repo_url, summary=summary),
     )
 
     if args.dry_run:
