@@ -415,7 +415,6 @@ class TestCuratedNotes:
             "https://example.test/auto and fast"
         )
 
-
     def test_bare_markdown_markers_in_summary_are_rejected(self):
         import pytest
 
