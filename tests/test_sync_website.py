@@ -307,10 +307,7 @@ class TestCuratedNotes:
             "Schema binding — closes aliases for registered schemas",
             "Independent interop for pq receipts",
         ]
-        assert summary == (
-            "A wrapped summary with bold text. "
-            "The next line completes the summary."
-        )
+        assert summary == ("A wrapped summary with bold text. The next line completes the summary.")
 
     def test_missing_whats_new_summary_is_rejected(self):
         import pytest
@@ -322,27 +319,19 @@ class TestCuratedNotes:
         import pytest
 
         with pytest.raises(ValueError, match="no non-empty bullet entries"):
-            sync_website.parse_notes(
-                "## Features\n\n## What's new\nA real summary.\n"
-            )
+            sync_website.parse_notes("## Features\n\n## What's new\nA real summary.\n")
 
     def test_non_bullet_feature_line_is_rejected(self):
         import pytest
 
         with pytest.raises(ValueError, match="must be a Markdown bullet"):
-            sync_website.parse_notes(
-                "## Features\nA feature without a bullet\n"
-                "## What's new\nSummary.\n"
-            )
+            sync_website.parse_notes("## Features\nA feature without a bullet\n## What's new\nSummary.\n")
 
     def test_markdown_list_in_summary_is_rejected(self):
         import pytest
 
         with pytest.raises(ValueError, match="must contain prose"):
-            sync_website.parse_notes(
-                "## Features\n- One feature\n"
-                "## What's new\n- A list item\n"
-            )
+            sync_website.parse_notes("## Features\n- One feature\n## What's new\n- A list item\n")
 
     def test_whatsnew_summary_is_html_escaped(self):
         out = sync_website.render_whatsnew(
