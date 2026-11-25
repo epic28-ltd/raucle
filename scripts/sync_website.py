@@ -83,7 +83,7 @@ _SUBSECTION_RE = re.compile(r"^###\s+(.*)$")
 _BOLD_PHRASE_RE = re.compile(r"\*\*([^*]+)\*\*")
 
 
-def parse_notes(text: str) -> tuple[list[str], str]
+def parse_notes(text: str) -> tuple[list[str], str]:
     """Parse the curated notes markdown: '## Features' bullets and a
     '## What's new' summary paragraph. Returns (features, summary)."""
     features: list[str] | None = None
