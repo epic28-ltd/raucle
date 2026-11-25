@@ -126,7 +126,7 @@ def parse_notes(text: str) -> tuple[list[str], str]:
                 or stripped.startswith(("~~~", ">"))
                 or stripped.startswith(chr(96) * 3)
                 or re.match(r"^(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+)", stripped)
-                or re.fullmatch(r"(?:-\s*){3,}|\*(?:\s*\*){2,}|_(?:\s*_){2,}", stripped)
+                or re.fullmatch(r"(?:-\s*){3,}|\*(?:\s*\*){2,}|_(?:\s*_){2,}|={3,}", stripped)
                 or "|" in stripped
             ):
                 raise ValueError("'## What's new' must contain prose, not Markdown block syntax")
