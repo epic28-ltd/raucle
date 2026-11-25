@@ -291,7 +291,6 @@ class TestCuratedNotes:
                 ]
             )
 
-
     def test_accepts_indented_star_bullets_and_strips_inline_markdown(self):
         notes = (
             "## Features\n"
