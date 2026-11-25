@@ -340,6 +340,23 @@ class TestCuratedNotes:
         with pytest.raises(ValueError, match="must contain prose"):
             sync_website.parse_notes("## Features\n- One feature\n## What's new\n- A list item\n")
 
+
+    def test_markdown_thematic_break_in_summary_is_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(
+                "## Features\n- One feature\n## What's new\n---\n"
+            )
+
+    def test_markdown_table_in_summary_is_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(
+                "## Features\n- One feature\n## What's new\n| A | B |\n"
+            )
+
     def test_whatsnew_summary_is_html_escaped(self):
         out = sync_website.render_whatsnew(
             "0.4.0",
