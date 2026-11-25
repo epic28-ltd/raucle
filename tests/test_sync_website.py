@@ -149,9 +149,11 @@ class TestRendering:
         assert "Feature B &amp; C" in out  # HTML-escaped
         assert out.count("<li>") == 2
 
-    def test_features_list_empty_uses_placeholder(self):
-        out = sync_website.render_features_list([])
-        assert "<li>" in out  # still renders a fallback bullet
+    def test_features_list_rejects_empty_input(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="empty curated features list"):
+            sync_website.render_features_list([])
 
     def test_whatsnew_includes_link_and_titles(self):
         out = sync_website.render_whatsnew(
@@ -288,6 +290,155 @@ class TestCuratedNotes:
                     str(tmp_path / "absent.md"),
                 ]
             )
+
+    def test_accepts_indented_star_bullets_and_strips_inline_markdown(self):
+        notes = (
+            "## Features\n"
+            "  * **Schema binding** — closes aliases for registered schemas\n"
+            "  + [Independent interop](https://example.test/spec) for pq receipts\n"
+            "\n"
+            "## What’s New\n"
+            "A wrapped summary with **bold text**.\n"
+            "The next line completes the summary.\n"
+        )
+        features, summary = sync_website.parse_notes(notes)
+        assert features == [
+            "Schema binding — closes aliases for registered schemas",
+            "Independent interop for pq receipts",
+        ]
+        assert summary == "A wrapped summary with bold text. The next line completes the summary."
+
+    def test_missing_whats_new_summary_is_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="non-empty '## What's new'"):
+            sync_website.parse_notes("## Features\n- One feature\n")
+
+    def test_empty_features_section_is_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="no non-empty bullet entries"):
+            sync_website.parse_notes("## Features\n\n## What's new\nA real summary.\n")
+
+    def test_non_bullet_feature_line_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(
+            [
+                "## Features",
+                "A feature without a bullet",
+                "## What's new",
+                "Summary.",
+            ]
+        )
+        with pytest.raises(ValueError, match="must be a Markdown bullet"):
+            sync_website.parse_notes(notes)
+
+    def test_markdown_list_in_summary_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "- A list item"])
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(notes)
+
+    def test_markdown_thematic_break_in_summary_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "---"])
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(notes)
+
+    def test_markdown_table_in_summary_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "A | B"])
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(notes)
+
+    def test_markdown_spaced_thematic_break_in_summary_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "- - -"])
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(notes)
+
+    def test_indented_code_block_in_summary_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "    code block"])
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(notes)
+
+    def test_markdown_setext_heading_in_summary_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "==="])
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(notes)
+
+    def test_markdown_spaced_underscore_break_in_summary_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "_ _ _"])
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(notes)
+
+    def test_html_block_in_summary_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "<p>raw html</p>"])
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(notes)
+
+    def test_link_reference_definition_in_summary_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "[docs]: /guide"])
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(notes)
+
+    def test_strips_reference_links_shortcut_links_images_and_autolinks(self):
+        diagram = "![diagram](https://example.test/diagram.png)"
+        notes = "\n".join(
+            [
+                "## Features",
+                "- **Schema binding**",
+                "## What's new",
+                f"Read [the migration guide][docs], [quickstart], {diagram}, "
+                "<https://example.test/auto> and <strong>fast</strong>",
+            ]
+        )
+        features, summary = sync_website.parse_notes(notes)
+        assert features == ["Schema binding"]
+        assert summary == (
+            "Read the migration guide, quickstart, diagram, https://example.test/auto and fast"
+        )
+
+    def test_bare_markdown_markers_in_summary_are_rejected(self):
+        import pytest
+
+        for marker in ("-", "*", "+", "1.", "==", "--"):
+            notes = "\n".join(["## Features", "- One feature", "## What's new", marker])
+            with pytest.raises(ValueError, match="must contain prose"):
+                sync_website.parse_notes(notes)
+
+    def test_mixed_space_tab_indentation_in_summary_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "  \tcode block"])
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(notes)
+
+    def test_whatsnew_summary_is_html_escaped(self):
+        out = sync_website.render_whatsnew(
+            "0.4.0",
+            [],
+            "https://github.com/example/repo",
+            summary="<script>alert('x')</script> & safe text",
+        )
+        assert "&lt;script&gt;" in out
+        assert "&amp; safe text" in out
+        assert "<script>" not in out
 
 
 def _write_changelog(tmp_path) -> Path:
