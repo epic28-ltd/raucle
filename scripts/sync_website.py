@@ -119,7 +119,14 @@ def parse_notes(text: str) -> tuple[list[str], str]:
                 raise ValueError("'## Features' contains an empty bullet")
             features.append(feature)
         elif section == "whatsnew":
-            if stripped.startswith(("~~~", ">")) or stripped.startswith(chr(96) * 3) or re.match(r"^(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+)", stripped):
+            if (
+                stripped.startswith(("~~~", ">"))
+                or stripped.startswith(chr(96) * 3)
+                or re.match(r"^(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+)", stripped)
+                or re.fullmatch(r"(?:-{3,}|\*{3,}|_{3,})", stripped)
+                or stripped.startswith("|")
+                or stripped.count("|") >= 2
+            ):
                 raise ValueError("'## What's new' must contain prose, not Markdown block syntax")
             prose = _strip_markdown(stripped).strip()
             if prose:
