@@ -127,7 +127,7 @@ def parse_notes(text: str) -> tuple[list[str], str]:
                 or stripped.startswith(("~~~", ">"))
                 or stripped.startswith(chr(96) * 3)
                 or re.match(r"^(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+)", stripped)
-                or re.fullmatch(r"(?:-\s*){3,}|\*(?:\s*\*){2,}|_(?:\s*_){2,}|=+", stripped)
+                or re.fullmatch(r"(?:-\s*){2,}|\*(?:\s*\*){2,}|_(?:\s*_){2,}|=+", stripped)
                 or re.fullmatch(r"(?:[-*+]|[0-9]+[.)]|#{1,6})", stripped)
                 or "|" in stripped
                 or re.match(r"^<[A-Za-z/!?]", stripped)
