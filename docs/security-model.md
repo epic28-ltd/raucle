@@ -11,11 +11,20 @@ reason about residual trust. It reflects the hardening from the 2026-06 security
   `required_present`, tool match, dot-delimited `agent_id` scope, expiry, signature, issuer
   pinning, attenuation (children only narrow), and strict-mode proof binding (the cited proof
   must match the hash of the enforced constraints).
-- **Documented limitation:** the gate enforces on the **argument names declared in the
-  policy**; it does not know the tool's parameter schema. A `forbidden_values` *blacklist* can
-  therefore be evaded if the tool reads the forbidden value under a different parameter name.
-  **Prefer `allowed_values` whitelists** (which fail closed on an absent/aliased field) for
-  security-critical fields. Binding the gate to a tool's declared schema is future work.
+- **Schema binding (X1):** when a tool's schema is registered with the gate
+  (`raucle/tool_schema.py`; primary source MCP `tools/list`, secondary OpenAPI
+  fragment), rules referencing fields the schema does not declare fail at
+  **config load** — never silently at call time — and type-confused argument
+  values deny with a `schema_violation` reason before the name-based checks run.
+  Undeclared arguments deny when the schema closes the object
+  (`additionalProperties: false`), which closes the parameter-aliasing evasion
+  above for schemas that declare closed objects.
+- **Residual:** a tool **without** a registered schema keeps today's
+  name-based, fail-closed behaviour, and aliasing closes only for
+  closed-object schemas. **Prefer `allowed_values` whitelists** for
+  security-critical fields either way. Spec:
+  `docs/spec/x1-schema-enforcement.md`; conformance vectors:
+  `standards/test-vectors/schema_enforcement_v1_*.json`.
 - **Revocation:** per-token denylist; a revoked token (and, when a `parent_resolver` is
   configured, any revoked ancestor) is denied. Without a resolver, revoke each descendant or
   rely on short TTLs.
@@ -185,3 +194,22 @@ not shipped.
   are pinned to commit SHAs.
 
 Report vulnerabilities to **security@raucle.com** (see `.github/SECURITY.md`).
+
+## Scope map: what is enforced where
+
+Three scopes on one page, so no reader infers proof coverage from enforcement:
+
+1. **Core policy gate.** Name-based constraint checks
+   (`allowed_values`, `forbidden_values`, `max_value`/`min_value`,
+   `starts_with`, `required_present`, `forbidden_field_combinations`) plus
+   token checks: signature, issuer pinning, time bounds, identifier binding,
+   revocation, expiry, delegation attenuation.
+2. **X1 schema binding.** Applies per registered tool schema (MCP primary,
+   OpenAPI fragment): load-time field binding and call-time type/undeclared
+   checks. Tools without a registered schema are out of this scope and stay
+   on the name-based path (`scope 1`).
+3. **Lean 4 mechanisation.** Proves
+   `allowed_values`, `forbidden_values`, `max_value`/`min_value`,
+   `required_present`. X1 schema binding and every other runtime check on
+   this page are tested in the suite but are not yet part of the Lean model.
+
