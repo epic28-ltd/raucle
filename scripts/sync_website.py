@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Sync raucle release content into the raucle.com website.
 
-Parses ``CHANGELOG.md`` for a specific version's section, then injects three
-pieces of HTML content into the target site between named comment markers:
+Parses the curated notes file (``--notes``, the site checkout's
+``notes/<version>.md``) when provided, else ``CHANGELOG.md``'s version
+section, then injects three pieces of HTML content into the target site
+between named comment markers.  A missing notes file is an error: the
+curated release copy is the only release copy that ships.
 
 - ``RAUCLE_DETECT:VERSION``   — release-badge with the current version
 - ``RAUCLE_DETECT:FEATURES``  — bullet list of headline features
@@ -13,7 +16,8 @@ Usage::
     python scripts/sync_website.py \\
         --changelog CHANGELOG.md \\
         --version 0.4.0 \\
-        --website-html /tmp/raucle.com/index.html
+        --website-html /tmp/raucle.com/trust-centre/release-evidence/index.html \\
+        --notes /tmp/raucle.com/notes/0.4.0.md
 
 The script is idempotent: running it twice with the same inputs produces
 identical output.  It exits 0 on success, 1 if the version section is not
@@ -77,6 +81,34 @@ _SUBSECTION_RE = re.compile(r"^###\s+(.*)$")
 # Match Markdown emphasis like **foo** at the start of a bullet for the
 # headline phrase.  Falls back to the first sentence fragment.
 _BOLD_PHRASE_RE = re.compile(r"\*\*([^*]+)\*\*")
+
+
+def parse_notes(text: str) -> tuple[list[str] | None, str | None]:
+    """Parse the curated notes markdown: '## Features' bullets and a
+    '## What's new' summary paragraph. Returns (features, summary)."""
+    features: list[str] | None = None
+    summary_parts: list[str] = []
+    section = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped == "## Features":
+            section = "features"
+            features = []
+            continue
+        if stripped == "## What's new":
+            section = "whatsnew"
+            continue
+        if stripped.startswith("## ") and stripped != "## Features":
+            section = None
+            continue
+        if not stripped:
+            continue
+        if section == "features" and line.startswith("- "):
+            features.append(line[2:].strip())
+        elif section == "whatsnew":
+            summary_parts.append(stripped)
+    summary = " ".join(summary_parts).strip() or None
+    return features, summary
 
 
 def parse_changelog(text: str, version: str) -> ReleaseNotes:
@@ -223,9 +255,11 @@ def render_features_list(features: list[str]) -> str:
     return '<ul class="oss-features">\n' + body + "\n            </ul>"
 
 
-def render_whatsnew(version: str, section_titles: list[str], repo_url: str) -> str:
+def render_whatsnew(version: str, section_titles: list[str], repo_url: str, summary: str | None = None) -> str:
     """Render a small 'what's new in vN' callout linking to the release notes."""
-    if not section_titles:
+    if summary:
+        title_summary = summary
+    elif not section_titles:
         title_summary = "release notes"
     else:
         # Take the most marketing-friendly section titles.
@@ -262,7 +296,13 @@ def main(argv: list[str] | None = None) -> int:
         "--website-html",
         type=Path,
         required=True,
-        help="Path to the website index.html to update in-place",
+        help="Path to the website HTML holding the release-evidence marker blocks",
+    )
+    parser.add_argument(
+        "--notes",
+        type=Path,
+        required=True,
+        help="Curated notes markdown (## Features bullets + ## What's new paragraph)",
     )
     parser.add_argument(
         "--repo-url",
@@ -272,8 +312,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Print result, do not write")
     args = parser.parse_args(argv)
 
-    changelog_text = args.changelog.read_text(encoding="utf-8")
-    notes = parse_changelog(changelog_text, args.version)
+    if not args.notes.is_file():
+        raise SystemExit(
+            f"error: curated notes file not found: {args.notes} - refusing to "
+            "render release copy from the raw changelog. Write notes/<version>.md"
+            " in the site checkout (## Features + ## What's new) before syncing."
+        )
+    notes_text = args.notes.read_text(encoding="utf-8")
+    features, summary = parse_notes(notes_text)
+    if features is None:
+        raise SystemExit(
+            "error: notes file carries no '## Features' section - refusing to "
+            "render curated release copy without a curated features list"
+        )
+    notes = parse_changelog(args.changelog.read_text(encoding="utf-8"), args.version)
+    notes.headline_features = features
+    section_titles = [summary] if summary else notes.section_titles
+    summary_override = summary
 
     html_doc = args.website_html.read_text(encoding="utf-8")
     html_doc = _replace_block(html_doc, "VERSION", render_version_badge(notes.version))
@@ -281,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
     html_doc = _replace_block(
         html_doc,
         "WHATSNEW",
-        render_whatsnew(notes.version, notes.section_titles, args.repo_url),
+        render_whatsnew(notes.version, section_titles, args.repo_url, summary=summary),
     )
 
     if args.dry_run:
@@ -290,8 +345,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args.website_html.write_text(html_doc, encoding="utf-8")
     print(f"Updated {args.website_html} for release v{notes.version}", file=sys.stderr)
-    print(f"  Features injected: {len(notes.headline_features)}", file=sys.stderr)
-    print(f"  Sections: {notes.section_titles}", file=sys.stderr)
+    print(f"  Features injected (curated notes): {len(notes.headline_features)}", file=sys.stderr)
+    print(f"  What's new summary: {summary}", file=sys.stderr)
     return 0
 
 

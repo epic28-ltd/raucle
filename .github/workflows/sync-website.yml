@@ -65,8 +65,9 @@ jobs:
       - name: Snapshot website before sync
         working-directory: website
         run: |
-          cp index.html /tmp/index.before.html
-          wc -c /tmp/index.before.html
+          mkdir -p trust-centre/release-evidence
+          cp trust-centre/release-evidence/index.html /tmp/rel-before.html
+          wc -c /tmp/rel-before.html
 
       - name: Sync release content
         env:
@@ -75,7 +76,8 @@ jobs:
           python scripts/sync_website.py \
             --changelog CHANGELOG.md \
             --version "$VERSION" \
-            --website-html website/index.html
+            --website-html website/trust-centre/release-evidence/index.html \
+            --notes website/notes/"$VERSION".md
 
       - name: Smoke-check rendered output (fails closed on broken render)
         working-directory: website
@@ -88,7 +90,7 @@ jobs:
             'RAUCLE_DETECT:FEATURES:END' \
             'RAUCLE_DETECT:WHATSNEW:START' \
             'RAUCLE_DETECT:WHATSNEW:END'; do
-            if ! grep -q "$marker" index.html; then
+            if ! grep -q "$marker" trust-centre/release-evidence/index.html; then
               echo "::error::Marker $marker is missing from rendered HTML — refusing to deploy."
               exit 1
             fi
@@ -96,18 +98,18 @@ jobs:
 
           # 2. File size must not shrink by more than 30% — catches catastrophic
           #    regex bugs that strip out large chunks of the page.
-          before=$(wc -c < /tmp/index.before.html)
-          after=$(wc -c < index.html)
+          before=$(wc -c < /tmp/rel-before.html)
+          after=$(wc -c < trust-centre/release-evidence/index.html)
           shrink_pct=$(( (before - after) * 100 / before ))
           echo "Before: ${before} bytes, after: ${after} bytes (delta ${shrink_pct}%)"
           if (( shrink_pct > 30 )); then
-            echo "::error::index.html shrank by ${shrink_pct}% — likely a render bug, refusing to deploy."
+            echo "::error::release-evidence page shrank by ${shrink_pct}% — likely a render bug, refusing to deploy."
             exit 1
           fi
 
           # 3. Sanity-check that valid HTML structure is preserved.
-          if ! grep -q '</html>' index.html; then
-            echo "::error::Rendered index.html has no </html> tag — refusing to deploy."
+          if ! grep -q '</html>' trust-centre/release-evidence/index.html; then
+            echo "::error::Rendered release-evidence page has no </html> tag — refusing to deploy."
             exit 1
           fi
 
@@ -133,13 +135,13 @@ jobs:
             printf 'Sync raucle v%s release content\n\n' "$VERSION"
             printf 'Automated update from raucle tag push.\n'
             printf '  - Release badge bumped to v%s\n' "$VERSION"
-            printf '  - Features list regenerated from CHANGELOG.md\n'
+            printf '  - Features list regenerated from the curated site notes/%s.md\n' "$VERSION"
             printf "  - What's new callout updated\n\n"
             printf 'Source: https://github.com/epic28-ltd/raucle/blob/v%s/CHANGELOG.md\n' "$VERSION"
             printf 'Workflow run: https://github.com/epic28-ltd/raucle/actions/runs/%s\n' "$RUN_ID"
           } > /tmp/commit-msg.txt
 
-          git add index.html
+          git add trust-centre/release-evidence/index.html
           git commit -F /tmp/commit-msg.txt
           git push origin main
 

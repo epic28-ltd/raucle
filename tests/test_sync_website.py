@@ -53,6 +53,17 @@ _HTML_TEMPLATE = textwrap.dedent("""\
     </html>
     """)
 
+_NOTES = textwrap.dedent("""\
+    ## Features
+
+    - Tamper-evident audit chain: every event SHA-256 linked to its predecessor
+    - Signed JWS verdict receipts: downstream-verifiable
+
+    ## What's new
+
+    The policy prover narrows capabilities before the gate runs.
+    """)
+
 
 class TestParseChangelog:
     def test_extracts_target_version_only(self):
@@ -154,6 +165,12 @@ class TestRendering:
 
 
 class TestEndToEnd:
+    @staticmethod
+    def _notes(tmp_path) -> Path:
+        notes_path = tmp_path / "0.4.0.md"
+        notes_path.write_text(_NOTES)
+        return notes_path
+
     def test_full_sync_replaces_all_three_blocks(self, tmp_path):
         changelog_path = tmp_path / "CHANGELOG.md"
         changelog_path.write_text(_CHANGELOG)
@@ -168,6 +185,8 @@ class TestEndToEnd:
                 "0.4.0",
                 "--website-html",
                 str(website_path),
+                "--notes",
+                str(self._notes(tmp_path)),
             ]
         )
         assert rc == 0
@@ -192,6 +211,8 @@ class TestEndToEnd:
             "0.4.0",
             "--website-html",
             str(website_path),
+            "--notes",
+            str(self._notes(tmp_path)),
         ]
         sync_website.main(args)
         once = website_path.read_text()
@@ -217,5 +238,65 @@ class TestEndToEnd:
                     "0.4.0",
                     "--website-html",
                     str(website_path),
+                    "--notes",
+                    str(self._notes(tmp_path)),
                 ]
             )
+
+
+class TestCuratedNotes:
+    def test_parse_notes_extracts_features_and_summary(self):
+        features, summary = sync_website.parse_notes(_NOTES)
+        assert features == [
+            "Tamper-evident audit chain: every event SHA-256 linked to its predecessor",
+            "Signed JWS verdict receipts: downstream-verifiable",
+        ]
+        assert summary == "The policy prover narrows capabilities before the gate runs."
+
+    def test_parse_notes_without_features_section_is_an_error(self, tmp_path):
+        notes_path = tmp_path / "bad.md"
+        notes_path.write_text("## What's new\n\nOnly a summary.\n")
+        import pytest
+
+        with pytest.raises(SystemExit, match="no '## Features' section"):
+            sync_website.main(
+                [
+                    "--changelog",
+                    str(_write_changelog(tmp_path)),
+                    "--version",
+                    "0.4.0",
+                    "--website-html",
+                    str(_write_website(tmp_path)),
+                    "--notes",
+                    str(notes_path),
+                ]
+            )
+
+    def test_missing_notes_file_is_an_error(self, tmp_path):
+        import pytest
+
+        with pytest.raises(SystemExit, match="curated notes file not found"):
+            sync_website.main(
+                [
+                    "--changelog",
+                    str(_write_changelog(tmp_path)),
+                    "--version",
+                    "0.4.0",
+                    "--website-html",
+                    str(_write_website(tmp_path)),
+                    "--notes",
+                    str(tmp_path / "absent.md"),
+                ]
+            )
+
+
+def _write_changelog(tmp_path) -> Path:
+    p = tmp_path / "CHANGELOG.md"
+    p.write_text(_CHANGELOG)
+    return p
+
+
+def _write_website(tmp_path) -> Path:
+    p = tmp_path / "index.html"
+    p.write_text(_HTML_TEMPLATE)
+    return p
