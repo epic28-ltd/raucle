@@ -416,7 +416,7 @@ class TestCuratedNotes:
     def test_bare_markdown_markers_in_summary_are_rejected(self):
         import pytest
 
-        for marker in ("-", "*", "+", "1.", "=="):
+        for marker in ("-", "*", "+", "1.", "==", "--"):
             notes = "\n".join(
                 ["## Features", "- One feature", "## What's new", marker]
             )
