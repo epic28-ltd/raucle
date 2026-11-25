@@ -241,7 +241,7 @@ def _select_headline_features(bullets: list[str], limit: int = 6) -> list[str]:
 
 
 def _strip_markdown(text: str) -> str:
-    """Remove `code`, **bold**, *italic*, and stray markdown punctuation."""
+    """Strip Markdown links, images, emphasis, code, HTML tags and punctuation."""
     text = re.sub(r"^\[[^\]]+\]:\s*.*$", "", text)
     text = re.sub(r"!\[([^\]]*)\](?:\([^)]+\)|\[[^\]]*\])", r"\1", text)
     text = re.sub(r"\[([^\]]+)\](?:\([^)]+\)|\[[^\]]*\])", r"\1", text)
