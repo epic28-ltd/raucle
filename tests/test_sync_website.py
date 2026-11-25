@@ -357,7 +357,6 @@ class TestCuratedNotes:
         with pytest.raises(ValueError, match="must contain prose"):
             sync_website.parse_notes(notes)
 
-
     def test_markdown_spaced_thematic_break_in_summary_is_rejected(self):
         import pytest
 
