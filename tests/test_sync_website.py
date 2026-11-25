@@ -248,7 +248,7 @@ class TestCuratedNotes:
     def test_parse_notes_extracts_features_and_summary(self):
         features, summary = sync_website.parse_notes(_NOTES)
         assert features == [
-            "Tamper-evident audit chain: every event SHA-256 " "linked to its predecessor",
+            "Tamper-evident audit chain: every event SHA-256 linked to its predecessor",
             "Signed JWS verdict receipts: downstream-verifiable",
         ]
         assert summary == "The policy prover narrows capabilities before the gate runs."
