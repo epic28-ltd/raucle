@@ -337,9 +337,7 @@ class TestCuratedNotes:
     def test_markdown_list_in_summary_is_rejected(self):
         import pytest
 
-        notes = "\n".join(
-            ["## Features", "- One feature", "## What's new", "- A list item"]
-        )
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "- A list item"])
         with pytest.raises(ValueError, match="must contain prose"):
             sync_website.parse_notes(notes)
 
