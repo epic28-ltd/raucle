@@ -357,6 +357,23 @@ class TestCuratedNotes:
         with pytest.raises(ValueError, match="must contain prose"):
             sync_website.parse_notes(notes)
 
+
+    def test_markdown_spaced_thematic_break_in_summary_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "- - -"])
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(notes)
+
+    def test_indented_code_block_in_summary_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(
+            ["## Features", "- One feature", "## What's new", "    code block"]
+        )
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(notes)
+
     def test_whatsnew_summary_is_html_escaped(self):
         out = sync_website.render_whatsnew(
             "0.4.0",
