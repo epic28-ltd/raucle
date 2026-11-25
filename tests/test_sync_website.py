@@ -385,6 +385,21 @@ class TestCuratedNotes:
         with pytest.raises(ValueError, match="must contain prose"):
             sync_website.parse_notes(notes)
 
+
+    def test_html_block_in_summary_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "<p>raw html</p>"])
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(notes)
+
+    def test_link_reference_definition_in_summary_is_rejected(self):
+        import pytest
+
+        notes = "\n".join(["## Features", "- One feature", "## What's new", "[docs]: /guide"])
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(notes)
+
     def test_whatsnew_summary_is_html_escaped(self):
         out = sync_website.render_whatsnew(
             "0.4.0",
