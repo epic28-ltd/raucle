@@ -83,12 +83,13 @@ _SUBSECTION_RE = re.compile(r"^###\s+(.*)$")
 _BOLD_PHRASE_RE = re.compile(r"\*\*([^*]+)\*\*")
 
 
-def parse_notes(text: str) -> tuple[list[str] | None, str | None]:
+def parse_notes(text: str) -> tuple[list[str], str]
     """Parse the curated notes markdown: '## Features' bullets and a
     '## What's new' summary paragraph. Returns (features, summary)."""
     features: list[str] | None = None
     summary_parts: list[str] = []
     section = None
+    seen_summary = False
     for line in text.splitlines():
         stripped = line.strip()
         heading = re.match(r"^##\s+(.+?)\s*$", stripped)
@@ -100,8 +101,9 @@ def parse_notes(text: str) -> tuple[list[str] | None, str | None]:
                 section = "features"
                 features = []
             elif title == "what's new":
-                if summary_parts:
+                if seen_summary:
                     raise ValueError("duplicate '## What's new' section")
+                seen_summary = True
                 section = "whatsnew"
             else:
                 section = None
@@ -266,16 +268,7 @@ def render_features_list(features: list[str]) -> str:
             f"                    {html.escape(feat)}\n"
             f"                </li>"
         )
-    body = (
-        "\n".join(items)
-        if items
-        else (
-            "                <li>\n"
-            f"                    {_CHECK_SVG}\n"
-            "                    Open-source detection engine\n"
-            "                </li>"
-        )
-    )
+    body = "\n".join(items)
     return '<ul class="oss-features">\n' + body + "\n            </ul>"
 
 
