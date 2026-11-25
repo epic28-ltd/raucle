@@ -256,6 +256,8 @@ def render_version_badge(version: str) -> str:
 
 
 def render_features_list(features: list[str]) -> str:
+    if not features:
+        raise ValueError("refusing to render an empty curated features list")
     items = []
     for feat in features:
         items.append(
