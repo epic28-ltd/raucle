@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Sync raucle release content into the raucle.com website.
 
-Parses the curated notes file (``--notes``, the site checkout's
-``notes/<version>.md``) when provided, else ``CHANGELOG.md``'s version
-section, then injects three pieces of HTML content into the target site
-between named comment markers.  A missing notes file is an error: the
-curated release copy is the only release copy that ships.
+Parses the required curated notes file (``--notes``, the site checkout's
+``notes/<version>.md``) and validates the version against ``CHANGELOG.md``
+before injecting three pieces of HTML content into the target site.
+Missing, incomplete or malformed notes fail closed; changelog prose is
+never used as a fallback.
 
 - ``RAUCLE_DETECT:VERSION``   — release-badge with the current version
 - ``RAUCLE_DETECT:FEATURES``  — bullet list of headline features
@@ -83,31 +83,54 @@ _SUBSECTION_RE = re.compile(r"^###\s+(.*)$")
 _BOLD_PHRASE_RE = re.compile(r"\*\*([^*]+)\*\*")
 
 
-def parse_notes(text: str) -> tuple[list[str] | None, str | None]:
+def parse_notes(text: str) -> tuple[list[str], str]
     """Parse the curated notes markdown: '## Features' bullets and a
     '## What's new' summary paragraph. Returns (features, summary)."""
     features: list[str] | None = None
     summary_parts: list[str] = []
     section = None
+    seen_summary = False
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped == "## Features":
-            section = "features"
-            features = []
-            continue
-        if stripped == "## What's new":
-            section = "whatsnew"
-            continue
-        if stripped.startswith("## ") and stripped != "## Features":
-            section = None
+        heading = re.match(r"^##\s+(.+?)\s*$", stripped)
+        if heading:
+            title = heading.group(1).replace("’", "'").casefold()
+            if title == "features":
+                if features is not None:
+                    raise ValueError("duplicate '## Features' section")
+                section = "features"
+                features = []
+            elif title == "what's new":
+                if seen_summary:
+                    raise ValueError("duplicate '## What's new' section")
+                seen_summary = True
+                section = "whatsnew"
+            else:
+                section = None
             continue
         if not stripped:
             continue
-        if section == "features" and line.startswith("- "):
-            features.append(line[2:].strip())
+        if section == "features":
+            bullet = re.match(r"^\s*[-*+]\s+(.+?)\s*$", line)
+            if not bullet:
+                raise ValueError("every non-empty line in '## Features' must be a Markdown bullet")
+            feature = _strip_markdown(bullet.group(1)).strip()
+            if not feature:
+                raise ValueError("'## Features' contains an empty bullet")
+            features.append(feature)
         elif section == "whatsnew":
-            summary_parts.append(stripped)
+            if stripped.startswith(("~~~", ">")) or stripped.startswith(chr(96) * 3) or re.match(r"^(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+)", stripped):
+                raise ValueError("'## What's new' must contain prose, not Markdown block syntax")
+            prose = _strip_markdown(stripped).strip()
+            if prose:
+                summary_parts.append(prose)
     summary = " ".join(summary_parts).strip() or None
+    if features is None:
+        raise ValueError("notes file has no '## Features' section")
+    if not features:
+        raise ValueError("'## Features' section has no non-empty bullet entries")
+    if not summary:
+        raise ValueError("notes file has no non-empty '## What's new' summary paragraph")
     return features, summary
 
 
@@ -206,6 +229,7 @@ def _select_headline_features(bullets: list[str], limit: int = 6) -> list[str]:
 
 def _strip_markdown(text: str) -> str:
     """Remove `code`, **bold**, *italic*, and stray markdown punctuation."""
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"`([^`]+)`", r"\1", text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     text = re.sub(r"\*([^*]+)\*", r"\1", text)
@@ -234,6 +258,8 @@ def render_version_badge(version: str) -> str:
 
 
 def render_features_list(features: list[str]) -> str:
+    if not features:
+        raise ValueError("refusing to render an empty curated features list")
     items = []
     for feat in features:
         items.append(
@@ -242,23 +268,14 @@ def render_features_list(features: list[str]) -> str:
             f"                    {html.escape(feat)}\n"
             f"                </li>"
         )
-    body = (
-        "\n".join(items)
-        if items
-        else (
-            "                <li>\n"
-            f"                    {_CHECK_SVG}\n"
-            "                    Open-source detection engine\n"
-            "                </li>"
-        )
-    )
+    body = "\n".join(items)
     return '<ul class="oss-features">\n' + body + "\n            </ul>"
 
 
 def render_whatsnew(version: str, section_titles: list[str], repo_url: str, summary: str | None = None) -> str:
     """Render a small 'what's new in vN' callout linking to the release notes."""
     if summary:
-        title_summary = summary
+        title_summary = html.escape(summary)
     elif not section_titles:
         title_summary = "release notes"
     else:
@@ -319,16 +336,12 @@ def main(argv: list[str] | None = None) -> int:
             " in the site checkout (## Features + ## What's new) before syncing."
         )
     notes_text = args.notes.read_text(encoding="utf-8")
-    features, summary = parse_notes(notes_text)
-    if features is None:
-        raise SystemExit(
-            "error: notes file carries no '## Features' section - refusing to "
-            "render curated release copy without a curated features list"
-        )
+    try:
+        features, summary = parse_notes(notes_text)
+    except ValueError as exc:
+        raise SystemExit(f"error: invalid curated notes: {exc}") from exc
     notes = parse_changelog(args.changelog.read_text(encoding="utf-8"), args.version)
     notes.headline_features = features
-    section_titles = [summary] if summary else notes.section_titles
-    summary_override = summary
 
     html_doc = args.website_html.read_text(encoding="utf-8")
     html_doc = _replace_block(html_doc, "VERSION", render_version_badge(notes.version))
@@ -336,7 +349,7 @@ def main(argv: list[str] | None = None) -> int:
     html_doc = _replace_block(
         html_doc,
         "WHATSNEW",
-        render_whatsnew(notes.version, section_titles, args.repo_url, summary=summary),
+        render_whatsnew(notes.version, [], args.repo_url, summary=summary),
     )
 
     if args.dry_run:
