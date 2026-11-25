@@ -164,13 +164,13 @@ class TestRendering:
         assert "https://github.com/example/repo/blob/main/CHANGELOG.md" in out
 
 
-
 class TestEndToEnd:
     @staticmethod
     def _notes(tmp_path) -> Path:
         notes_path = tmp_path / "0.4.0.md"
         notes_path.write_text(_NOTES)
         return notes_path
+
     def test_full_sync_replaces_all_three_blocks(self, tmp_path):
         changelog_path = tmp_path / "CHANGELOG.md"
         changelog_path.write_text(_CHANGELOG)
@@ -243,12 +243,12 @@ class TestEndToEnd:
                 ]
             )
 
+
 class TestCuratedNotes:
     def test_parse_notes_extracts_features_and_summary(self):
         features, summary = sync_website.parse_notes(_NOTES)
         assert features == [
-            "Tamper-evident audit chain: every event SHA-256 "
-            "linked to its predecessor",
+            "Tamper-evident audit chain: every event SHA-256 " "linked to its predecessor",
             "Signed JWS verdict receipts: downstream-verifiable",
         ]
         assert summary == "The policy prover narrows capabilities before the gate runs."
