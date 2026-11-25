@@ -324,8 +324,16 @@ class TestCuratedNotes:
     def test_non_bullet_feature_line_is_rejected(self):
         import pytest
 
+        notes = "\n".join(
+            [
+                "## Features",
+                "A feature without a bullet",
+                "## What's new",
+                "Summary.",
+            ]
+        )
         with pytest.raises(ValueError, match="must be a Markdown bullet"):
-            sync_website.parse_notes("## Features\nA feature without a bullet\n## What's new\nSummary.\n")
+            sync_website.parse_notes(notes)
 
     def test_markdown_list_in_summary_is_rejected(self):
         import pytest
