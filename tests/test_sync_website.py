@@ -306,7 +306,7 @@ class TestCuratedNotes:
             "Schema binding — closes aliases for registered schemas",
             "Independent interop for pq receipts",
         ]
-        assert summary == ("A wrapped summary with bold text. The next line completes the summary.")
+        assert summary == "A wrapped summary with bold text. The next line completes the summary."
 
     def test_missing_whats_new_summary_is_rejected(self):
         import pytest
