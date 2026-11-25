@@ -149,9 +149,11 @@ class TestRendering:
         assert "Feature B &amp; C" in out  # HTML-escaped
         assert out.count("<li>") == 2
 
-    def test_features_list_empty_uses_placeholder(self):
-        out = sync_website.render_features_list([])
-        assert "<li>" in out  # still renders a fallback bullet
+    def test_features_list_rejects_empty_input(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="empty curated features list"):
+            sync_website.render_features_list([])
 
     def test_whatsnew_includes_link_and_titles(self):
         out = sync_website.render_whatsnew(
@@ -288,6 +290,70 @@ class TestCuratedNotes:
                     str(tmp_path / "absent.md"),
                 ]
             )
+
+
+    def test_accepts_indented_star_bullets_and_strips_inline_markdown(self):
+        notes = (
+            "## Features\n"
+            "  * **Schema binding** — closes aliases for registered schemas\n"
+            "  + [Independent interop](https://example.test/spec) for pq receipts\n"
+            "\n"
+            "## What’s New\n"
+            "A wrapped summary with **bold text**.\n"
+            "The next line completes the summary.\n"
+        )
+        features, summary = sync_website.parse_notes(notes)
+        assert features == [
+            "Schema binding — closes aliases for registered schemas",
+            "Independent interop for pq receipts",
+        ]
+        assert summary == (
+            "A wrapped summary with bold text. "
+            "The next line completes the summary."
+        )
+
+    def test_missing_whats_new_summary_is_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="non-empty '## What's new'"):
+            sync_website.parse_notes("## Features\n- One feature\n")
+
+    def test_empty_features_section_is_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="no non-empty bullet entries"):
+            sync_website.parse_notes(
+                "## Features\n\n## What's new\nA real summary.\n"
+            )
+
+    def test_non_bullet_feature_line_is_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="must be a Markdown bullet"):
+            sync_website.parse_notes(
+                "## Features\nA feature without a bullet\n"
+                "## What's new\nSummary.\n"
+            )
+
+    def test_markdown_list_in_summary_is_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="must contain prose"):
+            sync_website.parse_notes(
+                "## Features\n- One feature\n"
+                "## What's new\n- A list item\n"
+            )
+
+    def test_whatsnew_summary_is_html_escaped(self):
+        out = sync_website.render_whatsnew(
+            "0.4.0",
+            [],
+            "https://github.com/example/repo",
+            summary="<script>alert('x')</script> & safe text",
+        )
+        assert "&lt;script&gt;" in out
+        assert "&amp; safe text" in out
+        assert "<script>" not in out
 
 
 def _write_changelog(tmp_path) -> Path:
