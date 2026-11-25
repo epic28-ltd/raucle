@@ -91,23 +91,44 @@ def parse_notes(text: str) -> tuple[list[str] | None, str | None]:
     section = None
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped == "## Features":
-            section = "features"
-            features = []
-            continue
-        if stripped == "## What's new":
-            section = "whatsnew"
-            continue
-        if stripped.startswith("## ") and stripped != "## Features":
-            section = None
+        heading = re.match(r"^##\s+(.+?)\s*$", stripped)
+        if heading:
+            title = heading.group(1).replace("’", "'").casefold()
+            if title == "features":
+                if features is not None:
+                    raise ValueError("duplicate '## Features' section")
+                section = "features"
+                features = []
+            elif title == "what's new":
+                if summary_parts:
+                    raise ValueError("duplicate '## What's new' section")
+                section = "whatsnew"
+            else:
+                section = None
             continue
         if not stripped:
             continue
-        if section == "features" and line.startswith("- "):
-            features.append(line[2:].strip())
+        if section == "features":
+            bullet = re.match(r"^\s*[-*+]\s+(.+?)\s*$", line)
+            if not bullet:
+                raise ValueError("every non-empty line in '## Features' must be a Markdown bullet")
+            feature = _strip_markdown(bullet.group(1)).strip()
+            if not feature:
+                raise ValueError("'## Features' contains an empty bullet")
+            features.append(feature)
         elif section == "whatsnew":
-            summary_parts.append(stripped)
+            if stripped.startswith(("~~~", ">")) or stripped.startswith(chr(96) * 3) or re.match(r"^(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+)", stripped):
+                raise ValueError("'## What's new' must contain prose, not Markdown block syntax")
+            prose = _strip_markdown(stripped).strip()
+            if prose:
+                summary_parts.append(prose)
     summary = " ".join(summary_parts).strip() or None
+    if features is None:
+        raise ValueError("notes file has no '## Features' section")
+    if not features:
+        raise ValueError("'## Features' section has no non-empty bullet entries")
+    if not summary:
+        raise ValueError("notes file has no non-empty '## What's new' summary paragraph")
     return features, summary
 
 
