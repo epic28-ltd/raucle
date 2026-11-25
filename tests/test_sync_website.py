@@ -399,6 +399,20 @@ class TestCuratedNotes:
         with pytest.raises(ValueError, match="must contain prose"):
             sync_website.parse_notes(notes)
 
+
+    def test_strips_reference_links_and_images_from_curated_copy(self):
+        notes = "\n".join(
+            [
+                "## Features",
+                "- **Schema binding**",
+                "## What's new",
+                "Read [the migration guide][docs] and ![diagram](https://example.test/diagram.png)",
+            ]
+        )
+        features, summary = sync_website.parse_notes(notes)
+        assert features == ["Schema binding"]
+        assert summary == "Read the migration guide and diagram"
+
     def test_whatsnew_summary_is_html_escaped(self):
         out = sync_website.render_whatsnew(
             "0.4.0",
