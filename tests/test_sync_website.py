@@ -399,7 +399,6 @@ class TestCuratedNotes:
         with pytest.raises(ValueError, match="must contain prose"):
             sync_website.parse_notes(notes)
 
-
     def test_strips_reference_links_and_images_from_curated_copy(self):
         notes = "\n".join(
             [
