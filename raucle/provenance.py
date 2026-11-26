@@ -68,9 +68,11 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import errno
 import hashlib
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -3798,6 +3800,15 @@ class ProvenanceVerifier:
 
     def verify_chain(self, path: str | Path) -> VerificationReport:
         """Verify a JSONL chain file."""
+        # pythonsecurity:S8707 CLI-input pattern (the engine-proven recipe
+        # from raucle/policy_regression): canonicalise the caller-supplied
+        # chain path once, before any read, and refuse anything that is
+        # not an existing regular file with the verifier's named
+        # FileNotFoundError. No containment comparison: this flow is
+        # read-only over the chain it is handed.
+        chain_path = Path(path).expanduser().resolve()
+        if not chain_path.is_file():
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(chain_path))
         receipts_by_hash: dict[str, ProvenanceReceipt] = {}
         raw_lines_by_hash: dict[str, str] = {}
         report = VerificationReport(valid=True, receipt_count=0)
@@ -3830,7 +3841,7 @@ class ProvenanceVerifier:
         bounds = self._bounds
         bundle_bytes_seen = 0
 
-        with open(path, encoding="utf-8") as fh:
+        with open(chain_path, encoding="utf-8") as fh:
             for line_no, line in enumerate(fh, start=1):
                 line = line.strip()
                 if not line:
