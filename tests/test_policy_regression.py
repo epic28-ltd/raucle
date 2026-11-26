@@ -148,17 +148,6 @@ def _scenario_document(*scenarios, version=1):
         ),
     ],
 )
-@pytest.mark.parametrize(
-    "scenarios",
-    [
-        b'{"version":2,"scenarios":[]}',
-        b'{"version":1,"scenarios":[]}',
-        b'{"version":1,"scenarios":[{"id":"x","tool":"t","agent_id":"agent:a","args":{},"expected":"allow","extra":true}]}',
-        b'{"version":1,"scenarios":[{"id":"x","tool":"t","agent_id":"agent:a","args":{},"expected":"maybe"}]}',
-        b'{"version":1,"scenarios":[{"id":"x","tool":"t","agent_id":"agent:a","args":{},"expected":"allow"},{"id":"x","tool":"t","agent_id":"agent:a","args":{},"expected":"allow"}]}',
-        b'{"version":1,"scenarios":[{"id":"x","tool":"t","agent_id":"agent:a","args":NaN,"expected":"allow"}]}',
-    ],
-)
 def test_malformed_scenario_documents_fail_closed(scenarios):
     with pytest.raises(RegressionInputError):
         run_regression(POLICY_A, scenarios)
