@@ -188,6 +188,46 @@ class TestSIEMForwarder:
         forwarder.forward({"event": "test"})
         assert len(forwarder.buffered_events()) == 1
 
+    def test_exporter_failure_does_not_change_gate_decision(self, tmp_path, monkeypatch):
+        """A failed telemetry export is an evidence-delivery fault, not an auth fault."""
+        policy_path = tmp_path / "policies.yaml"
+        policy_path.write_text(
+            """
+version: 1
+issuer: test.bank
+policies:
+  - tool: lookup_balance
+    agent_id: agent:svc
+    ttl_seconds: 60
+    constraints:
+      allow:
+        account: ["ACC-001"]
+"""
+        )
+        config = GatewayConfig(
+            policy_file=str(policy_path),
+            receipt_store=str(tmp_path / "receipts.jsonl"),
+            audit_chain=str(tmp_path / "audit.jsonl"),
+            admin_api_key="test-admin-key",
+            signer_backend="local",
+            siem_enabled=True,
+            siem_backend="elastic",
+        )
+        gateway = RaucleGateway(config)
+
+        def fail_export(_event):
+            raise RuntimeError("simulated exporter outage")
+
+        monkeypatch.setattr(gateway.siem, "_forward_elastic", fail_export)
+        result = gateway.check_tool_call(
+            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc"
+        )
+
+        assert result["decision"] == "allow"
+        assert gateway.stats.allowed == 1
+        assert gateway.stats.denied == 0
+        assert len(gateway.siem.buffered_events()) >= 1
+
 
 # ---------------------------------------------------------------------------
 # UserManager
