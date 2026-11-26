@@ -166,6 +166,57 @@ class TestReceiptCrypto:
 
 
 # ---------------------------------------------------------------------------
+# Chain path canonicalisation (pythonsecurity:S8707)
+# ---------------------------------------------------------------------------
+
+
+class TestChainPathCanonicalisation:
+    """verify_chain canonicalises the caller-supplied chain path once,
+    before any read, and refuses any path that names no existing regular
+    file with the named FileNotFoundError (the CLI-input recipe from
+    raucle/policy_regression). Behaviour is asserted, not the mechanics."""
+
+    def _verifier_for(self, identity):
+        return ProvenanceVerifier(public_keys={identity.key_id: identity.public_key_pem()})
+
+    def _chain(self, tmp_path, identity):
+        chain_path = tmp_path / "chain.jsonl"
+        with ProvenanceLogger(agent=identity, sink_path=chain_path) as log:
+            log.record_user_input(text="hi")
+        return chain_path
+
+    def test_missing_chain_path_refused_by_name(self, tmp_path):
+        identity = AgentIdentity.generate(agent_id="agent:paths")
+        verifier = self._verifier_for(identity)
+        missing = tmp_path / "absent.jsonl"
+        with pytest.raises(FileNotFoundError) as err:
+            verifier.verify_chain(missing)
+        # the named refusal carries the canonicalised path
+        assert "No such file or directory" in str(err.value)
+        assert str(missing.resolve()) in str(err.value)
+
+    def test_hostile_traversal_shapes_to_no_file_are_refused(self, tmp_path):
+        identity = AgentIdentity.generate(agent_id="agent:paths")
+        verifier = self._verifier_for(identity)
+        for hostile in (
+            "../absent.jsonl",
+            "~/.raucle/definitely-absent-rw3.jsonl",
+            str(tmp_path / "sub" / ".." / ".." / "absent.jsonl"),
+        ):
+            with pytest.raises(FileNotFoundError):
+                verifier.verify_chain(hostile)
+
+    def test_existing_chain_reached_through_traversal_still_verifies(self, tmp_path):
+        identity = AgentIdentity.generate(agent_id="agent:paths")
+        self._chain(tmp_path, identity)
+        verifier = self._verifier_for(identity)
+        noisy = tmp_path / "sub" / "deeper" / ".." / ".." / "chain.jsonl"
+        report = verifier.verify_chain(str(noisy))
+        assert report.valid is True
+        assert report.receipt_count == 1
+
+
+# ---------------------------------------------------------------------------
 # DAG composition
 # ---------------------------------------------------------------------------
 
