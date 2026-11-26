@@ -377,3 +377,33 @@ def test_from_env_reads_segmented_store_config(monkeypatch, tmp_path):
 
     cfg = GatewayConfig.from_env()
     assert cfg.receipt_store_dir == str(tmp_path / "segs")
+
+
+class TestReceiptPersistenceFailures:
+    def test_flat_receipt_write_failure_propagates(self, gw):
+        """A failed chain-of-record append must not be reported as success."""
+
+        class BrokenWriter:
+            def write(self, _line):
+                raise OSError("simulated receipt disk failure")
+
+            def flush(self):
+                raise AssertionError("flush must not run after a failed write")
+
+        gw._receipt_writer = BrokenWriter()
+        payload = {
+            "iss": "raucle-gateway",
+            "typ": "provenance-receipt/v1",
+            "iat": 1,
+            "agent_id": "agent:gate",
+            "agent_key_id": gw.gate_identity.key_id,
+            "operation": "guardrail_scan",
+            "parents": [],
+            "taint": ["gate:observed"],
+            "input_hash": "a" * 64,
+            "ruleset_hash": "b" * 64,
+            "guardrail_verdict": "deny",
+        }
+
+        with pytest.raises(OSError, match="simulated receipt disk failure"):
+            gw._sign_and_store_receipt(payload)
