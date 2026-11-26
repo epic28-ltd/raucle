@@ -358,6 +358,23 @@ class GatewayConfig:
     # references (window / input store / policy_ref). Empty = the
     # gateway's own policy + data directories are used.
     simulate_ref_roots: tuple[str, ...] = ()
+    # Live shadow policy evaluation (issue #344 items 8-12, ADR 0010 s4):
+    # a bounded, non-enforcing evaluator for the same normalized request
+    # against a CANDIDATE policy. OFF by default; a boot with the mode on
+    # and an unusable candidate policy refuses by name. The candidate is
+    # loaded once; changing it requires a restart (like enforcement's).
+    shadow_eval_enabled: bool = False
+    shadow_candidate_policy: str = ""
+    # Bounded shadow artifact: dedicated JSONL, row-capped, distinct from
+    # receipts, simulation receipts and fault receipts. Empty = beside the
+    # receipt store.
+    shadow_eval_output: str = ""
+    shadow_eval_queue_max: int = 64
+    shadow_eval_budget_ms: int = 200
+    shadow_eval_sample_every: int = 1
+    shadow_eval_max_records: int = 4096
+    # Persisted named shadow counters (FaultCounter shape); empty = memory.
+    shadow_eval_counters_file: str = ""
     # Authority attribution (PR-E): human approvals, policy change ledger
     approval_ttl_seconds: int = 300
     policy_ledger_path: str = ""  # when unset, no ledger is written
@@ -502,6 +519,15 @@ class GatewayConfig:
             ),
             counterfactual_ruleset_file=os.environ.get("RAUCLE_COUNTERFACTUAL_RULESET_FILE", ""),
             tool_schema_manifest=os.environ.get("RAUCLE_TOOL_SCHEMA_MANIFEST", ""),
+            shadow_eval_enabled=os.environ.get("RAUCLE_SHADOW_EVAL", "").lower()
+            in ("1", "true", "yes"),
+            shadow_candidate_policy=os.environ.get("RAUCLE_SHADOW_CANDIDATE_POLICY", ""),
+            shadow_eval_output=os.environ.get("RAUCLE_SHADOW_EVAL_OUTPUT", ""),
+            shadow_eval_queue_max=int(os.environ.get("RAUCLE_SHADOW_EVAL_QUEUE_MAX", "64")),
+            shadow_eval_budget_ms=int(os.environ.get("RAUCLE_SHADOW_EVAL_BUDGET_MS", "200")),
+            shadow_eval_sample_every=int(os.environ.get("RAUCLE_SHADOW_EVAL_SAMPLE_EVERY", "1")),
+            shadow_eval_max_records=int(os.environ.get("RAUCLE_SHADOW_EVAL_MAX_RECORDS", "4096")),
+            shadow_eval_counters_file=os.environ.get("RAUCLE_SHADOW_EVAL_COUNTERS_FILE", ""),
         )
 
     @classmethod
@@ -1628,11 +1654,77 @@ class RaucleGateway:
         self.fault_counter = FaultCounter(config.fault_counter_path or None)
         self.boot_selftest_result: dict[str, Any] | None = None
 
+        # Live shadow policy evaluation (issue #344 items 8-12): validated
+        # at boot; unusable candidate policy or out-of-bounds bounds refuse
+        # the boot with a named error instead of a half-wired mode.
+        self._shadow_eval = self._init_shadow_eval(config)
+
         # Session window replay (EPIC Q lane Q-2, L1 boot-streaming): the
         # TTL-bounded replay now runs when the boot's continuity surface
         # lands (inline on a warm boot, from the compactor's tail-window
         # phase on a cold one). Until it lands, session-rule calls refuse
         # by name (session_continuity_pending), never a silent cold start.
+
+    def _init_shadow_eval(self, config: GatewayConfig) -> Any:
+        """Wire the bounded live shadow evaluator when configured.
+
+        Boot-time validation, fail-closed: a `shadow_eval_enabled` boot
+        with an unusable candidate policy or out-of-bounds bounds raises a
+        named ValueError instead of serving with a half-built mode. Default
+        (the flag off) leaves today's behaviour byte-identical.
+        """
+        if not config.shadow_eval_enabled:
+            return None
+        candidate = str(config.shadow_candidate_policy or "")
+        if not candidate:
+            raise ValueError(
+                "shadow_eval_config_invalid: shadow_eval_enabled requires "
+                "shadow_candidate_policy (the candidate policy file path)"
+            )
+        if not Path(candidate).is_file():
+            raise ValueError(
+                f"shadow_eval_config_invalid: shadow_candidate_policy '{candidate}' is not a file"
+            )
+        output = str(config.shadow_eval_output or "")
+        if not output:
+            receipt_parent = (
+                Path(config.receipt_store).parent if config.receipt_store else Path.cwd()
+            )
+            output = str(receipt_parent / "policy-shadow.jsonl")
+        from raucle.policy_shadow import ShadowEvaluator
+
+        try:
+            return ShadowEvaluator(
+                candidate_policy_path=candidate,
+                output_path=output,
+                queue_maxsize=int(config.shadow_eval_queue_max),
+                budget_ms=int(config.shadow_eval_budget_ms),
+                sample_every=int(config.shadow_eval_sample_every),
+                max_records=int(config.shadow_eval_max_records),
+                counters_path=str(config.shadow_eval_counters_file or "") or None,
+                autostart=True,
+            )
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(
+                f"shadow_eval_config_invalid: candidate policy refused: {exc}"
+            ) from exc
+
+    def shadow_eval_stats(self) -> dict[str, Any] | None:
+        """Coverage and loss counters for live shadow evaluation (or None
+        when the mode is off). Named counters: submitted, written, overflow,
+        unsampled, over-budget, errors - incomplete coverage is visible."""
+        if self._shadow_eval is None:
+            return None
+        return self._shadow_eval.stats()
+
+    def shutdown_shadow_eval(self, timeout_s: float = 2.0) -> bool | None:
+        """Stop the bounded shadow evaluator worker. Enforcement is never
+        touched by this: submissions after the stop are shed by name."""
+        if self._shadow_eval is None:
+            return None
+        return self._shadow_eval.shutdown(timeout_s)
 
     def _init_receipt_projection(self, config: GatewayConfig) -> None:
         """Segmented receipt store (B2) and the receipt_index projection (PR-C).
@@ -3778,6 +3870,36 @@ class RaucleGateway:
 
         latency_us = int((time.perf_counter() - start) * 1e6)
         self.stats.record(tool, result["decision"], latency_us)
+
+        # Live shadow policy evaluation (#344 items 8-12): after the
+        # authoritative decision exists, the SAME normalized request is
+        # offered to the bounded non-enforcing candidate evaluator. The
+        # submission is strictly non-blocking (bounded queue, put_nowait;
+        # overload sheds by name), deep-copies the request at the boundary
+        # and can never block, delay, mutate or forward the decision: any
+        # failure here is swallowed with a named log line and the live
+        # result is not even annotated. Calls refused before policy
+        # evaluation (containment, auth, admission, no-policy) are not
+        # candidate comparisons and are not submitted.
+        if self._shadow_eval is not None:
+            try:
+                self._shadow_eval.submit(
+                    tool=tool,
+                    args=args,
+                    agent_id=actual_agent_id,
+                    source=result.get("source", ""),
+                    destination=result.get("destination", ""),
+                    trace_id=trace_id,
+                    live_decision=result["decision"],
+                    active_policy_hash=(
+                        "sha256:"
+                        + self._policy_ruleset_hash(
+                            tool, result.get("source", ""), result.get("destination", "")
+                        )
+                    ),
+                )
+            except Exception:
+                logger.exception("shadow submission failed (enforcement untouched)")
 
         self.siem.forward(
             {
