@@ -35,3 +35,8 @@ GitLab can invoke the same versioned CLI after installing the engine from an imm
 ## Assurance boundary
 
 This checks only the supplied deterministic scenarios against the supplied policy bytes. It does not exercise downstream tool side effects, a deployed identity provider, production infrastructure, every possible prompt injection or every agent runtime. It is not formal verification, a penetration test or a claim of complete agent security.
+
+
+### Dependency profile
+
+The action installs only the engine's minimal `regression` extra. The engine declares no mandatory runtime dependencies; the regression extra pins PyYAML, cryptography, cffi and pycparser. Optional server and compliance extras are not installed or covered by this runner. Each successful report records the installed engine and regression dependency versions in `dependency_versions`; this is a bounded offline regression profile, not a full deployment dependency inventory.
