@@ -299,6 +299,12 @@ def run_regression(
                 "It is not formal verification, a penetration test or a guarantee "
                 "of complete agent security."
             ),
+            (
+                "Only the minimal pinned regression extra is installed; optional "
+                "server and compliance extras are outside this execution profile. "
+                "Exact installed versions of the engine and regression dependencies "
+                "are recorded in dependency_versions."
+            ),
         ],
     }
 
