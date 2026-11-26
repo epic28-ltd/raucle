@@ -683,3 +683,81 @@ class TestGatewayIssuerMapConstructionSite:
         gate = RaucleGateway(config)._ensure_caller_gate()
         token = org_a.mint(agent_id="agent:a", tool="t", constraints={})
         assert gate.check(token, tool="t", args={}, agent_id="agent:a").allowed
+
+
+def test_append_write_failure_rolls_back_file_and_memory(tmp_path, monkeypatch):
+    """A partial append failure must not advance the in-memory trust head."""
+    import builtins
+
+    path = tmp_path / "r.jsonl"
+    reg = TrustRegistry(path)
+    before_bytes = path.read_bytes()
+    before_entries = list(reg._entries)
+    before_head = reg.head()
+    real_open = builtins.open
+
+    class PartialWriter:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.handle.close()
+
+        def write(self, data):
+            self.handle.write(data[: max(1, len(data) // 2)])
+            self.handle.flush()
+            raise OSError("simulated disk full")
+
+        def __getattr__(self, name):
+            return getattr(self.handle, name)
+
+    def failing_open(file, mode="r", *args, **kwargs):
+        handle = real_open(file, mode, *args, **kwargs)
+        if mode == "a+b":
+            return PartialWriter(handle)
+        return handle
+
+    monkeypatch.setattr(builtins, "open", failing_open)
+    with pytest.raises(OSError, match="simulated disk full"):
+        reg.publish(_issuer("failed").public_key_pem, issuer="Failed")
+
+    assert path.read_bytes() == before_bytes
+    assert reg._entries == before_entries
+    assert reg.head() == before_head
+
+    monkeypatch.setattr(builtins, "open", real_open)
+    kid = reg.publish(_issuer("recovered").public_key_pem, issuer="Recovered")
+    assert reg.public_key(kid) is not None
+    assert TrustRegistry(path).public_key(kid) is not None
+
+
+def test_append_fsync_failure_rolls_back_file_and_memory(tmp_path, monkeypatch):
+    """A failed durability barrier must be treated as a failed append."""
+    import raucle.trust_registry as trust_registry_module
+
+    path = tmp_path / "r.jsonl"
+    reg = TrustRegistry(path)
+    before_bytes = path.read_bytes()
+    before_entries = list(reg._entries)
+    before_head = reg.head()
+    real_fsync = trust_registry_module.os.fsync
+    calls = 0
+
+    def fail_first_fsync(fd):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("simulated fsync failure")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(trust_registry_module.os, "fsync", fail_first_fsync)
+    with pytest.raises(OSError, match="simulated fsync failure"):
+        reg.publish(_issuer("failed-fsync").public_key_pem, issuer="Failed Fsync")
+
+    assert calls == 2
+    assert path.read_bytes() == before_bytes
+    assert reg._entries == before_entries
+    assert reg.head() == before_head
