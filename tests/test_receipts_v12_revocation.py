@@ -181,10 +181,10 @@ def _emitter_only(tmp_path):
 @pytest.mark.parametrize(
     "data",
     [
-        b'{"token_id":"tok-good"}\\nnot-json\\n',
-        b'{"token_id":"tok-good"}\\n{"reason":"missing id"}\\n',
-        b'{"token_id":"tok-good"}\\n[]\\n',
-        b'{"token_id":"tok-good"}\\n{"token_id":""}\\n',
+        b'{"token_id":"tok-good"}\nnot-json\n',
+        b'{"token_id":"tok-good"}\n{"reason":"missing id"}\n',
+        b'{"token_id":"tok-good"}\n[]\n',
+        b'{"token_id":"tok-good"}\n{"token_id":""}\n',
     ],
 )
 def test_revocation_registry_corruption_is_rejected(tmp_path, data):
