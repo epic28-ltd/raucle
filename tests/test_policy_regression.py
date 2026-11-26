@@ -259,6 +259,7 @@ def test_error_report_preserves_manifest_boundaries_and_completed_scenarios():
     assert report["unsupported_suites"]
     assert report["suite_manifest_sha256"]
 
+
 def test_partial_execution_error_report_binds_exact_inputs_and_dependencies(monkeypatch):
     from raucle.gateway import RaucleGateway
 
@@ -481,4 +482,3 @@ def test_cli_engine_error_preserves_partial_hashes(tmp_path, monkeypatch):
     assert report["executed"] == partial
     assert report["policy_sha256"] == hashlib.sha256(POLICY_A).hexdigest()
     assert report["scenarios_sha256"] == hashlib.sha256(SCENARIOS).hexdigest()
-
