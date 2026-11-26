@@ -121,6 +121,30 @@ def test_unknown_initiator_rejected(tmp_path, replay_store):
     assert "not in the registry" in res.reason
 
 
+def test_replay_store_failure_returns_signed_fail_closed_ack(two_orgs):
+    reg, _iss_a, resp_b, token = two_orgs
+
+    class BrokenReplayStore:
+        def consume(self, _key):
+            raise OSError("simulated replay-store outage")
+
+    req = build_request(
+        token, tool="transfer_funds", args={"to": "acct:b-co", "amount": 50}, nonce="store-down"
+    )
+    res = accept_call(
+        req,
+        registry=reg,
+        responder_signer=resp_b,
+        responder_id="org-b.gateway",
+        replay=BrokenReplayStore(),
+    )
+
+    assert not res.accepted
+    assert res.reason == "replay store unavailable (fail-closed)"
+    assert res.ack_receipt["body"]["decision"] == "REJECT"
+    assert verify_ack(res.ack_receipt, registry=reg, require_binding=False)[0]
+
+
 def test_ack_nonce_replay_rejected(two_orgs, replay_store):
     reg, _iss_a, resp_b, token = two_orgs
     req = build_request(

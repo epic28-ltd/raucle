@@ -200,7 +200,22 @@ def accept_call(
             token=token,
         )
     replay_key = f"{token.key_id}:{token.token_id}:{request.nonce}"
-    if not replay.consume(replay_key):
+    try:
+        replay_consumed = replay.consume(replay_key)
+    except Exception:
+        # A replay-store outage is a security dependency failure, not a
+        # replay decision. Refuse with a signed, stable fault acknowledgement;
+        # never continue to registry or capability evaluation.
+        return _ack(
+            responder_signer,
+            responder_id,
+            accepted=False,
+            reason="replay store unavailable (fail-closed)",
+            initiator_key_id=token.key_id,
+            request=request,
+            token=token,
+        )
+    if not replay_consumed:
         return _ack(
             responder_signer,
             responder_id,
