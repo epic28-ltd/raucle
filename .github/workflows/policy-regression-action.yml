@@ -14,6 +14,7 @@ on:
     paths:
       - ".github/actions/policy-regression/**"
       - "raucle/policy_regression.py"
+      - "raucle/policy_regression_suites.json"
       - "tests/test_policy_regression.py"
       - "examples/policy-regression-consumer/**"
       - "pyproject.toml"
