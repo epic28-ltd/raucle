@@ -3201,10 +3201,9 @@ class RaucleGateway:
             # the doctrine) instead of an unaudited exception into the
             # HTTP layer. The message names the registry condition; it
             # never quotes file content.
-            logger.error(
-                "gate identity dependency failure: %s: %s",
+            logger.error(  # NOSONAR S8572 - would emit untrusted message (S5145)
+                "gate identity dependency failure: %s",
                 type(exc).__name__,
-                _sanitize_log_text(str(exc)),
             )
             return (
                 None,
