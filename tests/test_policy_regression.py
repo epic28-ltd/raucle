@@ -97,6 +97,57 @@ def test_report_does_not_include_argument_values_or_free_text_reasons():
     assert all("reason" not in row for row in report["executed"])
 
 
+def _scenario_document(*scenarios, version=1):
+    return json.dumps({"version": version, "scenarios": list(scenarios)}).encode()
+
+
+@pytest.mark.parametrize(
+    "scenarios",
+    [
+        _scenario_document(version=2),
+        _scenario_document(),
+        _scenario_document(
+            {
+                "id": "x",
+                "tool": "t",
+                "agent_id": "agent:a",
+                "args": {},
+                "expected": "allow",
+                "extra": True,
+            }
+        ),
+        _scenario_document(
+            {
+                "id": "x",
+                "tool": "t",
+                "agent_id": "agent:a",
+                "args": {},
+                "expected": "maybe",
+            }
+        ),
+        _scenario_document(
+            *[
+                {
+                    "id": "x",
+                    "tool": "t",
+                    "agent_id": "agent:a",
+                    "args": {},
+                    "expected": "allow",
+                }
+            ]
+            * 2
+        ),
+        _scenario_document(
+            {
+                "id": "x",
+                "tool": "t",
+                "agent_id": "agent:a",
+                "args": float("nan"),
+                "expected": "allow",
+            }
+        ),
+    ],
+)
 @pytest.mark.parametrize(
     "scenarios",
     [
@@ -427,7 +478,14 @@ def test_cli_engine_error_preserves_partial_hashes(tmp_path, monkeypatch):
     monkeypatch.setattr(policy_regression, "_read_bounded", lambda path, label: POLICY_A)
     monkeypatch.setattr(policy_regression, "run_regression", fail)
     result = policy_regression.main(
-        ["--policy", str(policy_file), "--scenarios", str(scenarios_file), "--output", str(report_file)]
+        [
+            "--policy",
+            str(policy_file),
+            "--scenarios",
+            str(scenarios_file),
+            "--output",
+            str(report_file),
+        ]
     )
     report = json.loads(report_file.read_text())
     assert result == 2
