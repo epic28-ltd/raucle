@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import hashlib
 import json
 import os
@@ -188,6 +189,56 @@ def _classify_reasons(errors: list[str]) -> list[dict[str, Any]]:
     return reasons
 
 
+def _decode_receipt_header(line: str) -> dict[str, Any]:
+    """Decode one JSONL line's chain envelope JWS header.
+
+    Moved verbatim from the former in-loop block of ``_observe_chain``
+    (python:S3776); behaviour is unchanged.
+    """
+    raw = json.loads(line)
+    jws = raw["jws"]
+    header = json.loads(_b64url_decode(jws.split(".", 1)[0]))
+    if not isinstance(header, dict):
+        raise ValueError("header is not an object")
+    return header
+
+
+def _observe_profiles_and_kids(
+    header: dict[str, Any],
+    line_no: int,
+    profiles: dict[str, int],
+    supplied_key_ids: set[str],
+    supplied_pq_key_ids: set[str],
+    missing_ed25519: list[tuple[int, str]],
+    missing_pq: list[tuple[int, str]],
+) -> None:
+    """Classify one receipt header and record its unreferenced key ids.
+
+    Moved verbatim from the former in-loop block of ``_observe_chain``
+    (python:S3776); behaviour is unchanged.
+    """
+    from raucle.pq import header_is_pq1
+
+    if header_is_pq1(header):
+        profiles["pq1"] += 1
+    elif header.get("crit") == ["raucle/v1"] and header.get("typ") == (_expected_receipt_typ()):
+        profiles["v1"] += 1
+    else:
+        profiles["other"] += 1
+    kid = header.get("kid")
+    if isinstance(kid, str) and kid not in supplied_key_ids:
+        missing_ed25519.append((line_no, kid))
+    if header_is_pq1(header):
+        pqk = header.get("pqk")
+        if isinstance(pqk, str) and pqk not in supplied_pq_key_ids:
+            missing_pq.append((line_no, pqk))
+
+
+def _unobserved_chain_scan(profiles: dict[str, int]) -> dict[str, Any]:
+    """Best-effort empty observation: nothing scanned, nothing named."""
+    return {"profiles": profiles, "missing_ed25519": [], "missing_pq": []}
+
+
 def _observe_chain(
     chain_path: str | Path,
     supplied_key_ids: set[str],
@@ -199,47 +250,43 @@ def _observe_chain(
     decision. Returns the observed profile counters plus the (line, key id)
     pairs with no supplied trust root.
     """
-    from raucle.pq import header_is_pq1
-
     profiles = {"v1": 0, "pq1": 0, "other": 0, "unparseable": 0}
     missing_ed25519: list[tuple[int, str]] = []
     missing_pq: list[tuple[int, str]] = []
     try:
-        with open(chain_path, encoding="utf-8") as fh:
+        # pythonsecurity:S8707 CLI-input pattern (the engine-proven recipe
+        # from raucle/policy_regression): canonicalise the operator-supplied
+        # chain path before any read and refuse an unobservable chain; the
+        # scan stays best-effort and the canonical verifier reports the
+        # underlying problem.
+        source = Path(chain_path).expanduser().resolve()
+        if not source.is_file():
+            return _unobserved_chain_scan(profiles)
+        with source.open(encoding="utf-8") as fh:
             for line_no, line in enumerate(fh, start=1):
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    raw = json.loads(line)
-                    jws = raw["jws"]
-                    header = json.loads(_b64url_decode(jws.split(".", 1)[0]))
-                    if not isinstance(header, dict):
-                        raise ValueError("header is not an object")
+                    header = _decode_receipt_header(line)
                 except Exception:
                     # Unparseable here is only an observation failure; the
                     # canonical verifier classifies the underlying problem.
                     profiles["unparseable"] += 1
                     continue
-                if header_is_pq1(header):
-                    profiles["pq1"] += 1
-                elif header.get("crit") == ["raucle/v1"] and header.get("typ") == (
-                    _expected_receipt_typ()
-                ):
-                    profiles["v1"] += 1
-                else:
-                    profiles["other"] += 1
-                kid = header.get("kid")
-                if isinstance(kid, str) and kid not in supplied_key_ids:
-                    missing_ed25519.append((line_no, kid))
-                if header_is_pq1(header):
-                    pqk = header.get("pqk")
-                    if isinstance(pqk, str) and pqk not in supplied_pq_key_ids:
-                        missing_pq.append((line_no, pqk))
+                _observe_profiles_and_kids(
+                    header,
+                    line_no,
+                    profiles,
+                    supplied_key_ids,
+                    supplied_pq_key_ids,
+                    missing_ed25519,
+                    missing_pq,
+                )
     except OSError:
         # The canonical verifier reports unreadable chains; the scan has
         # nothing to add.
-        return {"profiles": profiles, "missing_ed25519": [], "missing_pq": []}
+        return _unobserved_chain_scan(profiles)
     return {"profiles": profiles, "missing_ed25519": missing_ed25519, "missing_pq": missing_pq}
 
 
@@ -447,32 +494,90 @@ def run_offline_verify(
             capabilities=dict(capabilities) if capabilities else None,
             pq_public_keys=dict(pq_public_keys) if pq_public_keys else None,
         ).verify_chain(chain_path)
-    except Exception as exc:  # noqa: BLE001 - classified below, re-raised for real bugs
+    except Exception as exc:  # classified below - re-raised for real bugs
         from raucle.pq import PQUnavailable
 
         if isinstance(exc, PQUnavailable):
-            body = _body(
-                PQ_RUNTIME_UNAVAILABLE,
-                [
-                    {
-                        "line": None,
-                        "class": "pq_runtime_unavailable",
-                        "message": str(exc),
-                    }
-                ],
-                report=None,
-                receipts=0,
-                profiles={"v1": 0, "pq1": 0, "other": 0, "unparseable": 0},
-                coverage=_coverage_section(0, bool(capabilities), require_pq, pq_ok),
-                checked_artifacts=checked,
+            return _pq_unavailable_body(
+                exc,
+                capabilities=capabilities,
                 require_pq=require_pq,
-                pq_available=False,
+                pq_ok=pq_ok,
+                checked_artifacts=checked,
                 pq_keys_supplied=pq_keys_supplied,
                 trust_roots_supplied=trust_roots_supplied,
             )
-            return body, EXIT_PQ_RUNTIME_UNAVAILABLE
         raise
 
+    return _assemble_verified_body(
+        report,
+        chain_path=chain_path,
+        public_keys=public_keys,
+        capabilities=capabilities,
+        pq_public_keys=pq_public_keys,
+        require_pq=require_pq,
+        pq_ok=pq_ok,
+        checked_artifacts=checked,
+        pq_keys_supplied=pq_keys_supplied,
+        trust_roots_supplied=trust_roots_supplied,
+    )
+
+
+def _pq_unavailable_body(
+    exc: Exception,
+    *,
+    capabilities: dict[str, Any] | None,
+    require_pq: bool,
+    pq_ok: bool,
+    checked_artifacts: list[dict[str, Any]],
+    pq_keys_supplied: int,
+    trust_roots_supplied: int,
+) -> tuple[dict[str, Any], int]:
+    """Versioned body for a chained receipt stream the PQ runtime cannot do.
+
+    Moved verbatim from the former in-line block of ``run_offline_verify``
+    (python:S3776); behaviour is unchanged.
+    """
+    body = _body(
+        PQ_RUNTIME_UNAVAILABLE,
+        [
+            {
+                "line": None,
+                "class": "pq_runtime_unavailable",
+                "message": str(exc),
+            }
+        ],
+        report=None,
+        receipts=0,
+        profiles={"v1": 0, "pq1": 0, "other": 0, "unparseable": 0},
+        coverage=_coverage_section(0, bool(capabilities), require_pq, pq_ok),
+        checked_artifacts=checked_artifacts,
+        require_pq=require_pq,
+        pq_available=False,
+        pq_keys_supplied=pq_keys_supplied,
+        trust_roots_supplied=trust_roots_supplied,
+    )
+    return body, EXIT_PQ_RUNTIME_UNAVAILABLE
+
+
+def _assemble_verified_body(
+    report: Any,
+    *,
+    chain_path: str | Path,
+    public_keys: dict[str, Any],
+    capabilities: dict[str, Any] | None,
+    pq_public_keys: dict[str, Any] | None,
+    require_pq: bool,
+    pq_ok: bool,
+    checked_artifacts: list[dict[str, Any]],
+    pq_keys_supplied: int,
+    trust_roots_supplied: int,
+) -> tuple[dict[str, Any], int]:
+    """Assemble the post-verification section of the versioned report.
+
+    Moved verbatim from the former tail of ``run_offline_verify``
+    (python:S3776); behaviour is unchanged.
+    """
     # Policy requirement: reuse the canonical --require-pq enforcement so
     # the versioned report carries the exact same named errors.
     if require_pq:
@@ -538,7 +643,7 @@ def run_offline_verify(
         receipts=receipts,
         profiles=scan["profiles"],
         coverage=coverage,
-        checked_artifacts=checked,
+        checked_artifacts=checked_artifacts,
         require_pq=require_pq,
         pq_available=pq_ok,
         pq_keys_supplied=pq_keys_supplied,
@@ -624,7 +729,14 @@ def _load_pq_keys(paths: list[str]) -> dict[str, Any]:
 
     keys: dict[str, Any] = {}
     for pem_path in paths:
-        text = Path(pem_path).read_text(encoding="ascii")
+        # pythonsecurity:S8707 CLI-input pattern (the engine-proven recipe
+        # from raucle/policy_regression): canonicalise the operator-supplied
+        # key path before any read and refuse anything that is not a regular
+        # file, fail closed with the CLI's named FileNotFoundError.
+        source = Path(pem_path).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(source))
+        text = source.read_text(encoding="ascii")
         keys[pq_key_id_from_public_key(pq_public_key_from_pem(text))] = text
     return keys
 
@@ -682,7 +794,7 @@ def _auditor_main(argv: list[str] | None = None) -> int:
     try:
         public_keys, capabilities = _load_pubkeys(args.trust_roots)
         pq_public_keys = _load_pq_keys(pq_paths)
-    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, KeyError) as exc:
         if args.json:
             body, code = _operational_body(
                 str(exc),
