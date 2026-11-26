@@ -31,6 +31,13 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Shared SQL vocabulary (python:S1192): the pragma, the transaction opener
+# and the backup-table drop each repeat across the open/recovery/rebuild
+# paths, so they live in one place.
+_PRAGMA_USER_VERSION = "PRAGMA user_version"
+_BEGIN_IMMEDIATE = "BEGIN IMMEDIATE"
+_DROP_BACKUP = "DROP TABLE receipts_prev_backup"
+
 
 def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * ((4 - len(s) % 4) % 4))
@@ -149,10 +156,10 @@ class ReceiptIndex:
         self._pending_migration = False
         if defer_migration:
             self._recover_interrupted_migration()
-            version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+            version = int(self._conn.execute(_PRAGMA_USER_VERSION).fetchone()[0])
             has_table = self._table_exists("receipts")
             self._pending_migration = bool(has_table and version < self.SCHEMA_VERSION)
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._conn.execute(_BEGIN_IMMEDIATE)
             try:
                 if not self._pending_migration:
                     # Only the O(table) migration copy defers (spec 3.5
@@ -162,7 +169,7 @@ class ReceiptIndex:
                     self._create_receipts_table(if_not_exists=True)
                     for stmt in _RECEIPTS_INDEXES:
                         self._conn.execute(stmt)
-                    self._conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+                    self._conn.execute(f"{_PRAGMA_USER_VERSION} = {self.SCHEMA_VERSION}")
                 self._conn.execute(_COMPACTOR_STATE_SQL)
                 self._conn.commit()
             except BaseException:
@@ -183,13 +190,13 @@ class ReceiptIndex:
         rolls the file back to the pristine pre-migration state."""
         if not self._pending_migration:
             return
-        self._conn.execute("BEGIN IMMEDIATE")
+        self._conn.execute(_BEGIN_IMMEDIATE)
         try:
             self._migrate_dedupe_schema()
             for stmt in _RECEIPTS_INDEXES:
                 self._conn.execute(stmt)
             self._conn.execute(_COMPACTOR_STATE_SQL)
-            self._conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+            self._conn.execute(f"{_PRAGMA_USER_VERSION} = {self.SCHEMA_VERSION}")
             self._conn.commit()
         except BaseException:
             self._conn.rollback()
@@ -235,7 +242,7 @@ class ReceiptIndex:
         # later boot re-entered the migration and died on the rename - a
         # permanent crash-loop under restart:always.
         self._recover_interrupted_migration()
-        version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+        version = int(self._conn.execute(_PRAGMA_USER_VERSION).fetchone()[0])
         has_table = self._table_exists("receipts")
         # The schema version rows are the migration journal. One explicit
         # transaction carries the schema change AND the version stamp
@@ -244,7 +251,7 @@ class ReceiptIndex:
         # committed transaction actually produced, and a crash at any
         # step rolls the file back to the pristine pre-migration state,
         # where the next open simply re-runs the migration.
-        self._conn.execute("BEGIN IMMEDIATE")
+        self._conn.execute(_BEGIN_IMMEDIATE)
         try:
             if has_table and version < self.SCHEMA_VERSION:
                 self._migrate_dedupe_schema()
@@ -252,7 +259,7 @@ class ReceiptIndex:
                 self._create_receipts_table(if_not_exists=True)
             for stmt in _RECEIPTS_INDEXES:
                 self._conn.execute(stmt)
-            self._conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+            self._conn.execute(f"{_PRAGMA_USER_VERSION} = {self.SCHEMA_VERSION}")
             self._conn.commit()
         except BaseException:
             self._conn.rollback()
@@ -333,21 +340,21 @@ class ReceiptIndex:
         if not self._table_exists("receipts_prev_backup"):
             return
         live = self._table_exists("receipts")
-        version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
-        self._conn.execute("BEGIN IMMEDIATE")
+        version = int(self._conn.execute(_PRAGMA_USER_VERSION).fetchone()[0])
+        self._conn.execute(_BEGIN_IMMEDIATE)
         try:
             if not live:
                 self._conn.execute("ALTER TABLE receipts_prev_backup RENAME TO receipts")
-                self._conn.execute("PRAGMA user_version = 0")
+                self._conn.execute(f"{_PRAGMA_USER_VERSION} = 0")
                 action = "renamed the backup back; migration re-runs"
             elif version >= self.SCHEMA_VERSION:
-                self._conn.execute("DROP TABLE receipts_prev_backup")
+                self._conn.execute(_DROP_BACKUP)
                 action = "dropped a stale backup beside a current index"
             else:
                 self._conn.execute("DROP TABLE receipts")
                 self._recreate_receipts_from("receipts_prev_backup")
-                self._conn.execute("DROP TABLE receipts_prev_backup")
-                self._conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+                self._conn.execute(_DROP_BACKUP)
+                self._conn.execute(f"{_PRAGMA_USER_VERSION} = {self.SCHEMA_VERSION}")
                 action = "completed the interrupted copy from the backup"
             self._conn.commit()
         except BaseException:
@@ -380,7 +387,7 @@ class ReceiptIndex:
         """
         self._conn.execute("ALTER TABLE receipts RENAME TO receipts_prev_backup")
         self._recreate_receipts_from("receipts_prev_backup")
-        self._conn.execute("DROP TABLE receipts_prev_backup")
+        self._conn.execute(_DROP_BACKUP)
 
     # ------------------------------------------------------------------
     # Write path
@@ -467,7 +474,7 @@ class ReceiptIndex:
         if not items and not state_updates:
             return 0
         with self._lock:
-            self._conn.execute("BEGIN IMMEDIATE")
+            self._conn.execute(_BEGIN_IMMEDIATE)
             try:
                 for line_no, record in items:
                     try:
