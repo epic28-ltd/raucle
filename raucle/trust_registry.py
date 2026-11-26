@@ -38,6 +38,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -327,11 +328,33 @@ class TrustRegistry:
                     entry["operator_sig"] = _b64(self._signer.sign(entry_hash.encode("ascii")))
             except ImportError:
                 entry["operator_sig"] = _b64(self._signer.sign(entry_hash.encode("ascii")))
+        if self._path is not None:
+            # Persist before publishing the new head in memory. A short write or
+            # fsync failure must not leave this instance ahead of durable state.
+            encoded = (json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n").encode(
+                "utf-8"
+            )
+            with open(self._path, "a+b") as fh:
+                fh.seek(0, os.SEEK_END)
+                original_size = fh.tell()
+                try:
+                    fh.write(encoded)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                except Exception:
+                    try:
+                        fh.seek(original_size)
+                        fh.truncate()
+                        fh.flush()
+                        os.fsync(fh.fileno())
+                    except Exception as rollback_error:
+                        raise RegistryIntegrityError(
+                            "trust registry append failed and rollback could not "
+                            "restore the original file; registry requires operator repair"
+                        ) from rollback_error
+                    raise
         self._entries.append(entry)
         self._tail_hash = entry_hash
-        if self._path is not None:
-            with open(self._path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n")
         return entry
 
     def publish(
