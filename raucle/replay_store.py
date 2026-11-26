@@ -105,6 +105,7 @@ class SqliteReplayStore:
                     "INSERT INTO replay_nonces (replay_key, consumed_at) VALUES (?, ?)",
                     (replay_key, _now()),
                 )
+                self._conn.execute("COMMIT")
             except sqlite3.IntegrityError as exc:
                 with contextlib.suppress(sqlite3.Error):
                     self._conn.execute("ROLLBACK")
@@ -118,7 +119,6 @@ class SqliteReplayStore:
                 with contextlib.suppress(sqlite3.Error):
                     self._conn.execute("ROLLBACK")
                 raise
-            self._conn.execute("COMMIT")
         self._sweep_expired()
         return True
 
