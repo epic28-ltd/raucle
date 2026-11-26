@@ -64,9 +64,7 @@ def _is_replay_key_collision(exc: sqlite3.IntegrityError) -> bool:
             "SQLITE_CONSTRAINT_UNIQUE",
         }
     message = str(exc)
-    return message.startswith(
-        ("UNIQUE constraint failed:", "PRIMARY KEY constraint failed:")
-    )
+    return message.startswith(("UNIQUE constraint failed:", "PRIMARY KEY constraint failed"))
 
 
 class SqliteReplayStore:
