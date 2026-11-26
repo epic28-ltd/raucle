@@ -37,7 +37,7 @@ function packFiles(mutate) {
 const PUBKEY_PATH = (JSON.parse(fs.readFileSync(path.join(packDir, "PACK.json"), "utf8")))
   .members.filter((mm) => mm.role === "public-key")[0].path;
 const failures = [];
-function expect(cond, label, detail) {
+function check(cond, label, detail) {
   if (!cond) failures.push(label + (detail ? " :: " + JSON.stringify(detail).slice(0, 300) : ""));
 }
 function allGreen(v) {
@@ -53,20 +53,20 @@ results.clean = {
   manifest_signature_ok: clean.manifest_signature_ok, signer_key_id: clean.signer_key_id,
   receipt_count: clean.receipt_count, receipts_green: allGreen({ valid: clean.chain_valid, lines: clean.lines }),
 };
-expect(clean.ok === true, "fixture pack verifies named-clean", clean.checks);
-expect(clean.chain_valid && allGreen({ valid: true, lines: clean.lines }), "every fixture receipt green", clean.lines);
-expect(clean.receipt_count === 2, "fixture receipt count is 2", clean.receipt_count);
+check(clean.ok === true, "fixture pack verifies named-clean", clean.checks);
+check(clean.chain_valid && allGreen({ valid: true, lines: clean.lines }), "every fixture receipt green", clean.lines);
+check(clean.receipt_count === 2, "fixture receipt count is 2", clean.receipt_count);
 
 // 2. custodian pin round-trips on the clean verdict
 const pinned = await X2V.verifyPack(packFiles(), { expected_signer: clean.signer_key_id });
-expect(pinned.signer_trusted === true, "pinned custodian signer matches", pinned.signer_key_id);
+check(pinned.signer_trusted === true, "pinned custodian signer matches", pinned.signer_key_id);
 const wrongPin = await X2V.verifyPack(packFiles(), { expected_signer: "0".repeat(16) });
-expect(wrongPin.ok === false && wrongPin.signer_trusted === false, "wrong signer pin denies", wrongPin.checks);
+check(wrongPin.ok === false && wrongPin.signer_trusted === false, "wrong signer pin denies", wrongPin.checks);
 
 // 3. tampered member bytes -> integrity hash mismatch
 const tampered = await X2V.verifyPack(packFiles((p, b) => (p === "chain.jsonl" ? new Uint8Array([...b, 0x41]) : b)));
-expect(tampered.ok === false && tampered.integrity_ok === false, "tampered member denied", tampered.checks);
-expect(JSON.stringify(tampered.checks).includes("hash mismatch"), "named hash-mismatch reason", tampered.checks);
+check(tampered.ok === false && tampered.integrity_ok === false, "tampered member denied", tampered.checks);
+check(JSON.stringify(tampered.checks).includes("hash mismatch"), "named hash-mismatch reason", tampered.checks);
 
 // 4. tampered manifest body -> signature deny
 const manifestTampered = await X2V.verifyPack(packFiles((p, b) => {
@@ -75,7 +75,7 @@ const manifestTampered = await X2V.verifyPack(packFiles((p, b) => {
   mf.body.red = 99;
   return new TextEncoder().encode(JSON.stringify(mf));
 }));
-expect(manifestTampered.manifest_signature_ok === false, "tampered manifest denied", manifestTampered.checks);
+check(manifestTampered.manifest_signature_ok === false, "tampered manifest denied", manifestTampered.checks);
 
 // 5. tampered index (member digest rewritten) -> index signature deny
 const indexTampered = await X2V.verifyPack(packFiles((p, b) => {
@@ -84,11 +84,11 @@ const indexTampered = await X2V.verifyPack(packFiles((p, b) => {
   idx.members[0].sha256 = "sha256:" + "9".repeat(64);
   return new TextEncoder().encode(JSON.stringify(idx));
 }));
-expect(indexTampered.index_signature_ok === false, "tampered index denied", indexTampered.checks);
+check(indexTampered.index_signature_ok === false, "tampered index denied", indexTampered.checks);
 
 // 6. unindexed extra file -> envelope-malleability deny
 const extra = await X2V.verifyPack([...packFiles(), { path: "rogue.json", bytes: new TextEncoder().encode("{}") }]);
-expect(extra.ok === false, "unindexed extra file denied", extra.checks);
+check(extra.ok === false, "unindexed extra file denied", extra.checks);
 
 // 7. per-receipt named failure detail on a doctored chain (signature leg)
 const chain = td.decode(fs.readFileSync(path.join(packDir, "chain.jsonl")));
@@ -112,22 +112,22 @@ env0.jws = p0.join(".");
 const doctored = [...head];
 doctored[0] = JSON.stringify(env0);
 const chainRes = await X2V.verifyChainText(doctored.join("\n"), {});
-expect(chainRes.valid === false, "doctored chain denied", chainRes);
+check(chainRes.valid === false, "doctored chain denied", chainRes);
 const l0 = chainRes.lines[0];
-expect(l0.status === "red" && l0.reasons.length > 0, "per-receipt named reasons present", l0.reasons);
-expect(chainRes.lines.length === 2 && chainRes.lines[1].status === "red",
+check(l0.status === "red" && l0.reasons.length > 0, "per-receipt named reasons present", l0.reasons);
+check(chainRes.lines.length === 2 && chainRes.lines[1].status === "red",
   "sibling receipts keep independent per-line verdicts", chainRes.lines[1].reasons);
 
 // 7b. dangling parent -> named DAG violation
 const linesOnly = chain.trim().split("\n");
 const childOnly = await X2V.verifyChainText(linesOnly[1] + "\n", Object.create(null));
-expect(childOnly.lines[0].status === "red" &&
+check(childOnly.lines[0].status === "red" &&
   JSON.stringify(childOnly.lines[0].reasons).includes("does not appear in the chain"),
   "dangling parent named", childOnly.lines[0].reasons);
 
 // 8. unknown key id -> fail-closed named reason
 const noKey = await X2V.verifyChainText(chain, Object.create(null));
-expect(noKey.valid === false && noKey.lines.every((l) =>
+check(noKey.valid === false && noKey.lines.every((l) =>
   JSON.stringify(l.reasons).includes("no public key supplied")),
   "missing keys fail closed with named reason", noKey);
 
@@ -135,17 +135,17 @@ expect(noKey.valid === false && noKey.lines.every((l) =>
 const pem = td.decode(fs.readFileSync(path.join(packDir, ...PUBKEY_PATH.split("/"))));
 const firstLine = JSON.parse(chain.split("\n")[0]);
 const singleGood = await X2V.verifySingleJWS(firstLine.jws, pem);
-expect(singleGood.sig_ok === true && singleGood.hash_ok === true && singleGood.status === "green",
+check(singleGood.sig_ok === true && singleGood.hash_ok === true && singleGood.status === "green",
   "single receipt verifies against pack pubkey", singleGood);
 const singleNoKey = await X2V.verifySingleJWS(firstLine.jws, null);
-expect(singleNoKey.status === "warn" && singleNoKey.hash_ok === true &&
+check(singleNoKey.status === "warn" && singleNoKey.hash_ok === true &&
   JSON.stringify(singleNoKey.reasons).includes("no public key supplied"),
   "single receipt without key fails closed (warn, hash green)", singleNoKey);
 const badPem = pem.replace(/[a-zA-Z0-9+/=]/g, "x").slice(0, pem.length);
 let badPemCaught = false;
 const badPemRes = await X2V.verifySingleJWS(firstLine.jws, badPem);
 badPemCaught = badPemRes.status === "red";
-expect(badPemCaught, "corrupt PEM is rejected, never mis-verified", badPemRes);
+check(badPemCaught, "corrupt PEM is rejected, never mis-verified", badPemRes);
 
 
 // ---------------------------------------------------------------------------
@@ -169,32 +169,32 @@ const xclean = await X2V.verifyCrossOrg(xorg.chain, xorg.registry, xopts());
 results.xorg_clean = { valid: xclean.valid, registry_ok: xclean.registry_ok,
   chain_valid: xclean.chain_valid, scope: xclean.scope, log_status: xclean.log_status,
   issuer: xclean.issuer, registered_at: xclean.registered_at };
-await expect(xclean.valid === true, "cross-org clean verifies", xclean.reasons);
-await expect(xclean.registry_ok && xclean.chain_valid && xclean.scope === true, "cross-org legs green", xclean.reasons);
-await expect(xclean.log_status === "LOG-INCLUDED" && xclean.registered_at !== null, "registration leg included", xclean.log_reasons);
-await expect(xclean.issuer === "org-a" && xclean.receipt_count === 2, "issuer and receipt count", [xclean.issuer, xclean.receipt_count]);
+await check(xclean.valid === true, "cross-org clean verifies", xclean.reasons);
+await check(xclean.registry_ok && xclean.chain_valid && xclean.scope === true, "cross-org legs green", xclean.reasons);
+await check(xclean.log_status === "LOG-INCLUDED" && xclean.registered_at !== null, "registration leg included", xclean.log_reasons);
+await check(xclean.issuer === "org-a" && xclean.receipt_count === 2, "issuer and receipt count", [xclean.issuer, xclean.receipt_count]);
 
 // 10b. cross-org without the log proof: still valid, residual named
 const xnoLog = await X2V.verifyCrossOrg(xorg.chain, xorg.registry, xopts({ logProofText: null, logOperatorPem: null }));
-await expect(xnoLog.valid === true && xnoLog.log_status === null &&
+await check(xnoLog.valid === true && xnoLog.log_status === null &&
   JSON.stringify(xnoLog.log_reasons).includes("not supplied"),
   "absent log proof leaves a named residual", xnoLog.log_reasons);
 
 // 11. tampered registry bytes -> named registry refusal
 const xtampered = await X2V.verifyCrossOrg(xorg.chain, xorg.registry.replace('"org-a"', '"org-a "'), xopts());
-await expect(xtampered.valid === false && xtampered.registry_ok === false, "tampered registry denied", xtampered.registry_reasons);
+await check(xtampered.valid === false && xtampered.registry_ok === false, "tampered registry denied", xtampered.registry_reasons);
 
 // 12. wrong registry anchor -> operator signature invalid, named
 const xwrongAnchor = await X2V.verifyCrossOrg(xorg.chain, xorg.registry,
   xopts({ operatorPem: xorg.logKey }));
-await expect(xwrongAnchor.valid === false && xwrongAnchor.registry_ok === false &&
+await check(xwrongAnchor.valid === false && xwrongAnchor.registry_ok === false &&
   JSON.stringify(xwrongAnchor.registry_reasons).includes("operator signature"),
   "wrong registry anchor denied named", xwrongAnchor.registry_reasons);
 
 // 13. stale freshness pin -> named stale snapshot
 const xstale = await X2V.verifyCrossOrg(xorg.chain, xorg.registry,
   xopts({ minIndex: 99 }));
-await expect(xstale.valid === false && xstale.registry_ok === false &&
+await check(xstale.valid === false && xstale.registry_ok === false &&
   JSON.stringify(xstale.registry_reasons).includes("stale snapshot"),
   "stale freshness pin denied named", xstale.registry_reasons);
 
@@ -206,13 +206,13 @@ const regHeadTs = (() => {
 })();
 const xaged = await X2V.verifyCrossOrg(xorg.chain, xorg.registry,
   xopts({ maxAgeSeconds: 60, now: regHeadTs + 7200 }));
-await expect(xaged.valid === false && JSON.stringify(xaged.registry_reasons).includes("stale snapshot"),
+await check(xaged.valid === false && JSON.stringify(xaged.registry_reasons).includes("stale snapshot"),
   "aged artifact denied named", xaged.registry_reasons);
 
 // 14. log proof pinned to the wrong log key -> LOG-BAD-SIGNATURE
 const xlogBad = await X2V.verifyCrossOrg(xorg.chain, xorg.registry,
   xopts({ logOperatorPem: xorg.anchor }));
-await expect(xlogBad.log_status === "LOG-BAD-SIGNATURE" && xlogBad.valid === false,
+await check(xlogBad.log_status === "LOG-BAD-SIGNATURE" && xlogBad.valid === false,
   "wrong pinned log key refuses named", [xlogBad.log_status, xlogBad.log_reasons]);
 
 // 14b. doctored proof entry -> chain broken / head mismatch, named
@@ -220,14 +220,14 @@ const doctoredProof = JSON.parse(xorg.proof);
 doctoredProof.entries[0].receipt_digest = "sha256:" + "1".repeat(64);
 const xlogDoctored = await X2V.verifyCrossOrg(xorg.chain, xorg.registry,
   xopts({ logProofText: JSON.stringify(doctoredProof) }));
-await expect(xlogDoctored.valid === false &&
+await check(xlogDoctored.valid === false &&
   ["LOG-CHAIN-BROKEN", "LOG-HEAD-MISMATCH", "LOG-BAD-SIGNATURE"].includes(xlogDoctored.log_status),
   "doctored inclusion proof refuses named", [xlogDoctored.log_status, xlogDoctored.log_reasons]);
 
 // 15. proof without a pinned log key -> LOG-UNPINNED, never self-attested
 const xlogUnpinned = await X2V.verifyCrossOrg(xorg.chain, xorg.registry,
   xopts({ logOperatorPem: null }));
-await expect(xlogUnpinned.valid === false && xlogUnpinned.log_status === "LOG-UNPINNED",
+await check(xlogUnpinned.valid === false && xlogUnpinned.log_status === "LOG-UNPINNED",
   "unpinned log key refuses named", [xlogUnpinned.log_status, xlogUnpinned.log_reasons]);
 
 // 16. render probe: the browser-only UI wiring drives the cross-org handler
@@ -262,15 +262,15 @@ await expect(xlogUnpinned.valid === false && xlogUnpinned.log_status === "LOG-UN
     if (typeof click !== "function") throw new Error("cross-org click handler not wired");
     await click();
     const verdict = elements["verdict"];
-    await expect(verdict.style.display === "block" && verdict.className === "verified" &&
+    await check(verdict.style.display === "block" && verdict.className === "verified" &&
       verdict.textContent.indexOf("VERIFIED") === 0 &&
       verdict.textContent.includes("org-a"),
       "render probe: cross-org verdict rendered VERIFIED from org-a", verdict.textContent);
     const legs = elements["packchecks"].innerHTML;
-    await expect(legs.includes("registry artifact") && legs.includes("receipt signature") &&
+    await check(legs.includes("registry artifact") && legs.includes("receipt signature") &&
       legs.includes("scope") && legs.includes("registration"),
       "render probe: all four legs rendered", legs);
-    await expect(elements["results"].innerHTML.includes("<table"), "render probe: receipt table rendered");
+    await check(elements["results"].innerHTML.includes("<table"), "render probe: receipt table rendered");
   } finally {
     delete globalThis.document;
   }
@@ -291,16 +291,16 @@ if (process.argv[3]) {
       reasons: v.reasons.slice(0, 3),
     });
     if (want.valid !== undefined) {
-      await expect(v.valid === want.valid, c.name + ": valid", v.reasons);
+      await check(v.valid === want.valid, c.name + ": valid", v.reasons);
     }
     if (want.registry_ok !== undefined) {
-      await expect(v.registry_ok === want.registry_ok, c.name + ": registry_ok", v.registry_reasons);
+      await check(v.registry_ok === want.registry_ok, c.name + ": registry_ok", v.registry_reasons);
     }
     if (want.scope !== undefined) {
-      await expect(v.scope === want.scope, c.name + ": scope", v.reasons);
+      await check(v.scope === want.scope, c.name + ": scope", v.reasons);
     }
     for (const s of want.reasonIncludes || []) {
-      await expect(JSON.stringify(v.reasons).includes(s),
+      await check(JSON.stringify(v.reasons).includes(s),
         c.name + ": named reason " + JSON.stringify(s), v.reasons);
     }
   }
