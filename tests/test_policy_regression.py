@@ -8,6 +8,7 @@ import pytest
 from raucle.policy_regression import (
     MAX_INPUT_BYTES,
     RegressionInputError,
+    _error_report,
     _read_bounded,
     run_regression,
 )
@@ -172,3 +173,23 @@ def test_read_bounded_refuses_missing_empty_directory_and_oversized(tmp_path):
     oversized.write_bytes(b"x" * (MAX_INPUT_BYTES + 1))
     with pytest.raises(RegressionInputError, match="policy_too_large"):
         _read_bounded(oversized, "policy")
+
+
+def test_error_report_preserves_manifest_boundaries_and_completed_scenarios():
+    completed = [
+        {
+            "suite_id": "consumer-policy-v1",
+            "scenario_id": "first",
+            "tool": "lookup_balance",
+            "expected": "allow",
+            "actual": "allow",
+            "passed": True,
+        }
+    ]
+    report = _error_report("a" * 40, "engine_error", completed)
+    assert report["status"] == "error"
+    assert report["error_code"] == "engine_error"
+    assert report["executed"] == completed
+    assert report["skipped"] == []
+    assert report["unsupported_suites"]
+    assert report["suite_manifest_sha256"]
