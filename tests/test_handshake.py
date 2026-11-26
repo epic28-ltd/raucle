@@ -661,6 +661,7 @@ def test_four_handshake_states_unchanged_for_fresh_nonces(two_orgs, replay_store
     assert not unknown.accepted
     assert "not in the registry" in unknown.reason
 
+
 def test_replay_collision_classifier_supports_python310_errors():
     import sqlite3
 
