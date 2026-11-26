@@ -484,6 +484,7 @@ def test_cli_engine_error_preserves_partial_hashes(tmp_path, monkeypatch):
     assert report["policy_sha256"] == hashlib.sha256(POLICY_A).hexdigest()
     assert report["scenarios_sha256"] == hashlib.sha256(SCENARIOS).hexdigest()
 
+
 def test_missing_yaml_dependency_is_environment_error(monkeypatch):
     import sys
 
