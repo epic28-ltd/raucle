@@ -36,6 +36,14 @@ class RegressionInputError(ValueError):
     """A named, bounded refusal for malformed consumer input."""
 
 
+class RegressionExecutionError(RuntimeError):
+    """An engine failure that retains truthful results from completed scenarios."""
+
+    def __init__(self, results: list[dict[str, Any]]) -> None:
+        super().__init__("engine_error")
+        self.results = results
+
+
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -216,7 +224,7 @@ def run_regression(
                 )
                 actual = decision.get("decision")
                 if actual not in _ALLOWED_DECISIONS:
-                    raise RuntimeError("engine_returned_unknown_decision")
+                    raise RegressionExecutionError(results)
                 results.append(
                     {
                         "suite_id": suite_id,
@@ -260,6 +268,30 @@ def run_regression(
     }
 
 
+def _error_report(
+    engine_commit: str,
+    error_code: str,
+    executed: list[dict[str, Any]],
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "report_schema_version": REPORT_SCHEMA_VERSION,
+        "suite_version": SUITE_VERSION,
+        "engine_commit": engine_commit,
+        "status": "error",
+        "error_code": error_code,
+        "executed": executed,
+        "skipped": [],
+    }
+    try:
+        manifest, manifest_bytes = _load_suite_manifest()
+    except RuntimeError:
+        return report
+    report["suite_version"] = manifest["suite_version"]
+    report["suite_manifest_sha256"] = _sha256(manifest_bytes)
+    report["unsupported_suites"] = manifest["unsupported_suites"]
+    return report
+
+
 def _write_report(path: str | Path, report: dict[str, Any]) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -299,30 +331,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0 if report["status"] == "passed" else 1
     except RegressionInputError as exc:
-        report = {
-            "report_schema_version": REPORT_SCHEMA_VERSION,
-            "suite_version": SUITE_VERSION,
-            "engine_commit": args.engine_commit,
-            "status": "error",
-            "error_code": str(exc),
-            "executed": [],
-            "skipped": [],
-            "unsupported_suites": [],
-        }
+        report = _error_report(args.engine_commit, str(exc), [])
         _write_report(args.output, report)
         print(f"Raucle policy regression refused: {exc}", file=sys.stderr)
         return 2
+    except RegressionExecutionError as exc:
+        report = _error_report(args.engine_commit, "engine_error", exc.results)
+        _write_report(args.output, report)
+        print("Raucle policy regression failed: engine_error", file=sys.stderr)
+        return 2
     except Exception:
-        report = {
-            "report_schema_version": REPORT_SCHEMA_VERSION,
-            "suite_version": SUITE_VERSION,
-            "engine_commit": args.engine_commit,
-            "status": "error",
-            "error_code": "engine_error",
-            "executed": [],
-            "skipped": [],
-            "unsupported_suites": [],
-        }
+        report = _error_report(args.engine_commit, "engine_error", [])
         _write_report(args.output, report)
         print("Raucle policy regression failed: engine_error", file=sys.stderr)
         return 2
