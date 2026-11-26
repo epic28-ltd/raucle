@@ -214,14 +214,17 @@ def run_regression(
         ):
             gateway = RaucleGateway(config)
             for scenario in scenarios:
-                decision = gateway.check_tool_call(
-                    scenario["tool"],
-                    scenario["args"],
-                    agent_id=scenario["agent_id"],
-                    source=scenario["source"],
-                    destination=scenario["destination"],
-                    trace_id=f"policy-regression:{scenario['id']}",
-                )
+                try:
+                    decision = gateway.check_tool_call(
+                        scenario["tool"],
+                        scenario["args"],
+                        agent_id=scenario["agent_id"],
+                        source=scenario["source"],
+                        destination=scenario["destination"],
+                        trace_id=f"policy-regression:{scenario['id']}",
+                    )
+                except Exception as exc:
+                    raise RegressionExecutionError(results) from exc
                 actual = decision.get("decision")
                 if actual not in _ALLOWED_DECISIONS:
                     raise RegressionExecutionError(results)
