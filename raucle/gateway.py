@@ -1518,6 +1518,12 @@ class RaucleGateway:
         # file; lifting follows the registry state of the binding traces.
         self._agent_quarantines: dict[str, dict[str, Any]] = {}
         self._agent_quarantine_lock = threading.Lock()
+        # A3 revocation freshness (RAU-05): the revocations files this
+        # process has actually read. A configured registry that was read
+        # once and then vanishes is a missing security dependency, not an
+        # empty registry - seeing it vanish refuses token evaluation by
+        # name below, instead of silently re-opening revoked tokens.
+        self._revocations_ever_seen: set[str] = set()
         self._init_receipt_projection(config)
         if self._gate_auth_mode == "off":
             logger.warning(
@@ -3186,7 +3192,24 @@ class RaucleGateway:
             return None, "capability token required (X-Capability-Token)", None
         from raucle.capability import Capability
 
-        gate = self._ensure_caller_gate()
+        try:
+            gate = self._ensure_caller_gate()
+        except Exception as exc:  # noqa: BLE001 - identity dependency failure is fail-closed
+            # A corrupt or vanished revocation/registry/ledger cannot be
+            # treated as "no revocations". Refuse the identity stage with
+            # a named reason (pre-gate, no receipt: unauthenticated by
+            # the doctrine) instead of an unaudited exception into the
+            # HTTP layer. The message names the registry condition; it
+            # never quotes file content.
+            logger.error(  # NOSONAR S8572 - would emit untrusted message (S5145)
+                "gate identity dependency failure: %s",
+                type(exc).__name__,
+            )
+            return (
+                None,
+                f"gate identity dependency unavailable (fail closed): {exc}",
+                None,
+            )
         try:
             token = (
                 capability_token
@@ -4392,10 +4415,31 @@ class RaucleGateway:
         return {"suspended": True, "revoked": revoked, "receipt_id": receipt_id}
 
     def _load_revoked_ids(self) -> set[str]:
-        """A3: the currently-revoked token ids (per call, like the registry)."""
+        """A3: the currently-revoked token ids (per call, like the registry).
+
+        Fail-closed on a vanished registry: a configured revocations file
+        this process has already read (revoked ids were served from it)
+        must never degrade into "no revocations" when the file disappears
+        later - that would silently re-open previously revoked tokens.
+        The raise is converted into a named pre-gate refusal by
+        :meth:`authenticate_caller`.
+
+        A configured-but-never-seen file stays the empty set: the
+        registry is created lazily by the first revocation, so config +
+        absent is a legitimate pre-first-revocation steady state.
+        """
         path = self.config.revocations_file
-        if not path or not Path(path).exists():
+        if not path:
             return set()
+        if not Path(path).exists():
+            if path in self._revocations_ever_seen:
+                raise ValueError(
+                    f"revocation registry {path} was read earlier in this process "
+                    "lifetime but is now missing; refusing token evaluation "
+                    "(fail closed) until the registry file is restored"
+                )
+            return set()
+        self._revocations_ever_seen.add(path)
         return self._file_cache.get(path, self._revoked_ids_from_bytes)
 
     @staticmethod

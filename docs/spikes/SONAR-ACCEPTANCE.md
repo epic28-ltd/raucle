@@ -28,6 +28,13 @@ so `logging.exception()` would reintroduce the S5145 log-injection finding.
 Full diagnostics stay in the admission receipt, not in the log file. Suppressed
 with an inline `# NOSONAR` rationale and this entry. Decision owner: Craig.
 
+2026-11-26 addendum (PR #362): the identity-dependency failure path follows
+this doctrine at the `gate identity dependency failure` site in
+`raucle/gateway.py`: a type-name-only `logger.error` inside `except` with the
+inline NOSONAR rationale; the caller-facing registry condition rides the
+refused-call body, never the log line. Doctrine as accepted 2026-11-05;
+decision owner Craig.
+
 ## S5144 (server-side request forgery in UrlGate.forward) - raucle/urlgate.py, accepted 2026-11-06
 
 O3 is a transparent URL-switch gate proxy: its purpose is to forward SDK
