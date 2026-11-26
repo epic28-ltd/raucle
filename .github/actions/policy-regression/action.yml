@@ -1,0 +1,85 @@
+name: Raucle policy regression
+description: Run deterministic consumer-authored policy scenarios against a pinned Raucle engine revision and emit a hash-bound JSON report.
+inputs:
+  policy-file:
+    description: Relative path to the consumer policy YAML file.
+    required: true
+  scenarios-file:
+    description: Relative path to the version 1 consumer scenario JSON file.
+    required: true
+  engine-ref:
+    description: Immutable 40-character Raucle engine commit SHA to install and test.
+    required: true
+  report-file:
+    description: Report output path, relative to the consumer workspace.
+    required: false
+    default: raucle-policy-regression-report.json
+runs:
+  using: composite
+  steps:
+    - name: Validate immutable engine reference
+      shell: bash
+      env:
+        ENGINE_REF: ${{ inputs.engine-ref }}
+      run: |
+        if [[ ! "$ENGINE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "::error::engine-ref must be a full 40-character immutable commit SHA."
+          exit 2
+        fi
+
+    - name: Check out pinned Raucle engine
+      uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      with:
+        repository: epic28-ltd/raucle
+        ref: ${{ inputs.engine-ref }}
+        path: .raucle-engine
+        persist-credentials: false
+        fetch-depth: 1
+
+    - name: Set up Python
+      uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+      with:
+        python-version: "3.12"
+
+    - name: Install pinned engine regression extra
+      shell: bash
+      working-directory: .raucle-engine
+      run: |
+        python -m pip install --disable-pip-version-check ".[regression]"
+
+    - name: Run consumer policy scenarios
+      id: regression
+      shell: bash
+      env:
+        POLICY_FILE: ${{ inputs.policy-file }}
+        SCENARIOS_FILE: ${{ inputs.scenarios-file }}
+        REPORT_FILE: ${{ inputs.report-file }}
+        ENGINE_REF: ${{ inputs.engine-ref }}
+      run: |
+        set -euo pipefail
+        case "$POLICY_FILE" in
+          /*) policy_path="$POLICY_FILE" ;;
+          *) policy_path="$GITHUB_WORKSPACE/$POLICY_FILE" ;;
+        esac
+        case "$SCENARIOS_FILE" in
+          /*) scenarios_path="$SCENARIOS_FILE" ;;
+          *) scenarios_path="$GITHUB_WORKSPACE/$SCENARIOS_FILE" ;;
+        esac
+        case "$REPORT_FILE" in
+          /*) report_path="$REPORT_FILE" ;;
+          *) report_path="$GITHUB_WORKSPACE/$REPORT_FILE" ;;
+        esac
+        python -m raucle.policy_regression \
+          --policy "$policy_path" \
+          --scenarios "$scenarios_path" \
+          --output "$report_path" \
+          --engine-commit "$ENGINE_REF"
+
+    - name: Upload hash-bound regression report
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: raucle-policy-regression-report
+        path: ${{ inputs.report-file }}
+        if-no-files-found: error
+        retention-days: 30

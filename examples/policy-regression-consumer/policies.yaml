@@ -1,0 +1,10 @@
+version: 1
+issuer: consumer.example
+policies:
+  - id: lookup-allowed-accounts
+    tool: lookup_balance
+    agent_id: agent:billing
+    ttl_seconds: 60
+    constraints:
+      allow:
+        account: ["ACC-001", "ACC-002"]

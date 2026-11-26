@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "id": "known-account-allowed",
+      "tool": "lookup_balance",
+      "agent_id": "agent:billing",
+      "args": {"account": "ACC-001"},
+      "expected": "allow"
+    },
+    {
+      "id": "unknown-account-denied",
+      "tool": "lookup_balance",
+      "agent_id": "agent:billing",
+      "args": {"account": "ACC-999"},
+      "expected": "deny"
+    }
+  ]
+}
