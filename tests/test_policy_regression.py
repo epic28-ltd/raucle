@@ -5,7 +5,12 @@ import json
 
 import pytest
 
-from raucle.policy_regression import MAX_INPUT_BYTES, RegressionInputError, _read_bounded, run_regression
+from raucle.policy_regression import (
+    MAX_INPUT_BYTES,
+    RegressionInputError,
+    _read_bounded,
+    run_regression,
+)
 
 POLICY_A = b"""version: 1
 issuer: regression.test
