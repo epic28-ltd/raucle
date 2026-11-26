@@ -13,6 +13,7 @@ Examples::
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import logging
 import os
@@ -1012,6 +1013,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     prov_verify.add_argument(
         "--format", choices=["table", "json"], default="table", help=_HELP_OUTPUT_FORMAT
+    )
+    prov_verify.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Emit the versioned machine report (raucle.verify.report/v1) and "
+            "use the stable exit-code contract (see "
+            "docs/spec/verifier-coverage-inventory.md). Takes precedence "
+            "over --format; the default human output is unchanged without it"
+        ),
     )
 
     prov_trace = prov_sub.add_parser(
@@ -3080,8 +3091,14 @@ def _load_provenance_pubkeys(
     public_keys: dict[str, bytes] = {}
     capabilities: dict[str, CapabilityStatement] = {}
     for src in sources:
-        path = Path(src)
-        content = path.read_bytes()
+        # pythonsecurity:S8707 CLI-input pattern (the engine-proven recipe
+        # from raucle/policy_regression): canonicalise the operator-supplied
+        # trust path before any read and refuse anything that is not a
+        # regular file, fail closed with the CLI's named FileNotFoundError.
+        source = Path(src).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(source))
+        content = source.read_bytes()
         # Try JSON capability statement first; fall back to raw PEM.
         try:
             d = json.loads(content)
@@ -3125,6 +3142,27 @@ def _cmd_provenance_verify(args: argparse.Namespace) -> int:
         key = pq_public_key_from_pem(Path(pem_path).read_text(encoding="ascii"))
         pq_public_keys[pq_key_id_from_public_key(key)] = Path(pem_path).read_text(encoding="ascii")
 
+    # Versioned machine output (--json): a self-contained contract with the
+    # stable exit-code table. The legacy path below is byte-identical to
+    # its pre-flag behaviour.
+    if getattr(args, "json", False):
+        from raucle.verifier_cli import emit_versioned_report
+
+        artifacts = [("chain", args.path)]
+        artifacts += [("trust_root", src) for src in args.pubkeys]
+        for pem_path in getattr(args, "pq_pubkeys", None) or []:
+            artifacts.append(("pq_key", pem_path))
+        _body, exit_code = emit_versioned_report(
+            args.path,
+            public_keys=public_keys,
+            capabilities=capabilities,
+            pq_public_keys=pq_public_keys,
+            require_pq=getattr(args, "require_pq", False),
+            artifacts=artifacts,
+        )
+        print(json.dumps(_body, indent=2))
+        return exit_code
+
     report = ProvenanceVerifier(
         public_keys=public_keys,
         capabilities=capabilities or None,
@@ -3152,7 +3190,14 @@ def _enforce_require_pq(path: str, report: Any) -> None:
     """
     from raucle.provenance import ProvenanceReceipt, _jws_declares_pq1
 
-    with open(path, encoding="utf-8") as fh:
+    # pythonsecurity:S8707 CLI-input pattern (the engine-proven recipe from
+    # raucle/policy_regression): canonicalise the operator-supplied chain
+    # path before any read and refuse anything that is not a regular file,
+    # fail closed with the CLI's named FileNotFoundError.
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(source))
+    with source.open(encoding="utf-8") as fh:
         for line_no, line in enumerate(fh, start=1):
             line = line.strip()
             if not line:
