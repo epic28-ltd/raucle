@@ -427,6 +427,12 @@ def _make_handler(sidecar: ReceiptSidecar) -> type[BaseHTTPRequestHandler]:
         """Tiny HTTP surface: POST /submit, GET /health. Nothing else."""
 
         def _respond(self, code: int, payload: dict[str, Any]) -> None:
+            # pythonsecurity:S5131 by construction: a response body is JSON
+            # built from fixed named status strings, computed counters and
+            # store-held values only. Request-supplied bytes, paths and
+            # envelope fields are never reflected (unknown paths are named
+            # 404s, parse failures are named 400s, and a refused submit is
+            # receipted on the gateway's own advisory, not echoed here).
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
@@ -528,12 +534,15 @@ def _make_handler(sidecar: ReceiptSidecar) -> type[BaseHTTPRequestHandler]:
                 # the transaction is rolled back in the store, and the
                 # refusal is named for the receipted-loss path.
                 logger.exception("receipt sidecar: nonce store unavailable (submit refused)")
+                # No refused_receipt echo here: the refused hash is
+                # request-supplied and the store held nothing to answer
+                # with; the gateway receipts the loss in its own signed
+                # x_sidecar advisory.
                 self._respond(
                     503,
                     {
                         "error": "nonce_store_unavailable",
                         "detail": "submit refused fail-closed; no nonce record, nothing enqueued",
-                        "refused_receipt": envelope["receipt_hash"],
                     },
                 )
                 return
@@ -565,12 +574,14 @@ def _make_handler(sidecar: ReceiptSidecar) -> type[BaseHTTPRequestHandler]:
             try:
                 sidecar._sink.submit(envelope)
             except ReceiptSinkOverflow:
+                # No refused_receipt echo here either: the 503 names the
+                # refusal and carries the computed queue depth only; the
+                # gateway's own signed advisory records the refused hash.
                 self._respond(
                     503,
                     {
                         "error": "receipt_sink_overflow",
                         "detail": "bounded submit queue full",
-                        "refused_receipt": envelope.get("receipt_hash"),
                         "queue_depth": sidecar._sink.depth,
                     },
                 )

@@ -25,7 +25,10 @@ section 5, implemented on the raucle/replay_store.py machinery):
   corrupts neither the receipt ledger nor enforcement; a failing chain
   append is contained by the sink and leaves the ledger byte-identical;
 - a corrupt nonce store fails the sidecar boot instead of serving
-  unprotected.
+  unprotected;
+- no response body ever reflects request-supplied bytes (S5131): the
+  responder speaks only fixed named status strings, computed counters
+  and store-held values, pinned by marker-payload grep tests.
 """
 
 from __future__ import annotations
@@ -62,6 +65,8 @@ policies:
 
 HASH_A = "sha256:" + "a" * 64
 HASH_B = "sha256:" + "b" * 64
+# Hostile bytes no honest sidecar response can ever carry (S5131 pin).
+XSS_MARKER = "<script>alert('rw3-xss-marker')</script>"
 
 
 def _wait_until(predicate, timeout=10.0, interval=0.05):
@@ -130,6 +135,30 @@ def _post_with(sc, headers, body):
         except json.JSONDecodeError:
             parsed = {"raw": detail}
         return err.code, parsed
+
+
+def _post_raw(sc, headers, body):
+    """POST /submit without parsing; returns (status, raw body text,
+    content type) for grep-the-output assertions on hostile payloads."""
+    request = urllib.request.Request(
+        sc.url + "/submit",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/json", **headers},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5.0) as resp:
+            return (
+                resp.status,
+                resp.read().decode("utf-8", "replace"),
+                resp.headers.get("Content-Type", ""),
+            )
+    except urllib.error.HTTPError as err:
+        return (
+            err.code,
+            err.read().decode("utf-8", "replace"),
+            err.headers.get("Content-Type", ""),
+        )
 
 
 def _authenticated_headers(nonce, sent_at, body, secret=SECRET):
@@ -500,6 +529,104 @@ class TestRetention:
             sc.stop()
 
 
+def _hostile_envelope_body():
+    """A shape-valid envelope whose only loosely validated field (``jws``,
+    any non-empty string) carries hostile bytes that must never appear in
+    any response."""
+    return json.dumps(
+        {"receipt_hash": HASH_A, "jws": f"evil.{XSS_MARKER}.sig"},
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
+class TestHostileRequestBodies:
+    """pythonsecurity:S5131: no request-supplied bytes or paths are ever
+    reflected into a sidecar response body. Each reachable answer is
+    asserted raw, by grep, against a marker payload."""
+
+    def test_no_hostile_body_or_header_bytes_appear_in_any_response(self, tmp_path):
+        sc = _sidecar(tmp_path)
+        fault = None
+        try:
+            now = int(time.time())
+            # (1) 202: a marker-carrying but shape-valid envelope is
+            # accepted; the answer names the queue state only
+            hostile_body = _hostile_envelope_body()
+            nonce_a = "1" * 32
+            status, raw, ctype = _post_raw(
+                sc, _authenticated_headers(nonce_a, now, hostile_body), hostile_body
+            )
+            assert status == 202
+            assert "application/json" in ctype
+            assert XSS_MARKER not in raw
+            assert '"status": "queued"' in raw
+
+            # the identical resubmission answers the named duplicate from
+            # the store-held hash; still no echo of the marker field
+            _wait_until(lambda: sc.store.total_receipt_count() == 1)
+            status, raw, ctype = _post_raw(
+                sc, _authenticated_headers(nonce_a, now, hostile_body), hostile_body
+            )
+            assert status == 200
+            assert '"error"' not in raw
+            assert XSS_MARKER not in raw
+
+            # (2) 400 invalid_envelope: raw non-JSON marker bytes signed
+            # with a valid handshake are named, never echoed
+            garbage_body = b"<svg onload=alert(1)>%s</svg>" % XSS_MARKER.encode("utf-8")
+            nonce_b = "2" * 32
+            status, raw, ctype = _post_raw(
+                sc, _authenticated_headers(nonce_b, now, garbage_body), garbage_body
+            )
+            assert status == 400
+            assert "application/json" in ctype
+            assert b'"error": "invalid_envelope"' in raw.encode("utf-8", "replace")
+            assert XSS_MARKER not in raw
+
+            # (3) 409: a re-used nonce over a hostile second body is
+            # refused by name with the first accepted hash only
+            body_a = _envelope_body(HASH_A)
+            assert _post(sc, "3" * 32, now, body_a)[0] == 202
+            _wait_until(lambda: sc.store.total_receipt_count() == 2)
+            mixed = json.dumps(
+                {"receipt_hash": HASH_B, "jws": XSS_MARKER}, ensure_ascii=False
+            ).encode("utf-8")
+            status, raw, ctype = _post_raw(
+                sc, _authenticated_headers("3" * 32, now + 1, mixed), mixed
+            )
+            assert status == 409
+            assert '"nonce_reuse_mismatch"' in raw
+            assert XSS_MARKER not in raw
+
+            # (4) 400 invalid_nonce: a hostile nonce header is named, not
+            # reflected (headers are compared, never re-served)
+            hostile_nonce = "N" * 8 + XSS_MARKER
+            status, raw, ctype = _post_raw(
+                sc,
+                _authenticated_headers(hostile_nonce, now, body_a),
+                body_a,
+            )
+            assert status == 400
+            assert '"invalid_nonce"' in raw
+            assert XSS_MARKER not in raw
+
+            # (5) 503: a failing nonce store answers the named refusal;
+            # the body carries no request-supplied value at all
+            fault = _install_nonce_fault(sc)
+            status, raw, ctype = _post_raw(
+                sc, _authenticated_headers("4" * 32, now, hostile_body), hostile_body
+            )
+            assert status == 503
+            assert '"nonce_store_unavailable"' in raw
+            assert XSS_MARKER not in raw
+            assert '"receipt_hash"' not in raw and "jws" not in raw
+        finally:
+            if fault is not None:
+                fault.execute("DROP TRIGGER IF EXISTS submit_nonce_fault")
+                fault.close()
+            sc.stop()
+
+
 class TestSubmitPersistenceFailure:
     """Issue #344 item 3 (sidecar part): persistence failures fail closed
     and corrupt neither the receipt ledger nor enforcement."""
@@ -513,7 +640,9 @@ class TestSubmitPersistenceFailure:
             status, refused = _post(sc, "3" * 32, int(time.time()), _envelope_body())
             assert status == 503
             assert refused["error"] == "nonce_store_unavailable"
-            assert refused["refused_receipt"] == HASH_A
+            # S5131: the refusal never echoes the request-supplied
+            # envelope back; the body is the named error and detail only
+            assert set(refused) == {"error", "detail"}
             time.sleep(0.2)
             # fail closed: nothing enqueued, nothing appended, no index row
             assert sc.sink._write_errors == 0
