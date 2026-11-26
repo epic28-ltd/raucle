@@ -660,3 +660,54 @@ def test_four_handshake_states_unchanged_for_fresh_nonces(two_orgs, replay_store
     )
     assert not unknown.accepted
     assert "not in the registry" in unknown.reason
+
+
+def test_replay_collision_classifier_supports_python310_errors():
+    import sqlite3
+
+    from raucle.replay_store import _is_replay_key_collision
+
+    unique_error = sqlite3.IntegrityError("UNIQUE constraint failed: replay_nonces.replay_key")
+    assert _is_replay_key_collision(unique_error)
+    assert _is_replay_key_collision(sqlite3.IntegrityError("PRIMARY KEY constraint failed"))
+    assert not _is_replay_key_collision(sqlite3.IntegrityError("CHECK constraint failed"))
+
+
+def test_replay_store_propagates_non_integrity_sqlite_errors(tmp_path):
+    import sqlite3
+
+    from raucle.replay_store import SqliteReplayStore
+
+    store = SqliteReplayStore(tmp_path / "replay.sqlite3")
+    store.close()
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        store.consume("issuer:token:nonce")
+
+
+def test_replay_store_does_not_misclassify_storage_constraint_as_replay(tmp_path):
+    """Only a primary-key collision is a replay; storage failures propagate."""
+    import sqlite3
+
+    from raucle.replay_store import SqliteReplayStore
+
+    store = SqliteReplayStore(tmp_path / "replay.sqlite3")
+    store._conn.execute(
+        """
+        CREATE TRIGGER reject_replay_insert
+        BEFORE INSERT ON replay_nonces
+        BEGIN
+            SELECT RAISE(ABORT, 'simulated replay-store write failure');
+        END
+        """
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="simulated replay-store write failure"):
+        store.consume("issuer:token:nonce")
+
+    # The failed transaction was rolled back; after the fault is removed,
+    # the same key can be consumed normally rather than being left in a
+    # poisoned connection transaction.
+    store._conn.execute("DROP TRIGGER reject_replay_insert")
+    assert store.consume("issuer:token:nonce") is True
+    assert store.consume("issuer:token:nonce") is False
+    store.close()
