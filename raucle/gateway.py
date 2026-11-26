@@ -4417,9 +4417,7 @@ class RaucleGateway:
                     f"revocation registry contains invalid JSON on line {lineno}"
                 ) from exc
             if not isinstance(record, dict):
-                raise ValueError(
-                    f"revocation registry record on line {lineno} must be an object"
-                )
+                raise ValueError(f"revocation registry record on line {lineno} must be an object")
             token_id = record.get("token_id")
             if not isinstance(token_id, str) or not token_id.strip():
                 raise ValueError(
