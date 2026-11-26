@@ -492,3 +492,27 @@ def test_missing_yaml_dependency_is_environment_error(monkeypatch):
     monkeypatch.setitem(sys.modules, "yaml", None)
     with pytest.raises(RegressionEnvironmentError, match="dependency_unavailable"):
         policy_regression._validate_policy(POLICY_A)
+
+
+def test_cli_missing_dependency_writes_environment_error_report(tmp_path, monkeypatch):
+    report_file = tmp_path / "report.json"
+
+    def missing_dependency(*args, **kwargs):
+        raise RegressionEnvironmentError("dependency_unavailable")
+
+    monkeypatch.setattr(policy_regression, "_read_bounded", lambda path, label: POLICY_A)
+    monkeypatch.setattr(policy_regression, "run_regression", missing_dependency)
+    result = policy_regression.main(
+        [
+            "--policy",
+            "policy.yaml",
+            "--scenarios",
+            "scenarios.json",
+            "--output",
+            str(report_file),
+        ]
+    )
+    report = json.loads(report_file.read_text())
+    assert result == 2
+    assert report["status"] == "error"
+    assert report["error_code"] == "dependency_unavailable"
