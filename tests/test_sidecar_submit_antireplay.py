@@ -220,13 +220,17 @@ class TestSubmitNonceStore:
 
     def test_nonce_and_digest_shapes_are_enforced(self, tmp_path):
         store = SidecarSubmitNonceStore(tmp_path / "submit_nonces.sqlite")
+        # The shared probe digest is prepared before the raises blocks so
+        # each block holds exactly one raising invocation (python:S5778);
+        # the prepared state moves into the body, never the assertions.
+        digest_x = hashlib.sha256(b"x").hexdigest()
         for bad in ("", "short", "F" * 32, "f" * 15, "f" * 129, "g" * 32, "f" * 32 + "\n"):
             with pytest.raises(ValueError):
-                store.consume(bad, hashlib.sha256(b"x").hexdigest(), HASH_A)
+                store.consume(bad, digest_x, HASH_A)
         with pytest.raises(ValueError):
             store.consume("f" * 32, "tooshort", HASH_A)
         with pytest.raises(ValueError):
-            store.consume("f" * 32, hashlib.sha256(b"x").hexdigest(), "nope")
+            store.consume("f" * 32, digest_x, "nope")
 
     def test_retention_must_cover_twice_the_skew_window(self, tmp_path):
         # 9 s of retention against a 5 s skew forgets before the HMAC-bound
@@ -697,10 +701,11 @@ class TestSubmitPersistenceFailure:
         store_dir = tmp_path / "segments"
         store_dir.mkdir(parents=True, exist_ok=True)
         (store_dir / "submit_nonces.sqlite").write_bytes(b"not a database at all")
+        # The boot dies in the constructor itself: the nonce store runs
+        # its PRAGMA over the corrupt file inside SidecarSubmitNonceStore
+        # __init__ (python:S5778: exactly one raising invocation here).
         with pytest.raises(sqlite3.DatabaseError):
-            sc = ReceiptSidecar(store_dir=store_dir, secret=SECRET, host="127.0.0.1", port=0)
-            sc.start()
-            sc.stop()  # pragma: no cover - only reached if the boot wrongly succeeds
+            ReceiptSidecar(store_dir=store_dir, secret=SECRET, host="127.0.0.1", port=0)
         chunks = [seg.read_bytes() for seg in sorted(store_dir.glob("seg-*.jsonl"))]
         assert chunks == []  # no chain was ever opened by a failed boot
 
