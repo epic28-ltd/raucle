@@ -1013,6 +1013,16 @@ def _build_parser() -> argparse.ArgumentParser:
     prov_verify.add_argument(
         "--format", choices=["table", "json"], default="table", help=_HELP_OUTPUT_FORMAT
     )
+    prov_verify.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Emit the versioned machine report (raucle.verify.report/v1) and "
+            "use the stable exit-code contract (see "
+            "docs/spec/verifier-coverage-inventory.md). Takes precedence "
+            "over --format; the default human output is unchanged without it"
+        ),
+    )
 
     prov_trace = prov_sub.add_parser(
         "trace", help="Walk the DAG backwards from a receipt to all roots"
@@ -3124,6 +3134,27 @@ def _cmd_provenance_verify(args: argparse.Namespace) -> int:
 
         key = pq_public_key_from_pem(Path(pem_path).read_text(encoding="ascii"))
         pq_public_keys[pq_key_id_from_public_key(key)] = Path(pem_path).read_text(encoding="ascii")
+
+    # Versioned machine output (--json): a self-contained contract with the
+    # stable exit-code table. The legacy path below is byte-identical to
+    # its pre-flag behaviour.
+    if getattr(args, "json", False):
+        from raucle.verifier_cli import emit_versioned_report
+
+        artifacts = [("chain", args.path)]
+        artifacts += [("trust_root", src) for src in args.pubkeys]
+        for pem_path in getattr(args, "pq_pubkeys", None) or []:
+            artifacts.append(("pq_key", pem_path))
+        _body, exit_code = emit_versioned_report(
+            args.path,
+            public_keys=public_keys,
+            capabilities=capabilities,
+            pq_public_keys=pq_public_keys,
+            require_pq=getattr(args, "require_pq", False),
+            artifacts=artifacts,
+        )
+        print(json.dumps(_body, indent=2))
+        return exit_code
 
     report = ProvenanceVerifier(
         public_keys=public_keys,
