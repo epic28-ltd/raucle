@@ -36,6 +36,10 @@ class RegressionInputError(ValueError):
     """A named, bounded refusal for malformed consumer input."""
 
 
+class RegressionEnvironmentError(RuntimeError):
+    """A missing runtime dependency or environment prerequisite."""
+
+
 class RegressionExecutionError(RuntimeError):
     """An engine failure that retains truthful results from completed scenarios."""
 
@@ -164,9 +168,11 @@ def _parse_scenarios(raw: bytes) -> list[dict[str, Any]]:
 def _validate_policy(raw: bytes) -> None:
     try:
         import yaml
-
         from raucle.policy import PolicyFile
+    except ImportError as exc:
+        raise RegressionEnvironmentError("dependency_unavailable") from exc
 
+    try:
         parsed = yaml.safe_load(raw)
         if not isinstance(parsed, dict):
             raise ValueError("policy must be a mapping")
@@ -388,6 +394,11 @@ def main(argv: list[str] | None = None) -> int:
         report = _error_report(args.engine_commit, str(exc), [])
         _write_report(args.output, report)
         print(f"Raucle policy regression refused: {exc}", file=sys.stderr)
+        return 2
+    except RegressionEnvironmentError as exc:
+        report = _error_report(args.engine_commit, str(exc), [])
+        _write_report(args.output, report)
+        print("Raucle policy regression failed: dependency_unavailable", file=sys.stderr)
         return 2
     except RegressionExecutionError as exc:
         report = _error_report(
