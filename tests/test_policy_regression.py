@@ -72,8 +72,8 @@ def test_consumer_scenarios_run_against_exact_policy_bytes():
     assert report["suite_manifest_sha256"]
     assert report["policy_sha256"] == hashlib.sha256(POLICY_A).hexdigest()
     assert report["scenarios_sha256"] == hashlib.sha256(SCENARIOS).hexdigest()
-    assert report["engine_version"] == "0.23.9"
-    assert report["dependency_versions"] == {"PyYAML": "6.0.2"}
+    assert report["engine_version"] == "test-engine-version"
+    assert report["dependency_versions"] == dependency_versions
     assert report["unsupported_suites"]
 
 
@@ -192,14 +192,21 @@ def test_error_report_preserves_manifest_boundaries_and_completed_scenarios():
             "passed": True,
         }
     ]
+    dependency_versions = {
+        "raucle": "test-engine-version",
+        "PyYAML": "6.0.2",
+        "cryptography": "48.0.0",
+        "cffi": "2.1.1",
+        "pycparser": "3.12",
+    }
     report = _error_report(
         "a" * 40,
         "engine_error",
         completed,
         policy_sha256=hashlib.sha256(POLICY_A).hexdigest(),
         scenarios_sha256=hashlib.sha256(SCENARIOS).hexdigest(),
-        engine_version="0.23.9",
-        dependency_versions={"PyYAML": "6.0.2"},
+        engine_version="test-engine-version",
+        dependency_versions=dependency_versions,
     )
     assert report["status"] == "error"
     assert report["error_code"] == "engine_error"
