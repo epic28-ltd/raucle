@@ -1,0 +1,29 @@
+{
+  "profile": "SCITT signed statement anchoring the head of the audit chain fixture",
+  "chain": [
+    "{\"chain_meta\": true, \"version\": 1, \"signed\": true, \"created_at\": \"2026-11-26T12:00:00+00:00\", \"key_id\": \"3eb6ecf002ca585d\", \"signature\": \"yfUuSW9oZJqykN9rzek/Ad7WDQNmHfD/oK+/8xf/f5GlaFQy+qu+bYDusNpMZjjVAeeT6KUoLQpegJkAdg8zCg==\"}",
+    "{\"index\": 0, \"timestamp\": \"2026-11-26T12:00:00+00:00\", \"prev_hash\": \"0000000000000000000000000000000000000000000000000000000000000000\", \"event\": {\"seq\": 0, \"note\": \"event-0\"}, \"hash\": \"2483f908bb99be973eeb8a3c1b3b421e070ac01fcdc47ce03f64ec920e8d9542\"}",
+    "{\"index\": 1, \"timestamp\": \"2026-11-26T12:00:00+00:00\", \"prev_hash\": \"2483f908bb99be973eeb8a3c1b3b421e070ac01fcdc47ce03f64ec920e8d9542\", \"event\": {\"seq\": 1, \"note\": \"event-1\"}, \"hash\": \"68d5b68bdce4154c147fd4bfc646e5dc35e8338e785a8a4b3b7f8ed79a9a9c83\"}",
+    "{\"checkpoint\": true, \"index\": 2, \"merkle_root\": \"da0216bb65c7411fdad0f2e6ab08071eeee789f2761d003100e0d24ccb2554ee\", \"key_id\": \"3eb6ecf002ca585d\", \"timestamp\": \"2026-11-26T12:00:00+00:00\", \"signature\": \"qqblqQvDUVWdp1cYq57FX8WrSzFIWiefRlO5R5WL1y+5yAowNLgGdJ1OD/FJUh8jGlYnbUh3SXMtVQMGU+0KAg==\"}",
+    "{\"index\": 2, \"timestamp\": \"2026-11-26T12:00:00+00:00\", \"prev_hash\": \"68d5b68bdce4154c147fd4bfc646e5dc35e8338e785a8a4b3b7f8ed79a9a9c83\", \"event\": {\"seq\": 2, \"note\": \"event-2\"}, \"hash\": \"ebd4e25512bc89039f286e14b22a8fdc990144332f1e2dbee426a3c278b05529\"}",
+    "{\"index\": 3, \"timestamp\": \"2026-11-26T12:00:00+00:00\", \"prev_hash\": \"ebd4e25512bc89039f286e14b22a8fdc990144332f1e2dbee426a3c278b05529\", \"event\": {\"seq\": 3, \"note\": \"event-3\"}, \"hash\": \"765b85bcccc4086dc0e09673c46d33b9ffe0a50da5df97178d676f0309a127da\"}",
+    "{\"checkpoint\": true, \"index\": 4, \"merkle_root\": \"286d01d16b9ae612b61a4053d81063bca996ba0c0333442fca85d55781e597a8\", \"key_id\": \"3eb6ecf002ca585d\", \"timestamp\": \"2026-11-26T12:00:00+00:00\", \"signature\": \"w5acmQS0aBO0aFfCGuO35q7sed2OM0+4fEZHZJAQoCvryTJngV3B8TeqPG7+/cL+//Lua8N4MV+wD+gaA4sdBQ==\"}",
+    "{\"index\": 4, \"timestamp\": \"2026-11-26T12:00:00+00:00\", \"prev_hash\": \"765b85bcccc4086dc0e09673c46d33b9ffe0a50da5df97178d676f0309a127da\", \"event\": {\"seq\": 4, \"note\": \"event-4\"}, \"hash\": \"76a1c0b59c09c9d3eb6cab4f68c4aa149832b70f6774fc9b32a869564f36e523\"}",
+    "{\"checkpoint\": true, \"index\": 5, \"merkle_root\": \"279cfe52388866777a1f9e082ab004e9f2053e8296e48d9e2ceb8f8a977ba34c\", \"key_id\": \"3eb6ecf002ca585d\", \"timestamp\": \"2026-11-26T12:00:00+00:00\", \"signature\": \"Cr2WUuRChn2ZC0XQ1ZxfozngiNdfHA1QVRnhcJo6cNZDuGELhRgc25m801bJVz6WRJXMnhJdpSUGCFuMq9L0BQ==\"}"
+  ],
+  "chain_id": "chain-a",
+  "statement": {
+    "entry_profile": "urn:raucle:scitt:receipt-chain-head:v1",
+    "chain_id": "chain-a",
+    "chain_head": {
+      "index": 4,
+      "hash": "76a1c0b59c09c9d3eb6cab4f68c4aa149832b70f6774fc9b32a869564f36e523"
+    }
+  },
+  "signature": "aWFuY2hvci1zaWduYXR1cmUtcGF0aC1wbGFjZWhvbGRlcg==",
+  "expected": {
+    "status": "TRANSPARENCY-ANCHORED",
+    "head_index": 4,
+    "head_hash": "76a1c0b59c09c9d3eb6cab4f68c4aa149832b70f6774fc9b32a869564f36e523"
+  }
+}

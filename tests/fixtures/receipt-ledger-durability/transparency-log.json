@@ -1,0 +1,147 @@
+{
+  "profile": "hosted transparency log: registry entries + signed epoch checkpoints",
+  "org": "anchorco",
+  "entries": [
+    {
+      "org": "anchorco",
+      "sequence": 1,
+      "prev_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "receipt_digest": "sha256:89a7274dbce1e9bf870430b822d7cc3a39c0f2789ebefb6db7b1eef41c1041ce",
+      "payload_digest": null,
+      "registered_at": 1700100001,
+      "entry_hash": "sha256:0b7e97fe8bbdc4c2ae7ad5c6a19b6d8b4140306af4548503113b01112e45a2a0"
+    },
+    {
+      "org": "anchorco",
+      "sequence": 2,
+      "prev_hash": "sha256:0b7e97fe8bbdc4c2ae7ad5c6a19b6d8b4140306af4548503113b01112e45a2a0",
+      "receipt_digest": "sha256:a8b4d1c2bfec9fe64d3a9ce724f8f0e8930483f7042cfd40a469a19dc3d770a0",
+      "payload_digest": null,
+      "registered_at": 1700100002,
+      "entry_hash": "sha256:60ab7e3adf6210e95ab7dc844d1544039b8cdf2a4b36ba4a2a125d9a74492247"
+    },
+    {
+      "org": "anchorco",
+      "sequence": 3,
+      "prev_hash": "sha256:60ab7e3adf6210e95ab7dc844d1544039b8cdf2a4b36ba4a2a125d9a74492247",
+      "receipt_digest": "sha256:8c35ea0dd2a3b5c1bbb9ebc727abb45745bdde6908099286d9b2269270392f8b",
+      "payload_digest": null,
+      "registered_at": 1700100003,
+      "entry_hash": "sha256:b28ee723b8dc192bd06209dd42504d8efb4c6f6d8578b7393af28ba362b756d9"
+    },
+    {
+      "org": "anchorco",
+      "sequence": 4,
+      "prev_hash": "sha256:b28ee723b8dc192bd06209dd42504d8efb4c6f6d8578b7393af28ba362b756d9",
+      "receipt_digest": "sha256:081e90e41942b47b83072d480a3076a2df948adb8932c352da967c4dee1ec28a",
+      "payload_digest": null,
+      "registered_at": 1700100004,
+      "entry_hash": "sha256:a8347617e9385b8e5c23fd1a0746fee310133e7f439fd08c97743ffe73206feb"
+    },
+    {
+      "org": "anchorco",
+      "sequence": 5,
+      "prev_hash": "sha256:a8347617e9385b8e5c23fd1a0746fee310133e7f439fd08c97743ffe73206feb",
+      "receipt_digest": "sha256:069fd28e24b64e797043c64ba7820ddfc9f2e216c340b412c65ecba8f90b5143",
+      "payload_digest": null,
+      "registered_at": 1700100005,
+      "entry_hash": "sha256:3c585b850e0fa0a0e13876876b3a38bd4c04e2839d639fcaf2b4dab49a98bdcf"
+    }
+  ],
+  "operator_public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEALXbT5y7cFHUileB1PWx+YY1xMm+X0qsMzYuXcCDL7IU=\n-----END PUBLIC KEY-----\n",
+  "inclusion_proof": {
+    "org": "anchorco",
+    "sequence": 1,
+    "entries": [
+      {
+        "org": "anchorco",
+        "sequence": 1,
+        "prev_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "receipt_digest": "sha256:89a7274dbce1e9bf870430b822d7cc3a39c0f2789ebefb6db7b1eef41c1041ce",
+        "payload_digest": null,
+        "registered_at": 1700100001,
+        "entry_hash": "sha256:0b7e97fe8bbdc4c2ae7ad5c6a19b6d8b4140306af4548503113b01112e45a2a0"
+      },
+      {
+        "org": "anchorco",
+        "sequence": 2,
+        "prev_hash": "sha256:0b7e97fe8bbdc4c2ae7ad5c6a19b6d8b4140306af4548503113b01112e45a2a0",
+        "receipt_digest": "sha256:a8b4d1c2bfec9fe64d3a9ce724f8f0e8930483f7042cfd40a469a19dc3d770a0",
+        "payload_digest": null,
+        "registered_at": 1700100002,
+        "entry_hash": "sha256:60ab7e3adf6210e95ab7dc844d1544039b8cdf2a4b36ba4a2a125d9a74492247"
+      },
+      {
+        "org": "anchorco",
+        "sequence": 3,
+        "prev_hash": "sha256:60ab7e3adf6210e95ab7dc844d1544039b8cdf2a4b36ba4a2a125d9a74492247",
+        "receipt_digest": "sha256:8c35ea0dd2a3b5c1bbb9ebc727abb45745bdde6908099286d9b2269270392f8b",
+        "payload_digest": null,
+        "registered_at": 1700100003,
+        "entry_hash": "sha256:b28ee723b8dc192bd06209dd42504d8efb4c6f6d8578b7393af28ba362b756d9"
+      },
+      {
+        "org": "anchorco",
+        "sequence": 4,
+        "prev_hash": "sha256:b28ee723b8dc192bd06209dd42504d8efb4c6f6d8578b7393af28ba362b756d9",
+        "receipt_digest": "sha256:081e90e41942b47b83072d480a3076a2df948adb8932c352da967c4dee1ec28a",
+        "payload_digest": null,
+        "registered_at": 1700100004,
+        "entry_hash": "sha256:a8347617e9385b8e5c23fd1a0746fee310133e7f439fd08c97743ffe73206feb"
+      },
+      {
+        "org": "anchorco",
+        "sequence": 5,
+        "prev_hash": "sha256:a8347617e9385b8e5c23fd1a0746fee310133e7f439fd08c97743ffe73206feb",
+        "receipt_digest": "sha256:069fd28e24b64e797043c64ba7820ddfc9f2e216c340b412c65ecba8f90b5143",
+        "payload_digest": null,
+        "registered_at": 1700100005,
+        "entry_hash": "sha256:3c585b850e0fa0a0e13876876b3a38bd4c04e2839d639fcaf2b4dab49a98bdcf"
+      }
+    ],
+    "size": 5,
+    "head_hash": "sha256:3c585b850e0fa0a0e13876876b3a38bd4c04e2839d639fcaf2b4dab49a98bdcf",
+    "checkpoint_jws": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsicmF1Y2xlL3YxIl0sImtpZCI6InJhdWNsZS1wb3J0YWwtdGVzdCIsInJhdWNsZS92MSI6InRyYW5zcGFyZW5jeSIsInR5cCI6InRyYW5zcGFyZW5jeS1lcG9jaC92MSJ9.eyJlcG9jaCI6NSwiaGVhZF9oYXNoIjoic2hhMjU2OjNjNTg1Yjg1MGUwZmEwYTBlMTM4NzY4NzZiM2EzOGJkNGMwNGUyODM5ZDYzOWZjYWYyYjRkYWI0OWE5OGJkY2YiLCJpYXQiOjE3MDAwMDAwMDUsImlzcyI6InJhdWNsZS1wb3J0YWwiLCJub25jZSI6IjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIiwib3JnIjoiYW5jaG9yY28iLCJzaXplIjo1fQ.NWQFIDCC3BCTEEdiVhrUrH4DFgA-i3v9wqL5PnGg0_vN_U0J90py9axLYiOvgrZQU8Ld2qfCgeUlOSPuXBUgAw"
+  },
+  "consistency_proof": {
+    "org": "anchorco",
+    "from_size": 3,
+    "to_size": 5,
+    "entries": [
+      {
+        "org": "anchorco",
+        "sequence": 4,
+        "prev_hash": "sha256:b28ee723b8dc192bd06209dd42504d8efb4c6f6d8578b7393af28ba362b756d9",
+        "receipt_digest": "sha256:081e90e41942b47b83072d480a3076a2df948adb8932c352da967c4dee1ec28a",
+        "payload_digest": null,
+        "registered_at": 1700100004,
+        "entry_hash": "sha256:a8347617e9385b8e5c23fd1a0746fee310133e7f439fd08c97743ffe73206feb"
+      },
+      {
+        "org": "anchorco",
+        "sequence": 5,
+        "prev_hash": "sha256:a8347617e9385b8e5c23fd1a0746fee310133e7f439fd08c97743ffe73206feb",
+        "receipt_digest": "sha256:069fd28e24b64e797043c64ba7820ddfc9f2e216c340b412c65ecba8f90b5143",
+        "payload_digest": null,
+        "registered_at": 1700100005,
+        "entry_hash": "sha256:3c585b850e0fa0a0e13876876b3a38bd4c04e2839d639fcaf2b4dab49a98bdcf"
+      }
+    ],
+    "from_checkpoint_jws": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsicmF1Y2xlL3YxIl0sImtpZCI6InJhdWNsZS1wb3J0YWwtdGVzdCIsInJhdWNsZS92MSI6InRyYW5zcGFyZW5jeSIsInR5cCI6InRyYW5zcGFyZW5jeS1lcG9jaC92MSJ9.eyJlcG9jaCI6MywiaGVhZF9oYXNoIjoic2hhMjU2OmIyOGVlNzIzYjhkYzE5MmJkMDYyMDlkZDQyNTA0ZDhlZmI0YzZmNmQ4NTc4YjczOTNhZjI4YmEzNjJiNzU2ZDkiLCJpYXQiOjE3MDAwMDAwMDMsImlzcyI6InJhdWNsZS1wb3J0YWwiLCJub25jZSI6IjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIiwib3JnIjoiYW5jaG9yY28iLCJzaXplIjozfQ.Is_5PN_4SanuPKfMrkA1Bktuql_d73Og5M_OgjrdGE7KxGQVMDnTjVW8ixUlCtbTzaMmTPZy3WAsxAeaAClIBQ",
+    "to_checkpoint_jws": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsicmF1Y2xlL3YxIl0sImtpZCI6InJhdWNsZS1wb3J0YWwtdGVzdCIsInJhdWNsZS92MSI6InRyYW5zcGFyZW5jeSIsInR5cCI6InRyYW5zcGFyZW5jeS1lcG9jaC92MSJ9.eyJlcG9jaCI6NSwiaGVhZF9oYXNoIjoic2hhMjU2OjNjNTg1Yjg1MGUwZmEwYTBlMTM4NzY4NzZiM2EzOGJkNGMwNGUyODM5ZDYzOWZjYWYyYjRkYWI0OWE5OGJkY2YiLCJpYXQiOjE3MDAwMDAwMDUsImlzcyI6InJhdWNsZS1wb3J0YWwiLCJub25jZSI6IjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIiwib3JnIjoiYW5jaG9yY28iLCJzaXplIjo1fQ.NWQFIDCC3BCTEEdiVhrUrH4DFgA-i3v9wqL5PnGg0_vN_U0J90py9axLYiOvgrZQU8Ld2qfCgeUlOSPuXBUgAw"
+  },
+  "checkpoints": {
+    "1": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsicmF1Y2xlL3YxIl0sImtpZCI6InJhdWNsZS1wb3J0YWwtdGVzdCIsInJhdWNsZS92MSI6InRyYW5zcGFyZW5jeSIsInR5cCI6InRyYW5zcGFyZW5jeS1lcG9jaC92MSJ9.eyJlcG9jaCI6MSwiaGVhZF9oYXNoIjoic2hhMjU2OjBiN2U5N2ZlOGJiZGM0YzJhZTdhZDVjNmExOWI2ZDhiNDE0MDMwNmFmNDU0ODUwMzExM2IwMTExMmU0NWEyYTAiLCJpYXQiOjE3MDAwMDAwMDEsImlzcyI6InJhdWNsZS1wb3J0YWwiLCJub25jZSI6IjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIiwib3JnIjoiYW5jaG9yY28iLCJzaXplIjoxfQ.ECSbDhH1sj5LTkkrcK_qY94X3bBuYo998STo_PlhuyLu1KsjUzAo-zY505qE_33mIUcRVOn9_CdoAi5_rK75Dg",
+    "3": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsicmF1Y2xlL3YxIl0sImtpZCI6InJhdWNsZS1wb3J0YWwtdGVzdCIsInJhdWNsZS92MSI6InRyYW5zcGFyZW5jeSIsInR5cCI6InRyYW5zcGFyZW5jeS1lcG9jaC92MSJ9.eyJlcG9jaCI6MywiaGVhZF9oYXNoIjoic2hhMjU2OmIyOGVlNzIzYjhkYzE5MmJkMDYyMDlkZDQyNTA0ZDhlZmI0YzZmNmQ4NTc4YjczOTNhZjI4YmEzNjJiNzU2ZDkiLCJpYXQiOjE3MDAwMDAwMDMsImlzcyI6InJhdWNsZS1wb3J0YWwiLCJub25jZSI6IjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIiwib3JnIjoiYW5jaG9yY28iLCJzaXplIjozfQ.Is_5PN_4SanuPKfMrkA1Bktuql_d73Og5M_OgjrdGE7KxGQVMDnTjVW8ixUlCtbTzaMmTPZy3WAsxAeaAClIBQ",
+    "5": "eyJhbGciOiJFZERTQSIsImNyaXQiOlsicmF1Y2xlL3YxIl0sImtpZCI6InJhdWNsZS1wb3J0YWwtdGVzdCIsInJhdWNsZS92MSI6InRyYW5zcGFyZW5jeSIsInR5cCI6InRyYW5zcGFyZW5jeS1lcG9jaC92MSJ9.eyJlcG9jaCI6NSwiaGVhZF9oYXNoIjoic2hhMjU2OjNjNTg1Yjg1MGUwZmEwYTBlMTM4NzY4NzZiM2EzOGJkNGMwNGUyODM5ZDYzOWZjYWYyYjRkYWI0OWE5OGJkY2YiLCJpYXQiOjE3MDAwMDAwMDUsImlzcyI6InJhdWNsZS1wb3J0YWwiLCJub25jZSI6IjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwIiwib3JnIjoiYW5jaG9yY28iLCJzaXplIjo1fQ.NWQFIDCC3BCTEEdiVhrUrH4DFgA-i3v9wqL5PnGg0_vN_U0J90py9axLYiOvgrZQU8Ld2qfCgeUlOSPuXBUgAw"
+  },
+  "expected": {
+    "size": 5,
+    "head_hash": "sha256:3c585b850e0fa0a0e13876876b3a38bd4c04e2839d639fcaf2b4dab49a98bdcf",
+    "checkpoints_sizes": [
+      1,
+      3,
+      5
+    ]
+  }
+}
