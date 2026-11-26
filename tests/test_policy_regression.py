@@ -515,3 +515,26 @@ def test_cli_missing_dependency_writes_environment_error_report(tmp_path, monkey
     assert result == 2
     assert report["status"] == "error"
     assert report["error_code"] == "dependency_unavailable"
+
+
+def test_write_report_refuses_root_and_home_destinations():
+    with pytest.raises(RegressionInputError, match="output_forbidden_path"):
+        policy_regression._write_report("/", {"status": "passed"})
+    with pytest.raises(RegressionInputError, match="output_forbidden_path"):
+        policy_regression._write_report("~", {"status": "passed"})
+
+
+def test_cli_refuses_unusable_report_destination():
+    # Refusal happens before any input read; nothing is written and the
+    # exit code is the named-refusal 2, never a traceback.
+    result = policy_regression.main(
+        [
+            "--policy",
+            "policy.yaml",
+            "--scenarios",
+            "scenarios.json",
+            "--output",
+            "~",
+        ]
+    )
+    assert result == 2

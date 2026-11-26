@@ -65,9 +65,14 @@ def _sha256(data: bytes) -> str:
 
 
 def _read_bounded(path: str | Path, label: str) -> bytes:
-    """Read at most MAX_INPUT_BYTES + 1, so the bound applies before allocation."""
-    source = Path(path)
+    """Read at most MAX_INPUT_BYTES + 1, so the bound applies before allocation.
+
+    The path is canonicalised before any read: tilde expansion and traversal
+    components collapse onto the physical target, and the read hits exactly
+    that canonical file (pythonsecurity:S8707 CLI-input pattern).
+    """
     try:
+        source = Path(path).expanduser().resolve()
         if not source.is_file():
             raise RegressionInputError(f"{label}_not_a_file")
         with source.open("rb") as handle:
@@ -353,8 +358,22 @@ def _error_report(
     return report
 
 
+def _write_target(path: str | Path) -> Path:
+    """Canonicalise the report destination and refuse unusable targets.
+
+    A CLI-supplied write destination resolves (tilde expansion, traversal
+    components, symlink aliasing) onto the physical target and is refused
+    when that target is the filesystem root or the home directory
+    (pythonsecurity:S8707 write-sink hardening).
+    """
+    destination = Path(path).expanduser().resolve()
+    if destination == Path(destination.root) or destination == Path.home():
+        raise RegressionInputError("output_forbidden_path")
+    return destination
+
+
 def _write_report(path: str | Path, report: dict[str, Any]) -> None:
-    destination = Path(path)
+    destination = _write_target(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     temporary.write_text(
@@ -377,6 +396,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        report_path = _write_target(args.output)
+    except RegressionInputError as exc:
+        print(f"Raucle policy regression refused: {exc}", file=sys.stderr)
+        return 2
+
+    try:
         policy_bytes = _read_bounded(args.policy, "policy")
         scenarios_bytes = _read_bounded(args.scenarios, "scenarios")
         report = run_regression(
@@ -384,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
             scenarios_bytes,
             engine_commit=args.engine_commit,
         )
-        _write_report(args.output, report)
+        _write_report(report_path, report)
         print(
             f"Raucle policy regression {report['status']}: "
             f"{report['summary']['passed']}/{report['summary']['total']} scenarios passed "
@@ -393,12 +418,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report["status"] == "passed" else 1
     except RegressionInputError as exc:
         report = _error_report(args.engine_commit, str(exc), [])
-        _write_report(args.output, report)
+        _write_report(report_path, report)
         print(f"Raucle policy regression refused: {exc}", file=sys.stderr)
         return 2
     except RegressionEnvironmentError as exc:
         report = _error_report(args.engine_commit, str(exc), [])
-        _write_report(args.output, report)
+        _write_report(report_path, report)
         print("Raucle policy regression failed: dependency_unavailable", file=sys.stderr)
         return 2
     except RegressionExecutionError as exc:
@@ -411,12 +436,12 @@ def main(argv: list[str] | None = None) -> int:
             engine_version=exc.engine_version,
             dependency_versions=exc.dependency_versions,
         )
-        _write_report(args.output, report)
+        _write_report(report_path, report)
         print("Raucle policy regression failed: engine_error", file=sys.stderr)
         return 2
     except Exception:
         report = _error_report(args.engine_commit, "engine_error", [])
-        _write_report(args.output, report)
+        _write_report(report_path, report)
         print("Raucle policy regression failed: engine_error", file=sys.stderr)
         return 2
 
