@@ -8,6 +8,7 @@ import pytest
 import raucle.policy_regression as policy_regression
 from raucle.policy_regression import (
     MAX_INPUT_BYTES,
+    RegressionEnvironmentError,
     RegressionExecutionError,
     RegressionInputError,
     _error_report,
@@ -482,3 +483,12 @@ def test_cli_engine_error_preserves_partial_hashes(tmp_path, monkeypatch):
     assert report["executed"] == partial
     assert report["policy_sha256"] == hashlib.sha256(POLICY_A).hexdigest()
     assert report["scenarios_sha256"] == hashlib.sha256(SCENARIOS).hexdigest()
+
+
+
+def test_missing_yaml_dependency_is_environment_error(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "yaml", None)
+    with pytest.raises(RegressionEnvironmentError, match="dependency_unavailable"):
+        policy_regression._validate_policy(POLICY_A)
