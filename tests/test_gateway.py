@@ -188,7 +188,6 @@ class TestSIEMForwarder:
         forwarder.forward({"event": "test"})
         assert len(forwarder.buffered_events()) == 1
 
-
     def test_exporter_failure_does_not_change_gate_decision(self, tmp_path, monkeypatch):
         """A failed telemetry export is an evidence-delivery fault, not an auth fault."""
         policy_path = tmp_path / "policies.yaml"
