@@ -177,6 +177,12 @@ testpaths = ["tests"]
 # Decorate-only: tests that need the async loop must use @pytest.mark.asyncio
 # explicitly. (Switch to ``auto`` later if every async test is the same shape.)
 asyncio_mode = "strict"
+# The bench marker: indicative cost measurements over deterministic
+# workloads (issue 342 slice FOUR). The tests print numbers and assert
+# verification correctness only - never a timing bound, never an SLO.
+markers = [
+    "bench: indicative proof-cost measurement (deterministic workload; numbers only, no SLO)",
+]
 
 [tool.mypy]
 # Q9 (external v0.23.7 review): type checking introduced as a baseline gate,
