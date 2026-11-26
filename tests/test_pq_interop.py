@@ -129,7 +129,8 @@ class TestShippedEmission:
     def test_receipt_is_three_segment_compact_jws(self, pq1_receipt):
         jws = pq1_receipt["jws"]
         parts = jws.split(".")
-        assert len(parts) == 3 and jws.count(".") == 2, "untouched receipt is 3-segment Compact"
+        assert len(parts) == 3, "untouched receipt is 3-segment Compact"
+        assert jws.count(".") == 2, "untouched receipt is 3-segment Compact"
         header = json.loads(base64.urlsafe_b64decode(parts[0] + "=="))
         assert header["crit"] == ["raucle/v1", "raucle/pq1"]
         assert header["raucle/pq1"] == "ml-dsa-65"
@@ -174,8 +175,9 @@ class TestIndependentJoseLibrary:
         """
         if tuple(_resolved_version()) < (1, 8):
             pytest.skip("joserfc < 1.8 has no default signature-size bound")
+        jws_bytes = pq1_receipt["jws"].encode("ascii")
         with pytest.raises(ExceededSizeError, match="1024"):
-            extract_compact(pq1_receipt["jws"].encode("ascii"))
+            extract_compact(jws_bytes)
 
     def test_library_parses_framing_and_protected_header(self, pq1_receipt):
         compact = extract_compact(pq1_receipt["jws"].encode("ascii"), registry=_pq1_registry())
@@ -198,8 +200,9 @@ class TestIndependentJoseLibrary:
         """
         okp = OKPKey.import_key(pq1_receipt["ident"].public_key_pem())
         jws = pq1_receipt["jws"]
+        registry = _pq1_registry()
         with pytest.raises(UnsupportedHeaderError) as exc_info:
-            deserialize_compact(jws, okp, algorithms=["Ed25519"], registry=_pq1_registry())
+            deserialize_compact(jws, okp, algorithms=["Ed25519"], registry=registry)
         assert "raucle/pq1" in str(exc_info.value), (
             f"the rejection names the critical entry it refused, got: {exc_info.value}"
         )

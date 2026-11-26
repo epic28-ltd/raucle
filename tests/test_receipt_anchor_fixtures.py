@@ -126,7 +126,8 @@ class TestSealFixtures:
         fixture = _load("segment-seal-rotation.json")
         v1 = verify_seal_meta(fixture["meta_v1"], fixture["public_key_v1"].encode("ascii"))
         v2 = verify_seal_meta(fixture["meta_v2"], fixture["public_key_v2"].encode("ascii"))
-        assert v1.verified is True and v2.verified is True, (v1.reason, v2.reason)
+        assert v1.verified is True, (v1.reason, v2.reason)
+        assert v2.verified is True, (v1.reason, v2.reason)
         assert fixture["meta_v1"]["receipt_count"] == fixture["expected"]["receipt_count_v1"]
         assert fixture["meta_v2"]["receipt_count"] == fixture["expected"]["receipt_count_v2"]
         assert (
@@ -141,7 +142,8 @@ class TestSealFixtures:
         verdict = verify_seal_meta(fixture["meta_v2"], fixture["public_key_v1"].encode("ascii"))
         assert verdict.verified is False
         assert verdict.unsigned is False
-        assert verdict.reason is not None and "does not verify" in verdict.reason
+        assert verdict.reason is not None
+        assert "does not verify" in verdict.reason
 
     def test_a_doctored_committed_meta_refuses_by_name(self):
         fixture = _load("segment-seal.json")

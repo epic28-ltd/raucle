@@ -231,19 +231,18 @@ class TestEndToEnd:
 
         import pytest
 
+        args = [
+            "--changelog",
+            str(changelog_path),
+            "--version",
+            "0.4.0",
+            "--website-html",
+            str(website_path),
+            "--notes",
+            str(self._notes(tmp_path)),
+        ]
         with pytest.raises(SystemExit, match="markers RAUCLE_DETECT:VERSION"):
-            sync_website.main(
-                [
-                    "--changelog",
-                    str(changelog_path),
-                    "--version",
-                    "0.4.0",
-                    "--website-html",
-                    str(website_path),
-                    "--notes",
-                    str(self._notes(tmp_path)),
-                ]
-            )
+            sync_website.main(args)
 
 
 class TestCuratedNotes:
@@ -260,36 +259,34 @@ class TestCuratedNotes:
         notes_path.write_text("## What's new\n\nOnly a summary.\n")
         import pytest
 
+        args = [
+            "--changelog",
+            str(_write_changelog(tmp_path)),
+            "--version",
+            "0.4.0",
+            "--website-html",
+            str(_write_website(tmp_path)),
+            "--notes",
+            str(notes_path),
+        ]
         with pytest.raises(SystemExit, match="no '## Features' section"):
-            sync_website.main(
-                [
-                    "--changelog",
-                    str(_write_changelog(tmp_path)),
-                    "--version",
-                    "0.4.0",
-                    "--website-html",
-                    str(_write_website(tmp_path)),
-                    "--notes",
-                    str(notes_path),
-                ]
-            )
+            sync_website.main(args)
 
     def test_missing_notes_file_is_an_error(self, tmp_path):
         import pytest
 
+        args = [
+            "--changelog",
+            str(_write_changelog(tmp_path)),
+            "--version",
+            "0.4.0",
+            "--website-html",
+            str(_write_website(tmp_path)),
+            "--notes",
+            str(tmp_path / "absent.md"),
+        ]
         with pytest.raises(SystemExit, match="curated notes file not found"):
-            sync_website.main(
-                [
-                    "--changelog",
-                    str(_write_changelog(tmp_path)),
-                    "--version",
-                    "0.4.0",
-                    "--website-html",
-                    str(_write_website(tmp_path)),
-                    "--notes",
-                    str(tmp_path / "absent.md"),
-                ]
-            )
+            sync_website.main(args)
 
     def test_accepts_indented_star_bullets_and_strips_inline_markdown(self):
         notes = (

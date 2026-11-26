@@ -174,7 +174,8 @@ class TestReceiptLedgerTamperClasses:
 
         first = _verify_receipts([_fork_line("fork-a")], tmp_path)
         second = _verify_receipts([_fork_line("fork-b")], tmp_path)
-        assert first.valid is True and second.valid is True
+        assert first.valid is True
+        assert second.valid is True
 
 
 # ---------------------------------------------------------------------------
@@ -221,9 +222,8 @@ class TestAuditChainTamperClasses:
         report = self._verify(tmp_path, pem, _drop(lines, event_positions[2]))
         assert report.valid is False
         joined = " | ".join(report.errors)
-        assert "checkpoint at index" in joined and "does not match chain head" in joined, (
-            report.errors
-        )
+        assert "checkpoint at index" in joined, report.errors
+        assert "does not match chain head" in joined, report.errors
 
     def test_rolled_back_chain_passes_alone_and_refuses_against_the_retained_head(self, tmp_path):
         """The rollback class end to end: a reconstructed shorter chain -
@@ -494,7 +494,8 @@ class TestSealReconciliation:
         forged["receipt_count"] = sealed_count - 1
         verdict = verify_seal_meta(forged, seeded_public_pem(SEAL_SEED))
         assert verdict.verified is False
-        assert verdict.reason is not None and "does not verify" in verdict.reason
+        assert verdict.reason is not None
+        assert "does not verify" in verdict.reason
 
     def test_committed_seal_fixture_still_reconciles(self):
         """Currency: the committed seal fixture verifies offline."""
