@@ -391,8 +391,9 @@ class TestRetirement:
         while the old key is still active, the impersonation control holds."""
         reg = TrustRegistry(tmp_path / "r.jsonl")
         reg.publish(_issuer("org-a").public_key_pem, issuer="Org A")
+        impersonation_pem = _issuer("org-a").public_key_pem
         with pytest.raises(ValueError, match="collides"):
-            reg.publish(_issuer("org-a").public_key_pem, issuer="org a")
+            reg.publish(impersonation_pem, issuer="org a")
 
     def test_registry_with_retired_and_active_reloads_and_verifies(self, tmp_path):
         """The post-rotation registry is loadable: issuer-name uniqueness
@@ -452,7 +453,8 @@ class TestRetirement:
         assert reg.public_key(kid) is None
         rec = reg.resolve(kid)
         assert rec is not None
-        assert rec.retired and rec.revoked
+        assert rec.retired
+        assert rec.revoked
 
 
 def _read_entries(path) -> list[dict]:
@@ -721,8 +723,9 @@ def test_append_write_failure_rolls_back_file_and_memory(tmp_path, monkeypatch):
         return handle
 
     monkeypatch.setattr(builtins, "open", failing_open)
+    failed_pem = _issuer("failed").public_key_pem
     with pytest.raises(OSError, match="simulated disk full"):
-        reg.publish(_issuer("failed").public_key_pem, issuer="Failed")
+        reg.publish(failed_pem, issuer="Failed")
 
     assert path.read_bytes() == before_bytes
     assert reg._entries == before_entries
@@ -754,8 +757,9 @@ def test_append_fsync_failure_rolls_back_file_and_memory(tmp_path, monkeypatch):
         return real_fsync(fd)
 
     monkeypatch.setattr(trust_registry_module.os, "fsync", fail_first_fsync)
+    failed_pem = _issuer("failed-fsync").public_key_pem
     with pytest.raises(OSError, match="simulated fsync failure"):
-        reg.publish(_issuer("failed-fsync").public_key_pem, issuer="Failed Fsync")
+        reg.publish(failed_pem, issuer="Failed Fsync")
 
     assert calls == 2
     assert path.read_bytes() == before_bytes
