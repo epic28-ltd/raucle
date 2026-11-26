@@ -55,6 +55,20 @@ class ReplayStore(Protocol):
     def consume(self, replay_key: str) -> bool: ...
 
 
+def _is_replay_key_collision(exc: sqlite3.IntegrityError) -> bool:
+    """Recognise duplicate-key errors on Python 3.10 as well as newer runtimes."""
+    error_name = getattr(exc, "sqlite_errorname", "")
+    if error_name:
+        return error_name in {
+            "SQLITE_CONSTRAINT_PRIMARYKEY",
+            "SQLITE_CONSTRAINT_UNIQUE",
+        }
+    message = str(exc)
+    return message.startswith(
+        ("UNIQUE constraint failed:", "PRIMARY KEY constraint failed:")
+    )
+
+
 class SqliteReplayStore:
     """File-backed :class:`ReplayStore` on the receipt-index sqlite idiom.
 
@@ -109,10 +123,7 @@ class SqliteReplayStore:
             except sqlite3.IntegrityError as exc:
                 with contextlib.suppress(sqlite3.Error):
                     self._conn.execute("ROLLBACK")
-                if getattr(exc, "sqlite_errorname", "") in {
-                    "SQLITE_CONSTRAINT_PRIMARYKEY",
-                    "SQLITE_CONSTRAINT_UNIQUE",
-                }:
+                if _is_replay_key_collision(exc):
                     return False
                 raise
             except sqlite3.Error:

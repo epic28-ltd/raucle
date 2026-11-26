@@ -552,6 +552,27 @@ def test_concurrent_same_request_accepts_exactly_once(two_orgs, tmp_path, replay
     assert all("replay" in o.reason for o in outcomes if not o.accepted)
 
 
+def test_replay_collision_classifier_supports_python310_errors():
+    import sqlite3
+
+    from raucle.replay_store import _is_replay_key_collision
+
+    assert _is_replay_key_collision(sqlite3.IntegrityError("UNIQUE constraint failed: replay_nonces.replay_key"))
+    assert _is_replay_key_collision(sqlite3.IntegrityError("PRIMARY KEY constraint failed"))
+    assert not _is_replay_key_collision(sqlite3.IntegrityError("CHECK constraint failed"))
+
+
+def test_replay_store_propagates_non_integrity_sqlite_errors(tmp_path):
+    import sqlite3
+
+    from raucle.replay_store import SqliteReplayStore
+
+    store = SqliteReplayStore(tmp_path / "replay.sqlite3")
+    store.close()
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        store.consume("issuer:token:nonce")
+
+
 def test_replay_store_does_not_misclassify_storage_constraint_as_replay(tmp_path):
     """Only a primary-key collision is a replay; storage failures propagate."""
     import sqlite3
