@@ -69,7 +69,8 @@ runs:
           /*) report_path="$REPORT_FILE" ;;
           *) report_path="$GITHUB_WORKSPACE/$REPORT_FILE" ;;
         esac
-        python -m raucle.policy_regression \
+        cd "$RUNNER_TEMP"
+        python -I -m raucle.policy_regression \
           --policy "$policy_path" \
           --scenarios "$scenarios_path" \
           --output "$report_path" \
