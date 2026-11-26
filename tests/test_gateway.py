@@ -324,6 +324,28 @@ class TestRaucleGateway:
         result = gateway_with_policies.reload_policies()
         assert result["status"] == "ok"
 
+    def test_seal_refusal_during_reload_preserves_active_policy(
+        self, gateway_with_policies, monkeypatch
+    ):
+        """A rejected candidate must not replace the currently active rules."""
+        from raucle.errors import PolicySealRefused
+
+        gateway = gateway_with_policies
+        active_rules = gateway._all_rules
+
+        def refuse_candidate(_files):
+            raise PolicySealRefused("simulated policy seal mismatch")
+
+        monkeypatch.setattr(gateway, "_load_rules", refuse_candidate)
+        reload_result = gateway.reload_policies()
+
+        assert reload_result["status"] == "error"
+        assert gateway._all_rules is active_rules
+        decision = gateway.check_tool_call(
+            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc"
+        )
+        assert decision["decision"] == "allow"
+
 
 @pytest.fixture
 def approval_only_gateway(tmp_path):
