@@ -660,3 +660,139 @@ def test_four_handshake_states_unchanged_for_fresh_nonces(two_orgs, replay_store
     )
     assert not unknown.accepted
     assert "not in the registry" in unknown.reason
+
+def test_replay_collision_classifier_supports_python310_errors():
+    import sqlite3
+
+    from raucle.replay_store import _is_replay_key_collision
+
+    unique_error = sqlite3.IntegrityError("UNIQUE constraint failed: replay_nonces.replay_key")
+    assert _is_replay_key_collision(unique_error)
+    assert _is_replay_key_collision(sqlite3.IntegrityError("PRIMARY KEY constraint failed"))
+    assert not _is_replay_key_collision(sqlite3.IntegrityError("CHECK constraint failed"))
+
+
+def test_replay_store_propagates_non_integrity_sqlite_errors(tmp_path):
+    import sqlite3
+
+    from raucle.replay_store import SqliteReplayStore
+
+    store = SqliteReplayStore(tmp_path / "replay.sqlite3")
+    store.close()
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        store.consume("issuer:token:nonce")
+
+
+def test_replay_store_does_not_misclassify_storage_constraint_as_replay(tmp_path):
+    """Only a primary-key collision is a replay; storage failures propagate."""
+    import sqlite3
+
+    from raucle.replay_store import SqliteReplayStore
+
+    store = SqliteReplayStore(tmp_path / "replay.sqlite3")
+    store._conn.execute(
+        """
+        CREATE TRIGGER reject_replay_insert
+        BEFORE INSERT ON replay_nonces
+        BEGIN
+            SELECT RAISE(ABORT, 'simulated replay-store write failure');
+        END
+        """
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="simulated replay-store write failure"):
+        store.consume("issuer:token:nonce")
+
+    # The failed transaction was rolled back; after the fault is removed,
+    # the same key can be consumed normally rather than being left in a
+    # poisoned connection transaction.
+    store._conn.execute("DROP TRIGGER reject_replay_insert")
+    assert store.consume("issuer:token:nonce") is True
+    assert store.consume("issuer:token:nonce") is False
+    store.close()
+
+
+def test_retention_window_purges_expired_tokens_nonce(tmp_path):
+    """Retention: a consumed nonce may be purged (and its key reused) only
+    after the retention window; live rows are never purged early."""
+    from raucle.replay_store import SqliteReplayStore
+
+    path = tmp_path / "replay.sqlite3"
+    store = SqliteReplayStore(path, retention_seconds=10)
+    assert store.consume("issuer:token:n-old") is True
+
+    # Age the row past the retention window by hand (a time-warp).
+    import sqlite3 as _sq
+
+    raw = _sq.connect(str(path))
+    raw.execute("UPDATE replay_nonces SET consumed_at = consumed_at - 1000")
+    raw.commit()
+    raw.close()
+
+    # The next consume triggers the retention sweep; the expired row is gone
+    # and its key is consumable again.
+    assert store.purge_expired() == 1
+    assert store.consume("issuer:token:n-old") is True
+
+    # A fresh row sits inside the window: a purge leaves it in place.
+    assert store.consume("issuer:token:n-new") is True
+    assert store.purge_expired() == 0
+    assert store.consume("issuer:token:n-new") is False
+
+
+def test_replay_store_default_keeps_rows_forever(tmp_path):
+    """No retention configured: the safe default retains everything (an operator
+    opt-in is required to forget nonces)."""
+    from raucle.replay_store import SqliteReplayStore
+
+    store = SqliteReplayStore(tmp_path / "replay.sqlite3")
+    assert store.consume("issuer:token:n1") is True
+    assert store.consume("issuer:token:n1") is False
+
+
+def test_four_handshake_states_unchanged_for_fresh_nonces(two_orgs, replay_store, tmp_path):
+    """The four result states a fresh nonce can produce carry through the
+    store unchanged: accepted, gate-denied, revoked-issuer, unknown-issuer."""
+    reg, iss_a, resp_b, token = two_orgs
+
+    ok = accept_call(
+        build_request(token, tool="transfer_funds", args={"to": "acct:b-co", "amount": 50}),
+        registry=reg,
+        responder_signer=resp_b,
+        responder_id="org-b.gateway",
+        replay=replay_store,
+    )
+    assert ok.accepted
+
+    injected = accept_call(
+        build_request(token, tool="transfer_funds", args={"to": "acct:attacker", "amount": 9900}),
+        registry=reg,
+        responder_signer=resp_b,
+        responder_id="org-b.gateway",
+        replay=replay_store,
+    )
+    assert not injected.accepted
+
+    reg.revoke(iss_a.key_id, reason="compromised")
+    revoked = accept_call(
+        build_request(token, tool="transfer_funds", args={"to": "acct:b-co", "amount": 5}),
+        registry=reg,
+        responder_signer=resp_b,
+        responder_id="org-b.gateway",
+        replay=replay_store,
+    )
+    assert not revoked.accepted
+    assert "revoked" in revoked.reason
+
+    reg2 = TrustRegistry(tmp_path / "registry-without-org-a.jsonl")  # no org A published
+    issuer_b = CapabilityIssuer.generate(issuer="stranger")
+    token_stranger = issuer_b.mint(agent_id="agent:s", tool="t", constraints={})
+    unknown = accept_call(
+        build_request(token_stranger, tool="t", args={}),
+        registry=reg2,
+        responder_signer=resp_b,
+        responder_id="org-b.gateway",
+        replay=replay_store,
+    )
+    assert not unknown.accepted
+    assert "not in the registry" in unknown.reason
