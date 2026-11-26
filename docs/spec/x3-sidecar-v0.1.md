@@ -109,8 +109,11 @@ receipt preserves mint time).
 ## The overflow contract (named, never silent)
 
 The submit queue is bounded. When it is full the sidecar answers `503`
-with the named error `receipt_sink_overflow` and the refused envelope's
-hash. The gateway then mints ONE advisory receipt, signed by the same
+with the named error `receipt_sink_overflow` and no request-supplied
+value is reflected back in the response body (S5131): the refused
+envelope's hash stays with the gateway, which already holds the envelope
+it minted. The gateway then mints ONE advisory receipt, signed by the
+same
 gate identity as every other receipt, with an `x_sidecar` extension
 (bounded disclosure: the refused hash, the named reason, the queue depth,
 the time; never content):
