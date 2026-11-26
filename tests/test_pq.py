@@ -717,8 +717,9 @@ class TestPQ1TestVectors:
             parse_hybrid_signature(middle_segment)
         # Current-form downgrade: 64-byte slot for a pq1 header.
         truncated = negatives["downgrade_truncates_concat_slot"]["input_jws"]
+        truncated_slot = truncated.split(".")[2]
         with pytest.raises(HybridVerificationError, match="exactly 3373 raw bytes"):
-            parse_hybrid_signature(truncated.split(".")[2])
+            parse_hybrid_signature(truncated_slot)
         # Current-form framing attack: reversed components stay frame-valid
         # (3373 bytes, one segment) but fail the Ed25519 component.
         swapped_slot = negatives["component_order_swapped"]["input_jws"].split(".")[2]
@@ -728,10 +729,11 @@ class TestPQ1TestVectors:
         ed_flip = negatives["ed_component_flipped_concat"]
         pq_flip = negatives["pq_component_flipped_concat"]
         for vec, match in ((ed_flip, "Ed25519"), (pq_flip, "ML-DSA-65")):
+            raw_slot = vec["input_jws"].split(".")[2]
             with pytest.raises(HybridVerificationError, match=match):
                 verify_hybrid(
                     prefix,
-                    vec["input_jws"].split(".")[2],
+                    raw_slot,
                     ed_pub,
                     pq_pub,
                 )

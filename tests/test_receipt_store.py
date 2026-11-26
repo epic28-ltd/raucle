@@ -256,16 +256,18 @@ class TestSealRefusesCorruptLines:
         restart = SegmentedReceiptStore(base_dir=store_dir, max_segment_bytes=1 << 20)
         # the named refusal fires at OPEN (the lazy resume on first append),
         # never silently past a torn tail
+        line3 = _line(3)
         with pytest.raises(ReceiptStoreSealRefused) as excinfo:
-            restart.append_line(_line(3))
+            restart.append_line(line3)
         assert "seg-000000.jsonl" in str(excinfo.value)
         assert "line 3" in str(excinfo.value)
         # fail closed: no segment was started, no orphan exists
         assert sorted(p.name for p in store_dir.glob("seg-*.jsonl")) == ["seg-000000.jsonl"]
         assert not (store_dir / "seg-000000.jsonl.meta").exists()
         # the refusal is re-raised on the next append (state un-poisoned)
+        line4 = _line(4)
         with pytest.raises(ReceiptStoreSealRefused):
-            restart.append_line(_line(4))
+            restart.append_line(line4)
 
     def test_clean_seal_keeps_the_meta_contract(self, store_dir):
         """The all-clean path seals with the same meta content as before:
