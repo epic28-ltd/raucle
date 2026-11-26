@@ -1839,6 +1839,27 @@ def _canonicalise_chain_path(path: str | Path) -> Path:
     return chain_path
 
 
+@dataclass
+class _ChainCollectors:
+    """Cross-receipt collectors threaded through the per-line extension
+    re-checks and read by the chain-end pin passes. The dicts and sets
+    are created once per verify run and mutated in place; the bundle
+    only holds the references (python:S107: the bundle replaces the
+    eleven-parameter collector tail of ``_verify_receipt_extensions``)."""
+
+    revoked_ids: set[str]
+    revocation_lines: dict[str, int]
+    lease_grants: dict[str, dict[str, Any]]
+    receipts_by_hash: dict[str, ProvenanceReceipt]
+    raw_lines_by_hash: dict[str, str]
+    intent_constraint_values: set[str]
+    tool_definition_latest: dict[str, dict[str, Any]]
+    tool_definition_drift: dict[str, int]
+    state_evidence_by_write: dict[str, dict[str, Any]]
+    covered_writes: dict[str, dict[str, Any]]
+    gate_tools_by_hash: dict[str, str]
+
+
 class ProvenanceVerifier:
     """Verify a provenance chain end-to-end.
 
@@ -2256,52 +2277,60 @@ class ProvenanceVerifier:
         line_no: int,
         receipt: ProvenanceReceipt,
         report: VerificationReport,
-        revoked_ids: set[str],
-        revocation_lines: dict[str, int],
-        lease_grants: dict[str, dict[str, Any]],
-        receipts_by_hash: dict[str, ProvenanceReceipt],
-        raw_lines_by_hash: dict[str, str],
-        intent_constraint_values: set[str],
-        tool_definition_latest: dict[str, dict[str, Any]],
-        tool_definition_drift: dict[str, int],
-        state_evidence_by_write: dict[str, dict[str, Any]],
-        covered_writes: dict[str, dict[str, Any]],
-        gate_tools_by_hash: dict[str, str],
+        collectors: _ChainCollectors,
     ) -> None:
         """v1.1/v1.2 extension re-checks for one receipt (extracted from
         verify_chain): one helper per extension family, called in the
         historical order so the per-line error sequence is unchanged.
-        The collectors (revocations, lease grants, receipts by hash)
-        thread through the helpers and mutate in place, as does
-        *report*."""
+        The collectors travel as one bundle (python:S107) and mutate
+        in place, as does *report*."""
         decoded, x_gate_payload = self._decode_gate_payload(raw)
         self._verify_delegated_authority_digest(x_gate_payload, line_no, report)
         self._verify_lease_extension(
-            decoded, line_no, report, lease_grants, revoked_ids, revocation_lines
+            decoded,
+            line_no,
+            report,
+            collectors.lease_grants,
+            collectors.revoked_ids,
+            collectors.revocation_lines,
         )
         self._verify_cascade_revocation(
             x_gate_payload,
             decoded,
             line_no,
             report,
-            revoked_ids,
-            revocation_lines,
-            receipts_by_hash,
-            intent_constraint_values,
+            collectors.revoked_ids,
+            collectors.revocation_lines,
+            collectors.receipts_by_hash,
+            collectors.intent_constraint_values,
         )
-        self._verify_task_intent(x_gate_payload, receipt, line_no, report, intent_constraint_values)
-        self._verify_harness_finding(decoded, line_no, report, receipts_by_hash)
-        self._verify_time_anchor(decoded, line_no, report, receipts_by_hash, raw_lines_by_hash)
+        self._verify_task_intent(
+            x_gate_payload, receipt, line_no, report, collectors.intent_constraint_values
+        )
+        self._verify_harness_finding(decoded, line_no, report, collectors.receipts_by_hash)
+        self._verify_time_anchor(
+            decoded, line_no, report, collectors.receipts_by_hash, collectors.raw_lines_by_hash
+        )
         self._verify_bilateral(decoded, line_no, receipt, report)
-        self._verify_x_dlp(decoded, line_no, report, receipts_by_hash)
+        self._verify_x_dlp(decoded, line_no, report, collectors.receipts_by_hash)
         self._verify_counterfactual(decoded, x_gate_payload, receipt, line_no, report)
         self._verify_tool_definition(
-            decoded, x_gate_payload, line_no, report, tool_definition_latest
+            x_gate_payload, line_no, report, collectors.tool_definition_latest
         )
-        self._collect_tool_definition_drift(decoded, line_no, tool_definition_drift)
-        self._verify_x_state(decoded, line_no, report, receipts_by_hash, state_evidence_by_write)
+        self._collect_tool_definition_drift(decoded, line_no, collectors.tool_definition_drift)
+        self._verify_x_state(
+            decoded,
+            line_no,
+            report,
+            collectors.receipts_by_hash,
+            collectors.state_evidence_by_write,
+        )
         self._collect_state_coverage(
-            x_gate_payload, receipt, line_no, covered_writes, gate_tools_by_hash
+            x_gate_payload,
+            receipt,
+            line_no,
+            collectors.covered_writes,
+            collectors.gate_tools_by_hash,
         )
 
     def _collect_tool_definition_drift(
@@ -2330,7 +2359,6 @@ class ProvenanceVerifier:
 
     def _verify_tool_definition(
         self,
-        decoded: Any,
         x_gate_payload: dict[str, Any],
         line_no: int,
         report: VerificationReport,
@@ -2482,7 +2510,7 @@ class ProvenanceVerifier:
         residual, never a crash)."""
         try:
             return json.loads(Path(manifest).read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 - unreadable manifest: residual, not a failure
+        except Exception:
             return None
 
     def _verify_bilateral(
@@ -3855,6 +3883,23 @@ class ProvenanceVerifier:
         # oversize bundle refuses before its remaining lines are parsed.
         bounds = self._bounds
         bundle_bytes_seen = 0
+        # python:S107: the chain-scoped collectors travel as one bundle
+        # (the per-line helper now takes five parameters); the same
+        # objects are shared, not copies, so every in-place mutation the
+        # helpers make is visible to the chain-end pin passes below.
+        collectors = _ChainCollectors(
+            revoked_ids=revoked_ids,
+            revocation_lines=revocation_lines,
+            lease_grants=lease_grants,
+            receipts_by_hash=receipts_by_hash,
+            raw_lines_by_hash=raw_lines_by_hash,
+            intent_constraint_values=intent_constraint_values,
+            tool_definition_latest=tool_definition_latest,
+            tool_definition_drift=tool_definition_drift,
+            state_evidence_by_write=state_evidence_by_write,
+            covered_writes=covered_writes,
+            gate_tools_by_hash=gate_tools_by_hash,
+        )
 
         with open(chain_path, encoding="utf-8") as fh:
             for line_no, line in enumerate(fh, start=1):
@@ -3894,23 +3939,7 @@ class ProvenanceVerifier:
                 # head-digest re-derivation (anchors bind the raw bytes)
                 raw_lines_by_hash[receipt.receipt_hash] = line
 
-                self._verify_receipt_extensions(
-                    raw,
-                    line_no,
-                    receipt,
-                    report,
-                    revoked_ids,
-                    revocation_lines,
-                    lease_grants,
-                    receipts_by_hash,
-                    raw_lines_by_hash,
-                    intent_constraint_values,
-                    tool_definition_latest,
-                    tool_definition_drift,
-                    state_evidence_by_write,
-                    covered_writes,
-                    gate_tools_by_hash,
-                )
+                self._verify_receipt_extensions(raw, line_no, receipt, report, collectors)
 
                 receipts_by_hash[receipt.receipt_hash] = receipt
                 report.receipt_count += 1
