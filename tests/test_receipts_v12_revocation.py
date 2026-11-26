@@ -608,3 +608,19 @@ def test_revocation_isolated_between_chains(tmp_path):
     assert report.valid, report.errors
     # and the gate still serves chain 1
     assert _gate(client, tokens["child1"], account="ACC-002").json()["decision"] == "allow"
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        b'{"token_id":"tok-good"}\nnot-json\n',
+        b'{"token_id":"tok-good"}\n{"reason":"missing id"}\n',
+        b'{"token_id":"tok-good"}\n[]\n',
+        b'{"token_id":"tok-good"}\n{"token_id":""}\n',
+    ],
+)
+def test_revocation_registry_corruption_is_rejected(tmp_path, data):
+    """A malformed registry must not silently drop revocations."""
+    with pytest.raises(ValueError, match="revocation registry"):
+        RaucleGateway._revoked_ids_from_bytes(data)
+

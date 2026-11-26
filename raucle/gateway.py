@@ -4406,15 +4406,25 @@ class RaucleGateway:
         (RAU-02 when a ``.meta`` sidecar marks the file), never a second
         read of the path."""
         ids: set[str] = set()
-        for line in data.decode("utf-8", errors="strict").splitlines():
+        for lineno, line in enumerate(data.decode("utf-8", errors="strict").splitlines(), 1):
             line = line.strip()
             if not line:
                 continue
             try:
-                ids.add(json.loads(line).get("token_id", ""))
-            except ValueError:
-                continue
-        return {i for i in ids if i}
+                record = json.loads(line)
+            except ValueError as exc:
+                raise ValueError(
+                    f"revocation registry contains invalid JSON on line {lineno}"
+                ) from exc
+            if not isinstance(record, dict):
+                raise ValueError(f"revocation registry record on line {lineno} must be an object")
+            token_id = record.get("token_id")
+            if not isinstance(token_id, str) or not token_id.strip():
+                raise ValueError(
+                    f"revocation registry record on line {lineno} has no valid token_id"
+                )
+            ids.add(token_id)
+        return ids
 
     def _load_registry_last_state(self, path: str, id_field: str) -> dict[str, str]:
         """P4.A v1: last-record-wins state map from a containment registry
