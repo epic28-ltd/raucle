@@ -170,8 +170,9 @@ def test_require_admin_key_raises_and_passes_by_name(tmp_path) -> None:
     pass-through when one is configured (the serving path's contract)."""
     from raucle.errors import AdminKeyMissingError
 
+    blank_cfg = _config(tmp_path, admin_api_key="")
     with pytest.raises(AdminKeyMissingError, match="admin key"):
-        gateway_server._require_admin_key(_config(tmp_path, admin_api_key=""))
+        gateway_server._require_admin_key(blank_cfg)
     gateway_server._require_admin_key(_config(tmp_path))  # key set: no raise
 
 

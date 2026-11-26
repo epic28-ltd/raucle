@@ -513,12 +513,13 @@ def test_definition_drift_and_state_evidence_coexist(tmp_path):
 def test_emit_state_evidence_refuses_unknown_pairing(tmp_path):
     gw, client, token = _gateway(tmp_path)
     write_id = _receipted_write(client, token)
+    digest = _read_digest()
     with pytest.raises(ValueError, match="pairing"):
         gw.emit_state_evidence(
             cited_receipt=write_id,
             pairing_id="ghost:pairing",
             read_tool="get_event",
-            evidence_digest=_read_digest(),
+            evidence_digest=digest,
             handle="evt-1",
             field_classes=["event_id"],
         )
@@ -537,12 +538,13 @@ def test_emit_state_evidence_refuses_unknown_pairing(tmp_path):
 def test_emit_state_evidence_refuses_without_registry(tmp_path):
     gw, client, token = _gateway(tmp_path, policy_text=POLICY_WITHOUT_PAIRINGS)
     write_id = _receipted_write(client, token)
+    digest = _read_digest()
     with pytest.raises(ValueError, match="no state pairings"):
         gw.emit_state_evidence(
             cited_receipt=write_id,
             pairing_id="create_event:get_event",
             read_tool="get_event",
-            evidence_digest=_read_digest(),
+            evidence_digest=digest,
             handle="evt-1",
             field_classes=["event_id"],
         )
