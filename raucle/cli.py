@@ -13,6 +13,7 @@ Examples::
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import logging
 import os
@@ -3090,8 +3091,14 @@ def _load_provenance_pubkeys(
     public_keys: dict[str, bytes] = {}
     capabilities: dict[str, CapabilityStatement] = {}
     for src in sources:
-        path = Path(src)
-        content = path.read_bytes()
+        # pythonsecurity:S8707 CLI-input pattern (the engine-proven recipe
+        # from raucle/policy_regression): canonicalise the operator-supplied
+        # trust path before any read and refuse anything that is not a
+        # regular file, fail closed with the CLI's named FileNotFoundError.
+        source = Path(src).expanduser().resolve()
+        if not source.is_file():
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(source))
+        content = source.read_bytes()
         # Try JSON capability statement first; fall back to raw PEM.
         try:
             d = json.loads(content)
@@ -3183,7 +3190,14 @@ def _enforce_require_pq(path: str, report: Any) -> None:
     """
     from raucle.provenance import ProvenanceReceipt, _jws_declares_pq1
 
-    with open(path, encoding="utf-8") as fh:
+    # pythonsecurity:S8707 CLI-input pattern (the engine-proven recipe from
+    # raucle/policy_regression): canonicalise the operator-supplied chain
+    # path before any read and refuse anything that is not a regular file,
+    # fail closed with the CLI's named FileNotFoundError.
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(source))
+    with source.open(encoding="utf-8") as fh:
         for line_no, line in enumerate(fh, start=1):
             line = line.strip()
             if not line:
