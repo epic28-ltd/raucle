@@ -112,7 +112,6 @@ def test_empty_policy_fails_closed():
         run_regression(b"version: 1\nissuer: empty.test\npolicies: []\n", SCENARIOS)
 
 
-
 POLICY_ESCALATE = b"""version: 1
 issuer: regression.test
 policies:
