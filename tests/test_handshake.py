@@ -552,6 +552,35 @@ def test_concurrent_same_request_accepts_exactly_once(two_orgs, tmp_path, replay
     assert all("replay" in o.reason for o in outcomes if not o.accepted)
 
 
+def test_replay_store_does_not_misclassify_storage_constraint_as_replay(tmp_path):
+    """Only a primary-key collision is a replay; storage failures propagate."""
+    import sqlite3
+
+    from raucle.replay_store import SqliteReplayStore
+
+    store = SqliteReplayStore(tmp_path / "replay.sqlite3")
+    store._conn.execute(
+        """
+        CREATE TRIGGER reject_replay_insert
+        BEFORE INSERT ON replay_nonces
+        BEGIN
+            SELECT RAISE(ABORT, 'simulated replay-store write failure');
+        END
+        """
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="simulated replay-store write failure"):
+        store.consume("issuer:token:nonce")
+
+    # The failed transaction was rolled back; after the fault is removed,
+    # the same key can be consumed normally rather than being left in a
+    # poisoned connection transaction.
+    store._conn.execute("DROP TRIGGER reject_replay_insert")
+    assert store.consume("issuer:token:nonce") is True
+    assert store.consume("issuer:token:nonce") is False
+    store.close()
+
+
 def test_retention_window_purges_expired_tokens_nonce(tmp_path):
     """Retention: a consumed nonce may be purged (and its key reused) only
     after the retention window; live rows are never purged early."""
