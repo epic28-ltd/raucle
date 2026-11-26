@@ -1820,6 +1820,25 @@ class VerificationReport:
         return d
 
 
+def _canonicalise_chain_path(path: str | Path) -> Path:
+    """Canonicalise a caller-supplied chain path, refusing non-files.
+
+    pythonsecurity:S8707 CLI-input pattern (the engine-proven recipe from
+    raucle/policy_regression): the path is resolved exactly once and any
+    shape that does not name an existing regular file is refused
+    fail-closed with the verifier's named ``FileNotFoundError`` before any
+    read happens. No containment comparison: the flow is read-only over
+    the chain file it is handed, so only existence is asserted.
+
+    Extracted verbatim from the former inline block at ``verify_chain``'s
+    first use (python:S3776); behaviour is unchanged.
+    """
+    chain_path = Path(path).expanduser().resolve()
+    if not chain_path.is_file():
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(chain_path))
+    return chain_path
+
+
 class ProvenanceVerifier:
     """Verify a provenance chain end-to-end.
 
@@ -3801,14 +3820,10 @@ class ProvenanceVerifier:
     def verify_chain(self, path: str | Path) -> VerificationReport:
         """Verify a JSONL chain file."""
         # pythonsecurity:S8707 CLI-input pattern (the engine-proven recipe
-        # from raucle/policy_regression): canonicalise the caller-supplied
-        # chain path once, before any read, and refuse anything that is
-        # not an existing regular file with the verifier's named
-        # FileNotFoundError. No containment comparison: this flow is
-        # read-only over the chain it is handed.
-        chain_path = Path(path).expanduser().resolve()
-        if not chain_path.is_file():
-            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(chain_path))
+        # from raucle/policy_regression): canonicalise the chain path at
+        # its first use, before any read, via the helper below (extracted
+        # verbatim from the former inline block, python:S3776).
+        chain_path = _canonicalise_chain_path(path)
         receipts_by_hash: dict[str, ProvenanceReceipt] = {}
         raw_lines_by_hash: dict[str, str] = {}
         report = VerificationReport(valid=True, receipt_count=0)

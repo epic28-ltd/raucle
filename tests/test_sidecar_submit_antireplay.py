@@ -619,7 +619,8 @@ class TestHostileRequestBodies:
             assert status == 503
             assert '"nonce_store_unavailable"' in raw
             assert XSS_MARKER not in raw
-            assert '"receipt_hash"' not in raw and "jws" not in raw
+            assert '"receipt_hash"' not in raw
+            assert "jws" not in raw
         finally:
             if fault is not None:
                 fault.execute("DROP TRIGGER IF EXISTS submit_nonce_fault")
