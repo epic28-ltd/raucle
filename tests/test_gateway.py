@@ -324,6 +324,27 @@ class TestRaucleGateway:
         result = gateway_with_policies.reload_policies()
         assert result["status"] == "ok"
 
+    def test_expired_token_signer_failure_denies_without_stale_token(
+        self, gateway_with_policies, monkeypatch
+    ):
+        """A signer outage during refresh must never reuse an expired token."""
+        gateway = gateway_with_policies
+        token = gateway._tokens["lookup_balance"]
+        token.expires_at = 0
+
+        def fail_signing(**_kwargs):
+            raise RuntimeError("simulated signing service outage")
+
+        monkeypatch.setattr(gateway._issuer, "mint", fail_signing)
+        result = gateway.check_tool_call(
+            "lookup_balance", {"account": "ACC-001"}, agent_id="agent:svc"
+        )
+
+        assert result["decision"] == "deny"
+        assert result["reason"] == "token expired and re-mint failed"
+        assert gateway._tokens["lookup_balance"] is token
+        assert token.expires_at == 0
+
 
 @pytest.fixture
 def approval_only_gateway(tmp_path):
