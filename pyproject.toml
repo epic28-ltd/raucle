@@ -148,6 +148,9 @@ all = ["raucle[rules,ml,server,compliance,timestamp,multimodal,proof]"]
 raucle = "raucle.cli:main"
 raucle-detect = "raucle.cli:main"  # deprecated alias, kept for one transition cycle
 raucle-aws-mcp = "raucle.broker.cli:main"
+# Auditor-facing offline provenance verifier (issue #346, ADR 0011): a
+# separately distributable front end over the canonical Python verifier.
+raucle-verify = "raucle.verifier_cli:main"
 
 [project.urls]
 Homepage = "https://raucle.com"
