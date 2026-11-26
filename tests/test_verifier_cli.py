@@ -117,7 +117,8 @@ class TestAuditorCliContract:
         assert ("chain", str(chain)) in kinds
         assert ("trust_root", str(stmt)) in kinds
         for row in body["checked_artifacts"]:
-            assert row["sha256"].startswith("sha256:") and len(row["sha256"]) == 64 + 7
+            assert row["sha256"].startswith("sha256:")
+            assert len(row["sha256"]) == 64 + 7
             assert row["bytes"] > 0
 
     def test_human_output_is_deterministic(self, tmp_path):
