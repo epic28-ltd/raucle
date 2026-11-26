@@ -623,4 +623,3 @@ def test_revocation_registry_corruption_is_rejected(tmp_path, data):
     """A malformed registry must not silently drop revocations."""
     with pytest.raises(ValueError, match="revocation registry"):
         RaucleGateway._revoked_ids_from_bytes(data)
-
