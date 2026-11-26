@@ -168,6 +168,7 @@ def _parse_scenarios(raw: bytes) -> list[dict[str, Any]]:
 def _validate_policy(raw: bytes) -> None:
     try:
         import yaml
+
         from raucle.policy import PolicyFile
     except ImportError as exc:
         raise RegressionEnvironmentError("dependency_unavailable") from exc
