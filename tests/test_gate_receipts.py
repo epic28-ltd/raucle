@@ -378,6 +378,7 @@ def test_from_env_reads_segmented_store_config(monkeypatch, tmp_path):
     cfg = GatewayConfig.from_env()
     assert cfg.receipt_store_dir == str(tmp_path / "segs")
 
+
 class TestReceiptPersistenceFailures:
     def test_flat_receipt_write_failure_propagates(self, gw):
         """A failed chain-of-record append must not be reported as success."""
