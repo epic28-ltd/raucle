@@ -707,7 +707,13 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         """Public aggregate pulse for the login field (aggregates only)."""
         return JSONResponse(_live_pulse_payload(gateway))  # type: ignore[name-defined]
 
-    @app.post("/gate", responses={413: {"description": "payload exceeds canonical size bound"}})
+    @app.post(
+        "/gate",
+        responses={
+            "400": {"description": "Invalid session_id (bounded-identifier validation)"},
+            "413": {"description": "payload exceeds canonical size bound"},
+        },
+    )
     @_limiter.limit(os.environ.get("RAUCLE_GATE_ROUTE_LIMIT", "200/minute"))
     def gate_tool_call(
         request: Request,
@@ -2099,6 +2105,7 @@ def _register_receipt_routes(
         responses={
             "401": {"description": "MFA required or missing Authorization header"},
             "403": {"description": "Invalid API key or insufficient role"},
+            "503": {"description": "Receipt index not ready (building or refused)"},
         },
     )
     def get_receipts(
@@ -2139,6 +2146,7 @@ def _register_receipt_routes(
             "401": {"description": "MFA required or missing Authorization header"},
             "403": {"description": "Invalid API key or insufficient role"},
             "501": {"description": "Receipt index not configured"},
+            "503": {"description": "Receipt index not ready (building or refused)"},
         },
     )
     def get_receipt_ancestors(
