@@ -39,9 +39,21 @@ class RegressionInputError(ValueError):
 class RegressionExecutionError(RuntimeError):
     """An engine failure that retains truthful results from completed scenarios."""
 
-    def __init__(self, results: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        results: list[dict[str, Any]],
+        *,
+        policy_sha256: str,
+        scenarios_sha256: str,
+        engine_version: str,
+        dependency_versions: dict[str, str],
+    ) -> None:
         super().__init__("engine_error")
         self.results = results
+        self.policy_sha256 = policy_sha256
+        self.scenarios_sha256 = scenarios_sha256
+        self.engine_version = engine_version
+        self.dependency_versions = dependency_versions
 
 
 def _sha256(data: bytes) -> str:
@@ -184,6 +196,13 @@ def run_regression(
     scenarios = _parse_scenarios(scenarios_bytes)
     manifest, manifest_bytes = _load_suite_manifest()
     engine_version = importlib.metadata.version("raucle")
+    dependency_versions = {
+        "raucle": engine_version,
+        "PyYAML": importlib.metadata.version("PyYAML"),
+        "cryptography": importlib.metadata.version("cryptography"),
+        "cffi": importlib.metadata.version("cffi"),
+        "pycparser": importlib.metadata.version("pycparser"),
+    }
 
     from raucle.gateway import GatewayConfig, RaucleGateway
 
@@ -224,10 +243,22 @@ def run_regression(
                         trace_id=f"policy-regression:{scenario['id']}",
                     )
                 except Exception as exc:
-                    raise RegressionExecutionError(results) from exc
+                    raise RegressionExecutionError(
+                        results,
+                        policy_sha256=_sha256(policy_bytes),
+                        scenarios_sha256=_sha256(scenarios_bytes),
+                        engine_version=engine_version,
+                        dependency_versions=dependency_versions,
+                    ) from exc
                 actual = decision.get("decision")
                 if actual not in _ALLOWED_DECISIONS:
-                    raise RegressionExecutionError(results)
+                    raise RegressionExecutionError(
+                        results,
+                        policy_sha256=_sha256(policy_bytes),
+                        scenarios_sha256=_sha256(scenarios_bytes),
+                        engine_version=engine_version,
+                        dependency_versions=dependency_versions,
+                    )
                 results.append(
                     {
                         "suite_id": suite_id,
@@ -246,6 +277,7 @@ def run_regression(
         "suite_version": manifest["suite_version"],
         "suite_manifest_sha256": _sha256(manifest_bytes),
         "engine_version": engine_version,
+        "dependency_versions": dependency_versions,
         "engine_commit": engine_commit,
         "policy_sha256": _sha256(policy_bytes),
         "scenarios_sha256": _sha256(scenarios_bytes),
@@ -275,6 +307,11 @@ def _error_report(
     engine_commit: str,
     error_code: str,
     executed: list[dict[str, Any]],
+    *,
+    policy_sha256: str | None = None,
+    scenarios_sha256: str | None = None,
+    engine_version: str | None = None,
+    dependency_versions: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     report: dict[str, Any] = {
         "report_schema_version": REPORT_SCHEMA_VERSION,
@@ -285,6 +322,14 @@ def _error_report(
         "executed": executed,
         "skipped": [],
     }
+    if policy_sha256 is not None:
+        report["policy_sha256"] = policy_sha256
+    if scenarios_sha256 is not None:
+        report["scenarios_sha256"] = scenarios_sha256
+    if engine_version is not None:
+        report["engine_version"] = engine_version
+    if dependency_versions is not None:
+        report["dependency_versions"] = dependency_versions
     try:
         manifest, manifest_bytes = _load_suite_manifest()
     except RuntimeError:
@@ -339,7 +384,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Raucle policy regression refused: {exc}", file=sys.stderr)
         return 2
     except RegressionExecutionError as exc:
-        report = _error_report(args.engine_commit, "engine_error", exc.results)
+        report = _error_report(
+            args.engine_commit,
+            "engine_error",
+            exc.results,
+            policy_sha256=exc.policy_sha256,
+            scenarios_sha256=exc.scenarios_sha256,
+            engine_version=exc.engine_version,
+            dependency_versions=exc.dependency_versions,
+        )
         _write_report(args.output, report)
         print("Raucle policy regression failed: engine_error", file=sys.stderr)
         return 2
