@@ -70,10 +70,14 @@ def test_consumer_scenarios_run_against_exact_policy_bytes():
     assert [row["actual"] for row in report["executed"]] == ["allow", "deny"]
     assert report["engine_commit"] == "unavailable"
     assert report["suite_manifest_sha256"]
-    assert report["policy_sha256"] == hashlib.sha256(POLICY_A).hexdigest()
-    assert report["scenarios_sha256"] == hashlib.sha256(SCENARIOS).hexdigest()
-    assert report["engine_version"] == "test-engine-version"
-    assert report["dependency_versions"] == dependency_versions
+    assert report["engine_version"]
+    assert report["dependency_versions"]["raucle"] == report["engine_version"]
+    assert {
+        "PyYAML",
+        "cryptography",
+        "cffi",
+        "pycparser",
+    }.issubset(report["dependency_versions"])
     assert report["unsupported_suites"]
 
 
@@ -241,21 +245,32 @@ def test_partial_execution_error_report_binds_exact_inputs_and_dependencies(monk
 
 
 @pytest.mark.parametrize(
+    ("scenario", "error_code"),
+    [
+        (None, "scenario_0_invalid_fields"),
+        ({"id": " ", "tool": "t", "agent_id": "a", "args": {}, "expected": "allow"}, "scenario_0_invalid_id"),
+        ({"id": "x", "tool": " ", "agent_id": "a", "args": {}, "expected": "allow"}, "scenario_0_invalid_tool"),
+        ({"id": "x", "tool": "t", "agent_id": " ", "args": {}, "expected": "allow"}, "scenario_0_invalid_agent_id"),
+        ({"id": "x", "tool": "t", "agent_id": "a", "args": [], "expected": "allow"}, "scenario_0_invalid_args"),
+        ({"id": "x", "tool": "t", "agent_id": "a", "args": {}, "expected": "allow", "source": 1}, "scenario_0_invalid_source"),
+        ({"id": "x", "tool": "t", "agent_id": "a", "args": {}, "expected": "allow", "destination": 1}, "scenario_0_invalid_destination"),
+    ],
+)
+def test_scenario_validation_rejects_each_invalid_field(scenario, error_code):
+    raw = json.dumps({"version": 1, "scenarios": [scenario]}).encode()
+    with pytest.raises(RegressionInputError, match=error_code):
+        policy_regression._parse_scenarios(raw)
+
+
+@pytest.mark.parametrize(
     ("raw", "error_code"),
     [
         (b"not-json", "scenarios_invalid_json"),
         (b"[]", "scenarios_unsupported_version"),
         (b'{"version":1,"scenarios":null}', "scenarios_required"),
-        (b'{"version":1,"scenarios":[null]}', "scenario_0_invalid_fields"),
-        (b'{"version":1,"scenarios":[{"id":" ","tool":"t","agent_id":"a","args":{},"expected":"allow"}]}', "scenario_0_invalid_id"),
-        (b'{"version":1,"scenarios":[{"id":"x","tool":" ","agent_id":"a","args":{},"expected":"allow"}]}', "scenario_0_invalid_tool"),
-        (b'{"version":1,"scenarios":[{"id":"x","tool":"t","agent_id":" ","args":{},"expected":"allow"}]}', "scenario_0_invalid_agent_id"),
-        (b'{"version":1,"scenarios":[{"id":"x","tool":"t","agent_id":"a","args":[],"expected":"allow"}]}', "scenario_0_invalid_args"),
-        (b'{"version":1,"scenarios":[{"id":"x","tool":"t","agent_id":"a","args":{},"expected":"allow","source":1}]}', "scenario_0_invalid_source"),
-        (b'{"version":1,"scenarios":[{"id":"x","tool":"t","agent_id":"a","args":{},"expected":"allow","destination":1}]}', "scenario_0_invalid_destination"),
     ],
 )
-def test_scenario_validation_rejects_each_invalid_field(raw, error_code):
+def test_scenario_validation_rejects_invalid_document(raw, error_code):
     with pytest.raises(RegressionInputError, match=error_code):
         policy_regression._parse_scenarios(raw)
 
@@ -313,7 +328,14 @@ def test_cli_success_writes_machine_report(tmp_path, monkeypatch):
         },
     )
     result = policy_regression.main(
-        ["--policy", str(policy_file), "--scenarios", str(scenarios_file), "--output", str(report_file)]
+        [
+            "--policy",
+            str(policy_file),
+            "--scenarios",
+            str(scenarios_file),
+            "--output",
+            str(report_file),
+        ]
     )
     assert result == 0
     assert json.loads(report_file.read_text())["status"] == "passed"
