@@ -178,6 +178,21 @@ def _emitter_only(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "data",
+    [
+        b'{"token_id":"tok-good"}\nnot-json\n',
+        b'{"token_id":"tok-good"}\n{"reason":"missing id"}\n',
+        b'{"token_id":"tok-good"}\n[]\n',
+        b'{"token_id":"tok-good"}\n{"token_id":""}\n',
+    ],
+)
+def test_revocation_registry_corruption_is_rejected(tmp_path, data):
+    """A malformed registry must not silently drop revocations."""
+    with pytest.raises(ValueError, match="revocation registry"):
+        RaucleGateway._revoked_ids_from_bytes(data)
+
+
 def test_revoke_capability_mints_v12_block(tmp_path):
     """A requested revocation receipt kind extends the shipped emitter
     to the full v1.2 shape, with the ledger-backed chain linkage."""
