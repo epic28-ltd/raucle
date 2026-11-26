@@ -648,7 +648,7 @@ class HashChainSink:
         try:
             data = json.loads(self._frontier_path.read_text(encoding="utf-8"))
             frontier = MerkleFrontier.from_dict(data)
-        except (OSError, ValueError, json.JSONDecodeError):
+        except (OSError, ValueError):
             frontier = None
         if frontier is not None and frontier.leaf_count == self._next_index:
             self._frontier = frontier
@@ -828,7 +828,7 @@ class HashChainSink:
                 continue
             try:
                 rec = _loads_strict(text)
-            except (json.JSONDecodeError, ValueError) as exc:
+            except ValueError as exc:
                 if prefix_lines is None:
                     prefix_lines = count_lines(path, upto_bytes=start)
                 defects.append(
