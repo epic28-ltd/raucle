@@ -557,7 +557,8 @@ def test_replay_collision_classifier_supports_python310_errors():
 
     from raucle.replay_store import _is_replay_key_collision
 
-    assert _is_replay_key_collision(sqlite3.IntegrityError("UNIQUE constraint failed: replay_nonces.replay_key"))
+    unique_error = sqlite3.IntegrityError("UNIQUE constraint failed: replay_nonces.replay_key")
+    assert _is_replay_key_collision(unique_error)
     assert _is_replay_key_collision(sqlite3.IntegrityError("PRIMARY KEY constraint failed"))
     assert not _is_replay_key_collision(sqlite3.IntegrityError("CHECK constraint failed"))
 
