@@ -247,13 +247,44 @@ def test_partial_execution_error_report_binds_exact_inputs_and_dependencies(monk
 @pytest.mark.parametrize(
     ("scenario", "error_code"),
     [
-        (None, "scenario_0_invalid_fields"),
-        ({"id": " ", "tool": "t", "agent_id": "a", "args": {}, "expected": "allow"}, "scenario_0_invalid_id"),
-        ({"id": "x", "tool": " ", "agent_id": "a", "args": {}, "expected": "allow"}, "scenario_0_invalid_tool"),
-        ({"id": "x", "tool": "t", "agent_id": " ", "args": {}, "expected": "allow"}, "scenario_0_invalid_agent_id"),
-        ({"id": "x", "tool": "t", "agent_id": "a", "args": [], "expected": "allow"}, "scenario_0_invalid_args"),
-        ({"id": "x", "tool": "t", "agent_id": "a", "args": {}, "expected": "allow", "source": 1}, "scenario_0_invalid_source"),
-        ({"id": "x", "tool": "t", "agent_id": "a", "args": {}, "expected": "allow", "destination": 1}, "scenario_0_invalid_destination"),
+        (
+            {"id": " ", "tool": "t", "agent_id": "a", "args": {}, "expected": "allow"},
+            "scenario_0_invalid_id",
+        ),
+        (
+            {"id": "x", "tool": " ", "agent_id": "a", "args": {}, "expected": "allow"},
+            "scenario_0_invalid_tool",
+        ),
+        (
+            {"id": "x", "tool": "t", "agent_id": " ", "args": {}, "expected": "allow"},
+            "scenario_0_invalid_agent_id",
+        ),
+        (
+            {"id": "x", "tool": "t", "agent_id": "a", "args": [], "expected": "allow"},
+            "scenario_0_invalid_args",
+        ),
+        (
+            {
+                "id": "x",
+                "tool": "t",
+                "agent_id": "a",
+                "args": {},
+                "expected": "allow",
+                "source": 1,
+            },
+            "scenario_0_invalid_source",
+        ),
+        (
+            {
+                "id": "x",
+                "tool": "t",
+                "agent_id": "a",
+                "args": {},
+                "expected": "allow",
+                "destination": 1,
+            },
+            "scenario_0_invalid_destination",
+        ),
     ],
 )
 def test_scenario_validation_rejects_each_invalid_field(scenario, error_code):
@@ -354,7 +385,14 @@ def test_cli_refusal_writes_error_report(tmp_path, monkeypatch):
     monkeypatch.setattr(policy_regression, "_read_bounded", lambda path, label: POLICY_A)
     monkeypatch.setattr(policy_regression, "run_regression", refuse)
     result = policy_regression.main(
-        ["--policy", str(policy_file), "--scenarios", str(scenarios_file), "--output", str(report_file)]
+        [
+            "--policy",
+            str(policy_file),
+            "--scenarios",
+            str(scenarios_file),
+            "--output",
+            str(report_file),
+        ]
     )
     assert result == 2
     assert json.loads(report_file.read_text())["error_code"] == "policy_invalid"
