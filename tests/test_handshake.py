@@ -711,4 +711,3 @@ def test_replay_store_does_not_misclassify_storage_constraint_as_replay(tmp_path
     assert store.consume("issuer:token:nonce") is True
     assert store.consume("issuer:token:nonce") is False
     store.close()
-
