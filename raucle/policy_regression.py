@@ -244,9 +244,18 @@ def run_regression(
         "skipped": [],
         "unsupported_suites": manifest["unsupported_suites"],
         "limitations": [
-            "This run evaluates only the supplied deterministic scenarios against the supplied policy bytes.",
-            "It does not test downstream tool side effects, deployed identity providers, runtime infrastructure or every possible agent attack.",
-            "It is not formal verification, a penetration test or a guarantee of complete agent security.",
+            (
+                "This run evaluates only the supplied deterministic scenarios "
+                "against the supplied policy bytes."
+            ),
+            (
+                "It does not test downstream tool side effects, deployed identity "
+                "providers, runtime infrastructure or every possible agent attack."
+            ),
+            (
+                "It is not formal verification, a penetration test or a guarantee "
+                "of complete agent security."
+            ),
         ],
     }
 
