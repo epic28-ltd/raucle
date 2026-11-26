@@ -435,7 +435,7 @@ def build_session_findings(gateway: Any) -> dict[str, Any]:
         scanned += 1
         try:
             payload = _decode_payload(record)
-        except Exception:  # noqa: BLE001 - a malformed line is skipped, never served
+        except Exception:  # a malformed line is skipped, never served
             continue
         finding = payload.get("x_finding") if isinstance(payload, dict) else None
         if not isinstance(finding, dict) or finding.get("harness") != _HARNESS:
@@ -556,7 +556,7 @@ def build_dlp_findings(gateway: Any) -> dict[str, Any]:
             if len(findings) >= DLP_ROW_CAP:
                 truncated = True
                 break
-        except Exception:  # noqa: BLE001 - a malformed line is skipped, never served
+        except Exception:  # a malformed line is skipped, never served
             continue
     findings.sort(key=lambda f: f["detected_at"], reverse=True)
     payload.update(
