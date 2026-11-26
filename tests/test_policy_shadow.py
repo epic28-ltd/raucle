@@ -212,7 +212,10 @@ def test_shadow_off_by_default_is_untouched(tmp_path):
 # 2. Boot validation (fail closed, named)
 
 
-def test_boot_refuses_unusable_shadow_config(tmp_path):
+@pytest.fixture
+def _shadow_boot_cases(tmp_path):
+    """Builds all five boot-refusal configs, so every refusal test body
+    holds exactly one raising invocation (S5778)."""
     good = _candidate_path(tmp_path, CANDIDATE_STRICTER)
     bad = tmp_path / "not-policy.yaml"
     bad.write_text(NOT_A_POLICY)
@@ -235,16 +238,38 @@ def test_boot_refuses_unusable_shadow_config(tmp_path):
             setattr(config, k, v)
         return config
 
+    return {
+        "empty_candidate": _cfg(""),
+        "missing_candidate": _cfg(str(tmp_path / "missing.yaml")),
+        "non_policy_file": _cfg(str(bad)),
+        "zero_sample_every": _cfg(str(good), shadow_eval_sample_every=0),
+        "zero_queue_max": _cfg(str(good), shadow_eval_queue_max=0),
+    }
+
+
+def test_boot_refuses_empty_candidate(_shadow_boot_cases):
     with pytest.raises(ValueError, match="shadow_eval_config_invalid"):
-        RaucleGateway(_cfg(""))
+        RaucleGateway(_shadow_boot_cases["empty_candidate"])
+
+
+def test_boot_refuses_missing_candidate_file(_shadow_boot_cases):
     with pytest.raises(ValueError, match="shadow_eval_config_invalid"):
-        RaucleGateway(_cfg(str(tmp_path / "missing.yaml")))
+        RaucleGateway(_shadow_boot_cases["missing_candidate"])
+
+
+def test_boot_refuses_non_policy_candidate_file(_shadow_boot_cases):
     with pytest.raises(ValueError, match="shadow_eval_config_invalid"):
-        RaucleGateway(_cfg(str(bad)))
+        RaucleGateway(_shadow_boot_cases["non_policy_file"])
+
+
+def test_boot_refuses_zero_sample_every(_shadow_boot_cases):
     with pytest.raises(ValueError, match="shadow_eval_config_invalid"):
-        RaucleGateway(_cfg(str(good), shadow_eval_sample_every=0))
+        RaucleGateway(_shadow_boot_cases["zero_sample_every"])
+
+
+def test_boot_refuses_zero_queue_max(_shadow_boot_cases):
     with pytest.raises(ValueError, match="shadow_eval_config_invalid"):
-        RaucleGateway(_cfg(str(good), shadow_eval_queue_max=0))
+        RaucleGateway(_shadow_boot_cases["zero_queue_max"])
 
 
 def test_env_loader_wires_shadow_fields(monkeypatch, tmp_path):
