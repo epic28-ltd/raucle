@@ -685,7 +685,6 @@ class TestGatewayIssuerMapConstructionSite:
         assert gate.check(token, tool="t", args={}, agent_id="agent:a").allowed
 
 
-
 def test_append_write_failure_rolls_back_file_and_memory(tmp_path, monkeypatch):
     """A partial append failure must not advance the in-memory trust head."""
     import builtins

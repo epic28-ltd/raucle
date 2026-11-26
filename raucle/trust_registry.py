@@ -331,9 +331,9 @@ class TrustRegistry:
         if self._path is not None:
             # Persist before publishing the new head in memory. A short write or
             # fsync failure must not leave this instance ahead of durable state.
-            encoded = (
-                json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n"
-            ).encode("utf-8")
+            encoded = (json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n").encode(
+                "utf-8"
+            )
             with open(self._path, "a+b") as fh:
                 fh.seek(0, os.SEEK_END)
                 original_size = fh.tell()
