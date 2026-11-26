@@ -76,8 +76,9 @@ class TestCrashBeforeRollover:
             raise OSError("simulated crash before rollover")
 
         monkeypatch.setattr(store, "_seal_active", _kill)
+        line3 = _line(3)
         with pytest.raises(OSError, match="simulated crash before rollover"):
-            store.append_line(_line(3))
+            store.append_line(line3)
 
         # After the kill: one writable segment, over its threshold, no meta.
         seg = tmp_path / "receipts" / "seg-000000.jsonl"
@@ -137,8 +138,9 @@ class TestCrashInsideSeal:
         frozen_meta = meta_path.read_text()
 
         restart = SegmentedReceiptStore(base_dir=tmp_path / "receipts")
+        line3 = _line(3)
         with pytest.raises(ReceiptStoreSealRefused) as excinfo:
-            restart.append_line(_line(3))
+            restart.append_line(line3)
         message = str(excinfo.value)
         assert "seg-000000.jsonl" in message
         assert "sidecar" in message
@@ -148,8 +150,9 @@ class TestCrashInsideSeal:
         assert seg_path.read_text() == frozen
         assert meta_path.read_text() == frozen_meta
         assert json.loads(frozen_meta)["receipt_count"] == 2
+        line4 = _line(4)
         with pytest.raises(ReceiptStoreSealRefused):
-            restart.append_line(_line(4))
+            restart.append_line(line4)
         # No new segment was silently started for the refused receipt.
         assert len(_segment_paths(tmp_path)) == 1
 
@@ -196,7 +199,8 @@ class TestCrashInsideSeal:
         restart.append_line(_line(3))
         assert restart.active_segment == "seg-000000.jsonl"
         seg = (tmp_path / "receipts" / "seg-000000.jsonl").read_text()
-        assert _line(1) in seg and _line(3) in seg
+        assert _line(1) in seg
+        assert _line(3) in seg
 
 
 class TestCrashAfterSealFlip:
@@ -257,8 +261,9 @@ class TestFailedAppendRevalidatesTail:
         monkeypatch.setattr(os, "fsync", _one_shot_enospc)
         # The FIRST append fails at fsync: the write itself landed (intact
         # line), the caller saw the failure.
+        line1 = _line(1)
         with pytest.raises(OSError, match="simulated ENOSPC"):
-            store.append_line(_line(1))
+            store.append_line(line1)
         # The NEXT append re-opens the segment through the tail validation
         # instead of silently writing past whatever the failed write left.
         store.append_line(_line(2))
@@ -295,13 +300,15 @@ class TestFailedAppendRevalidatesTail:
                 return self._inner.fileno()
 
         store._active_file = _MidRecordFailHandle(store._active_file)
+        line2 = _line(2)
         with pytest.raises(OSError, match="simulated mid-record write failure"):
-            store.append_line(_line(2))
+            store.append_line(line2)
 
         # The crashed write left a torn record; the next append must refuse
         # by name (never chain a third record past the torn second one).
+        line3 = _line(3)
         with pytest.raises(ReceiptStoreSealRefused) as excinfo:
-            store.append_line(_line(3))
+            store.append_line(line3)
         assert "physical line 2" in str(excinfo.value)
         assert _line(3) not in seg_path.read_text()
         content = seg_path.read_text()
@@ -309,8 +316,9 @@ class TestFailedAppendRevalidatesTail:
         assert content.count("\n") == 1
         # And the refusal survives re-opening: the segment is sealed-ready
         # only after the operator resolves the torn line.
+        line4 = _line(4)
         with pytest.raises(ReceiptStoreSealRefused):
-            store.append_line(_line(4))
+            store.append_line(line4)
 
 
 def _seg_gateway(tmp_path):

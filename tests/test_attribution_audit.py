@@ -118,9 +118,10 @@ def test_crewai_unattributed_async_call_denies(tmp_path):
     guarded = guard_tool(_Tool(), gate=gate, sink=sink, agent_id=None)  # bearer-mode attempt
     token = issuer.mint(agent_id="agent:test", tool="lookup_contact", ttl_seconds=60)
     set_in_force_token(token)
+    bearer_call = guarded.arun(to="someone")
     try:
         with pytest.raises(CapabilityDenied):
-            asyncio.run(guarded.arun(to="someone"))
+            asyncio.run(bearer_call)
         assert body_calls == []
         receipt = json.loads(log.read_text().strip().splitlines()[-1])["event"]
         assert receipt["decision"] == "DENY"

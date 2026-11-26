@@ -829,7 +829,7 @@ class GatewayUser:
     @property
     def key_label(self) -> str:
         """Non-secret label for display: a hash fragment, never a key."""
-        return "sha256:" + self.api_key_hash[:8] + "..." if self.api_key_hash else ""
+        return _HASH_PREFIX + self.api_key_hash[:8] + "..." if self.api_key_hash else ""
 
 
 def _hash_api_key(api_key: str) -> str:
@@ -2657,7 +2657,7 @@ class RaucleGateway:
         try:
             raw = Path(ruleset_path).read_bytes()
             ruleset = PolicyFile.from_dict(yaml.safe_load(raw))
-        except Exception as exc:  # noqa: BLE001 - the block is optional, never fabricated
+        except Exception as exc:  # the block is optional, never fabricated
             logger.warning(
                 "counterfactual ruleset %s is unusable (%s); no counterfactual "
                 "evidence on this receipt",
@@ -3286,7 +3286,7 @@ class RaucleGateway:
 
         try:
             gate = self._ensure_caller_gate()
-        except Exception as exc:  # noqa: BLE001 - identity dependency failure is fail-closed
+        except Exception as exc:  # identity dependency failure is fail-closed
             # A corrupt or vanished revocation/registry/ledger cannot be
             # treated as "no revocations". Refuse the identity stage with
             # a named reason (pre-gate, no receipt: unauthenticated by
@@ -3785,7 +3785,7 @@ class RaucleGateway:
                 _intent_hint=_intent_hint,
                 _acting_for=_acting_for,
             )
-        except Exception as exc:  # noqa: BLE001 - the gate must never crash open
+        except Exception as exc:  # the gate must never crash open
             logger.exception("gate fault during decision for tool %s", tool)
             result = self._deny_result(
                 result,
@@ -3915,7 +3915,7 @@ class RaucleGateway:
                     trace_id=trace_id,
                     live_decision=result["decision"],
                     active_policy_hash=(
-                        "sha256:"
+                        _HASH_PREFIX
                         + self._policy_ruleset_hash(
                             tool, result.get("source", ""), result.get("destination", "")
                         )
@@ -4757,7 +4757,7 @@ class RaucleGateway:
                     if (getattr(rule, "participant", "") or "") == "tool_response_taint":
                         reason = f"{reason} (participant=tool_response_taint)"
                     return (reason, rule.id, digest)
-        except Exception as exc:  # noqa: BLE001 - fail-closed; type only, never the message
+        except Exception as exc:  # fail-closed: type only, never the message
             logger.exception("session rule evaluation fault")
             return (
                 f"session rule evaluation fault ({type(exc).__name__}); call denied",
@@ -5322,7 +5322,7 @@ class RaucleGateway:
                     "delegation ledger (fail-closed: the block cannot hash what "
                     "it cannot resolve)"
                 )
-            hashes[tid] = "sha256:" + _sha256_hex(_canonical_json(token.to_dict()))
+            hashes[tid] = _HASH_PREFIX + _sha256_hex(_canonical_json(token.to_dict()))
         return hashes
 
     def _revoke_ids(
@@ -5537,7 +5537,7 @@ class RaucleGateway:
         path = Path(manifest)
         try:
             raw = _json.loads(path.read_text(encoding="utf-8"))
-        except Exception as exc:  # noqa: BLE001 - named refusal, never a partial boot
+        except Exception as exc:  # named refusal, never a partial boot
             raise SchemaPolicyLoadError(
                 f"tool schema manifest {manifest!r} is unusable ({type(exc).__name__}: {exc})"
             ) from exc
