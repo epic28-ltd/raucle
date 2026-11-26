@@ -30,7 +30,7 @@ The action installs the engine from `engine-ref`, runs the offline regression ru
 
 ## GitLab CI
 
-GitLab can invoke the same versioned CLI after installing the engine from an immutable commit. Use `python -m raucle.policy_regression --policy ... --scenarios ... --engine-commit "$RAUCLE_ENGINE_COMMIT" --output raucle-policy-regression-report.json`, then publish the JSON report as a job artefact. There is no separate GitLab runner implementation or second policy-evaluation code path.
+GitLab can invoke the same versioned CLI after installing the engine from an immutable commit. Run it in isolated mode from a neutral working directory so a repository-local `raucle` package cannot shadow the installed engine. For example: `(cd "${RUNNER_TEMP:-/tmp}" && python -I -m raucle.policy_regression --policy "$CI_PROJECT_DIR/path/to/policies.yaml" --scenarios "$CI_PROJECT_DIR/path/to/scenarios.json" --engine-commit "$RAUCLE_ENGINE_COMMIT" --output "$CI_PROJECT_DIR/raucle-policy-regression-report.json")`, then publish the JSON report as a job artefact. There is no separate GitLab runner implementation or second policy-evaluation code path.
 
 ## Assurance boundary
 
