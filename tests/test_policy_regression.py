@@ -5,8 +5,10 @@ import json
 
 import pytest
 
+import raucle.policy_regression as policy_regression
 from raucle.policy_regression import (
     MAX_INPUT_BYTES,
+    RegressionExecutionError,
     RegressionInputError,
     _error_report,
     _read_bounded,
@@ -68,6 +70,10 @@ def test_consumer_scenarios_run_against_exact_policy_bytes():
     assert [row["actual"] for row in report["executed"]] == ["allow", "deny"]
     assert report["engine_commit"] == "unavailable"
     assert report["suite_manifest_sha256"]
+    assert report["policy_sha256"] == hashlib.sha256(POLICY_A).hexdigest()
+    assert report["scenarios_sha256"] == hashlib.sha256(SCENARIOS).hexdigest()
+    assert report["engine_version"] == "0.23.9"
+    assert report["dependency_versions"] == {"PyYAML": "6.0.2"}
     assert report["unsupported_suites"]
 
 
@@ -186,10 +192,179 @@ def test_error_report_preserves_manifest_boundaries_and_completed_scenarios():
             "passed": True,
         }
     ]
-    report = _error_report("a" * 40, "engine_error", completed)
+    report = _error_report(
+        "a" * 40,
+        "engine_error",
+        completed,
+        policy_sha256=hashlib.sha256(POLICY_A).hexdigest(),
+        scenarios_sha256=hashlib.sha256(SCENARIOS).hexdigest(),
+        engine_version="0.23.9",
+        dependency_versions={"PyYAML": "6.0.2"},
+    )
     assert report["status"] == "error"
     assert report["error_code"] == "engine_error"
     assert report["executed"] == completed
     assert report["skipped"] == []
     assert report["unsupported_suites"]
     assert report["suite_manifest_sha256"]
+
+def test_partial_execution_error_report_binds_exact_inputs_and_dependencies(monkeypatch):
+    from raucle.gateway import RaucleGateway
+
+    original = RaucleGateway.check_tool_call
+    calls = 0
+
+    def fail_second_call(self, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("synthetic engine failure")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(RaucleGateway, "check_tool_call", fail_second_call)
+    with pytest.raises(RegressionExecutionError) as caught:
+        run_regression(POLICY_A, SCENARIOS)
+
+    error = caught.value
+    assert len(error.results) == 1
+    assert error.policy_sha256 == hashlib.sha256(POLICY_A).hexdigest()
+    assert error.scenarios_sha256 == hashlib.sha256(SCENARIOS).hexdigest()
+    assert error.engine_version
+    assert error.dependency_versions["cryptography"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "error_code"),
+    [
+        (b"not-json", "scenarios_invalid_json"),
+        (b"[]", "scenarios_unsupported_version"),
+        (b'{"version":1,"scenarios":null}', "scenarios_required"),
+        (b'{"version":1,"scenarios":[null]}', "scenario_0_invalid_fields"),
+        (b'{"version":1,"scenarios":[{"id":" ","tool":"t","agent_id":"a","args":{},"expected":"allow"}]}', "scenario_0_invalid_id"),
+        (b'{"version":1,"scenarios":[{"id":"x","tool":" ","agent_id":"a","args":{},"expected":"allow"}]}', "scenario_0_invalid_tool"),
+        (b'{"version":1,"scenarios":[{"id":"x","tool":"t","agent_id":" ","args":{},"expected":"allow"}]}', "scenario_0_invalid_agent_id"),
+        (b'{"version":1,"scenarios":[{"id":"x","tool":"t","agent_id":"a","args":[],"expected":"allow"}]}', "scenario_0_invalid_args"),
+        (b'{"version":1,"scenarios":[{"id":"x","tool":"t","agent_id":"a","args":{},"expected":"allow","source":1}]}', "scenario_0_invalid_source"),
+        (b'{"version":1,"scenarios":[{"id":"x","tool":"t","agent_id":"a","args":{},"expected":"allow","destination":1}]}', "scenario_0_invalid_destination"),
+    ],
+)
+def test_scenario_validation_rejects_each_invalid_field(raw, error_code):
+    with pytest.raises(RegressionInputError, match=error_code):
+        policy_regression._parse_scenarios(raw)
+
+
+def test_scenario_count_is_bounded():
+    raw = json.dumps(
+        {
+            "version": 1,
+            "scenarios": [
+                {
+                    "id": str(index),
+                    "tool": "t",
+                    "agent_id": "a",
+                    "args": {},
+                    "expected": "allow",
+                }
+                for index in range(policy_regression.MAX_SCENARIOS + 1)
+            ],
+        }
+    ).encode()
+    with pytest.raises(RegressionInputError, match="scenarios_too_many"):
+        policy_regression._parse_scenarios(raw)
+
+
+def test_error_report_keeps_input_bindings_if_suite_manifest_is_unavailable(monkeypatch):
+    def unavailable():
+        raise RuntimeError("manifest unavailable")
+
+    monkeypatch.setattr(policy_regression, "_load_suite_manifest", unavailable)
+    report = _error_report(
+        "a" * 40,
+        "engine_error",
+        [],
+        policy_sha256=hashlib.sha256(POLICY_A).hexdigest(),
+        scenarios_sha256=hashlib.sha256(SCENARIOS).hexdigest(),
+    )
+    assert report["policy_sha256"] == hashlib.sha256(POLICY_A).hexdigest()
+    assert report["scenarios_sha256"] == hashlib.sha256(SCENARIOS).hexdigest()
+    assert "unsupported_suites" not in report
+
+
+def test_cli_success_writes_machine_report(tmp_path, monkeypatch):
+    policy_file = tmp_path / "policy.yaml"
+    scenarios_file = tmp_path / "scenarios.json"
+    report_file = tmp_path / "nested" / "report.json"
+    policy_file.write_bytes(POLICY_A)
+    scenarios_file.write_bytes(SCENARIOS)
+    monkeypatch.setattr(
+        policy_regression,
+        "run_regression",
+        lambda *args, **kwargs: {
+            "status": "passed",
+            "summary": {"passed": 1, "total": 1},
+            "policy_sha256": hashlib.sha256(POLICY_A).hexdigest(),
+        },
+    )
+    result = policy_regression.main(
+        ["--policy", str(policy_file), "--scenarios", str(scenarios_file), "--output", str(report_file)]
+    )
+    assert result == 0
+    assert json.loads(report_file.read_text())["status"] == "passed"
+
+
+def test_cli_refusal_writes_error_report(tmp_path, monkeypatch):
+    policy_file = tmp_path / "policy.yaml"
+    scenarios_file = tmp_path / "scenarios.json"
+    report_file = tmp_path / "report.json"
+    policy_file.write_bytes(POLICY_A)
+    scenarios_file.write_bytes(SCENARIOS)
+
+    def refuse(*args, **kwargs):
+        raise RegressionInputError("policy_invalid")
+
+    monkeypatch.setattr(policy_regression, "_read_bounded", lambda path, label: POLICY_A)
+    monkeypatch.setattr(policy_regression, "run_regression", refuse)
+    result = policy_regression.main(
+        ["--policy", str(policy_file), "--scenarios", str(scenarios_file), "--output", str(report_file)]
+    )
+    assert result == 2
+    assert json.loads(report_file.read_text())["error_code"] == "policy_invalid"
+
+
+def test_cli_engine_error_preserves_partial_hashes(tmp_path, monkeypatch):
+    policy_file = tmp_path / "policy.yaml"
+    scenarios_file = tmp_path / "scenarios.json"
+    report_file = tmp_path / "report.json"
+    policy_file.write_bytes(POLICY_A)
+    scenarios_file.write_bytes(SCENARIOS)
+    partial = [
+        {
+            "suite_id": "consumer-policy-v1",
+            "scenario_id": "allowed-account",
+            "tool": "lookup_balance",
+            "expected": "allow",
+            "actual": "allow",
+            "passed": True,
+        }
+    ]
+
+    def fail(*args, **kwargs):
+        raise RegressionExecutionError(
+            partial,
+            policy_sha256=hashlib.sha256(POLICY_A).hexdigest(),
+            scenarios_sha256=hashlib.sha256(SCENARIOS).hexdigest(),
+            engine_version="0.23.9",
+            dependency_versions={"cryptography": "48.0.0"},
+        )
+
+    monkeypatch.setattr(policy_regression, "_read_bounded", lambda path, label: POLICY_A)
+    monkeypatch.setattr(policy_regression, "run_regression", fail)
+    result = policy_regression.main(
+        ["--policy", str(policy_file), "--scenarios", str(scenarios_file), "--output", str(report_file)]
+    )
+    report = json.loads(report_file.read_text())
+    assert result == 2
+    assert report["executed"] == partial
+    assert report["policy_sha256"] == hashlib.sha256(POLICY_A).hexdigest()
+    assert report["scenarios_sha256"] == hashlib.sha256(SCENARIOS).hexdigest()
+
