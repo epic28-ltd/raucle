@@ -51,6 +51,8 @@ server = [
     "pyotp>=2.9",         # TOTP MFA for admin panel authentication
 ]
 compliance = ["cryptography>=42.0"]
+# Offline consumer policy regression runner: YAML policy parsing and local receipt signing.
+regression = ["pyyaml==6.0.2", "cryptography==48.0.0", "cffi==2.1.1", "pycparser==3.12"]
 # G1 RFC 3161 timestamping: asn1crypto PARSES the CMS TimeStampToken
 # (pure Python, no compiled deps, MIT); signature verification itself
 # stays in cryptography, so no new crypto primitive enters the trust

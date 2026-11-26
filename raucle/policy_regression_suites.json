@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "suite_version": "1.0.0",
+  "suites": [
+    {
+      "id": "consumer_policy_decision",
+      "selector": "scenarios[].id",
+      "execution": "RaucleGateway.check_tool_call",
+      "supported_decisions": ["allow", "deny", "escalate"],
+      "guarantees": [
+        "The exact supplied policy bytes are schema-validated and copied unchanged to the gateway policy path.",
+        "Each supplied scenario is evaluated by the canonical RaucleGateway decision path.",
+        "The report binds the raw policy bytes, raw scenario bytes, suite manifest bytes and immutable engine commit when supplied.",
+        "Argument values and free-text decision reasons are excluded from report rows."
+      ]
+    }
+  ],
+  "unsupported_suites": [
+    "engine_adversarial_pytest_corpus",
+    "live_shadow_policy_evaluation",
+    "historical_receipt_counterfactual_replay",
+    "formal_policy_verification",
+    "downstream_tool_side_effects",
+    "deployed_identity_provider_integration",
+    "production_infrastructure_and_failover",
+    "exhaustive_prompt_injection_or_agent_attack_coverage"
+  ]
+}
