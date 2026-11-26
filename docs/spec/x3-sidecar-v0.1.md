@@ -56,11 +56,39 @@ Authentication is a shared-secret handshake, following the existing
 | `RAUCLE_RECEIPT_SIDECAR_TIMEOUT` | gateway | HTTP timeout in seconds (default `2.0`) |
 | `RAUCLE_RECEIPT_SIDECAR_MAX_QUEUE` | sidecar | bound on the submit queue (default `4096`) |
 
-The handshake: the client sends `X-Raucle-Nonce` (fresh random hex) and
-`X-Raucle-Sidecar-Auth: <hex HMAC-SHA256(secret, nonce + body)>`. The
-sidecar recomputes and compares in constant time. A missing or wrong
-authenticator is a named 401 refusal and nothing is appended. The secret
-never enters argv, a config document or a receipt.
+The handshake: the client sends `X-Raucle-Nonce` (fresh random lowercase
+hex, 16 to 128 characters), `X-Raucle-Sidecar-Sent-At` (its unix time in
+seconds) and `X-Raucle-Sidecar-Auth: <hex HMAC-SHA256(secret, nonce +
+"\n" + sent_at + "\n" + body)>`. The sidecar recomputes and compares in
+constant time. A missing or wrong authenticator is a named 401 refusal
+and nothing is appended; a sent-at that is not an integer is a named 401;
+a sent-at outside the accepted clock-skew window (default plus or minus
+300 seconds) is a named 400 `stale_timestamp` and burns no nonce record.
+The secret never enters argv, a config document or a receipt. Because the
+timestamp is under the HMAC, a captured request cannot be re-signalled
+into a fresh-looking one.
+
+Submit anti-replay (issue #340, on the ADR 0008 section 5 contract): the
+first submit of a nonce-and-body identity is consumed atomically into a
+persistent SQLite store (`<store_dir>/submit_nonces.sqlite`) BEFORE the
+envelope is enqueued, and answers 202 `status: queued`. An identical
+resubmission of that nonce and body gets the named duplicate answer (200
+`status: duplicate`, carrying the first accepted receipt hash) and is
+never appended again. The same nonce over a different body is refused as
+409 `nonce_reuse_mismatch` and the first digest stays. The store is
+single-host only, like `SqliteReplayStore`: one file, one writer sidecar
+process, its own namespace separate from any handshake replay keys.
+Consumed nonces survive a sidecar restart. Retention of consumed records
+defaults to forever; a configured `retention_seconds` must be at least
+twice the skew window (enforced at boot), and expiry is then honest:
+within retention a replay is the duplicate answer, beyond it the
+HMAC-bound sent-at window still refuses it, so a captured submit is never
+appended a second time. If the nonce store cannot serve a decision, the
+submit is refused fail-closed by name (503 `nonce_store_unavailable`,
+nothing enqueued) and the receipt loss is recorded by the caller. This is
+at-most-once ingest of one request identity; it is not an exactly-once
+claim, and gateway and sidecar must run the same protocol version (an
+older client's HMAC no longer matches).
 
 Fail-closed misconfiguration guard: a gateway configured with BOTH a
 sidecar URL and a local write projection (`receipt_store_dir` or
@@ -141,9 +169,16 @@ and no new record kinds.
 - The handshake is HMAC over the body, so tamper-evident per request, but
   the transport is plaintext HTTP on a trusted network segment. mTLS is
   a named follow-up, not an assumption.
-- No replay tracking: a captured request could be replayed to append a
-  duplicate line (content-addressed, so the duplicate is detectable
-  offline). Replay nonces are a named follow-up.
+- Submit replay is now refused by name instead of appended twice: the
+  duplicate answer, the mismatch refusal and the stale refusals are
+  named (see the protocol above). A duplicate envelope can still reach
+  the chain when the caller mints a fresh nonce for a repeat of the
+  same receipt: anti-replay scope is the REQUEST identity, and
+  duplicate SUPPRESSION by receipt hash stays out of the sidecar (the
+  index keeps every attempt by design). The multi-host shared replay
+  backend (PostgreSQL unique-constraint transactions) is a named
+  follow-up slice requiring a deployment decision and ADR acceptance;
+  no multi-host or exactly-once claim is made.
 - No duplicate suppression at the sidecar: byte-identical same-second
   attempts are legitimate mint events and the derived index keeps every
   attempt by design, so the sidecar keeps them too.
@@ -178,10 +213,23 @@ Red-first, in `tests/test_receipt_sidecar.py`:
    appended; the misconfiguration guard refuses the two-writer boot.
 7. The chart contract: sidecar rows in values, env wiring, read-only
    gateway mount, single-replica Recreate sidecar, prod.env.example names.
+8. Submit anti-replay, pinned in `tests/test_sidecar_submit_antireplay.py`:
+   the named duplicate answer (serial use, a verbatim captured replay and
+   concurrent duplicates with exactly one winner), the
+   `nonce_reuse_mismatch` refusal with the first digest preserved, the
+   clock-skew window both ways with no nonce burned, restart persistence
+   of consumed nonces, retention expiry with the HMAC-bound sent-at still
+   blocking the replay, the retention floor (at least twice the skew), a
+   nonce-store write failure answered fail-closed by name with the receipt
+   ledger byte-identical and enforcement untouched, recovery clean after
+   the fault, a corrupt nonce store failing the boot, and a failing chain
+   append contained by the sink with no partial line and no index row.
 
 ## Non-goals (named, deferred)
 
 Gateway query surfaces over the shared volume (read-only index view),
-mTLS between gateway and sidecar, replay nonces, sidecar HA (a standby
-is a follow-up; the single writer is the constraint by design), and any
-change to receipt formats or the verifier.
+mTLS between gateway and sidecar, sidecar HA (a standby is a follow-up;
+the single writer is the constraint by design), envelope-level duplicate
+suppression across distinct nonces (receipt-sequencing, separate
+contract), a multi-host shared replay backend, and any change to receipt
+formats or the verifier.
