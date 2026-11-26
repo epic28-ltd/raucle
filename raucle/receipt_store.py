@@ -116,6 +116,11 @@ class SegmentedReceiptStore:
 
         Flushes per write. Seals the segment when the write crossed the
         threshold.
+
+        A failed write/flush/fsync raises to the caller AND drops the open
+        handle, so the NEXT append re-opens the segment and re-validates
+        its tail: an append that died mid-record must never be silently
+        chained past.
         """
         if not line.endswith("\n"):
             line += "\n"
@@ -123,9 +128,19 @@ class SegmentedReceiptStore:
             if self._active_file is None:
                 self._resume_or_start_segment()
             assert self._active_file is not None
-            self._active_file.write(line)
-            self._active_file.flush()
-            os.fsync(self._active_file.fileno())
+            try:
+                self._active_file.write(line)
+                self._active_file.flush()
+                os.fsync(self._active_file.fileno())
+            except Exception:
+                # The write may have landed partially: a torn tail now
+                # exists or the file's true size is ahead of the tracked
+                # one. Resetting the handle makes the next append go
+                # through _open_existing_segment, which re-validates the
+                # tail and re-reads the size from disk (both fail closed
+                # on a torn record, resume cleanly on an intact one).
+                self._active_file = None
+                raise
             self._active_size += len(line.encode("utf-8"))
             if self._active_size >= self._max_bytes:
                 self._seal_active()
@@ -222,8 +237,30 @@ class SegmentedReceiptStore:
         name (:class:`ReceiptStoreSealRefused`) when the tail (the last
         non-blank line) is unparsable: chaining a new record after a torn
         write would build a second record stream inside one segment file.
+        Fails closed by name too when a ``.meta`` sidecar exists while the
+        segment is still writable (a seal that crashed before its
+        read-only flip): resuming would grow a sealed segment past its
+        recorded receipt seal.
         """
         path = self._base / name
+        meta_path = self._base / (name + ".meta")
+        if meta_path.exists():
+            # Crash between the seal's meta write and its read-only flip
+            # (crash consistency, issue 344 item 2): the segment carries a
+            # seal sidecar but is still writable. Appending again would
+            # grow a SEALED segment past its recorded receipt seal, so the
+            # meta (signed or not) would silently lie about the segment's
+            # contents. Fail closed by name; the sidecar of a seal that
+            # never completed is operator-resolvable evidence, never
+            # something this store rewrites or deletes on its own.
+            raise ReceiptStoreSealRefused(
+                f"refusing to resume segment {name}: a .meta seal sidecar "
+                "exists but the segment is still writable (an earlier seal "
+                "wrote its meta and crashed before the read-only flip); "
+                "appending would grow a sealed segment past its recorded "
+                "receipt seal - resolve the sidecar of the incomplete seal, "
+                "then restart"
+            )
         tail = ""
         tail_line_no = 0
         with open(path, encoding="utf-8") as fh:
@@ -319,6 +356,12 @@ class SegmentedReceiptStore:
         os.fsync(self._active_file.fileno())
         self._active_file.close()
         meta_path.write_text(json.dumps(meta, ensure_ascii=False) + "\n", encoding="utf-8")
+        # Crash-order hardening (issue 344 item 2): the seal meta is
+        # durable BEFORE the segment flips read-only. A power cut between
+        # the chmod and an unsynced meta would otherwise leave a read-only
+        # segment whose seal sidecar never landed.
+        with open(meta_path, "rb") as meta_fh:
+            os.fsync(meta_fh.fileno())
         # read-only from here on
         path = self._base / name
         mode = path.stat().st_mode
