@@ -57,7 +57,7 @@ import threading
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO, Any
+from typing import IO, Any, NoReturn
 
 from raucle._canon import make_duplicate_key_rejecter as _make_duplicate_key_rejecter
 from raucle.errors import ChainTailMalformed
@@ -259,8 +259,127 @@ def read_last_lines(path: str | Path, window_bytes: int) -> tuple[int, list[tupl
 
 
 # ---------------------------------------------------------------------------
+# Named tail-defect refusals (L1 helpers, moved verbatim from the scan
+# methods below as the S3776 decomposition)
+# ---------------------------------------------------------------------------
+
+
+def _tail_refuse(
+    path: Path,
+    start: int,
+    prefix_lines: int | None,
+    local_line: int,
+    offset: int,
+    header: str,
+    trailer: str,
+    cause: BaseException | None = None,
+) -> NoReturn:
+    """Raise the named :class:`ChainTailMalformed` for one defective window
+    line.
+
+    The refusal names the file and the GLOBAL line number: the prefix
+    lines before ``start`` are counted only when a defect actually
+    occurs (the lazy fill the inline call sites carried). ``header``
+    and ``trailer`` are the message text around the fixed
+    ``(file ..., line ..., offset ...)`` clause, so every refusal
+    message is built exactly as the pre-refactor inline f-strings.
+    """
+    prefix = prefix_lines if prefix_lines is not None else count_lines(path, upto_bytes=start)
+    message = f"{header} (file {path}, line {prefix + local_line}, offset {offset}){trailer}"
+    if cause is None:
+        raise ChainTailMalformed(message)
+    raise ChainTailMalformed(message) from cause
+
+
+def _refresh_tail_defect(
+    path: Path,
+    start: int,
+    prefix_lines: int | None,
+    local_line: int,
+    offset: int,
+    header: str,
+    trailer: str,
+) -> tuple[dict[str, Any], int]:
+    """One named defect row of the append-time head refresh.
+
+    ``header`` and ``trailer`` carry the message text around the fixed
+    ``(file ..., line ..., offset ...)`` clause; the prefix lines before
+    ``start`` are counted only when a defect occurs (the lazy fill the
+    inlined rows carried). Returns the row AND the prefix count so the
+    scan's local state fills exactly as before.
+    """
+    prefix = prefix_lines if prefix_lines is not None else count_lines(path, upto_bytes=start)
+    line_no = prefix + local_line
+    detail = f"{header} (file {path}, line {line_no}, offset {offset}){trailer}"
+    return (
+        {
+            "kind": "torn_tail",
+            "detail": detail,
+            "file": str(path),
+            "line": line_no,
+            "offset": offset,
+        },
+        prefix,
+    )
+
+
+def _tail_scan_record_usable(rec_hash: Any, rec_index: Any) -> bool:
+    """Whether one record is a usable event row for the append-time
+    refresh (the shape gate the scan carries)."""
+    return isinstance(rec_index, int) and rec_index >= 0 and bool(rec_hash)
+
+
+def _is_meta_record(rec: dict[str, Any]) -> bool:
+    """Whether one window record is checkpoint or chain-meta bookkeeping
+    (never an event row)."""
+    return bool(rec.get("checkpoint") or rec.get("chain_meta"))
+
+
+# ---------------------------------------------------------------------------
 # The incremental Merkle frontier (L1)
 # ---------------------------------------------------------------------------
+
+
+def _frontier_level_hash(elements: list[bytes], j: int, count: int) -> bytes | None:
+    """One frontier level's hash step: the combine rule over the pending
+    level and the accumulator.
+
+    Moved verbatim from ``_frontier_root_digest``'s loop body (S3776
+    helper): two elements hash pairwise, a lone element duplicates
+    itself only over an odd count (an even count over one element is
+    the guarded-unreachable inconsistency), and nothing hashes into an
+    empty level.
+    """
+    if len(elements) == 2:
+        return hashlib.sha256(elements[0] + elements[1]).digest()
+    if len(elements) == 1:
+        if count % 2 != 1:
+            raise AssertionError(  # pragma: no cover - unreachable
+                f"frontier level {j} holds one element over an even {count}"
+            )
+        return hashlib.sha256(elements[0] + elements[0]).digest()
+    return None
+
+
+def _frontier_root_digest(count: int, pending: list) -> str:
+    """The Merkle root digest over ``count`` leaves, given the frontier's
+    pending levels.
+
+    The private core of :meth:`MerkleFrontier.root`, moved verbatim from
+    that method's body (S3776 decomposition): same loop, same messages,
+    same results.
+    """
+    acc: bytes | None = None
+    j = 0
+    while count > 1:
+        level = pending[j] if j < len(pending) else None
+        elements = ([level] if level is not None else []) + ([acc] if acc is not None else [])
+        acc = _frontier_level_hash(elements, j, count)
+        count = (count + 1) // 2
+        j += 1
+    top = pending[j] if j < len(pending) else None
+    final = top if acc is None else acc
+    return final.hex()  # type: ignore[union-attr]
 
 
 class MerkleFrontier:
@@ -304,29 +423,7 @@ class MerkleFrontier:
         """The Merkle root over all leaves added so far."""
         if self._count == 0:
             return _sha256_hex(b"")
-        count = self._count
-        acc: bytes | None = None
-        j = 0
-        while count > 1:
-            pending = self._pending[j] if j < len(self._pending) else None
-            elements = ([pending] if pending is not None else []) + (
-                [acc] if acc is not None else []
-            )
-            if len(elements) == 2:
-                acc = hashlib.sha256(elements[0] + elements[1]).digest()
-            elif len(elements) == 1:
-                if count % 2 != 1:
-                    raise AssertionError(  # pragma: no cover - unreachable
-                        f"frontier level {j} holds one element over an even {count}"
-                    )
-                acc = hashlib.sha256(elements[0] + elements[0]).digest()
-            else:
-                acc = None
-            count = (count + 1) // 2
-            j += 1
-        top = self._pending[j] if j < len(self._pending) else None
-        final = top if acc is None else acc
-        return final.hex()  # type: ignore[union-attr]
+        return _frontier_root_digest(self._count, self._pending)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -570,45 +667,55 @@ class HashChainSink:
             if not terminated:
                 # A torn write is the tail defect this closes (spec 3.7):
                 # named with its coordinates, never silently skipped.
-                if prefix_lines is None:
-                    prefix_lines = count_lines(path, upto_bytes=start)
-                raise ChainTailMalformed(
-                    f"chain_tail_malformed: torn tail line (file {path}, line "
-                    f"{prefix_lines + local_line}, offset {offset}); the bounded "
-                    f"tail resume refuses to chain onto a torn write. Archive "
-                    f"the chain with '{_ROTATE_COMMAND}', which keeps the "
-                    f"archive verifiable offline and starts a fresh chain."
+                _tail_refuse(
+                    path,
+                    start,
+                    prefix_lines,
+                    local_line,
+                    offset,
+                    "chain_tail_malformed: torn tail line",
+                    "; the bounded tail resume refuses to chain onto a torn "
+                    f"write. Archive the chain with '{_ROTATE_COMMAND}', "
+                    "which keeps the archive verifiable offline and starts "
+                    "a fresh chain.",
                 )
             if not text.strip():
                 continue
             try:
                 rec = _loads_strict(text)
             except json.JSONDecodeError as exc:
-                if prefix_lines is None:
-                    prefix_lines = count_lines(path, upto_bytes=start)
-                raise ChainTailMalformed(
-                    f"chain_tail_malformed: unparsable line (file {path}, line "
-                    f"{prefix_lines + local_line}, offset {offset}): {exc}. The "
-                    f"whole-scan resume this replaces silently skipped such a "
-                    f"line; the bounded resume fails closed. Archive the chain "
-                    f"with '{_ROTATE_COMMAND}' and start a fresh one."
-                ) from exc
-            if rec.get("checkpoint") or rec.get("chain_meta"):
+                _tail_refuse(
+                    path,
+                    start,
+                    prefix_lines,
+                    local_line,
+                    offset,
+                    "chain_tail_malformed: unparsable line",
+                    f": {exc}. The whole-scan resume this replaces silently "
+                    f"skipped such a line; the bounded resume fails closed. "
+                    f"Archive the chain with '{_ROTATE_COMMAND}' and start "
+                    f"a fresh one.",
+                    cause=exc,
+                )
+            if _is_meta_record(rec):
                 continue
             rec_hash = rec.get("hash", "")
             rec_index = rec.get("index", -1)
             if prev_hash is not None and (
                 rec.get("prev_hash") != prev_hash or rec_index != prev_index + 1
             ):
-                if prefix_lines is None:
-                    prefix_lines = count_lines(path, upto_bytes=start)
-                raise ChainTailMalformed(
-                    f"chain_link_broken: record (file {path}, line "
-                    f"{prefix_lines + local_line}, offset {offset}) does not "
-                    f"link to its in-window predecessor (prev_hash or index "
-                    f"mismatch); the tail is unverifiable, so the resume "
-                    f"refuses instead of appending onto it. Archive the chain "
-                    f"with '{_ROTATE_COMMAND}' and start a fresh one."
+                _tail_refuse(
+                    path,
+                    start,
+                    prefix_lines,
+                    local_line,
+                    offset,
+                    "chain_link_broken: record",
+                    " does not link to its in-window predecessor (prev_hash "
+                    "or index mismatch); the tail is unverifiable, so the "
+                    f"resume refuses instead of appending onto it. Archive "
+                    f"the chain with '{_ROTATE_COMMAND}' and start a fresh "
+                    f"one.",
                 )
             prev_hash = rec_hash
             prev_index = rec_index
@@ -807,50 +914,41 @@ class HashChainSink:
         for pos, (offset, text, terminated) in enumerate(entries):
             local_line = pos + 2 if first_discarded else pos + 1
             if not terminated:
-                if prefix_lines is None:
-                    prefix_lines = count_lines(path, upto_bytes=start)
-                defects.append(
-                    {
-                        "kind": "torn_tail",
-                        "detail": (
-                            f"chain_tail_malformed: torn tail line (file {path}, line "
-                            f"{prefix_lines + local_line}, offset {offset}); the append "
-                            f"head refresh chains onto the last complete record and "
-                            f"names the torn write"
-                        ),
-                        "file": str(path),
-                        "line": prefix_lines + local_line,
-                        "offset": offset,
-                    }
+                row, prefix_lines = _refresh_tail_defect(
+                    path,
+                    start,
+                    prefix_lines,
+                    local_line,
+                    offset,
+                    "chain_tail_malformed: torn tail line",
+                    "; the append head refresh chains onto the last complete "
+                    "record and names the torn write",
                 )
+                defects.append(row)
                 continue
             if not text.strip():
                 continue
             try:
                 rec = _loads_strict(text)
             except ValueError as exc:
-                if prefix_lines is None:
-                    prefix_lines = count_lines(path, upto_bytes=start)
-                defects.append(
-                    {
-                        "kind": "torn_tail",
-                        "detail": (
-                            f"chain_tail_malformed: unparsable line (file {path}, line "
-                            f"{prefix_lines + local_line}, offset {offset}): {exc}. The "
-                            f"append head refresh chains onto the last complete record "
-                            f"and names this line; it is never silently skipped"
-                        ),
-                        "file": str(path),
-                        "line": prefix_lines + local_line,
-                        "offset": offset,
-                    }
+                row, prefix_lines = _refresh_tail_defect(
+                    path,
+                    start,
+                    prefix_lines,
+                    local_line,
+                    offset,
+                    "chain_tail_malformed: unparsable line",
+                    f": {exc}. The append head refresh chains onto the last "
+                    f"complete record and names this line; it is never "
+                    f"silently skipped",
                 )
+                defects.append(row)
                 continue
-            if rec.get("checkpoint") or rec.get("chain_meta"):
+            if _is_meta_record(rec):
                 continue
             rec_hash = rec.get("hash", "")
             rec_index = rec.get("index", -1)
-            if not isinstance(rec_index, int) or rec_index < 0 or not rec_hash:
+            if not _tail_scan_record_usable(rec_hash, rec_index):
                 continue
             tail_hash = rec_hash
             next_index = rec_index + 1

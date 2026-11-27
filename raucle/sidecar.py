@@ -422,6 +422,222 @@ class ReceiptSidecar:
             logger.exception("receipt sidecar: index insert failed (query degraded)")
 
 
+def _submit_length_guard(handler: Any) -> tuple[tuple[int, dict[str, Any]] | None, int]:
+    """The Content-Length gate of POST /submit.
+
+    Returns ``(None, length)`` when the header parses (verbatim shapes); a
+    failure carries the named ``(code, payload)`` answer.
+    """
+    try:
+        length = int(handler.headers.get("Content-Length") or "0")
+    except ValueError:
+        return (400, {"error": "invalid_request", "detail": "bad length"}), 0
+    return None, length
+
+
+def _submit_header_guards(
+    sidecar: ReceiptSidecar, nonce: str, sent_at_raw: str, authenticator: str, body: bytes
+) -> tuple[int, dict[str, Any]] | None:
+    """The handshake gates of POST /submit, in order (moved verbatim,
+    S3776 helper): missing headers, nonce shape, sent-at parse, the
+    fail-closed clock-skew window and the HMAC match. Each refusal is a
+    named answer; the nonce is not consumed on any of them."""
+    if not nonce or not sent_at_raw or not authenticator:
+        return (401, {"error": "unauthorized", "detail": "handshake headers missing"})
+    if not _SUBMIT_NONCE_RE.fullmatch(nonce):
+        return (
+            400,
+            {
+                "error": "invalid_nonce",
+                "detail": "nonce must be 16 to 128 lowercase hex characters",
+            },
+        )
+    try:
+        sent_at = int(sent_at_raw)
+    except ValueError:
+        return (
+            401,
+            {"error": "unauthorized", "detail": "sent-at is not an integer unix timestamp"},
+        )
+    if abs(int(time.time()) - sent_at) > sidecar._skew_seconds:
+        # Fail closed BEFORE any nonce consumption: a stale or
+        # far-future submit burns no nonce record and appends
+        # nothing. The timestamp is under the HMAC, so a
+        # capturer cannot refresh it to dodge this window.
+        return (
+            400,
+            {
+                "error": "stale_timestamp",
+                "detail": (
+                    f"sent-at outside the accepted clock-skew window ({sidecar._skew_seconds} s)"
+                ),
+            },
+        )
+    if not hmac.compare_digest(_mac(sidecar._secret, nonce, sent_at, body), authenticator):
+        return (401, {"error": "unauthorized", "detail": "handshake mismatch"})
+    return None
+
+
+def _submit_envelope_guard(body: bytes) -> tuple[tuple[int, dict[str, Any]] | None, dict[str, Any]]:
+    """Decode and shape-check the submitted envelope.
+
+    On success returns ``(None, envelope)``; on a refusal the FIRST slot
+    carries the named ``(code, payload)`` answer and the envelope slot is
+    an empty placeholder the caller never reads (the flow returns before
+    any further stage, as the inlined flow did).
+    """
+    try:
+        envelope = json.loads(body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return (400, {"error": "invalid_envelope", "detail": "body is not JSON"}), {}
+    if (
+        not isinstance(envelope, dict)
+        or set(envelope) != _ENVELOPE_KEYS
+        or not _RECEIPT_HASH_RE.match(str(envelope.get("receipt_hash") or ""))
+        or not isinstance(envelope.get("jws"), str)
+        or not envelope["jws"]
+    ):
+        return (
+            400,
+            {
+                "error": "invalid_envelope",
+                "detail": "expected exactly {receipt_hash, jws} with a sha256 receipt hash",
+            },
+        ), {}
+    return None, envelope
+
+
+def _submit_consume_guard(
+    sidecar: ReceiptSidecar, body: bytes, nonce: str, envelope: dict[str, Any]
+) -> tuple[tuple[int, dict[str, Any]] | None, Any]:
+    """Consume the anti-replay nonce for this submit (moved verbatim,
+    S3776 helper).
+
+    The nonce is consumed atomically BEFORE the envelope is enqueued
+    (ADR 0008 section 5). The claim-before-enqueue ordering is at-most-once
+    ingest: an enqueue refusal after the claim (overflow) is named to
+    the caller and never retried under the same nonce. Fail closed: a
+    nonce-store outage ingests nothing and names the refusal.
+    """
+    body_digest = hashlib.sha256(body).hexdigest()
+    try:
+        decision = sidecar._nonces.consume(nonce, body_digest, envelope["receipt_hash"])
+    except ValueError:
+        return (
+            400,
+            {"error": "invalid_request", "detail": "nonce or digest shape refused"},
+        ), None
+    except sqlite3.Error:
+        # Fail closed: without a decided nonce the submit is not
+        # ingested. Nothing is enqueued, nothing is appended, the
+        # transaction is rolled back in the store, and the refusal is
+        # named for the receipted-loss path.
+        logger.exception("receipt sidecar: nonce store unavailable (submit refused)")
+        # No refused_receipt echo here: the refused hash is
+        # request-supplied and the store held nothing to answer
+        # with; the gateway receipts the loss in its own signed
+        # x_sidecar advisory.
+        return (
+            503,
+            {
+                "error": "nonce_store_unavailable",
+                "detail": "submit refused fail-closed; no nonce record, nothing enqueued",
+            },
+        ), None
+    return None, decision
+
+
+def _submit_decision_guards(
+    sidecar: ReceiptSidecar, decision: Any
+) -> tuple[int, dict[str, Any]] | None:
+    """The decided-nonce gates (moved verbatim, S3776 helper): the named
+    re-use mismatch and the honest duplicate answer."""
+    if decision.outcome == "mismatch":
+        return (
+            409,
+            {
+                "error": "nonce_reuse_mismatch",
+                "detail": "this nonce was already accepted with a different request body",
+                "first_receipt_hash": decision.first_receipt_hash,
+            },
+        )
+    if decision.outcome == "duplicate":
+        # The named duplicate answer: this exact request
+        # identity (nonce and body bytes) was already accepted; the
+        # envelope is not appended again and the reply carries the
+        # first accepted receipt hash.
+        return (
+            200,
+            {
+                "status": "duplicate",
+                "detail": "this nonce and body were already accepted; not appended again",
+                "first_receipt_hash": decision.first_receipt_hash,
+                "queue_depth": sidecar._sink.depth,
+            },
+        )
+    return None
+
+
+def _submit_sink_guard(
+    sidecar: ReceiptSidecar, envelope: dict[str, Any]
+) -> tuple[int, dict[str, Any]] | None:
+    """Enqueue the envelope on the bounded sink (moved verbatim, S3776
+    helper)."""
+    try:
+        sidecar._sink.submit(envelope)
+    except ReceiptSinkOverflow:
+        # No refused_receipt echo here either: the 503 names the
+        # refusal and carries the computed queue depth only; the
+        # gateway's own signed advisory records the refused hash.
+        return (
+            503,
+            {
+                "error": "receipt_sink_overflow",
+                "detail": "bounded submit queue full",
+                "queue_depth": sidecar._sink.depth,
+            },
+        )
+    except Exception:  # noqa: BLE001 - never a 500 without a name
+        logger.exception("receipt sidecar: submit failed unexpectedly")
+        return (500, {"error": "sidecar_error", "detail": "internal failure"})
+    return None
+
+
+def _handle_submit(handler: Any, sidecar: ReceiptSidecar) -> None:
+    """The POST /submit flow (moved verbatim from ``do_POST``, S3776
+    decomposition). Each stage answers in order exactly as before; the
+    happy path ends in the 202 queued acknowledgement."""
+    guard, length = _submit_length_guard(handler)
+    if guard is not None:
+        handler._respond(guard[0], guard[1])
+        return
+    body = handler.rfile.read(length)
+    nonce = handler.headers.get("X-Raucle-Nonce") or ""
+    sent_at_raw = handler.headers.get("X-Raucle-Sidecar-Sent-At") or ""
+    authenticator = handler.headers.get("X-Raucle-Sidecar-Auth") or ""
+    guard = _submit_header_guards(sidecar, nonce, sent_at_raw, authenticator, body)
+    if guard is not None:
+        handler._respond(guard[0], guard[1])
+        return
+    guard, envelope = _submit_envelope_guard(body)
+    if guard is not None:
+        handler._respond(guard[0], guard[1])
+        return
+    guard, decision = _submit_consume_guard(sidecar, body, nonce, envelope)
+    if guard is not None:
+        handler._respond(guard[0], guard[1])
+        return
+    guard = _submit_decision_guards(sidecar, decision)
+    if guard is not None:
+        handler._respond(guard[0], guard[1])
+        return
+    guard = _submit_sink_guard(sidecar, envelope)
+    if guard is not None:
+        handler._respond(guard[0], guard[1])
+        return
+    handler._respond(202, {"status": "queued", "queue_depth": sidecar._sink.depth})
+
+
 def _make_handler(sidecar: ReceiptSidecar) -> type[BaseHTTPRequestHandler]:
     class _Handler(BaseHTTPRequestHandler):
         """Tiny HTTP surface: POST /submit, GET /health. Nothing else."""
@@ -446,151 +662,7 @@ def _make_handler(sidecar: ReceiptSidecar) -> type[BaseHTTPRequestHandler]:
                 # error, not an echo of caller-controlled bytes.
                 self._respond(404, {"error": "not_found"})
                 return
-            try:
-                length = int(self.headers.get("Content-Length") or "0")
-            except ValueError:
-                self._respond(400, {"error": "invalid_request", "detail": "bad length"})
-                return
-            body = self.rfile.read(length)
-            nonce = self.headers.get("X-Raucle-Nonce") or ""
-            sent_at_raw = self.headers.get("X-Raucle-Sidecar-Sent-At") or ""
-            authenticator = self.headers.get("X-Raucle-Sidecar-Auth") or ""
-            if not nonce or not sent_at_raw or not authenticator:
-                self._respond(401, {"error": "unauthorized", "detail": "handshake headers missing"})
-                return
-            if not _SUBMIT_NONCE_RE.fullmatch(nonce):
-                self._respond(
-                    400,
-                    {
-                        "error": "invalid_nonce",
-                        "detail": "nonce must be 16 to 128 lowercase hex characters",
-                    },
-                )
-                return
-            try:
-                sent_at = int(sent_at_raw)
-            except ValueError:
-                self._respond(
-                    401,
-                    {"error": "unauthorized", "detail": "sent-at is not an integer unix timestamp"},
-                )
-                return
-            if abs(int(time.time()) - sent_at) > sidecar._skew_seconds:
-                # Fail closed BEFORE any nonce consumption: a stale or
-                # far-future submit burns no nonce record and appends
-                # nothing. The timestamp is under the HMAC, so a
-                # capturer cannot refresh it to dodge this window.
-                self._respond(
-                    400,
-                    {
-                        "error": "stale_timestamp",
-                        "detail": (
-                            "sent-at outside the accepted clock-skew window "
-                            f"({sidecar._skew_seconds} s)"
-                        ),
-                    },
-                )
-                return
-            if not hmac.compare_digest(_mac(sidecar._secret, nonce, sent_at, body), authenticator):
-                self._respond(401, {"error": "unauthorized", "detail": "handshake mismatch"})
-                return
-            try:
-                envelope = json.loads(body.decode("utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                self._respond(400, {"error": "invalid_envelope", "detail": "body is not JSON"})
-                return
-            if (
-                not isinstance(envelope, dict)
-                or set(envelope) != _ENVELOPE_KEYS
-                or not _RECEIPT_HASH_RE.match(str(envelope.get("receipt_hash") or ""))
-                or not isinstance(envelope.get("jws"), str)
-                or not envelope["jws"]
-            ):
-                self._respond(
-                    400,
-                    {
-                        "error": "invalid_envelope",
-                        "detail": "expected exactly {receipt_hash, jws} with a sha256 receipt hash",
-                    },
-                )
-                return
-            # Submit anti-replay: the nonce is consumed atomically
-            # BEFORE the envelope is enqueued (ADR 0008 section 5). The
-            # claim-before-enqueue ordering is at-most-once ingest: an
-            # enqueue refusal after the claim (overflow) is named to
-            # the caller and never retried under the same nonce.
-            body_digest = hashlib.sha256(body).hexdigest()
-            try:
-                decision = sidecar._nonces.consume(nonce, body_digest, envelope["receipt_hash"])
-            except ValueError:
-                self._respond(
-                    400,
-                    {"error": "invalid_request", "detail": "nonce or digest shape refused"},
-                )
-                return
-            except sqlite3.Error:
-                # Fail closed: without a decided nonce the submit is not
-                # ingested. Nothing is enqueued, nothing is appended,
-                # the transaction is rolled back in the store, and the
-                # refusal is named for the receipted-loss path.
-                logger.exception("receipt sidecar: nonce store unavailable (submit refused)")
-                # No refused_receipt echo here: the refused hash is
-                # request-supplied and the store held nothing to answer
-                # with; the gateway receipts the loss in its own signed
-                # x_sidecar advisory.
-                self._respond(
-                    503,
-                    {
-                        "error": "nonce_store_unavailable",
-                        "detail": "submit refused fail-closed; no nonce record, nothing enqueued",
-                    },
-                )
-                return
-            if decision.outcome == "mismatch":
-                self._respond(
-                    409,
-                    {
-                        "error": "nonce_reuse_mismatch",
-                        "detail": "this nonce was already accepted with a different request body",
-                        "first_receipt_hash": decision.first_receipt_hash,
-                    },
-                )
-                return
-            if decision.outcome == "duplicate":
-                # The named duplicate answer: this exact request
-                # identity (nonce and body bytes) was already accepted;
-                # the envelope is not appended again and the reply
-                # carries the first accepted receipt hash.
-                self._respond(
-                    200,
-                    {
-                        "status": "duplicate",
-                        "detail": "this nonce and body were already accepted; not appended again",
-                        "first_receipt_hash": decision.first_receipt_hash,
-                        "queue_depth": sidecar._sink.depth,
-                    },
-                )
-                return
-            try:
-                sidecar._sink.submit(envelope)
-            except ReceiptSinkOverflow:
-                # No refused_receipt echo here either: the 503 names the
-                # refusal and carries the computed queue depth only; the
-                # gateway's own signed advisory records the refused hash.
-                self._respond(
-                    503,
-                    {
-                        "error": "receipt_sink_overflow",
-                        "detail": "bounded submit queue full",
-                        "queue_depth": sidecar._sink.depth,
-                    },
-                )
-                return
-            except Exception:  # noqa: BLE001 - never a 500 without a name
-                logger.exception("receipt sidecar: submit failed unexpectedly")
-                self._respond(500, {"error": "sidecar_error", "detail": "internal failure"})
-                return
-            self._respond(202, {"status": "queued", "queue_depth": sidecar._sink.depth})
+            _handle_submit(self, sidecar)
 
         def do_GET(self) -> None:  # noqa: N802 - http.server API
             if self.path == "/health":

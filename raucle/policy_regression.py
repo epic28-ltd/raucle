@@ -108,14 +108,12 @@ def _load_suite_manifest() -> tuple[dict[str, Any], bytes]:
     return manifest, raw
 
 
-def _parse_scenarios(raw: bytes) -> list[dict[str, Any]]:
-    def reject_constant(_value: str) -> None:
-        raise RegressionInputError("scenarios_invalid_json_constant")
+def _require_scenarios_document(document: object) -> list[object]:
+    """The parsed scenarios-document gates.
 
-    try:
-        document = json.loads(raw.decode("utf-8"), parse_constant=reject_constant)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RegressionInputError("scenarios_invalid_json") from exc
+    Moved verbatim from :func:`_parse_scenarios` (S3776 helper): version 1
+    (strict against bools), a non-empty scenarios list, bounded count.
+    """
     if (
         not isinstance(document, dict)
         or not isinstance(document.get("version"), int)
@@ -128,45 +126,66 @@ def _parse_scenarios(raw: bytes) -> list[dict[str, Any]]:
         raise RegressionInputError("scenarios_required")
     if len(scenarios) > MAX_SCENARIOS:
         raise RegressionInputError("scenarios_too_many")
+    return scenarios
+
+
+def _validated_scenario(index: int, item: object, seen_ids: set[str]) -> dict[str, Any]:
+    """One scenario row, validated and normalised.
+
+    Moved verbatim from :func:`_parse_scenarios`' loop body (S3776
+    helper): the allowed-field gate, the id/tool/agent_id/args/expected
+    checks in order, duplicate ids against ``seen_ids`` (mutated in
+    place, as before) and the optional source/destination string checks.
+    """
+    if not isinstance(item, dict) or set(item) - _ALLOWED_SCENARIO_FIELDS:
+        raise RegressionInputError(f"scenario_{index}_invalid_fields")
+    scenario_id = item.get("id")
+    tool = item.get("tool")
+    agent_id = item.get("agent_id")
+    args = item.get("args")
+    expected = item.get("expected")
+    if not isinstance(scenario_id, str) or not scenario_id.strip():
+        raise RegressionInputError(f"scenario_{index}_invalid_id")
+    if scenario_id in seen_ids:
+        raise RegressionInputError(f"scenario_{index}_duplicate_id")
+    seen_ids.add(scenario_id)
+    if not isinstance(tool, str) or not tool.strip():
+        raise RegressionInputError(f"scenario_{index}_invalid_tool")
+    if not isinstance(agent_id, str) or not agent_id.strip():
+        raise RegressionInputError(f"scenario_{index}_invalid_agent_id")
+    if not isinstance(args, dict):
+        raise RegressionInputError(f"scenario_{index}_invalid_args")
+    if not isinstance(expected, str) or expected not in _ALLOWED_DECISIONS:
+        raise RegressionInputError(f"scenario_{index}_invalid_expected")
+    for optional in ("source", "destination"):
+        value = item.get(optional, "")
+        if not isinstance(value, str):
+            raise RegressionInputError(f"scenario_{index}_invalid_{optional}")
+    return {
+        "id": scenario_id,
+        "tool": tool,
+        "agent_id": agent_id,
+        "args": args,
+        "expected": expected,
+        "source": item.get("source", ""),
+        "destination": item.get("destination", ""),
+    }
+
+
+def _parse_scenarios(raw: bytes) -> list[dict[str, Any]]:
+    def reject_constant(_value: str) -> None:
+        raise RegressionInputError("scenarios_invalid_json_constant")
+
+    try:
+        document = json.loads(raw.decode("utf-8"), parse_constant=reject_constant)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RegressionInputError("scenarios_invalid_json") from exc
+    scenarios = _require_scenarios_document(document)
 
     seen_ids: set[str] = set()
     validated: list[dict[str, Any]] = []
     for index, item in enumerate(scenarios):
-        if not isinstance(item, dict) or set(item) - _ALLOWED_SCENARIO_FIELDS:
-            raise RegressionInputError(f"scenario_{index}_invalid_fields")
-        scenario_id = item.get("id")
-        tool = item.get("tool")
-        agent_id = item.get("agent_id")
-        args = item.get("args")
-        expected = item.get("expected")
-        if not isinstance(scenario_id, str) or not scenario_id.strip():
-            raise RegressionInputError(f"scenario_{index}_invalid_id")
-        if scenario_id in seen_ids:
-            raise RegressionInputError(f"scenario_{index}_duplicate_id")
-        seen_ids.add(scenario_id)
-        if not isinstance(tool, str) or not tool.strip():
-            raise RegressionInputError(f"scenario_{index}_invalid_tool")
-        if not isinstance(agent_id, str) or not agent_id.strip():
-            raise RegressionInputError(f"scenario_{index}_invalid_agent_id")
-        if not isinstance(args, dict):
-            raise RegressionInputError(f"scenario_{index}_invalid_args")
-        if not isinstance(expected, str) or expected not in _ALLOWED_DECISIONS:
-            raise RegressionInputError(f"scenario_{index}_invalid_expected")
-        for optional in ("source", "destination"):
-            value = item.get(optional, "")
-            if not isinstance(value, str):
-                raise RegressionInputError(f"scenario_{index}_invalid_{optional}")
-        validated.append(
-            {
-                "id": scenario_id,
-                "tool": tool,
-                "agent_id": agent_id,
-                "args": args,
-                "expected": expected,
-                "source": item.get("source", ""),
-                "destination": item.get("destination", ""),
-            }
-        )
+        validated.append(_validated_scenario(index, item, seen_ids))
     return validated
 
 
