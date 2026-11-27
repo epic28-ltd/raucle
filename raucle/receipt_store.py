@@ -297,23 +297,42 @@ class SegmentedReceiptStore:
         A store that never appended still seals its recorded writable tail
         segment by name (the zero-receipt seal), because the resume opens
         it first.
+
+        The three stages of a seal (reopen, scan, write-and-seal-off) are
+        the private helpers below, moved verbatim (S3776 decomposition).
         """
-        if self._active_file is None:
-            name = self._active_name
-            if name is None:
-                return None
-            path = self._base / name
-            if not (path.exists() and _is_writable(path)):
-                return None
-            # Resume-then-seal: an operator sealing a restarted store gets
-            # the same named refusal a first append would get.
-            self._open_existing_segment(name)
-            assert self._active_file is not None
+        if self._active_file is None and self._reopen_active_for_seal() is None:
+            return None
         name = self._active_name
         assert name is not None
-        # Count receipts for the seal metadata. A non-blank line that is
-        # not parseable JSON fails the seal by name; it never counts as a
-        # receipt and never seals silently.
+        receipt_count, last_hash = self._scan_seal_segment(name)
+        meta = self._build_seal_meta(name, receipt_count, last_hash)
+        self._write_seal_meta_and_seal_off(name, meta)
+        return name
+
+    def _reopen_active_for_seal(self) -> str | None:
+        """Resume-then-seal: an operator sealing a restarted store gets
+        the same named refusal a first append would get.
+
+        Returns the reopened segment's name, or ``None`` when there is
+        no recorded writable tail segment to reopen (the zero-seal no-op).
+        """
+        name = self._active_name
+        if name is None:
+            return None
+        path = self._base / name
+        if not (path.exists() and _is_writable(path)):
+            return None
+        self._open_existing_segment(name)
+        assert self._active_file is not None
+        return name
+
+    def _scan_seal_segment(self, name: str) -> tuple[int, str]:
+        """Count receipts and find the last hash for the seal metadata.
+
+        A non-blank line that is not parseable JSON fails the seal by
+        name; it never counts as a receipt and never seals silently.
+        """
         receipt_count = 0
         last_hash = ""
         with open(self._base / name, encoding="utf-8") as fh:
@@ -333,6 +352,11 @@ class SegmentedReceiptStore:
                 receipt_count += 1
                 if isinstance(rec, dict) and "receipt_hash" in rec:
                     last_hash = rec["receipt_hash"]
+        return receipt_count, last_hash
+
+    def _build_seal_meta(self, name: str, receipt_count: int, last_hash: str) -> dict[str, Any]:
+        """The trust-honest seal meta: ``key_id`` + ``signature`` under a
+        configured seal signer, ``unsigned: true`` without."""
         import time as _time
 
         meta = {
@@ -348,13 +372,20 @@ class SegmentedReceiptStore:
             ).decode("ascii")
         else:
             meta[_UNSIGNED_KEY] = True
+        return meta
+
+    def _write_seal_meta_and_seal_off(self, name: str, meta: dict[str, Any]) -> None:
+        """Write the seal meta sidecar, make the segment read-only, and
+        open the next segment."""
         # Seal metadata lives in a SIDECAR (.meta), never inside the segment:
         # the segment must be a pure receipt chain so ProvenanceVerifier and
         # the audit pack consume it byte-for-byte with no special casing.
         meta_path = self._base / (name + ".meta")
-        self._active_file.flush()
-        os.fsync(self._active_file.fileno())
-        self._active_file.close()
+        active = self._active_file
+        assert active is not None  # a seal always runs with an open active file
+        active.flush()
+        os.fsync(active.fileno())
+        active.close()
         meta_path.write_text(json.dumps(meta, ensure_ascii=False) + "\n", encoding="utf-8")
         # Crash-order hardening (issue 344 item 2): the seal meta is
         # durable BEFORE the segment flips read-only. A power cut between
@@ -370,7 +401,6 @@ class SegmentedReceiptStore:
         self._active_name = None
         # open the next
         self._start_segment(len(self.segments()))
-        return name
 
     def _count_lines(self, seg: Path) -> int:
         count = 0

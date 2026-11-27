@@ -415,6 +415,54 @@ def build_finding_chain_verification(gateway: Any, receipt_hash: str) -> dict[st
     }
 
 
+def _session_finding_row(finding: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+    """One session-monitor finding row (moved verbatim from
+    :func:`build_session_findings`' scan loop, S3776 helper)."""
+    repro = finding.get("repro") or {}
+    return {
+        "finding_id": str(finding.get("finding_id") or ""),
+        "test_id": str(finding.get("test_id") or ""),
+        "verdict": str(finding.get("verdict") or ""),
+        "cited_receipt": str(finding.get("cited_receipt") or ""),
+        "tool": str(repro.get("tool") or ""),
+        "expected_decision": str(repro.get("expected_decision") or ""),
+        "actual_decision": str(repro.get("actual_decision") or ""),
+        "detected_at": int(finding.get("detected_at") or 0),
+        "note": str(finding.get("note") or ""),
+        "receipt_hash": str(record.get("receipt_hash") or ""),
+    }
+
+
+def _scan_session_findings(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Scan the newest receipt envelopes for ``x_finding`` receipts with
+    harness ``session-monitor``, newest first, bounded and disclosed.
+
+    The scan loop of :func:`build_session_findings`, moved verbatim
+    (S3776 helper); each row carries the finding receipt's own hash so
+    the panel can run the offline verifier over it (the verifier
+    re-checks the cited gate receipt and the reported decision against
+    the chain). A malformed line is skipped, never served.
+    """
+    findings: list[dict[str, Any]] = []
+    truncated = False
+    scanned = 0
+    for record in records:
+        scanned += 1
+        try:
+            payload = _decode_payload(record)
+        except Exception:  # a malformed line is skipped, never served
+            continue
+        finding = payload.get("x_finding") if isinstance(payload, dict) else None
+        if not isinstance(finding, dict) or finding.get("harness") != _HARNESS:
+            continue
+        findings.append(_session_finding_row(finding, record))
+        if len(findings) >= FINDING_ROW_CAP:
+            truncated = True
+            break
+    findings.sort(key=lambda f: f["detected_at"], reverse=True)
+    return {"findings": findings, "scanned": scanned, "truncated": truncated}
+
+
 def build_session_findings(gateway: Any) -> dict[str, Any]:
     """The session-monitor findings, read from the signed receipt chain.
 
@@ -428,44 +476,15 @@ def build_session_findings(gateway: Any) -> dict[str, Any]:
     records: list[dict[str, Any]] = []
     if store is not None:
         records = store.recent(FINDING_SCAN_CAP)
-    findings: list[dict[str, Any]] = []
-    truncated = False
-    scanned = 0
-    for record in records:
-        scanned += 1
-        try:
-            payload = _decode_payload(record)
-        except Exception:  # a malformed line is skipped, never served
-            continue
-        finding = payload.get("x_finding") if isinstance(payload, dict) else None
-        if not isinstance(finding, dict) or finding.get("harness") != _HARNESS:
-            continue
-        repro = finding.get("repro") or {}
-        findings.append(
-            {
-                "finding_id": str(finding.get("finding_id") or ""),
-                "test_id": str(finding.get("test_id") or ""),
-                "verdict": str(finding.get("verdict") or ""),
-                "cited_receipt": str(finding.get("cited_receipt") or ""),
-                "tool": str(repro.get("tool") or ""),
-                "expected_decision": str(repro.get("expected_decision") or ""),
-                "actual_decision": str(repro.get("actual_decision") or ""),
-                "detected_at": int(finding.get("detected_at") or 0),
-                "note": str(finding.get("note") or ""),
-                "receipt_hash": str(record.get("receipt_hash") or ""),
-            }
-        )
-        if len(findings) >= FINDING_ROW_CAP:
-            truncated = True
-            break
-    findings.sort(key=lambda f: f["detected_at"], reverse=True)
+    scanned_scan = _scan_session_findings(records)
+    findings = scanned_scan["findings"]
     return {
         "schema_version": FINDINGS_SCHEMA,
         "label": "signed x_finding receipts from this deployment's chain",
         "harness": _HARNESS,
         "count": len(findings),
-        "scanned": scanned,
-        "truncated": truncated,
+        "scanned": scanned_scan["scanned"],
+        "truncated": scanned_scan["truncated"],
         "monitor_note": (
             "a finding is the monitor's claim; the offline verifier re-checks "
             "it against the cited gate receipt in the chain, so a finding "
@@ -473,6 +492,89 @@ def build_session_findings(gateway: Any) -> dict[str, Any]:
             "verification"
         ),
         "findings": findings,
+    }
+
+
+def _is_middleware_advisory_finding(decoded: dict[str, Any]) -> bool:
+    """Whether one decoded record is a middleware-advisory ``x_finding``
+    receipt (counted alongside the DLP scans)."""
+    x_finding = decoded.get("x_finding")
+    return isinstance(x_finding, dict) and x_finding.get("harness") == "middleware-advisory"
+
+
+def _dlp_row(
+    decoded: dict[str, Any], x_dlp: dict[str, Any], record: dict[str, Any]
+) -> dict[str, Any]:
+    """One ``x_dlp`` scan row (moved verbatim from
+    :func:`build_dlp_findings`' scan loop, S3776 helper). Every row field
+    comes from the signed extension: digests, bounded class names, span
+    counts and route identifiers, never content."""
+    route = x_dlp.get("route") if isinstance(x_dlp.get("route"), dict) else {}
+    return {
+        "scan_id": str(x_dlp.get("scan_id") or ""),
+        "action": str(x_dlp.get("action") or ""),
+        "direction": str(x_dlp.get("direction") or ""),
+        "route": {
+            "source": str(route.get("source") or ""),
+            "destination": str(route.get("destination") or ""),
+        },
+        "content_sha256": str(x_dlp.get("content_sha256") or ""),
+        "redacted_content_sha256": str(x_dlp.get("redacted_content_sha256") or ""),
+        "matched_classes": sorted(str(c) for c in (x_dlp.get("matched_classes") or [])),
+        "span_counts": {str(k): int(v) for k, v in (x_dlp.get("span_counts") or {}).items()},
+        "rule_id": str(x_dlp.get("rule_id") or ""),
+        "cited_receipt": str(x_dlp.get("cited_receipt") or ""),
+        "detected_at": int(decoded.get("iat") or 0),
+        "receipt_hash": str(record.get("receipt_hash") or ""),
+    }
+
+
+def _accumulate_span_counts(by_class: dict[str, int], span_counts: dict[str, int]) -> None:
+    """Fold one row's span counts into the per-class totals (in place,
+    as the scan loop did)."""
+    for cls, count in span_counts.items():
+        by_class[cls] = by_class.get(cls, 0) + count
+
+
+def _scan_dlp_records(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Scan the newest receipt envelopes for ``x_dlp`` receipts and the
+    advisory middleware findings from the same scan window.
+
+    The scan loop of :func:`build_dlp_findings`, moved verbatim (S3776
+    helper). A malformed line is skipped, never served; the screen never
+    holds the values, only the signed extension's fields.
+    """
+    findings: list[dict[str, Any]] = []
+    by_class: dict[str, int] = {}
+    advisory = 0
+    scanned = 0
+    truncated = False
+    for record in records:
+        scanned += 1
+        try:
+            decoded = _decode_payload(record)
+            if not isinstance(decoded, dict):
+                continue
+            x_dlp = decoded.get("x_dlp")
+            if not isinstance(x_dlp, dict):
+                if _is_middleware_advisory_finding(decoded):
+                    advisory += 1
+                continue
+            row = _dlp_row(decoded, x_dlp, record)
+            findings.append(row)
+            _accumulate_span_counts(by_class, row["span_counts"])
+            if len(findings) >= DLP_ROW_CAP:
+                truncated = True
+                break
+        except Exception:  # a malformed line is skipped, never served
+            continue
+    findings.sort(key=lambda f: f["detected_at"], reverse=True)
+    return {
+        "findings": findings,
+        "by_class": by_class,
+        "advisory": advisory,
+        "scanned": scanned,
+        "truncated": truncated,
     }
 
 
@@ -509,65 +611,17 @@ def build_dlp_findings(gateway: Any) -> dict[str, Any]:
             }
         )
         return payload
-    records: list[dict[str, Any]] = store.recent(DLP_SCAN_CAP)
-    findings: list[dict[str, Any]] = []
-    by_class: dict[str, int] = {}
-    advisory = 0
-    scanned = 0
-    truncated = False
-    for record in records:
-        scanned += 1
-        try:
-            decoded = _decode_payload(record)
-            if not isinstance(decoded, dict):
-                continue
-            x_dlp = decoded.get("x_dlp")
-            if not isinstance(x_dlp, dict):
-                x_finding = decoded.get("x_finding")
-                if (
-                    isinstance(x_finding, dict)
-                    and x_finding.get("harness") == "middleware-advisory"
-                ):
-                    advisory += 1
-                continue
-            route = x_dlp.get("route") if isinstance(x_dlp.get("route"), dict) else {}
-            row = {
-                "scan_id": str(x_dlp.get("scan_id") or ""),
-                "action": str(x_dlp.get("action") or ""),
-                "direction": str(x_dlp.get("direction") or ""),
-                "route": {
-                    "source": str(route.get("source") or ""),
-                    "destination": str(route.get("destination") or ""),
-                },
-                "content_sha256": str(x_dlp.get("content_sha256") or ""),
-                "redacted_content_sha256": str(x_dlp.get("redacted_content_sha256") or ""),
-                "matched_classes": sorted(str(c) for c in (x_dlp.get("matched_classes") or [])),
-                "span_counts": {
-                    str(k): int(v) for k, v in (x_dlp.get("span_counts") or {}).items()
-                },
-                "rule_id": str(x_dlp.get("rule_id") or ""),
-                "cited_receipt": str(x_dlp.get("cited_receipt") or ""),
-                "detected_at": int(decoded.get("iat") or 0),
-                "receipt_hash": str(record.get("receipt_hash") or ""),
-            }
-            findings.append(row)
-            for cls, count in row["span_counts"].items():
-                by_class[cls] = by_class.get(cls, 0) + count
-            if len(findings) >= DLP_ROW_CAP:
-                truncated = True
-                break
-        except Exception:  # a malformed line is skipped, never served
-            continue
-    findings.sort(key=lambda f: f["detected_at"], reverse=True)
+    scan = _scan_dlp_records(store.recent(DLP_SCAN_CAP))
+    findings = scan["findings"]
     payload.update(
         {
             "available": True,
             "findings": findings,
-            "by_class": dict(sorted(by_class.items())),
+            "by_class": dict(sorted(scan["by_class"].items())),
             "count": len(findings),
-            "scanned": scanned,
-            "truncated": truncated,
-            "advisory_findings": advisory,
+            "scanned": scan["scanned"],
+            "truncated": scan["truncated"],
+            "advisory_findings": scan["advisory"],
             "empty_note": "" if findings else _DLP_EMPTY_NOTE,
             "monitor_note": (
                 "every row is a signed x_dlp receipt; the offline verifier "

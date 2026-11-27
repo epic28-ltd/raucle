@@ -1480,6 +1480,49 @@ class RaucleGateway:
         # taint tags, per task/delegation chain (trace_id). Evaluated
         # deterministically at each gate decision; see record_chain_output.
         self._chain_state = ChainTaintState()
+        self._init_session_windows_state(config)
+        self._init_gate_auth_mode(config)
+        self._init_gate_boot_controls(config)
+        self._init_receipt_projection(config)
+        self._init_gate_auth_stack(config)
+
+        # EPIC W lane W2: load the tool schema manifest BEFORE the gate is
+        # created, so the gate is schema-bound at construction (X1) and
+        # receipts can bind the definition digest. A malformed manifest
+        # refuses the boot with a named error, never a silent empty
+        # registry. _last_tool_receipt anchors the drift finding's
+        # citation to the last gate receipt minted for a tool.
+        self._tool_schemas = self._load_tool_schemas()
+        self._last_tool_receipt: dict[str, tuple[str, str]] = {}
+
+        # Bootstrap from config
+        self._init_audit_chain_boot(config)
+
+        self._init_gate_identity()
+        # Q8: the gateway's persistent gate identity signs the store's seal
+        # metas (house signing path). The store was constructed earlier in
+        # boot order, before the identity existed, so the signer binds here.
+        if self._receipt_store is not None:
+            self._receipt_store.set_seal_signer(self._gate_identity)
+        self._load_policies()
+        # EPIC W lane W1: bind the policy file's state_pairings section
+        # against the tool schema registry AFTER both are loaded, so a
+        # pairing referencing an unknown tool or an undeclared id field
+        # refuses the boot with a named error (the X1 load-time
+        # doctrine, never at call time).
+        self._state_pairings = self._load_state_pairings()
+
+        self._init_authority_and_evidence(config)
+
+        # Session window replay (EPIC Q lane Q-2, L1 boot-streaming): the
+        # TTL-bounded replay now runs when the boot's continuity surface
+        # lands (inline on a warm boot, from the compactor's tail-window
+        # phase on a cold one). Until it lands, session-rule calls refuse
+        # by name (session_continuity_pending), never a silent cold start.
+
+    def _init_session_windows_state(self, config: GatewayConfig) -> None:
+        """The session behavioural windows, moved verbatim from
+        ``__init__`` (S3776 decomposition)."""
         # Session behavioural windows (EPIC Q lane Q-2): bounded decision
         # summaries keyed (session_id, agent_id), maintained at receipt
         # emission. The configured rules and the named malformed-config
@@ -1495,6 +1538,11 @@ class RaucleGateway:
 
         self._evidence_store = EvidenceStore()
 
+    def _init_gate_auth_mode(self, config: GatewayConfig) -> None:
+        """Resolve and validate the gate authentication mode.
+
+        Moved verbatim from ``__init__`` (S3776 decomposition).
+        """
         # Gate authentication (A1). "off" preserves today's behaviour
         # exactly: declared agent_id is trusted, suitable only for
         # trusted internal networks. "apikey"/"token" require a
@@ -1504,6 +1552,13 @@ class RaucleGateway:
             raise ValueError(
                 f"invalid RAUCLE_GATE_AUTH {self._gate_auth_mode!r}: expected off, apikey or token"
             )
+
+    def _init_gate_boot_controls(self, config: GatewayConfig) -> None:
+        """The boot-time control surfaces between the auth mode and the
+        receipt projection (moved verbatim from ``__init__``, S3776
+        decomposition): the chaos controller, the credential stores, the
+        policy-seal boot keys and file cache, the agent quarantine lock
+        and the revocation-freshness set."""
         # S5 chaos controller: OFF unless RAUCLE_ENV=dev AND RAUCLE_CHAOS=1;
         # refuses to enable behind a gateway that is not gate_auth="off".
         from raucle.chaos import ChaosFaultController
@@ -1550,7 +1605,11 @@ class RaucleGateway:
         # empty registry - seeing it vanish refuses token evaluation by
         # name below, instead of silently re-opening revoked tokens.
         self._revocations_ever_seen: set[str] = set()
-        self._init_receipt_projection(config)
+
+    def _init_gate_auth_stack(self, config: GatewayConfig) -> None:
+        """The per-mode gate authentication wiring (moved verbatim from
+        ``__init__``, S3776 decomposition): the off warning, the apikey
+        credential store, the lazily-built token gate."""
         if self._gate_auth_mode == "off":
             logger.warning(
                 "\n"
@@ -1575,15 +1634,9 @@ class RaucleGateway:
         else:  # unreachable: validated above
             raise ValueError(self._gate_auth_mode)
 
-        # EPIC W lane W2: load the tool schema manifest BEFORE the gate is
-        # created, so the gate is schema-bound at construction (X1) and
-        # receipts can bind the definition digest. A malformed manifest
-        # refuses the boot with a named error, never a silent empty
-        # registry. _last_tool_receipt anchors the drift finding's
-        # citation to the last gate receipt minted for a tool.
-        self._tool_schemas = self._load_tool_schemas()
-        self._last_tool_receipt: dict[str, tuple[str, str]] = {}
-
+    def _init_audit_chain_boot(self, config: GatewayConfig) -> None:
+        """Bootstrap the signer and the strict signed-audit gates (moved
+        verbatim from ``__init__``, S3776 decomposition)."""
         # Bootstrap from config
         try:
             self._init_signer()
@@ -1619,20 +1672,10 @@ class RaucleGateway:
             if audit_path is not None and audit_path.exists():
                 state, key_id = _audit_chain_genesis_state(audit_path)
                 self.boot_readiness.set_audit_chain(state=state, key_id=key_id)
-        self._init_gate_identity()
-        # Q8: the gateway's persistent gate identity signs the store's seal
-        # metas (house signing path). The store was constructed earlier in
-        # boot order, before the identity existed, so the signer binds here.
-        if self._receipt_store is not None:
-            self._receipt_store.set_seal_signer(self._gate_identity)
-        self._load_policies()
-        # EPIC W lane W1: bind the policy file's state_pairings section
-        # against the tool schema registry AFTER both are loaded, so a
-        # pairing referencing an unknown tool or an undeclared id field
-        # refuses the boot with a named error (the X1 load-time
-        # doctrine, never at call time).
-        self._state_pairings = self._load_state_pairings()
 
+    def _init_authority_and_evidence(self, config: GatewayConfig) -> None:
+        """The authority attribution and fault/shadow evidence surfaces,
+        moved verbatim from ``__init__`` (S3776 decomposition)."""
         # Authority attribution (PR-E): human approval workflow + policy
         # change ledger. Approvals live in memory (receipts are the durable
         # record); the ledger is append-only hash-chained JSONL.
@@ -1664,12 +1707,6 @@ class RaucleGateway:
         # at boot; unusable candidate policy or out-of-bounds bounds refuse
         # the boot with a named error instead of a half-wired mode.
         self._shadow_eval = self._init_shadow_eval(config)
-
-        # Session window replay (EPIC Q lane Q-2, L1 boot-streaming): the
-        # TTL-bounded replay now runs when the boot's continuity surface
-        # lands (inline on a warm boot, from the compactor's tail-window
-        # phase on a cold one). Until it lands, session-rule calls refuse
-        # by name (session_continuity_pending), never a silent cold start.
 
     def _init_shadow_eval(self, config: GatewayConfig) -> Any:
         """Wire the bounded live shadow evaluator when configured.
@@ -1747,46 +1784,66 @@ class RaucleGateway:
         write projection at all; the sidecar is the deployment's single
         writer. A URL configured together with a local projection is the
         two-writer deployment this slice exists to prevent, so it is a
-        named boot refusal.
+        named boot refusal. The three projection stages are the private
+        helpers below, moved verbatim (S3776 decomposition).
         """
         self._sidecar_client = None
         self._pending_sidecar_advisories: deque = deque(maxlen=128)
-        if config.receipt_sidecar_url:
-            if config.receipt_store_dir or config.receipt_index_path:
-                raise ValueError(
-                    "single-writer guard: receipt_sidecar_url is configured "
-                    "together with receipt_store_dir/receipt_index_path; a "
-                    "gateway with a local write projection plus a sidecar "
-                    "would be a two-writer deployment (refusing to boot)"
-                )
-            from raucle.sidecar import SidecarClient
-
-            if not config.receipt_sidecar_secret:
-                # Spec (docs/spec/x3-sidecar-v0.1.md): the sidecar refuses
-                # to boot without the shared secret and the gateway refuses
-                # sidecar mode without it. An empty secret would lose every
-                # minted receipt by name on every submit.
-                raise ValueError(
-                    "receipt sidecar mode requires RAUCLE_RECEIPT_SIDECAR_SECRET "
-                    "(fail closed): without the shared secret every submit is "
-                    "an unauthorized refusal and every receipt is lost; set "
-                    "the secret and restart"
-                )
-            self._sidecar_client = SidecarClient(
-                url=config.receipt_sidecar_url,
-                secret=config.receipt_sidecar_secret,
-                timeout=config.receipt_sidecar_timeout,
-            )
-            self._receipt_store = None
-            self._receipt_index = None
-            self.boot_readiness = None
-            self._boot_compactor = None
-            logger.info(
-                "receipt sidecar mode: this gateway owns no chain write; "
-                "submitting minted envelopes to %s",
-                config.receipt_sidecar_url,
-            )
+        if self._init_sidecar_projection(config):
             return
+        self._init_segmented_receipt_store(config)
+        self._init_boot_compactor(config)
+
+    def _init_sidecar_projection(self, config: GatewayConfig) -> bool:
+        """The X3 slice-4 sidecar mode (moved verbatim from
+        ``_init_receipt_projection``, S3776 decomposition).
+
+        Returns True when the gateway entered sidecar mode (owning no
+        write projection at all); the caller stops there. A URL configured
+        together with a local projection is the two-writer deployment
+        this slice exists to prevent, so it is a named boot refusal.
+        """
+        if not config.receipt_sidecar_url:
+            return False
+        if config.receipt_store_dir or config.receipt_index_path:
+            raise ValueError(
+                "single-writer guard: receipt_sidecar_url is configured "
+                "together with receipt_store_dir/receipt_index_path; a "
+                "gateway with a local write projection plus a sidecar "
+                "would be a two-writer deployment (refusing to boot)"
+            )
+        from raucle.sidecar import SidecarClient
+
+        if not config.receipt_sidecar_secret:
+            # Spec (docs/spec/x3-sidecar-v0.1.md): the sidecar refuses
+            # to boot without the shared secret and the gateway refuses
+            # sidecar mode without it. An empty secret would lose every
+            # minted receipt by name on every submit.
+            raise ValueError(
+                "receipt sidecar mode requires RAUCLE_RECEIPT_SIDECAR_SECRET "
+                "(fail closed): without the shared secret every submit is "
+                "an unauthorized refusal and every receipt is lost; set "
+                "the secret and restart"
+            )
+        self._sidecar_client = SidecarClient(
+            url=config.receipt_sidecar_url,
+            secret=config.receipt_sidecar_secret,
+            timeout=config.receipt_sidecar_timeout,
+        )
+        self._receipt_store = None
+        self._receipt_index = None
+        self.boot_readiness = None
+        self._boot_compactor = None
+        logger.info(
+            "receipt sidecar mode: this gateway owns no chain write; "
+            "submitting minted envelopes to %s",
+            config.receipt_sidecar_url,
+        )
+        return True
+
+    def _init_segmented_receipt_store(self, config: GatewayConfig) -> None:
+        """The segmented receipt store (B2), moved verbatim from
+        ``_init_receipt_projection`` (S3776 decomposition)."""
         self._receipt_store = None
         if config.receipt_store_dir:
             from raucle.receipt_store import SegmentedReceiptStore
@@ -1800,6 +1857,11 @@ class RaucleGateway:
             # gateway attaches its persistent gate identity right after
             # _init_gate_identity (see __init__). Until a signer is bound,
             # sealed metas record ``unsigned: true`` honestly.
+
+    def _init_boot_compactor(self, config: GatewayConfig) -> None:
+        """The receipt_index projection and the L1 background boot
+        compactor, moved verbatim from ``_init_receipt_projection``
+        (S3776 decomposition)."""
         self._receipt_index = None
         self.boot_readiness: Any = None
         self._boot_compactor: Any = None
@@ -2643,17 +2705,55 @@ class RaucleGateway:
         malformed ruleset mints no block, never a fabricated one:
         enforcement never depends on the evidence surface. Returns None
         when no block applies.
+
+        The ruleset load, the session-rule pass and the policy-rule pass
+        are the private helpers below, moved verbatim (S3776
+        decomposition).
         """
-        import hashlib as _hl
-
-        from raucle.policy import PolicyFile, compile_constraint_dsl
-        from raucle.provenance import _COUNTERFACTUAL_VERSION, _SHA256_PREFIX
-
         if ctx.intent_block is None:
             return None
         ruleset_path = self.config.counterfactual_ruleset_file
         if not ruleset_path:
             return None
+        loaded = self._counterfactual_ruleset_block(ruleset_path)
+        if loaded is None:
+            return None
+        ruleset, block = loaded
+        evaluated_at = int(time.time())
+
+        # Session rules first: the alternative may fire over the receipt's
+        # own session window (bounded, content-free decision summaries
+        # recorded at receipt emission time - this call is not yet in it).
+        session_block = self._counterfactual_session_block(ctx, ruleset, block, evaluated_at)
+        if session_block is not None:
+            return session_block
+
+        # Policy rules: the same matching and constraint machinery the
+        # enforced decision uses (_find_rule semantics: tool exact, then
+        # source/destination patterns; taint-participant rules are deny
+        # overlays, never authority).
+        policy_block = self._counterfactual_policy_block(ctx, ruleset, block, evaluated_at)
+        if policy_block is not None:
+            return policy_block
+
+        # Nothing fired: the alternative ruleset would also have allowed,
+        # and the block records that with no rule fields.
+        return {**block, "decision": "allow", "evaluated_at": evaluated_at}
+
+    def _counterfactual_ruleset_block(self, ruleset_path: str) -> tuple[Any, dict[str, Any]] | None:
+        """Load the alternative ruleset and open the evidence block.
+
+        Moved verbatim from ``_counterfactual_block`` (S3776 helper): a
+        missing or malformed ruleset mints no block, never a fabricated
+        one (`enforcement never depends on the evidence surface`); the
+        block names the ruleset by a sha256 digest over the raw file
+        bytes.
+        """
+        import hashlib as _hl
+
+        from raucle.policy import PolicyFile
+        from raucle.provenance import _COUNTERFACTUAL_VERSION, _SHA256_PREFIX
+
         try:
             raw = Path(ruleset_path).read_bytes()
             ruleset = PolicyFile.from_dict(yaml.safe_load(raw))
@@ -2670,11 +2770,17 @@ class RaucleGateway:
             "version": _COUNTERFACTUAL_VERSION,
             "ruleset_hash": _SHA256_PREFIX + _hl.sha256(raw).hexdigest(),
         }
-        evaluated_at = int(time.time())
+        return ruleset, block
 
-        # Session rules first: the alternative may fire over the receipt's
-        # own session window (bounded, content-free decision summaries
-        # recorded at receipt emission time - this call is not yet in it).
+    def _counterfactual_session_block(
+        self,
+        ctx: GateReceiptContext,
+        ruleset: Any,
+        block: dict[str, Any],
+        evaluated_at: int,
+    ) -> dict[str, Any] | None:
+        """The session-rule pass of the counterfactual block, moved
+        verbatim from ``_counterfactual_block`` (S3776 helper)."""
         if ctx.session_id:
             entries = self._session_windows.entries(ctx.session_id, ctx.agent_id)
             for rule in ruleset.session_rules:
@@ -2713,12 +2819,21 @@ class RaucleGateway:
                         },
                         "evaluated_at": evaluated_at,
                     }
+        return None
 
-        # Policy rules: the same matching and constraint machinery the
-        # enforced decision uses (_find_rule semantics: tool exact, then
-        # source/destination patterns; taint-participant rules are deny
-        # overlays, never authority).
+    def _counterfactual_policy_block(
+        self,
+        ctx: GateReceiptContext,
+        ruleset: Any,
+        block: dict[str, Any],
+        evaluated_at: int,
+    ) -> dict[str, Any] | None:
+        """The policy-rule pass of the counterfactual block, moved
+        verbatim from ``_counterfactual_block`` (S3776 helper): the same
+        matching and constraint machinery the enforced decision uses
+        (_find_rule semantics); taint-participant rules never enforce."""
         from raucle.capability import _check_constraints
+        from raucle.policy import compile_constraint_dsl
 
         for rule in ruleset.policies:
             if rule.tool != ctx.tool:
@@ -2736,10 +2851,7 @@ class RaucleGateway:
                     "rule_kind": "policy_rule",
                     "evaluated_at": evaluated_at,
                 }
-
-        # Nothing fired: the alternative ruleset would also have allowed,
-        # and the block records that with no rule fields.
-        return {**block, "decision": "allow", "evaluated_at": evaluated_at}
+        return None
 
     def _policy_ruleset_hash(self, tool: str, source: str = "", destination: str = "") -> str:
         """Content digest of the policy rule in force for *tool* (binds
@@ -3589,13 +3701,97 @@ class RaucleGateway:
             result["_session_id"] = session_id
         result["_destination_class"] = destination_class or ""
 
-        # P4.A v1 containment: trace quarantine + lease suspension are
-        # consulted FIRST, before any delegated-authority shortcut or
-        # constraint evaluation. Both checks only ever DENY, so putting
-        # them first cannot widen authority — but it guarantees a
-        # quarantined trace / suspended lease cannot be bypassed by a
-        # valid token. Denials flow through the standard receipted deny
-        # path (nothing about containment is a special channel).
+        contained = self._check_tool_call_containment(result, start, trace_id, agent_id)
+        if contained is not None:
+            return contained
+
+        session_denied = self._check_session_rule_tier(
+            result, start, session_id, agent_id, tool, args, destination_class
+        )
+        if session_denied is not None:
+            return session_denied
+
+        token_denied = self._check_token_authority_tier(
+            result, start, _token_decision, _intent_hint, _acting_for
+        )
+        if token_denied is not None:
+            return token_denied
+
+        # Admission policy hooks (P1.4c): an agent whose enrolment fails
+        # admission (no descriptor, tampered manifest, bad signature,
+        # unknown version, retired) is refused at the gate, fail-closed,
+        # and the refusal is receipted like any other deny. Checked before
+        # any tool policy: an unadmitted agent reaches no policy at all.
+        admission_refusal = self._admission_refusal(agent_id)
+        if admission_refusal:
+            return self._deny_result(result, admission_refusal, start)
+
+        lookup_denied, matched_rule = self._check_tool_policy_lookup(
+            result, start, tool, args, agent_id, source, destination
+        )
+        if lookup_denied is not None:
+            return lookup_denied
+
+        token = self._tokens[tool]
+        actual_agent_id = agent_id or matched_rule.agent_id
+        # Data-flow enforcement (EPIC O1): a policy rule with the
+        # deny_from_chain_taint kind is evaluated against the REPLAYED
+        # chain state for this trace_id - deterministic, no side-channel.
+        # Fail-closed: an unusable chain state (missing trace) denies too.
+        dataflow_reason = self._evaluate_dataflow_rule(matched_rule, trace_id, destination_class)
+        # Participant-scoped taint rules (EPIC Q lane Q-3): a deny-only
+        # overlay evaluated inside the existing pre-check tier, before
+        # anything that can widen authority. A rule with
+        # participant=tool_response_taint never grants; it only refuses.
+        overlay = self._participant_overlay_refusal(trace_id, destination_class)
+        if overlay is not None:
+            overlay_rule, overlay_reason = overlay
+            self._bind_rule_metadata(result, overlay_rule, tool)
+            return self._deny_result(result, overlay_reason, start)
+        # Token TTL elapsed; re-mint under the matched rule (same issuer
+        # key, same constraints) so short policy TTLs do not brick a
+        # long-running gateway. Fail-closed if re-minting fails.
+        try:
+            token = self._ensure_fresh_token(tool, token, matched_rule, time.time())
+        except Exception:
+            logger.exception("Re-mint failed for %s", tool)
+            return self._deny_result(result, "token expired and re-mint failed", start)
+        self._bind_rule_metadata(result, matched_rule, tool)
+        return self._decide_and_finish(
+            result,
+            start,
+            matched_rule,
+            dataflow_reason,
+            token,
+            tool,
+            args,
+            actual_agent_id,
+            trace_id=trace_id,
+            approval_id=approval_id,
+            _intent_hint=_intent_hint,
+            _acting_for=_acting_for,
+        )
+
+    def _check_tool_call_containment(
+        self,
+        result: dict[str, Any],
+        start: float,
+        trace_id: str,
+        agent_id: str,
+    ) -> dict[str, Any] | None:
+        """P4.A v1 containment: trace quarantine + lease suspension are
+        consulted FIRST, before any delegated-authority shortcut or
+        constraint evaluation. Both checks only ever DENY, so putting
+        them first cannot widen authority — but it guarantees a
+        quarantined trace / suspended lease cannot be bypassed by a
+        valid token. Denials flow through the standard receipted deny
+        path (nothing about containment is a special channel). Also the
+        policy-bytes tamper gate (M2): the enforcement files were
+        receipted at activation; on-disk divergence (an out-of-band edit)
+        denies fail-closed with the named status before any policy
+        evaluation - no call is ever served under silently edited policy.
+        Moved verbatim from ``check_tool_call`` (S3776 decomposition).
+        """
         trace_refusal = self._trace_quarantine_refusal(trace_id, agent_id)
         if trace_refusal:
             return self._deny_result(result, trace_refusal, start)
@@ -3603,22 +3799,31 @@ class RaucleGateway:
         if lease_refusal:
             return self._deny_result(result, lease_refusal, start)
 
-        # Policy-bytes tamper detection (M2): the enforcement files were
-        # receipted at activation; on-disk divergence (an out-of-band edit)
-        # denies fail-closed with the named status before any policy
-        # evaluation - no call is ever served under silently edited policy.
         tampered_reason = self._policy_tampered_reason()
         if tampered_reason:
             return self._deny_result(result, tampered_reason, start)
+        return None
 
-        # Session behavioural rules (EPIC Q lane Q-2): deterministic,
-        # deny-only rules evaluated over the bounded session window state
-        # BEFORE anything that can widen authority (same doctrine as the
-        # containment checks above: a session rule can only ever deny).
-        # A session rule cannot fire without continuity: no session_id
-        # means no evaluation at all, never a fabricated one. Fail-closed:
-        # a malformed rule config or a window-state error denies with a
-        # named reason instead of skipping.
+    def _check_session_rule_tier(
+        self,
+        result: dict[str, Any],
+        start: float,
+        session_id: str,
+        agent_id: str,
+        tool: str,
+        args: dict[str, Any],
+        destination_class: str,
+    ) -> dict[str, Any] | None:
+        """Session behavioural rules (EPIC Q lane Q-2): deterministic,
+        deny-only rules evaluated over the bounded session window state
+        BEFORE anything that can widen authority (same doctrine as the
+        containment checks above: a session rule can only ever deny).
+        A session rule cannot fire without continuity: no session_id
+        means no evaluation at all, never a fabricated one. Fail-closed:
+        a malformed rule config or a window-state error denies with a
+        named reason instead of skipping. Moved verbatim from
+        ``check_tool_call`` (S3776 decomposition).
+        """
         if session_id:
             # L1 (AC5): while the boot's continuity replay is pending,
             # a session-scoped call refuses by name rather than being
@@ -3666,13 +3871,24 @@ class RaucleGateway:
                 "the caller's omission)",
                 start,
             )
+        return None
 
+    def _check_token_authority_tier(
+        self,
+        result: dict[str, Any],
+        start: float,
+        _token_decision: Any,
+        _intent_hint: dict[str, Any] | None,
+        _acting_for: str,
+    ) -> dict[str, Any] | None:
+        """Attributable token denial (receipts v1.1): the caller is
+        authenticated but the delegated authority refuses this call
+        (wrong tool, constraint violation, proof mismatch). Receipted
+        deny with the chain bound - the evidence an auditor needs.
+        Policy evaluation is moot: the authority itself refuses. Moved
+        verbatim from ``check_tool_call`` (S3776 decomposition).
+        """
         if _token_decision is not None and not _token_decision.allowed:
-            # Attributable token denial (receipts v1.1): the caller is
-            # authenticated but the delegated authority refuses this call
-            # (wrong tool, constraint violation, proof mismatch). Receipted
-            # deny with the chain bound - the evidence an auditor needs.
-            # Policy evaluation is moot: the authority itself refuses.
             return self._deny_result(
                 result,
                 f"delegated authority: {_token_decision.reason}",
@@ -3680,70 +3896,44 @@ class RaucleGateway:
                 _intent_hint=_intent_hint,
                 _acting_for=_acting_for,
             )
+        return None
 
-        # Admission policy hooks (P1.4c): an agent whose enrolment fails
-        # admission (no descriptor, tampered manifest, bad signature,
-        # unknown version, retired) is refused at the gate, fail-closed,
-        # and the refusal is receipted like any other deny. Checked before
-        # any tool policy: an unadmitted agent reaches no policy at all.
-        admission_refusal = self._admission_refusal(agent_id)
-        if admission_refusal:
-            return self._deny_result(result, admission_refusal, start)
-
+    def _check_tool_policy_lookup(
+        self,
+        result: dict[str, Any],
+        start: float,
+        tool: str,
+        args: dict[str, Any],
+        agent_id: str,
+        source: str,
+        destination: str,
+    ) -> tuple[dict[str, Any] | None, Any]:
+        """The policy lookup tier of ``check_tool_call`` (moved verbatim,
+        S3776 decomposition). Returns ``(denial, matched_rule)``: the
+        denial is a receipted deny when no policy governs this tool
+        (learn-mode observed, as before), otherwise ``None`` and the
+        matched rule. A miss learns like the inlined flow did."""
         if tool not in self._policy_rules or tool not in self._tokens:
             self._learn_observe(tool, args, agent_id, source, destination)
-            return self._deny_result(result, f"no policy configured for tool '{tool}'", start)
+            return (
+                self._deny_result(result, f"no policy configured for tool '{tool}'", start),
+                None,
+            )
 
         matched_rule = self._find_rule(tool, source, destination)
         if matched_rule is None:
             self._learn_observe(tool, args, agent_id, source, destination)
-            return self._deny_result(
-                result,
-                f"no policy for tool '{tool}' matching "
-                f"source='{source}' destination='{destination}'",
-                start,
-                siem=False,
+            return (
+                self._deny_result(
+                    result,
+                    f"no policy for tool '{tool}' matching "
+                    f"source='{source}' destination='{destination}'",
+                    start,
+                    siem=False,
+                ),
+                None,
             )
-
-        token = self._tokens[tool]
-        actual_agent_id = agent_id or matched_rule.agent_id
-        # Data-flow enforcement (EPIC O1): a policy rule with the
-        # deny_from_chain_taint kind is evaluated against the REPLAYED
-        # chain state for this trace_id - deterministic, no side-channel.
-        # Fail-closed: an unusable chain state (missing trace) denies too.
-        dataflow_reason = self._evaluate_dataflow_rule(matched_rule, trace_id, destination_class)
-        # Participant-scoped taint rules (EPIC Q lane Q-3): a deny-only
-        # overlay evaluated inside the existing pre-check tier, before
-        # anything that can widen authority. A rule with
-        # participant=tool_response_taint never grants; it only refuses.
-        overlay = self._participant_overlay_refusal(trace_id, destination_class)
-        if overlay is not None:
-            overlay_rule, overlay_reason = overlay
-            self._bind_rule_metadata(result, overlay_rule, tool)
-            return self._deny_result(result, overlay_reason, start)
-        # Token TTL elapsed; re-mint under the matched rule (same issuer
-        # key, same constraints) so short policy TTLs do not brick a
-        # long-running gateway. Fail-closed if re-minting fails.
-        try:
-            token = self._ensure_fresh_token(tool, token, matched_rule, time.time())
-        except Exception:
-            logger.exception("Re-mint failed for %s", tool)
-            return self._deny_result(result, "token expired and re-mint failed", start)
-        self._bind_rule_metadata(result, matched_rule, tool)
-        return self._decide_and_finish(
-            result,
-            start,
-            matched_rule,
-            dataflow_reason,
-            token,
-            tool,
-            args,
-            actual_agent_id,
-            trace_id=trace_id,
-            approval_id=approval_id,
-            _intent_hint=_intent_hint,
-            _acting_for=_acting_for,
-        )
+        return None, matched_rule
 
     def _decide_and_finish(
         self,
@@ -4826,79 +5016,20 @@ class RaucleGateway:
         digest = self._session_rule_digest(rule)
         window_note = f"{rule.window_seconds}s window"
 
+        # One deny-only verdict per kind, each its own private helper below
+        # (moved verbatim from this dispatch; S3776 decomposition).
         if rule.kind == "repeated_deny_storm":
-            denies = [e for e in in_window if e["decision"] == "deny" and e["tool"] == tool]
-            if len(denies) >= rule.threshold:
-                return (
-                    f"session rule '{rule.id}' (repeated_deny_storm): "
-                    f"{len(denies)} prior denied calls for tool '{tool}' in this "
-                    f"session within {window_note} (threshold {rule.threshold}); "
-                    "call denied",
-                    digest,
-                )
-            return None
-
+            return self._session_rule_deny_storm(rule, in_window, tool, digest, window_note)
         if rule.kind == "runaway_tool_loop":
-            calls = [e for e in in_window if e["tool"] == tool]
-            loop = 0
-            for entry in reversed(calls):
-                if entry["decision"] == "allow":
-                    break
-                loop += 1
-            if loop + 1 >= rule.threshold:
-                return (
-                    f"session rule '{rule.id}' (runaway_tool_loop): {loop} prior "
-                    f"calls for tool '{tool}' with no receipted success in this "
-                    f"session within {window_note} (threshold "
-                    f"{rule.threshold} including this call); call denied",
-                    digest,
-                )
-            return None
-
+            return self._session_rule_runaway_loop(rule, in_window, tool, digest, window_note)
         if rule.kind == "gradual_extraction":
-            if destination_class != rule.destination_class:
-                return None
-            hits = [e for e in in_window if e["destination_class"] == rule.destination_class]
-            if len(hits) >= rule.threshold:
-                return (
-                    f"session rule '{rule.id}' (gradual_extraction): "
-                    f"{len(hits)} prior decisions touching destination class "
-                    f"'{rule.destination_class}' in this session within "
-                    f"{window_note} (threshold {rule.threshold}); call denied",
-                    digest,
-                )
-            return None
-
-        if rule.kind == "forbidden_tool_chain":
-            sequence = list(rule.sequence)
-            trailing = (
-                [e["tool"] for e in in_window][-(len(sequence) - 1) :] if len(sequence) > 1 else []
+            return self._session_rule_gradual_extraction(
+                rule, in_window, destination_class, digest, window_note
             )
-            if trailing + [tool] == sequence:
-                return (
-                    f"session rule '{rule.id}' (forbidden_tool_chain): the "
-                    "trailing tool sequence "
-                    + " -> ".join(sequence)
-                    + f" is declared forbidden for this session within "
-                    f"{window_note}; call denied",
-                    digest,
-                )
-            return None
-
+        if rule.kind == "forbidden_tool_chain":
+            return self._session_rule_forbidden_chain(rule, in_window, tool, digest, window_note)
         if rule.kind == "scope_drift":
-            known = set(rule.tools)
-            if tool in known:
-                return None
-            strikes = sum(1 for e in in_window if e["tool"] not in known)
-            if strikes + 1 >= rule.threshold:
-                return (
-                    f"session rule '{rule.id}' (scope_drift): tool '{tool}' is "
-                    "outside the declared known-tools set for this agent; "
-                    f"{strikes} prior strike(s) in this session within "
-                    f"{window_note} (threshold {rule.threshold}); call denied",
-                    digest,
-                )
-            return None
+            return self._session_rule_scope_drift(rule, in_window, tool, digest, window_note)
 
         # An in-vocabulary kind with no handler is a config fault, not a
         # skip: fail closed with a named reason.
@@ -4906,6 +5037,133 @@ class RaucleGateway:
             f"session rule '{rule.id}' (unknown evaluation kind '{rule.kind}'); call denied",
             digest,
         )
+
+    def _session_rule_deny_storm(
+        self,
+        rule: Any,
+        in_window: list[dict[str, Any]],
+        tool: str,
+        digest: str,
+        window_note: str,
+    ) -> tuple[str, str] | None:
+        """repeated_deny_storm: the window already holds >= threshold
+        RECEIPTED denies for this tool; this attempt is cut off (the
+        storm is evidenced, the intervention prevents the next one).
+        Moved verbatim from ``_evaluate_session_rule`` (S3776 helper)."""
+        denies = [e for e in in_window if e["decision"] == "deny" and e["tool"] == tool]
+        if len(denies) >= rule.threshold:
+            return (
+                f"session rule '{rule.id}' (repeated_deny_storm): "
+                f"{len(denies)} prior denied calls for tool '{tool}' in this "
+                f"session within {window_note} (threshold {rule.threshold}); "
+                "call denied",
+                digest,
+            )
+        return None
+
+    def _session_rule_runaway_loop(
+        self,
+        rule: Any,
+        in_window: list[dict[str, Any]],
+        tool: str,
+        digest: str,
+        window_note: str,
+    ) -> tuple[str, str] | None:
+        """runaway_tool_loop: counting the current call, >= threshold
+        calls of this tool since the last receipted allow for it. Moved
+        verbatim from ``_evaluate_session_rule`` (S3776 helper)."""
+        calls = [e for e in in_window if e["tool"] == tool]
+        loop = 0
+        for entry in reversed(calls):
+            if entry["decision"] == "allow":
+                break
+            loop += 1
+        if loop + 1 >= rule.threshold:
+            return (
+                f"session rule '{rule.id}' (runaway_tool_loop): {loop} prior "
+                f"calls for tool '{tool}' with no receipted success in this "
+                f"session within {window_note} (threshold "
+                f"{rule.threshold} including this call); call denied",
+                digest,
+            )
+        return None
+
+    def _session_rule_gradual_extraction(
+        self,
+        rule: Any,
+        in_window: list[dict[str, Any]],
+        destination_class: str,
+        digest: str,
+        window_note: str,
+    ) -> tuple[str, str] | None:
+        """gradual_extraction: the window already holds >= threshold
+        receipted decisions (allow or deny) touching the rule's
+        destination class, and the current call touches that class. Moved
+        verbatim from ``_evaluate_session_rule`` (S3776 helper)."""
+        if destination_class != rule.destination_class:
+            return None
+        hits = [e for e in in_window if e["destination_class"] == rule.destination_class]
+        if len(hits) >= rule.threshold:
+            return (
+                f"session rule '{rule.id}' (gradual_extraction): "
+                f"{len(hits)} prior decisions touching destination class "
+                f"'{rule.destination_class}' in this session within "
+                f"{window_note} (threshold {rule.threshold}); call denied",
+                digest,
+            )
+        return None
+
+    def _session_rule_forbidden_chain(
+        self,
+        rule: Any,
+        in_window: list[dict[str, Any]],
+        tool: str,
+        digest: str,
+        window_note: str,
+    ) -> tuple[str, str] | None:
+        """forbidden_tool_chain: the trailing tools in the window followed
+        by the current call match the declared sequence exactly. Moved
+        verbatim from ``_evaluate_session_rule`` (S3776 helper)."""
+        sequence = list(rule.sequence)
+        trailing = (
+            [e["tool"] for e in in_window][-(len(sequence) - 1) :] if len(sequence) > 1 else []
+        )
+        if trailing + [tool] == sequence:
+            return (
+                f"session rule '{rule.id}' (forbidden_tool_chain): the "
+                "trailing tool sequence "
+                + " -> ".join(sequence)
+                + f" is declared forbidden for this session within "
+                f"{window_note}; call denied",
+                digest,
+            )
+        return None
+
+    def _session_rule_scope_drift(
+        self,
+        rule: Any,
+        in_window: list[dict[str, Any]],
+        tool: str,
+        digest: str,
+        window_note: str,
+    ) -> tuple[str, str] | None:
+        """scope_drift: the current tool is outside the declared known set
+        and cumulative strikes in the window (including this call) reach
+        the threshold. Moved verbatim from ``_evaluate_session_rule``
+        (S3776 helper)."""
+        known = set(rule.tools)
+        if tool in known:
+            return None
+        strikes = sum(1 for e in in_window if e["tool"] not in known)
+        if strikes + 1 >= rule.threshold:
+            return (
+                f"session rule '{rule.id}' (scope_drift): tool '{tool}' is "
+                "outside the declared known-tools set for this agent; "
+                f"{strikes} prior strike(s) in this session within "
+                f"{window_note} (threshold {rule.threshold}); call denied",
+                digest,
+            )
+        return None
 
     @staticmethod
     def _session_rule_digest(rule: Any) -> str:
@@ -5183,45 +5441,17 @@ class RaucleGateway:
             "cited_receipt": cited_receipt,
         }
         if evidence_digest is not None:
-            if not _is_sha256_digest(evidence_digest):
-                raise ValueError(
-                    "evidence_digest must be a sha256 digest over the read-back's "
-                    "raw response bytes"
-                )
-            if not isinstance(handle, str) or not handle:
-                raise ValueError(
-                    "state evidence requires a handle (the object handle extracted "
-                    "per the pairing's id_pointer)"
-                )
-            if not field_classes or any(not isinstance(c, str) or not c for c in field_classes):
-                raise ValueError(
-                    "state evidence requires field_classes: non-empty "
-                    "field-presence names, digests never content"
-                )
-            if not pairing_id:
-                raise ValueError("state evidence must bind a pairing_id from the registry")
-            pairing = self._require_state_pairing(pairing_id, read_tool)
-            extension.update(
-                {
-                    "pairing_id": pairing.pairing_id,
-                    "read_tool": pairing.read_tool,
-                    "evidence_digest": evidence_digest,
-                    "handle": handle,
-                    "field_classes": list(field_classes),
-                }
+            present = self._state_evidence_present_fields(
+                evidence_digest, handle, field_classes, pairing_id, read_tool
             )
+            extension.update(present)
             return self._emit_authority_receipt(
                 verdict="state_verified",
                 extension_key="x_state",
                 extension=extension,
             )
         # The absent path: the literal sentinel, never a fake digest.
-        if handle is not None or field_classes:
-            raise ValueError(
-                "state evidence requires evidence_digest: handle and "
-                "field_classes without a digest mint nothing (absence is the "
-                "literal sentinel, never a fake digest)"
-            )
+        self._state_absent_shape(handle, field_classes)
         if pairing_id:
             pairing = self._require_state_pairing(pairing_id, read_tool)
             extension["pairing_id"] = pairing.pairing_id
@@ -5234,6 +5464,55 @@ class RaucleGateway:
             extension_key="x_state",
             extension=extension,
         )
+
+    def _state_evidence_present_fields(
+        self,
+        evidence_digest: str,
+        handle: str | None,
+        field_classes: list[str] | None,
+        pairing_id: str,
+        read_tool: str,
+    ) -> dict[str, Any]:
+        """The evidence-present branch of :meth:`emit_state_evidence`,
+        moved verbatim (S3776 helper): the digest/handle/field-classes/
+        pairing gates in order, then the resolved pairing's fields."""
+        from raucle.provenance import _is_sha256_digest  # same helper import as above
+
+        if not _is_sha256_digest(evidence_digest):
+            raise ValueError(
+                "evidence_digest must be a sha256 digest over the read-back's raw response bytes"
+            )
+        if not isinstance(handle, str) or not handle:
+            raise ValueError(
+                "state evidence requires a handle (the object handle extracted "
+                "per the pairing's id_pointer)"
+            )
+        if not field_classes or any(not isinstance(c, str) or not c for c in field_classes):
+            raise ValueError(
+                "state evidence requires field_classes: non-empty "
+                "field-presence names, digests never content"
+            )
+        if not pairing_id:
+            raise ValueError("state evidence must bind a pairing_id from the registry")
+        pairing = self._require_state_pairing(pairing_id, read_tool)
+        return {
+            "pairing_id": pairing.pairing_id,
+            "read_tool": pairing.read_tool,
+            "evidence_digest": evidence_digest,
+            "handle": handle,
+            "field_classes": list(field_classes),
+        }
+
+    def _state_absent_shape(self, handle: str | None, field_classes: list[str] | None) -> None:
+        """The absence gate of :meth:`emit_state_evidence`, moved verbatim
+        (S3776 helper): handle and field_classes without a digest mint
+        nothing (absence is the literal sentinel, never a fake digest)."""
+        if handle is not None or field_classes:
+            raise ValueError(
+                "state evidence requires evidence_digest: handle and "
+                "field_classes without a digest mint nothing (absence is the "
+                "literal sentinel, never a fake digest)"
+            )
 
     def _v12_revocation_extension(
         self,

@@ -216,6 +216,47 @@ def _verify_passport_signature(p: AgentPassport, pem: str) -> PassportVerdict | 
     return None
 
 
+def _passport_structural_verdict(p: AgentPassport) -> PassportVerdict | None:
+    """The version and statement-structural gates of :func:`verify_passport`.
+
+    Moved verbatim (S3776 helper): an unknown version, or a vouched
+    statement that fails the production ``CapabilityStatement`` parser
+    (Q10, P1), yields the exact same named failure verdicts.
+    """
+    if p.body().get("version") != PASSPORT_VERSION:
+        return PassportVerdict(False, f"unknown passport version {p.body().get('version')!r}")
+
+    # Structural validation of the vouched statement (Q10, P1): reuse the
+    # production ``CapabilityStatement`` parser rather than re-implementing
+    # it. A statement with unknown fields or wrong shapes fails with a named
+    # reason DISTINCT from unknown statements/issuers.
+    try:
+        CapabilityStatement.from_dict(p.statement)
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        return PassportVerdict(False, f"passport statement failed structural validation: {exc}")
+    return None
+
+
+def _passport_window_verdict(p: AgentPassport, ts: int) -> PassportVerdict | None:
+    """The time-window gates of :func:`verify_passport`.
+
+    Moved verbatim (S3776 helper): issued_at beyond the clock-skew
+    allowance and expiry fail closed with the same reasons.
+    """
+    # issued_at must not sit in the future beyond a small clock-skew
+    # allowance (Q10, P1): the same allowance the trust registry applies
+    # to signed heads, so warm clocks do not fail closed.
+    if p.issued_at > ts + _MAX_CLOCK_SKEW_SECONDS:
+        return PassportVerdict(
+            False,
+            f"passport issued_at {p.issued_at} is in the future (now {ts}, "
+            f"allowed skew {_MAX_CLOCK_SKEW_SECONDS}s)",
+        )
+    if p.expires_at is not None and ts >= p.expires_at:
+        return PassportVerdict(False, f"passport expired at {p.expires_at}")
+    return None
+
+
 def verify_passport(
     passport: dict[str, Any] | AgentPassport,
     *,
@@ -239,17 +280,9 @@ def verify_passport(
         return parsed
     p = parsed
 
-    if p.body().get("version") != PASSPORT_VERSION:
-        return PassportVerdict(False, f"unknown passport version {p.body().get('version')!r}")
-
-    # Structural validation of the vouched statement (Q10, P1): reuse the
-    # production ``CapabilityStatement`` parser rather than re-implementing
-    # it. A statement with unknown fields or wrong shapes fails with a named
-    # reason DISTINCT from unknown statements/issuers.
-    try:
-        CapabilityStatement.from_dict(p.statement)
-    except (ValueError, TypeError, KeyError, AttributeError) as exc:
-        return PassportVerdict(False, f"passport statement failed structural validation: {exc}")
+    structural = _passport_structural_verdict(p)
+    if structural is not None:
+        return structural
 
     # Resolve the registry RECORD (not just the key) so we can check the
     # authoritative issuer identity, not the passport's self-asserted one.
@@ -272,18 +305,9 @@ def verify_passport(
             f"is registered to {record.issuer!r}",
         )
 
-    ts = now if now is not None else _now()
-    # issued_at must not sit in the future beyond a small clock-skew
-    # allowance (Q10, P1): the same allowance the trust registry applies
-    # to signed heads, so warm clocks do not fail closed.
-    if p.issued_at > ts + _MAX_CLOCK_SKEW_SECONDS:
-        return PassportVerdict(
-            False,
-            f"passport issued_at {p.issued_at} is in the future (now {ts}, "
-            f"allowed skew {_MAX_CLOCK_SKEW_SECONDS}s)",
-        )
-    if p.expires_at is not None and ts >= p.expires_at:
-        return PassportVerdict(False, f"passport expired at {p.expires_at}")
+    window = _passport_window_verdict(p, ts=now if now is not None else _now())
+    if window is not None:
+        return window
 
     stmt = p.statement
     return PassportVerdict(
