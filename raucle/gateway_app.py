@@ -650,6 +650,110 @@ def _install_security_headers(app: FastAPI) -> None:
         return response
 
 
+def _refuse_unlimit_serving(_import_error: Exception) -> None:
+    """Warn and maybe refuse serving without a rate limiter (RED-037).
+
+    Module-level extraction of the ``except ImportError`` tail of
+    :func:`create_gateway_app` (cognitive-complexity decomposition,
+    S3776): verbatim body, no behaviour change.
+    """
+    # RED-037: silently running without a rate limit is the failure mode
+    # worth shouting about, because the deployment believes it has one.
+    logger.warning(
+        "slowapi is not installed: the gateway is running WITHOUT rate limiting. "
+        'Install the "server" extra (pip install "raucle[server]") to enable it.'
+    )
+    # Q15 (RED-037 round two): creating the gateway app IS serving mode,
+    # so a serving boot without the limiter refuses by name unless the
+    # operator explicitly opts out. Local dev/CLI paths never construct
+    # this app, so they are unaffected.
+    import os as _os
+
+    if _os.environ.get(ENV_RATE_LIMIT_DISABLE, "").lower() not in ("1", "true", "yes"):
+        from raucle.errors import ConfigurationError
+
+        raise ConfigurationError(
+            "serving the gateway without a rate limiter is refused: slowapi is "
+            "not installed. Install the [server] extra "
+            '(pip install "raucle[server]"), or set '
+            "RAUCLE_DISABLE_RATE_LIMIT=1 to serve without limiting deliberately."
+        ) from _import_error
+
+
+def _health_route_body(gateway: RaucleGateway, authorization: str | None) -> dict[str, Any]:
+    """Token-optional health payload behind the optional bearer check.
+
+    Module-level extraction of the former ``/health`` handler body
+    (cognitive-complexity decomposition, S3776): verbatim body, no
+    behaviour change.
+    """
+    if gateway.config.health_check_token:
+        key = authorization or ""
+        if key.startswith(_BEARER_PREFIX):
+            key = key[len(_BEARER_PREFIX) :]
+        import hmac as _hmac
+
+        if not _hmac.compare_digest(key, gateway.config.health_check_token):
+            raise HTTPException(status_code=401, detail="Health check unauthorized")
+    return _health_payload(gateway)
+
+
+def _revoke_route_body(
+    gateway: RaucleGateway, req: RevokeRequest, authorization: str | None
+) -> dict[str, Any]:
+    """Admin-key-checked revocation, receipted with actor="admin".
+
+    Module-level extraction of the former ``/api/revoke`` handler body
+    (cognitive-complexity decomposition, S3776): verbatim body, no
+    behaviour change.
+    """
+    key = authorization or ""
+    if key.startswith(_BEARER_PREFIX):
+        key = key[len(_BEARER_PREFIX) :]
+    import hmac as _hmac
+
+    if not gateway.config.admin_api_key or not _hmac.compare_digest(
+        key, gateway.config.admin_api_key
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Admin API key required (Authorization: Bearer <admin_api_key>)",
+        )
+    return gateway.revoke_capability(
+        req.token_id,
+        reason=req.reason,
+        actor="admin",
+        kind=req.kind,
+        reason_class=req.reason_class,
+    )
+
+
+def _serve_conformance_record() -> JSONResponse:
+    """Serve the committed conformance record, or 503 when not built.
+
+    Module-level extraction of the former
+    ``/.well-known/raucle-conformance`` handler body (cognitive-complexity
+    decomposition, S3776): verbatim body, no behaviour change.
+    """
+    data_path = (
+        Path(__file__).resolve().parent.parent
+        / "docs"
+        / "spec"
+        / "conformance"
+        / "conformance.json"
+    )
+    if not data_path.is_file():
+        raise HTTPException(
+            status_code=503,
+            detail="conformance data not built; run scripts/gen_conformance_data.py",
+        )
+    payload = json.loads(data_path.read_text())
+    return JSONResponse(
+        payload,
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
 def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
     """Create the gateway API app (agent-facing)."""
     app = FastAPI(
@@ -678,27 +782,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         app.add_middleware(SlowAPIMiddleware)
     except ImportError as _import_error:
         _limiter = _NullLimiter()
-        # RED-037: silently running without a rate limit is the failure mode
-        # worth shouting about, because the deployment believes it has one.
-        logger.warning(
-            "slowapi is not installed: the gateway is running WITHOUT rate limiting. "
-            'Install the "server" extra (pip install "raucle[server]") to enable it.'
-        )
-        # Q15 (RED-037 round two): creating the gateway app IS serving mode,
-        # so a serving boot without the limiter refuses by name unless the
-        # operator explicitly opts out. Local dev/CLI paths never construct
-        # this app, so they are unaffected.
-        import os as _os
-
-        if _os.environ.get(ENV_RATE_LIMIT_DISABLE, "").lower() not in ("1", "true", "yes"):
-            from raucle.errors import ConfigurationError
-
-            raise ConfigurationError(
-                "serving the gateway without a rate limiter is refused: slowapi is "
-                "not installed. Install the [server] extra "
-                '(pip install "raucle[server]"), or set '
-                "RAUCLE_DISABLE_RATE_LIMIT=1 to serve without limiting deliberately."
-            ) from _import_error
+        _refuse_unlimit_serving(_import_error)
 
     _install_security_headers(app)
 
@@ -742,15 +826,8 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         authorization: str | None = Header(None),
         x_totp: str | None = Header(None, alias="X-TOTP"),
     ) -> dict[str, Any]:
-        if gateway.config.health_check_token:
-            key = authorization or ""
-            if key.startswith(_BEARER_PREFIX):
-                key = key[len(_BEARER_PREFIX) :]
-            import hmac as _hmac
-
-            if not _hmac.compare_digest(key, gateway.config.health_check_token):
-                raise HTTPException(status_code=401, detail="Health check unauthorized")
-        return _health_payload(gateway)
+        """Aggregate payload, honours health_check_token (see /livez)."""
+        return _health_route_body(gateway, authorization)
 
     @app.get("/livez")
     def livez() -> dict[str, str]:
@@ -784,25 +861,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         manager on this port, so the key IS the authority and the
         receipt records the operator as actor="admin".
         """
-        key = authorization or ""
-        if key.startswith(_BEARER_PREFIX):
-            key = key[len(_BEARER_PREFIX) :]
-        import hmac as _hmac
-
-        if not gateway.config.admin_api_key or not _hmac.compare_digest(
-            key, gateway.config.admin_api_key
-        ):
-            raise HTTPException(
-                status_code=401,
-                detail="Admin API key required (Authorization: Bearer <admin_api_key>)",
-            )
-        return gateway.revoke_capability(
-            req.token_id,
-            reason=req.reason,
-            actor="admin",
-            kind=req.kind,
-            reason_class=req.reason_class,
-        )
+        return _revoke_route_body(gateway, req, authorization)
 
     _register_deployment_intake_routes(app, gateway)
 
@@ -823,23 +882,7 @@ def create_gateway_app(gateway: RaucleGateway) -> FastAPI:
         re-runs and compares byte-for-byte). 503 when the artifact is absent —
         a deployment that was never built with it has nothing to claim.
         """
-        data_path = (
-            Path(__file__).resolve().parent.parent
-            / "docs"
-            / "spec"
-            / "conformance"
-            / "conformance.json"
-        )
-        if not data_path.is_file():
-            raise HTTPException(
-                status_code=503,
-                detail="conformance data not built; run scripts/gen_conformance_data.py",
-            )
-        payload = json.loads(data_path.read_text())
-        return JSONResponse(
-            payload,
-            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
-        )
+        return _serve_conformance_record()
 
     return app
 
