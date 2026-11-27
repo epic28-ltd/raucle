@@ -276,6 +276,60 @@ def _session_rule_str_list(data: dict[str, Any], key: str) -> list[str]:
     return list(value)
 
 
+def _session_rule_id(data: dict[str, Any]) -> str:
+    rule_id = data.get("id", "")
+    if not isinstance(rule_id, str) or not rule_id:
+        raise ValueError("session rule field 'id' is required")
+    return rule_id
+
+
+def _session_rule_kind(data: dict[str, Any]) -> str:
+    kind = data.get("kind", "")
+    if kind not in SESSION_RULE_KINDS:
+        raise ValueError(
+            f"unknown session rule kind {kind!r}; use one of " + ", ".join(SESSION_RULE_KINDS)
+        )
+    return kind
+
+
+def _session_rule_action(data: dict[str, Any]) -> str:
+    action = data.get("action", "deny") or "deny"
+    if action != "deny":
+        raise ValueError(
+            f"session rule action {action!r} is not supported in v1; only 'deny' is allowed"
+        )
+    return action
+
+
+def _session_rule_destination_class(data: dict[str, Any], kind: str) -> str:
+    destination_class = ""
+    if kind == "gradual_extraction":
+        destination_class = data.get("destination_class", "")
+        if not isinstance(destination_class, str) or not destination_class:
+            raise ValueError(
+                "session rule field 'destination_class' is required for gradual_extraction"
+            )
+    return destination_class
+
+
+def _session_rule_patterns(data: dict[str, Any]) -> list[Any]:
+    patterns_raw = data.get("tool_patterns", [])
+    if patterns_raw is None:
+        patterns_raw = []
+    if not isinstance(patterns_raw, list) or any(
+        not isinstance(p, str) or not p for p in patterns_raw
+    ):
+        raise ValueError("session rule field 'tool_patterns' must be a list of non-empty strings")
+    return patterns_raw
+
+
+def _session_rule_description(data: dict[str, Any]) -> str:
+    description = data.get("description", "")
+    if not isinstance(description, str):
+        raise ValueError("session rule field 'description' must be a string")
+    return description
+
+
 @dataclass
 class SessionRule:
     """One deterministic session rule (EPIC Q lane Q-2).
@@ -311,19 +365,9 @@ class SessionRule:
     def from_dict(cls, data: dict[str, Any]) -> SessionRule:
         if not isinstance(data, dict):
             raise ValueError("a session rule must be a mapping")
-        rule_id = data.get("id", "")
-        if not isinstance(rule_id, str) or not rule_id:
-            raise ValueError("session rule field 'id' is required")
-        kind = data.get("kind", "")
-        if kind not in SESSION_RULE_KINDS:
-            raise ValueError(
-                f"unknown session rule kind {kind!r}; use one of " + ", ".join(SESSION_RULE_KINDS)
-            )
-        action = data.get("action", "deny") or "deny"
-        if action != "deny":
-            raise ValueError(
-                f"session rule action {action!r} is not supported in v1; only 'deny' is allowed"
-            )
+        rule_id = _session_rule_id(data)
+        kind = _session_rule_kind(data)
+        action = _session_rule_action(data)
         window_seconds = _session_rule_int(data, "window_seconds")
         threshold = 0
         if kind in _KINDS_NEEDING_THRESHOLD:
@@ -334,25 +378,9 @@ class SessionRule:
         sequence: list[str] = []
         if kind == "forbidden_tool_chain":
             sequence = _session_rule_str_list(data, "sequence")
-        destination_class = ""
-        if kind == "gradual_extraction":
-            destination_class = data.get("destination_class", "")
-            if not isinstance(destination_class, str) or not destination_class:
-                raise ValueError(
-                    "session rule field 'destination_class' is required for gradual_extraction"
-                )
-        patterns_raw = data.get("tool_patterns", [])
-        if patterns_raw is None:
-            patterns_raw = []
-        if not isinstance(patterns_raw, list) or any(
-            not isinstance(p, str) or not p for p in patterns_raw
-        ):
-            raise ValueError(
-                "session rule field 'tool_patterns' must be a list of non-empty strings"
-            )
-        description = data.get("description", "")
-        if not isinstance(description, str):
-            raise ValueError("session rule field 'description' must be a string")
+        destination_class = _session_rule_destination_class(data, kind)
+        patterns_raw = _session_rule_patterns(data)
+        description = _session_rule_description(data)
         participant = _validate_participant(
             data.get("participant"), context="session rule field 'participant'"
         )
@@ -635,6 +663,32 @@ class PolicyFile:
         return yaml.dump(data, default_flow_style=False, sort_keys=False)
 
 
+def _state_pairing_entry_row(entry: dict[str, Any], i: int) -> dict[str, Any]:
+    """Validate one raw state_pairings entry and build its canonical row.
+
+    Verbatim extraction of the per-entry body of
+    :func:`_parse_state_pairings` (cognitive-complexity decomposition,
+    S3776): same error strings, same order, no behaviour change.
+    """
+    for field_name in ("write_tool", "read_tool", "id_pointer"):
+        value = entry.get(field_name)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"state_pairings entry {i}: {field_name!r} must be a non-empty string")
+    classes = entry.get("require_field_classes")
+    if classes is None:
+        classes = []
+    if not isinstance(classes, list) or any(not isinstance(c, str) or not c for c in classes):
+        raise ValueError(
+            f"state_pairings entry {i}: require_field_classes must be a list of non-empty strings"
+        )
+    return {
+        "write_tool": str(entry["write_tool"]),
+        "read_tool": str(entry["read_tool"]),
+        "id_pointer": str(entry["id_pointer"]),
+        "require_field_classes": [str(c) for c in classes],
+    }
+
+
 def _parse_state_pairings(entries: Any) -> list[dict[str, Any]]:
     """EPIC W lane W1: the state_pairings policy-file section, raw rows.
 
@@ -653,28 +707,7 @@ def _parse_state_pairings(entries: Any) -> list[dict[str, Any]]:
     for i, entry in enumerate(entries):
         if not isinstance(entry, dict):
             raise ValueError(f"state_pairings entry {i} must be a JSON object")
-        for field_name in ("write_tool", "read_tool", "id_pointer"):
-            value = entry.get(field_name)
-            if not isinstance(value, str) or not value:
-                raise ValueError(
-                    f"state_pairings entry {i}: {field_name!r} must be a non-empty string"
-                )
-        classes = entry.get("require_field_classes")
-        if classes is None:
-            classes = []
-        if not isinstance(classes, list) or any(not isinstance(c, str) or not c for c in classes):
-            raise ValueError(
-                f"state_pairings entry {i}: require_field_classes must be a list of "
-                "non-empty strings"
-            )
-        rows.append(
-            {
-                "write_tool": str(entry["write_tool"]),
-                "read_tool": str(entry["read_tool"]),
-                "id_pointer": str(entry["id_pointer"]),
-                "require_field_classes": [str(c) for c in classes],
-            }
-        )
+        rows.append(_state_pairing_entry_row(entry, i))
     return rows
 
 
