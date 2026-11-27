@@ -258,6 +258,21 @@ def read_last_lines(path: str | Path, window_bytes: int) -> tuple[int, list[tupl
     return start, entries
 
 
+def _window_record_links(
+    rec: dict[str, Any], prev_hash: str | None, prev_index: int | None
+) -> bool:
+    """Whether one window record links onto its in-window predecessor
+    (moved verbatim from ``_tail_from_window``'s link gate, S3776
+    helper): a record with NO in-window predecessor starts the window;
+    otherwise both the prev_hash link and the consecutive index must
+    hold, else the chain is broken."""
+    if prev_hash is None:
+        return True
+    # prev_index always moves with prev_hash (set together); the None
+    # state is exactly the no-predecessor branch above.
+    return rec.get("prev_hash") == prev_hash and rec.get("index", -1) == prev_index + 1  # type: ignore[operator]
+
+
 # ---------------------------------------------------------------------------
 # Named tail-defect refusals (L1 helpers, moved verbatim from the scan
 # methods below as the S3776 decomposition)
@@ -701,9 +716,7 @@ class HashChainSink:
                 continue
             rec_hash = rec.get("hash", "")
             rec_index = rec.get("index", -1)
-            if prev_hash is not None and (
-                rec.get("prev_hash") != prev_hash or rec_index != prev_index + 1
-            ):
+            if not _window_record_links(rec, prev_hash, prev_index):
                 _tail_refuse(
                     path,
                     start,
