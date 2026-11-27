@@ -2148,54 +2148,12 @@ class ProvenanceVerifier:
         bounds = self._bounds
         if bounds is None:
             return
-        _white, _grey, _black = 0, 1, 2
         state: dict[str, int] = {}
         depth_memo: dict[str, int] = {}
         for start in sorted(receipts_by_hash):
             if state.get(start, _white) == _black:
                 continue
-            stack: list[tuple[str, bool]] = [(start, False)]
-            while stack:
-                node, ready = stack.pop()
-                receipt = receipts_by_hash.get(node)
-                if receipt is None:
-                    # cited-but-absent parents are per-line parent-link
-                    # failures already; nothing is walkable here.
-                    continue
-                if ready:
-                    best = 0
-                    for parent in receipt.parents:
-                        best = max(best, depth_memo.get(parent, 0))
-                    depth_memo[node] = best + 1
-                    state[node] = _black
-                    report.traversal_receipts_expanded += 1
-                    if depth_memo[node] > bounds.max_depth:
-                        raise ProvenanceVerifierBoundsExceeded(
-                            "graph_depth",
-                            depth_memo[node],
-                            bounds.max_depth,
-                            f"receipt {node} ancestry depth exceeds the verify bound",
-                        )
-                    continue
-                if state.get(node, _white) != _white:
-                    # a duplicate pending entry: the node is already in
-                    # flight below, or already done (memo hit). Not a cycle.
-                    continue
-                state[node] = _grey
-                stack.append((node, True))
-                for parent in receipt.parents:
-                    report.traversal_edges_examined += 1
-                    pstate = state.get(parent, _white)
-                    if pstate == _grey:
-                        raise ProvenanceVerifierBoundsExceeded(
-                            "cycle",
-                            parent,
-                            "n/a",
-                            f"parent graph is not acyclic: receipt {node} "
-                            f"cites in-flight ancestor {parent}",
-                        )
-                    if pstate == _white and parent in receipts_by_hash:
-                        stack.append((parent, False))
+            _walk_ancestry_from(start, receipts_by_hash, state, depth_memo, bounds, report)
 
     def _validate_chain_record(
         self, raw: dict[str, Any], line_no: int, report: VerificationReport
@@ -2387,59 +2345,12 @@ class ProvenanceVerifier:
             return
 
         self._forbidden_field_sweep(block, "tool_definition", line_no, report)
-
-        # Closed field set: the block names a definition, never an
-        # open-ended payload.
-        for key in block:
-            if key not in _TOOL_DEFINITION_FIELDS:
-                report.errors.append(
-                    f"line {line_no}: tool_definition carries unknown field {key!r} "
-                    f"(closed set: {sorted(_TOOL_DEFINITION_FIELDS)})"
-                )
-                report.valid = False
-        for required in _TOOL_DEFINITION_FIELDS:
-            if block.get(required) is None:
-                report.errors.append(f"line {line_no}: tool_definition missing field {required!r}")
-                report.valid = False
-
-        version = block.get("version")
-        if version is not None and version != _TOOL_DEFINITION_VERSION:
-            report.errors.append(
-                f"line {line_no}: tool_definition version {version!r} is unknown "
-                f"(supported: {_TOOL_DEFINITION_VERSION}); the block is refused, "
-                "never skipped"
-            )
-            report.valid = False
-
-        vantage = block.get("definition_vantage")
-        if vantage is not None and vantage not in _TOOL_DEFINITION_VANTAGES:
-            report.errors.append(
-                f"line {line_no}: tool_definition vantage {vantage!r} outside the "
-                f"closed vocabulary {sorted(_TOOL_DEFINITION_VANTAGES)}"
-            )
-            report.valid = False
-
+        _tool_definition_closed_fields(block, line_no, report)
+        _tool_definition_known_values(block, line_no, report)
         digest = block.get("definition_digest")
-        if digest is not None and not _is_sha256_digest(digest):
-            report.errors.append(
-                f"line {line_no}: tool_definition definition_digest is not a sha256 "
-                "digest of the form sha256:<64 hex characters>"
-            )
-            report.valid = False
-
-        # Record the LATEST block per tool for the chain-end pin pass
-        # (last write wins: lines verify in chain order). A structurally
-        # broken block still records what it claims, so the pin pass
-        # names the line where the registry state stops answering for
-        # the receipts.
-        manifest = str(block.get("definition_manifest") or "")
-        tool = str(x_gate_payload.get("tool") or "") if isinstance(x_gate_payload, dict) else ""
-        if tool:
-            tool_definition_latest[tool] = {
-                "line_no": line_no,
-                "digest": digest,
-                "manifest": manifest,
-            }
+        _record_tool_definition_latest(
+            x_gate_payload, block, digest, line_no, tool_definition_latest
+        )
 
     def _verify_tool_definition_pins(
         self,
@@ -2466,42 +2377,9 @@ class ProvenanceVerifier:
         structural, never a fabricated result. Mutates *report* in
         place."""
         for tool in sorted(tool_definition_latest):
-            record = tool_definition_latest[tool]
-            manifest = str(record["manifest"] or "")
-            digest = record["digest"]
-            line_no = int(record["line_no"])
-            if not manifest or digest is None:
-                continue
-            entries = self._read_definition_manifest(manifest)
-            if not isinstance(entries, list):
-                continue
-            row = next(
-                (r for r in entries if isinstance(r, dict) and r.get("name") == tool),
-                None,
+            self._verify_one_tool_definition_pin(
+                tool, tool_definition_latest[tool], tool_definition_drift, report
             )
-            if row is None:
-                report.errors.append(
-                    f"line {line_no}: tool_definition manifest {manifest!r} "
-                    f"does not declare the receipt's tool {tool!r}"
-                )
-                report.valid = False
-                continue
-            finding_line = tool_definition_drift.get(tool)
-            if finding_line is not None and finding_line > line_no:
-                # The divergence is receipted: a definition_changed finding
-                # later in the chain records the observed transition, so
-                # the manifest's newer state is signed evidence, never
-                # silent drift.
-                continue
-            if isinstance(row.get("inputSchema"), dict):
-                from raucle.tool_schema import _definition_digest
-
-                if _definition_digest(row["inputSchema"]) != digest:
-                    report.errors.append(
-                        f"line {line_no}: tool_definition digest does not re-derive "
-                        f"from the manifest's registered schema for tool {tool!r}"
-                    )
-                    report.valid = False
 
     @staticmethod
     def _read_definition_manifest(manifest: str) -> Any:
@@ -2512,6 +2390,113 @@ class ProvenanceVerifier:
             return json.loads(Path(manifest).read_text(encoding="utf-8"))
         except Exception:
             return None
+
+    def _verify_one_state_evidence_pin(
+        self,
+        write_hash: str,
+        bound: dict[str, Any],
+        gate_tools_by_hash: dict[str, str],
+        report: VerificationReport,
+    ) -> None:
+        """Linkage and presence re-check for one paired x_state claim
+        (EPIC W lane W1 chain-end pass).
+
+        Verbatim extraction of the per-write body of
+        ``ProvenanceVerifier._verify_state_evidence_pins``
+        (cognitive-complexity decomposition, S3776): same checks, same
+        error strings, no behaviour change; the loop ``continue`` rides
+        on ``return`` inside the extracted body.
+        """
+        pairing_id = str(bound.get("pairing_id") or "")
+        if not pairing_id:
+            return
+        row = self._state_pairings.get(pairing_id)
+        if row is None:
+            report.errors.append(
+                f"line {bound['line_no']}: x_state cites pairing {pairing_id!r} "
+                "not in the pairing registry"
+            )
+            report.valid = False
+            return
+        cited_tool = gate_tools_by_hash.get(write_hash)
+        row_write_tool = str(row.get("write_tool") or "")
+        if cited_tool is None or row_write_tool != cited_tool:
+            report.errors.append(
+                f"line {bound['line_no']}: x_state pairing {pairing_id!r} binds "
+                f"write tool {row_write_tool!r}, but the cited receipt's tool "
+                f"is {cited_tool!r}"
+            )
+            report.valid = False
+        read_tool = str(bound.get("read_tool") or "")
+        row_read_tool = str(row.get("read_tool") or "")
+        if read_tool and row_read_tool != read_tool:
+            report.errors.append(
+                f"line {bound['line_no']}: x_state read tool {read_tool!r} is not "
+                f"the pairing's read tool {row_read_tool!r}"
+            )
+            report.valid = False
+        if bound.get("state") == "evidence":
+            present = set(bound.get("field_classes") or [])
+            for required_class in row.get("require_field_classes") or []:
+                if required_class not in present:
+                    report.errors.append(
+                        f"line {bound['line_no']}: x_state field_classes is "
+                        f"missing required class {required_class!r} (presence "
+                        "re-check, digest-blind)"
+                    )
+                    report.valid = False
+
+    def _verify_one_tool_definition_pin(
+        self,
+        tool: str,
+        record: dict[str, Any],
+        tool_definition_drift: dict[str, int],
+        report: VerificationReport,
+    ) -> None:
+        """Re-derive one tool's LATEST tool_definition pin against the
+        manifest it names (EPIC W lane W2 chain-end pass).
+
+        Verbatim extraction of the per-tool body of
+        ``ProvenanceVerifier._verify_tool_definition_pins``
+        (cognitive-complexity decomposition, S3776): same checks, same
+        error strings, no behaviour change; the loop ``continue`` rides
+        on ``return`` inside the extracted body.
+        """
+        manifest = str(record["manifest"] or "")
+        digest = record["digest"]
+        line_no = int(record["line_no"])
+        if not manifest or digest is None:
+            return
+        entries = self._read_definition_manifest(manifest)
+        if not isinstance(entries, list):
+            return
+        row = next(
+            (r for r in entries if isinstance(r, dict) and r.get("name") == tool),
+            None,
+        )
+        if row is None:
+            report.errors.append(
+                f"line {line_no}: tool_definition manifest {manifest!r} "
+                f"does not declare the receipt's tool {tool!r}"
+            )
+            report.valid = False
+            return
+        finding_line = tool_definition_drift.get(tool)
+        if finding_line is not None and finding_line > line_no:
+            # The divergence is receipted: a definition_changed finding
+            # later in the chain records the observed transition, so
+            # the manifest's newer state is signed evidence, never
+            # silent drift.
+            return
+        if isinstance(row.get("inputSchema"), dict):
+            from raucle.tool_schema import _definition_digest
+
+            if _definition_digest(row["inputSchema"]) != digest:
+                report.errors.append(
+                    f"line {line_no}: tool_definition digest does not re-derive "
+                    f"from the manifest's registered schema for tool {tool!r}"
+                )
+                report.valid = False
 
     def _verify_bilateral(
         self,
@@ -2625,127 +2610,12 @@ class ProvenanceVerifier:
             report.valid = False
             return
 
-        # Structural validity first: every required field present.
-        for required in _DLP_REQUIRED_FIELDS:
-            if x_dlp.get(required) is None:
-                report.errors.append(f"line {line_no}: x_dlp missing field {required!r}")
-                report.valid = False
-
-        action = x_dlp.get("action")
-        if action not in _DLP_ACTIONS:
-            report.errors.append(
-                f"line {line_no}: x_dlp action {action!r} outside the closed "
-                f"vocabulary {sorted(_DLP_ACTIONS)}"
-            )
-            report.valid = False
-
-        direction = x_dlp.get("direction")
-        if direction not in _DLP_DIRECTIONS:
-            report.errors.append(
-                f"line {line_no}: x_dlp direction {direction!r} outside the closed "
-                f"vocabulary {sorted(_DLP_DIRECTIONS)}"
-            )
-            report.valid = False
-
-        # Digests are sha256-shaped: prefix plus 64 hex characters. The
-        # verifier never sees content, only these digests.
-        for digest_field in ("content_sha256", "redacted_content_sha256"):
-            digest = x_dlp.get(digest_field)
-            if digest is None:
-                continue
-            shape_ok = (
-                isinstance(digest, str)
-                and digest.startswith(_SHA256_PREFIX)
-                and re.fullmatch(r"[0-9a-f]{64}", digest[len(_SHA256_PREFIX) :]) is not None
-            )
-            if not shape_ok:
-                report.errors.append(
-                    f"line {line_no}: x_dlp {digest_field} is not a sha256 digest "
-                    f"of the form sha256:<64 hex characters>"
-                )
-                report.valid = False
-
-        # Action/redaction consistency: the post-redaction digest is
-        # present if and only if the action is redacted.
-        redacted_digest = x_dlp.get("redacted_content_sha256")
-        if action == "redacted" and not redacted_digest:
-            report.errors.append(
-                f"line {line_no}: x_dlp action 'redacted' carries no redacted_content_sha256"
-            )
-            report.valid = False
-        if action != "redacted" and redacted_digest is not None:
-            report.errors.append(
-                f"line {line_no}: x_dlp action {action!r} carries a "
-                f"redacted_content_sha256 (present only when action='redacted')"
-            )
-            report.valid = False
-
-        # Bounded class vocabulary, versioned: an unknown class fails
-        # closed rather than widening disclosure.
-        matched_classes = x_dlp.get("matched_classes")
-        classes: set[str] = set()
-        if not isinstance(matched_classes, list) or not matched_classes:
-            report.errors.append(f"line {line_no}: x_dlp matched_classes must be a non-empty list")
-            report.valid = False
-        else:
-            for mclass in matched_classes:
-                if not isinstance(mclass, str) or mclass not in _DLP_MATCHED_CLASSES:
-                    report.errors.append(
-                        f"line {line_no}: x_dlp unknown class {mclass!r} outside the "
-                        f"bounded vocabulary {sorted(_DLP_MATCHED_CLASSES)}"
-                    )
-                    report.valid = False
-                else:
-                    classes.add(mclass)
-
-        # Span counts: non-negative integers, keys in the same bounded
-        # vocabulary, and every counted class listed in matched_classes.
-        span_counts = x_dlp.get("span_counts")
-        if not isinstance(span_counts, dict):
-            report.errors.append(f"line {line_no}: x_dlp span_counts must be an object")
-            report.valid = False
-        else:
-            for spclass, count in span_counts.items():
-                if not isinstance(spclass, str) or spclass not in _DLP_MATCHED_CLASSES:
-                    report.errors.append(
-                        f"line {line_no}: x_dlp span_counts unknown class {spclass!r} "
-                        f"outside the bounded vocabulary {sorted(_DLP_MATCHED_CLASSES)}"
-                    )
-                    report.valid = False
-                    continue
-                if not isinstance(count, int) or isinstance(count, bool) or count < 0:
-                    report.errors.append(
-                        f"line {line_no}: x_dlp span_counts for {spclass!r} is not a "
-                        f"non-negative integer"
-                    )
-                    report.valid = False
-                if (
-                    isinstance(spclass, str)
-                    and spclass in _DLP_MATCHED_CLASSES
-                    and spclass not in classes
-                ):
-                    report.errors.append(
-                        f"line {line_no}: x_dlp span_counts names class {spclass!r} "
-                        f"absent from matched_classes"
-                    )
-                    report.valid = False
-
-        # Bounded disclosure: no content-like field anywhere in the block.
-        for leak_field in _DLP_FORBIDDEN_CONTENT_FIELDS:
-            if leak_field in x_dlp:
-                report.errors.append(
-                    f"line {line_no}: x_dlp carries content-like field "
-                    f"{leak_field!r} (bounded disclosure: counts, digests and "
-                    f"class names only, never content)"
-                )
-                report.valid = False
-
-        # Chain membership of any cited receipt, like every other
-        # extension citation.
-        cited = str(x_dlp.get("cited_receipt", ""))
-        if cited and cited not in receipts_by_hash:
-            report.errors.append(f"line {line_no}: x_dlp cites receipt {cited!r} not in the chain")
-            report.valid = False
+        _x_dlp_vocabulary_errors(x_dlp, line_no, report)
+        _x_dlp_digest_shapes(x_dlp, line_no, report)
+        _x_dlp_redaction_consistency(x_dlp, line_no, report)
+        classes = _x_dlp_matched_classes(x_dlp, line_no, report)
+        _x_dlp_span_counts(x_dlp, classes, line_no, report)
+        _x_dlp_bounded_disclosure(x_dlp, line_no, report, receipts_by_hash)
 
     def _verify_x_state(
         self,
@@ -2780,122 +2650,13 @@ class ProvenanceVerifier:
 
         # Bounded disclosure: no content-like field anywhere in the block.
         self._forbidden_field_sweep(x_state, "x_state", line_no, report)
-
-        # Closed field set: the block names a state claim, never an
-        # open-ended payload.
-        for key in x_state:
-            if key not in _X_STATE_FIELDS:
-                report.errors.append(
-                    f"line {line_no}: x_state carries unknown field {key!r} "
-                    f"(closed set: {sorted(_X_STATE_FIELDS)})"
-                )
-                report.valid = False
-        for required in ("version", "cited_receipt"):
-            if x_state.get(required) is None:
-                report.errors.append(f"line {line_no}: x_state missing field {required!r}")
-                report.valid = False
-
-        version = x_state.get("version")
-        if version is not None and version != _STATE_EVIDENCE_VERSION:
-            report.errors.append(
-                f"line {line_no}: x_state version {version!r} is unknown "
-                f"(supported: {_STATE_EVIDENCE_VERSION}); the block is refused, "
-                "never skipped"
-            )
-            report.valid = False
-
-        # The cited write receipt: sha256-shaped and present EARLIER in
-        # the chain, like every other extension citation.
-        cited = str(x_state.get("cited_receipt") or "")
-        if cited and not _is_sha256_digest(cited):
-            report.errors.append(
-                f"line {line_no}: x_state cited_receipt is not a sha256 receipt "
-                "hash of the form sha256:<64 hex characters>"
-            )
-            report.valid = False
-        if cited and cited not in receipts_by_hash:
-            report.errors.append(
-                f"line {line_no}: x_state cites receipt {cited!r} not in the chain"
-            )
-            report.valid = False
-
-        # Sentinel semantics: absence is the literal sentinel, never a
-        # fake digest; a block carrying neither states nothing.
-        sentinel = x_state.get("state_evidence")
-        has_digest = x_state.get("evidence_digest") is not None
-        state = "invalid"
-        if sentinel is not None and sentinel != _STATE_ABSENT_SENTINEL:
-            report.errors.append(
-                f"line {line_no}: x_state state_evidence {sentinel!r} is not the "
-                f"literal sentinel {_STATE_ABSENT_SENTINEL!r}"
-            )
-            report.valid = False
-        if sentinel == _STATE_ABSENT_SENTINEL:
-            if (
-                has_digest
-                or x_state.get("handle") is not None
-                or x_state.get("field_classes") is not None
-            ):
-                report.errors.append(
-                    f"line {line_no}: x_state state_evidence {_STATE_ABSENT_SENTINEL!r} "
-                    "never carries evidence fields (absence is stated, never a "
-                    "fake digest)"
-                )
-                report.valid = False
-            state = "absent"
-        elif has_digest:
-            state = "evidence"
-            for required in ("pairing_id", "read_tool", "handle", "field_classes"):
-                if x_state.get(required) is None:
-                    report.errors.append(f"line {line_no}: x_state missing field {required!r}")
-                    report.valid = False
-        else:
-            report.errors.append(
-                f"line {line_no}: x_state carries neither evidence nor the absent "
-                "sentinel (a receipt for a pairing-covered tool must state one)"
-            )
-            report.valid = False
-
-        digest = x_state.get("evidence_digest")
-        if digest is not None and not _is_sha256_digest(digest):
-            report.errors.append(
-                f"line {line_no}: x_state evidence_digest is not a sha256 digest "
-                "of the form sha256:<64 hex characters>"
-            )
-            report.valid = False
-
-        handle = x_state.get("handle")
-        if handle is not None and (not isinstance(handle, str) or not handle):
-            report.errors.append(
-                f"line {line_no}: x_state handle must be a non-empty string "
-                "(the object handle extracted per the pairing's id_pointer)"
-            )
-            report.valid = False
-
-        field_classes = x_state.get("field_classes")
-        if field_classes is not None and (
-            not isinstance(field_classes, list)
-            or not field_classes
-            or any(not isinstance(c, str) or not c for c in field_classes)
-        ):
-            report.errors.append(
-                f"line {line_no}: x_state field_classes must be a non-empty "
-                "list of field-presence names (names only, never content)"
-            )
-            report.valid = False
-
-        # Chain-end collector: the state claim bound to this write
-        # receipt (last write wins, lines verify in chain order).
-        if cited:
-            state_evidence_by_write[cited] = {
-                "line_no": line_no,
-                "state": state,
-                "pairing_id": str(x_state.get("pairing_id") or ""),
-                "read_tool": str(x_state.get("read_tool") or ""),
-                "field_classes": (
-                    [str(c) for c in field_classes] if isinstance(field_classes, list) else []
-                ),
-            }
+        _x_state_closed_set(x_state, line_no, report)
+        cited = _x_state_cited_receipt(x_state, line_no, report, receipts_by_hash)
+        state = _x_state_sentinel_semantics(x_state, line_no, report)
+        _x_state_digest_shape(x_state, line_no, report)
+        _x_state_handle_shape(x_state, line_no, report)
+        _x_state_field_classes_shape(x_state, line_no, report)
+        _x_state_collector(x_state, cited, state, line_no, state_evidence_by_write)
 
     def _collect_state_coverage(
         self,
@@ -2948,45 +2709,9 @@ class ProvenanceVerifier:
         if not self._state_pairings:
             return
         for write_hash in sorted(state_evidence_by_write):
-            bound = state_evidence_by_write[write_hash]
-            pairing_id = str(bound.get("pairing_id") or "")
-            if not pairing_id:
-                continue
-            row = self._state_pairings.get(pairing_id)
-            if row is None:
-                report.errors.append(
-                    f"line {bound['line_no']}: x_state cites pairing {pairing_id!r} "
-                    "not in the pairing registry"
-                )
-                report.valid = False
-                continue
-            cited_tool = gate_tools_by_hash.get(write_hash)
-            row_write_tool = str(row.get("write_tool") or "")
-            if cited_tool is None or row_write_tool != cited_tool:
-                report.errors.append(
-                    f"line {bound['line_no']}: x_state pairing {pairing_id!r} binds "
-                    f"write tool {row_write_tool!r}, but the cited receipt's tool "
-                    f"is {cited_tool!r}"
-                )
-                report.valid = False
-            read_tool = str(bound.get("read_tool") or "")
-            row_read_tool = str(row.get("read_tool") or "")
-            if read_tool and row_read_tool != read_tool:
-                report.errors.append(
-                    f"line {bound['line_no']}: x_state read tool {read_tool!r} is not "
-                    f"the pairing's read tool {row_read_tool!r}"
-                )
-                report.valid = False
-            if bound.get("state") == "evidence":
-                present = set(bound.get("field_classes") or [])
-                for required_class in row.get("require_field_classes") or []:
-                    if required_class not in present:
-                        report.errors.append(
-                            f"line {bound['line_no']}: x_state field_classes is "
-                            f"missing required class {required_class!r} (presence "
-                            "re-check, digest-blind)"
-                        )
-                        report.valid = False
+            self._verify_one_state_evidence_pin(
+                write_hash, state_evidence_by_write[write_hash], gate_tools_by_hash, report
+            )
         for write_hash in sorted(covered_writes):
             if write_hash in state_evidence_by_write:
                 continue
@@ -3063,109 +2788,12 @@ class ProvenanceVerifier:
 
         errors_before = len(report.errors)
         self._forbidden_field_sweep(cf, "counterfactual", line_no, report)
-
-        # Closed field set: the block names a hypothetical decision,
-        # never an open-ended payload.
-        for key in cf:
-            if key not in _COUNTERFACTUAL_FIELDS:
-                report.errors.append(
-                    f"line {line_no}: counterfactual carries unknown field {key!r} "
-                    f"(closed set: {sorted(_COUNTERFACTUAL_FIELDS)})"
-                )
-                report.valid = False
-
-        for required in ("version", "ruleset_hash", "decision", "evaluated_at"):
-            if cf.get(required) is None:
-                report.errors.append(f"line {line_no}: counterfactual missing field {required!r}")
-                report.valid = False
-
-        version = cf.get("version")
-        if version is not None and version != _COUNTERFACTUAL_VERSION:
-            report.errors.append(
-                f"line {line_no}: counterfactual version {version!r} is unknown "
-                f"(supported: {_COUNTERFACTUAL_VERSION}); the block is refused, "
-                f"never skipped"
-            )
-            report.valid = False
-
-        decision = cf.get("decision")
-        if decision is not None and decision not in _COUNTERFACTUAL_DECISIONS:
-            report.errors.append(
-                f"line {line_no}: counterfactual decision {decision!r} outside the "
-                f"closed vocabulary {sorted(_COUNTERFACTUAL_DECISIONS)}"
-            )
-            report.valid = False
-
-        if not _is_sha256_digest(cf.get("ruleset_hash")):
-            report.errors.append(
-                f"line {line_no}: counterfactual ruleset_hash is not a sha256 "
-                f"digest of the form sha256:<64 hex characters>"
-            )
-            report.valid = False
-
-        # A post-dated block is editorial, not evidence.
-        evaluated_at = cf.get("evaluated_at")
-        iat = decoded.get("iat") if isinstance(decoded, dict) else None
-        if not isinstance(evaluated_at, int) or isinstance(evaluated_at, bool):
-            report.errors.append(f"line {line_no}: counterfactual evaluated_at is not an integer")
-            report.valid = False
-        elif isinstance(iat, int) and evaluated_at > iat:
-            report.errors.append(
-                f"line {line_no}: counterfactual evaluated_at {evaluated_at} is "
-                f"later than the receipt's own iat {iat}"
-            )
-            report.valid = False
-
-        # rule_id is present if and only if the alternative rule fired
-        # (decision deny); an allow that carries rule fields claims a rule
-        # that did not fire.
-        rule_kind = cf.get("rule_kind")
-        if decision == "allow":
-            for absent_field in ("rule_id", "rule_kind", "session"):
-                if cf.get(absent_field) is not None:
-                    report.errors.append(
-                        f"line {line_no}: counterfactual decision 'allow' carries "
-                        f"{absent_field!r} (rule fields are present only when the "
-                        f"alternative rule fired)"
-                    )
-                    report.valid = False
-        elif decision == "deny":
-            for required_field in ("rule_id", "rule_kind"):
-                if cf.get(required_field) is None:
-                    report.errors.append(
-                        f"line {line_no}: counterfactual decision 'deny' carries no "
-                        f"{required_field!r} (the firing alternative rule is named)"
-                    )
-                    report.valid = False
-
-        # The closed rule-kind vocabulary: a policy rule or a session rule
-        # may back a counterfactual; anything else (advisory detection,
-        # classifier verdicts) is detection, not this surface.
+        _counterfactual_required_fields(cf, line_no, report)
+        _counterfactual_vocabularies(cf, line_no, report)
+        _counterfactual_evaluated_at(decoded, cf, line_no, report)
+        _counterfactual_rule_fields(cf, line_no, report)
         session_kinds = self._session_rule_kinds()
-        if rule_kind is not None:
-            if rule_kind not in {"policy_rule"} | session_kinds:
-                report.errors.append(
-                    f"line {line_no}: counterfactual rule_kind {rule_kind!r} "
-                    f"outside the closed vocabulary (policy_rule or a session "
-                    f"rule kind {sorted(session_kinds)})"
-                )
-                report.valid = False
-            else:
-                session = cf.get("session")
-                if rule_kind in session_kinds and session is None:
-                    report.errors.append(
-                        f"line {line_no}: counterfactual rule_kind {rule_kind!r} "
-                        f"carries no session block (a session rule names the window "
-                        f"it fired over)"
-                    )
-                    report.valid = False
-                if rule_kind == "policy_rule" and session is not None:
-                    report.errors.append(
-                        f"line {line_no}: counterfactual rule_kind 'policy_rule' "
-                        f"carries a session block (a policy rule fires on the call, "
-                        f"not over a session window)"
-                    )
-                    report.valid = False
+        _counterfactual_rule_kind_vocab(cf, session_kinds, line_no, report)
 
         # Session coherence: the block cites the receipt's own session, and
         # the window evidence is exactly the closed two-key shape.
@@ -3173,6 +2801,7 @@ class ProvenanceVerifier:
         if session is not None:
             self._verify_counterfactual_session(session, x_gate_payload, line_no, report)
 
+        decision = cf.get("decision")
         if len(report.errors) == errors_before:
             report.counterfactual_evidence.append(
                 {
@@ -3208,21 +2837,7 @@ class ProvenanceVerifier:
             report.valid = False
             return
 
-        for key in session:
-            if key not in _COUNTERFACTUAL_SESSION_FIELDS:
-                report.errors.append(
-                    f"line {line_no}: counterfactual session carries unknown "
-                    f"field {key!r} (closed set: {sorted(_COUNTERFACTUAL_SESSION_FIELDS)})"
-                )
-                report.valid = False
-
-        for required in ("session_id", "window_seconds", "participant", "window_evidence"):
-            if session.get(required) is None:
-                report.errors.append(
-                    f"line {line_no}: counterfactual session missing field {required!r}"
-                )
-                report.valid = False
-
+        _counterfactual_session_field_sets(session, line_no, report)
         own_session_id = x_gate_payload.get("session_id") or ""
         cited_session_id = session.get("session_id")
         if cited_session_id is not None and cited_session_id != own_session_id:
@@ -3232,56 +2847,9 @@ class ProvenanceVerifier:
                 f"{own_session_id!r}"
             )
             report.valid = False
-
-        window_seconds = session.get("window_seconds")
-        if (
-            not isinstance(window_seconds, int)
-            or isinstance(window_seconds, bool)
-            or window_seconds < 1
-        ):
-            report.errors.append(
-                f"line {line_no}: counterfactual session window_seconds is not a positive integer"
-            )
-            report.valid = False
-
-        participant = session.get("participant")
-        if participant is not None:
-            from raucle.policy import PARTICIPANTS
-
-            if participant not in PARTICIPANTS:
-                report.errors.append(
-                    f"line {line_no}: counterfactual session participant "
-                    f"{participant!r} outside the closed vocabulary "
-                    f"{list(PARTICIPANTS)}"
-                )
-                report.valid = False
-
-        evidence = session.get("window_evidence")
-        if not isinstance(evidence, dict) or set(evidence) != {"counters", "tools"}:
-            report.errors.append(
-                f"line {line_no}: counterfactual window_evidence must be exactly "
-                f"the two-key shape {{'counters', 'tools'}}"
-            )
-            report.valid = False
-            return
-        counters = evidence.get("counters")
-        if not isinstance(counters, dict) or any(
-            not isinstance(value, int) or isinstance(value, bool) or value < 0
-            for value in counters.values()
-        ):
-            report.errors.append(
-                f"line {line_no}: counterfactual window_evidence counters must "
-                f"map names to non-negative integers"
-            )
-            report.valid = False
-        tools = evidence.get("tools")
-        if not isinstance(tools, list) or any(
-            not isinstance(tool, str) or not tool for tool in tools
-        ):
-            report.errors.append(
-                f"line {line_no}: counterfactual window_evidence tools must be a list of tool names"
-            )
-            report.valid = False
+        _counterfactual_session_window(session, line_no, report)
+        _counterfactual_session_participant(session, line_no, report)
+        _counterfactual_window_evidence(session, line_no, report)
 
     def _decode_gate_payload(self, raw: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         """Invariant: x_gate lives INSIDE the signed JWS payload, not in the
@@ -3507,121 +3075,15 @@ class ProvenanceVerifier:
         reason class refuses with a named error, never a skip. Mutates
         *report* in place."""
         self._forbidden_field_sweep(revocation, "x_revocation", line_no, report)
-
-        # Closed field set: the block names a revocation event, never an
-        # open-ended payload.
-        for key in revocation:
-            if key not in _REVOCATION_V12_FIELDS:
-                report.errors.append(
-                    f"line {line_no}: x_revocation carries unknown field {key!r} "
-                    f"(closed set: {sorted(_REVOCATION_V12_FIELDS)})"
-                )
-                report.valid = False
-
-        for required in (
-            "version",
-            "kind",
-            "revoked_ids",
-            "revoked_hashes",
-            "actor",
-            "reason_class",
-            "revoked_at",
-        ):
-            if revocation.get(required) is None:
-                report.errors.append(f"line {line_no}: x_revocation missing field {required!r}")
-                report.valid = False
-
-        version = revocation.get("version")
-        if version is not None and version != _REVOCATION_VERSION:
-            report.errors.append(
-                f"line {line_no}: x_revocation version {version!r} is unknown "
-                f"(supported: {_REVOCATION_VERSION}); the block is refused, "
-                f"never skipped"
-            )
-            report.valid = False
-
-        kind = revocation.get("kind")
-        if kind is not None and kind not in _REVOCATION_KINDS:
-            report.errors.append(
-                f"line {line_no}: x_revocation kind {kind!r} outside the closed "
-                f"vocabulary {sorted(_REVOCATION_KINDS)}"
-            )
-            report.valid = False
-
-        reason_class = revocation.get("reason_class")
-        if reason_class is not None and reason_class not in _REVOCATION_REASON_CLASSES:
-            report.errors.append(
-                f"line {line_no}: x_revocation reason_class {reason_class!r} "
-                f"outside the closed vocabulary {sorted(_REVOCATION_REASON_CLASSES)}"
-            )
-            report.valid = False
-
-        # Chain linkage: keys exactly equal the revoked ids, every value a
-        # sha256 digest a third party holding the revoked material re-derives.
-        revoked_ids = revocation.get("revoked_ids")
-        revoked_hashes = revocation.get("revoked_hashes")
-        ids_ok = isinstance(revoked_ids, list) and all(isinstance(rid, str) for rid in revoked_ids)
-        if not ids_ok:
-            report.errors.append(f"line {line_no}: x_revocation revoked_ids must be a list of ids")
-            report.valid = False
-        if not isinstance(revoked_hashes, dict):
-            report.errors.append(
-                f"line {line_no}: x_revocation revoked_hashes must map ids to digests"
-            )
-            report.valid = False
-        elif ids_ok:
-            if set(revoked_hashes) != set(revoked_ids):
-                report.errors.append(
-                    f"line {line_no}: x_revocation revoked_hashes keys must equal "
-                    f"the revoked ids exactly (chain linkage)"
-                )
-                report.valid = False
-            for rid, digest in revoked_hashes.items():
-                if not _is_sha256_digest(digest):
-                    report.errors.append(
-                        f"line {line_no}: x_revocation revoked_hashes for {rid!r} "
-                        f"is not a sha256 digest of the form "
-                        f"sha256:<64 hex characters>"
-                    )
-                    report.valid = False
-
-        # A post-dated revocation timestamp is editorial, not evidence.
-        revoked_at = revocation.get("revoked_at")
-        iat = decoded.get("iat") if isinstance(decoded, dict) else None
-        if not isinstance(revoked_at, int) or isinstance(revoked_at, bool):
-            report.errors.append(f"line {line_no}: x_revocation revoked_at is not an integer")
-            report.valid = False
-        elif isinstance(iat, int) and revoked_at > iat:
-            report.errors.append(
-                f"line {line_no}: x_revocation revoked_at {revoked_at} is later "
-                f"than the receipt's own iat {iat}"
-            )
-            report.valid = False
-
-        # Bounded disclosure: the reason stays at class level. A revocation
-        # receipt is retained for the life of the archive, so it must never
-        # quote a constraint value the chain's intent receipts disclose.
-        reason = revocation.get("reason")
-        if isinstance(reason, str) and reason:
-            for value in intent_constraint_values:
-                if value and value in reason:
-                    report.errors.append(
-                        f"line {line_no}: x_revocation reason quotes a constraint "
-                        f"value the chain's receipts disclose (bounded disclosure: "
-                        f"the reason stays at class level)"
-                    )
-                    report.valid = False
-                    break
-
-        # kind = receipt: the same membership rule every extension citation
-        # obeys - every cited receipt must exist in this chain.
-        if kind == "receipt" and ids_ok:
-            for rid in revoked_ids:
-                if rid not in receipts_by_hash:
-                    report.errors.append(
-                        f"line {line_no}: x_revocation cites receipt {rid!r} not in the chain"
-                    )
-                    report.valid = False
+        _revocation_v12_fields(revocation, line_no, report)
+        kind = _revocation_v12_vocabularies(revocation, line_no, report)
+        ids_ok = _revocation_ids_shape(revocation, line_no, report)
+        _revocation_hashes_linkage(revocation, ids_ok, line_no, report)
+        _revocation_v12_timestamp(revocation, decoded, line_no, report)
+        _revocation_v12_bounded_reason(revocation, line_no, report, intent_constraint_values)
+        _revocation_v12_receipt_citations(
+            revocation, kind, ids_ok, line_no, report, receipts_by_hash
+        )
 
     def _verify_task_intent(
         self,
@@ -4251,6 +3713,1155 @@ class ProvenanceVerifier:
                     continue
                 out[r.receipt_hash] = r
         return out
+
+
+def _finish_ancestry_node(
+    node: str,
+    receipt: ProvenanceReceipt,
+    depth_memo: dict[str, int],
+    state: dict[str, int],
+    bounds: ProvenanceVerifierBounds,
+    report: VerificationReport,
+) -> None:
+    """Memoise one receipt's ancestry depth and police the depth bound.
+
+    Verbatim extraction of the ``ready`` epilogue inside
+    ``ProvenanceVerifier._verify_ancestry_bounds`` (cognitive-complexity
+    decomposition, S3776): same body, same raise, no behaviour change.
+    The caller keeps the loop ``continue``.
+    """
+    best = 0
+    for parent in receipt.parents:
+        best = max(best, depth_memo.get(parent, 0))
+    depth_memo[node] = best + 1
+    state[node] = _black
+    report.traversal_receipts_expanded += 1
+    if depth_memo[node] > bounds.max_depth:
+        raise ProvenanceVerifierBoundsExceeded(
+            "graph_depth",
+            depth_memo[node],
+            bounds.max_depth,
+            f"receipt {node} ancestry depth exceeds the verify bound",
+        )
+
+
+def _expand_ancestry_node(
+    node: str,
+    receipt: ProvenanceReceipt,
+    stack: list[tuple[str, bool]],
+    state: dict[str, int],
+    report: VerificationReport,
+    receipts_by_hash: dict[str, ProvenanceReceipt],
+) -> None:
+    """Queue one receipt's white parents, counting examined edges.
+
+    Verbatim extraction of the expansion pass inside
+    ``ProvenanceVerifier._verify_ancestry_bounds`` (cognitive-complexity
+    decomposition, S3776): same body, same cycle refusal, no behaviour
+    change.
+    """
+    for parent in receipt.parents:
+        report.traversal_edges_examined += 1
+        pstate = state.get(parent, _white)
+        if pstate == _grey:
+            raise ProvenanceVerifierBoundsExceeded(
+                "cycle",
+                parent,
+                "n/a",
+                f"parent graph is not acyclic: receipt {node} cites in-flight ancestor {parent}",
+            )
+        if pstate == _white and parent in receipts_by_hash:
+            stack.append((parent, False))
+
+
+def _walk_ancestry_from(
+    start: str,
+    receipts_by_hash: dict[str, ProvenanceReceipt],
+    state: dict[str, int],
+    depth_memo: dict[str, int],
+    bounds: ProvenanceVerifierBounds,
+    report: VerificationReport,
+) -> None:
+    """Iterative ancestry DFS from one start receipt (Q19 walk).
+
+    Verbatim extraction of the per-start walk inside
+    ``ProvenanceVerifier._verify_ancestry_bounds`` (cognitive-complexity
+    decomposition, S3776): same while-loop, same two refusals (graph
+    depth, cycle), no behaviour change; the ``continue`` semantics ride
+    on the loop being inside this helper now.
+    """
+    stack: list[tuple[str, bool]] = [(start, False)]
+    while stack:
+        node, ready = stack.pop()
+        receipt = receipts_by_hash.get(node)
+        if receipt is None:
+            # cited-but-absent parents are per-line parent-link
+            # failures already; nothing is walkable here.
+            continue
+        if ready:
+            _finish_ancestry_node(node, receipt, depth_memo, state, bounds, report)
+            continue
+        if state.get(node, _white) != _white:
+            # a duplicate pending entry: the node is already in
+            # flight below, or already done (memo hit). Not a cycle.
+            continue
+        state[node] = _grey
+        stack.append((node, True))
+        _expand_ancestry_node(node, receipt, stack, state, report, receipts_by_hash)
+
+
+def _tool_definition_closed_fields(
+    block: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """Closed field set for a tool_definition block.
+
+    Verbatim extraction of the two field-set loops inside
+    ``ProvenanceVerifier._verify_tool_definition``
+    (cognitive-complexity decomposition, S3776): same loops, same error
+    strings, no behaviour change.
+    """
+    # Closed field set: the block names a definition, never an
+    # open-ended payload.
+    for key in block:
+        if key not in _TOOL_DEFINITION_FIELDS:
+            report.errors.append(
+                f"line {line_no}: tool_definition carries unknown field {key!r} "
+                f"(closed set: {sorted(_TOOL_DEFINITION_FIELDS)})"
+            )
+            report.valid = False
+    for required in _TOOL_DEFINITION_FIELDS:
+        if block.get(required) is None:
+            report.errors.append(f"line {line_no}: tool_definition missing field {required!r}")
+            report.valid = False
+
+
+def _tool_definition_known_values(
+    block: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """Version gate, vantage vocabulary and digest shape for a
+    tool_definition block.
+
+    Verbatim extraction of the three known-value checks inside
+    ``ProvenanceVerifier._verify_tool_definition``
+    (cognitive-complexity decomposition, S3776): same checks, same error
+    strings, no behaviour change.
+    """
+    version = block.get("version")
+    if version is not None and version != _TOOL_DEFINITION_VERSION:
+        report.errors.append(
+            f"line {line_no}: tool_definition version {version!r} is unknown "
+            f"(supported: {_TOOL_DEFINITION_VERSION}); the block is refused, "
+            "never skipped"
+        )
+        report.valid = False
+
+    vantage = block.get("definition_vantage")
+    if vantage is not None and vantage not in _TOOL_DEFINITION_VANTAGES:
+        report.errors.append(
+            f"line {line_no}: tool_definition vantage {vantage!r} outside the "
+            f"closed vocabulary {sorted(_TOOL_DEFINITION_VANTAGES)}"
+        )
+        report.valid = False
+
+    digest = block.get("definition_digest")
+    if digest is not None and not _is_sha256_digest(digest):
+        report.errors.append(
+            f"line {line_no}: tool_definition definition_digest is not a sha256 "
+            "digest of the form sha256:<64 hex characters>"
+        )
+        report.valid = False
+
+
+def _record_tool_definition_latest(
+    x_gate_payload: Any,
+    block: dict[str, Any],
+    digest: Any,
+    line_no: int,
+    tool_definition_latest: dict[str, dict[str, Any]],
+) -> None:
+    """Record the LATEST tool_definition block per tool for the chain-end
+    pin pass (last write wins: lines verify in chain order).
+
+    Verbatim extraction of the collector tail inside
+    ``ProvenanceVerifier._verify_tool_definition``
+    (cognitive-complexity decomposition, S3776): same body, no behaviour
+    change. A structurally broken block still records what it claims, so
+    the pin pass names the line where the registry state stops answering
+    for the receipts.
+    """
+    manifest = str(block.get("definition_manifest") or "")
+    tool = str(x_gate_payload.get("tool") or "") if isinstance(x_gate_payload, dict) else ""
+    if tool:
+        tool_definition_latest[tool] = {
+            "line_no": line_no,
+            "digest": digest,
+            "manifest": manifest,
+        }
+
+
+def _x_dlp_vocabulary_errors(
+    x_dlp: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """Required fields and the closed action/direction vocabularies for
+    an x_dlp block.
+
+    Verbatim extraction of the structural and vocabulary sections
+    inside ``ProvenanceVerifier._verify_x_dlp`` (cognitive-complexity
+    decomposition, S3776): same loops, same error strings, no behaviour
+    change.
+    """
+    # Structural validity first: every required field present.
+    for required in _DLP_REQUIRED_FIELDS:
+        if x_dlp.get(required) is None:
+            report.errors.append(f"line {line_no}: x_dlp missing field {required!r}")
+            report.valid = False
+
+    action = x_dlp.get("action")
+    if action not in _DLP_ACTIONS:
+        report.errors.append(
+            f"line {line_no}: x_dlp action {action!r} outside the closed "
+            f"vocabulary {sorted(_DLP_ACTIONS)}"
+        )
+        report.valid = False
+
+    direction = x_dlp.get("direction")
+    if direction not in _DLP_DIRECTIONS:
+        report.errors.append(
+            f"line {line_no}: x_dlp direction {direction!r} outside the closed "
+            f"vocabulary {sorted(_DLP_DIRECTIONS)}"
+        )
+        report.valid = False
+
+
+def _x_dlp_digest_shapes(
+    x_dlp: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """Content-scanner digests stay in the sha256 digest shape.
+
+    Verbatim extraction of the digest-shape loop inside
+    ``ProvenanceVerifier._verify_x_dlp`` (cognitive-complexity
+    decomposition, S3776): same loop, same error strings, no behaviour
+    change.
+    """
+    # Digests are sha256-shaped: prefix plus 64 hex characters. The
+    # verifier never sees content, only these digests.
+    for digest_field in ("content_sha256", "redacted_content_sha256"):
+        digest = x_dlp.get(digest_field)
+        if digest is None:
+            continue
+        shape_ok = (
+            isinstance(digest, str)
+            and digest.startswith(_SHA256_PREFIX)
+            and re.fullmatch(r"[0-9a-f]{64}", digest[len(_SHA256_PREFIX) :]) is not None
+        )
+        if not shape_ok:
+            report.errors.append(
+                f"line {line_no}: x_dlp {digest_field} is not a sha256 digest "
+                f"of the form sha256:<64 hex characters>"
+            )
+            report.valid = False
+
+
+def _x_dlp_redaction_consistency(
+    x_dlp: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """The post-redaction digest is present iff the action is redacted.
+
+    Verbatim extraction of the action/redaction consistency section
+    inside ``ProvenanceVerifier._verify_x_dlp`` (cognitive-complexity
+    decomposition, S3776): same checks, same error strings, no behaviour
+    change.
+    """
+    # Action/redaction consistency: the post-redaction digest is
+    # present if and only if the action is redacted.
+    action = x_dlp.get("action")
+    redacted_digest = x_dlp.get("redacted_content_sha256")
+    if action == "redacted" and not redacted_digest:
+        report.errors.append(
+            f"line {line_no}: x_dlp action 'redacted' carries no redacted_content_sha256"
+        )
+        report.valid = False
+    if action != "redacted" and redacted_digest is not None:
+        report.errors.append(
+            f"line {line_no}: x_dlp action {action!r} carries a "
+            f"redacted_content_sha256 (present only when action='redacted')"
+        )
+        report.valid = False
+
+
+def _x_dlp_matched_classes(
+    x_dlp: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> set[str]:
+    """The bounded matched-class vocabulary check; returns the accepted
+    class set for the span-count cross-check.
+
+    Verbatim extraction of the matched_classes section inside
+    ``ProvenanceVerifier._verify_x_dlp`` (cognitive-complexity
+    decomposition, S3776): same loop, same error strings, no behaviour
+    change.
+    """
+    # Bounded class vocabulary, versioned: an unknown class fails
+    # closed rather than widening disclosure.
+    matched_classes = x_dlp.get("matched_classes")
+    classes: set[str] = set()
+    if not isinstance(matched_classes, list) or not matched_classes:
+        report.errors.append(f"line {line_no}: x_dlp matched_classes must be a non-empty list")
+        report.valid = False
+    else:
+        for mclass in matched_classes:
+            if not isinstance(mclass, str) or mclass not in _DLP_MATCHED_CLASSES:
+                report.errors.append(
+                    f"line {line_no}: x_dlp unknown class {mclass!r} outside the "
+                    f"bounded vocabulary {sorted(_DLP_MATCHED_CLASSES)}"
+                )
+                report.valid = False
+            else:
+                classes.add(mclass)
+    return classes
+
+
+def _x_dlp_span_counts(
+    x_dlp: dict[str, Any],
+    classes: set[str],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """Span counts: non-negative integers, keys in the same bounded
+    vocabulary, and every counted class listed in matched_classes.
+
+    Verbatim extraction of the span_counts section inside
+    ``ProvenanceVerifier._verify_x_dlp`` (cognitive-complexity
+    decomposition, S3776): same loop, same error strings, no behaviour
+    change; the per-row body rides on :func:`_x_dlp_span_count_row`.
+    """
+    span_counts = x_dlp.get("span_counts")
+    if not isinstance(span_counts, dict):
+        report.errors.append(f"line {line_no}: x_dlp span_counts must be an object")
+        report.valid = False
+        return
+    for spclass, count in span_counts.items():
+        _x_dlp_span_count_row(spclass, count, classes, line_no, report)
+
+
+def _x_dlp_span_count_row(
+    spclass: Any,
+    count: Any,
+    classes: set[str],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """One span_counts row: bounded key, non-negative count, and a class
+    named by counts must be listed in matched_classes.
+
+    Verbatim extraction of the per-row body inside
+    ``ProvenanceVerifier._verify_x_dlp`` (cognitive-complexity
+    decomposition, S3776): same checks and order, same error strings,
+    no behaviour change; the loop ``continue`` rides on ``return``.
+    """
+    if not isinstance(spclass, str) or spclass not in _DLP_MATCHED_CLASSES:
+        report.errors.append(
+            f"line {line_no}: x_dlp span_counts unknown class {spclass!r} "
+            f"outside the bounded vocabulary {sorted(_DLP_MATCHED_CLASSES)}"
+        )
+        report.valid = False
+        return
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        report.errors.append(
+            f"line {line_no}: x_dlp span_counts for {spclass!r} is not a non-negative integer"
+        )
+        report.valid = False
+    if isinstance(spclass, str) and spclass in _DLP_MATCHED_CLASSES and spclass not in classes:
+        report.errors.append(
+            f"line {line_no}: x_dlp span_counts names class {spclass!r} absent from matched_classes"
+        )
+        report.valid = False
+
+
+def _x_dlp_bounded_disclosure(
+    x_dlp: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+    receipts_by_hash: dict[str, ProvenanceReceipt],
+) -> None:
+    """No content-like field anywhere, and any cited receipt is in the
+    chain (like every other extension citation).
+
+    Verbatim extraction of the bounded-disclosure and citation sections
+    inside ``ProvenanceVerifier._verify_x_dlp`` (cognitive-complexity
+    decomposition, S3776): same checks, same error strings, no behaviour
+    change.
+    """
+    # Bounded disclosure: no content-like field anywhere in the block.
+    for leak_field in _DLP_FORBIDDEN_CONTENT_FIELDS:
+        if leak_field in x_dlp:
+            report.errors.append(
+                f"line {line_no}: x_dlp carries content-like field "
+                f"{leak_field!r} (bounded disclosure: counts, digests and "
+                f"class names only, never content)"
+            )
+            report.valid = False
+
+    # Chain membership of any cited receipt, like every other
+    # extension citation.
+    cited = str(x_dlp.get("cited_receipt", ""))
+    if cited and cited not in receipts_by_hash:
+        report.errors.append(f"line {line_no}: x_dlp cites receipt {cited!r} not in the chain")
+        report.valid = False
+
+
+def _x_state_closed_set(
+    x_state: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """Closed field set and version gate for an x_state block.
+
+    Verbatim extraction of the field-set and version sections inside
+    ``ProvenanceVerifier._verify_x_state`` (cognitive-complexity
+    decomposition, S3776): same loops, same error strings, no behaviour
+    change.
+    """
+    # Closed field set: the block names a state claim, never an
+    # open-ended payload.
+    for key in x_state:
+        if key not in _X_STATE_FIELDS:
+            report.errors.append(
+                f"line {line_no}: x_state carries unknown field {key!r} "
+                f"(closed set: {sorted(_X_STATE_FIELDS)})"
+            )
+            report.valid = False
+    for required in ("version", "cited_receipt"):
+        if x_state.get(required) is None:
+            report.errors.append(f"line {line_no}: x_state missing field {required!r}")
+            report.valid = False
+
+    version = x_state.get("version")
+    if version is not None and version != _STATE_EVIDENCE_VERSION:
+        report.errors.append(
+            f"line {line_no}: x_state version {version!r} is unknown "
+            f"(supported: {_STATE_EVIDENCE_VERSION}); the block is refused, "
+            "never skipped"
+        )
+        report.valid = False
+
+
+def _x_state_cited_receipt(
+    x_state: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+    receipts_by_hash: dict[str, ProvenanceReceipt],
+) -> str:
+    """The cited write receipt: sha256-shaped and present EARLIER in the
+    chain, like every other extension citation.
+
+    Verbatim extraction of the citation section inside
+    ``ProvenanceVerifier._verify_x_state`` (cognitive-complexity
+    decomposition, S3776): same checks, same error strings, no behaviour
+    change; returns the cited hash the collector needs.
+    """
+    cited = str(x_state.get("cited_receipt") or "")
+    if cited and not _is_sha256_digest(cited):
+        report.errors.append(
+            f"line {line_no}: x_state cited_receipt is not a sha256 receipt "
+            "hash of the form sha256:<64 hex characters>"
+        )
+        report.valid = False
+    if cited and cited not in receipts_by_hash:
+        report.errors.append(f"line {line_no}: x_state cites receipt {cited!r} not in the chain")
+        report.valid = False
+    return cited
+
+
+def _x_state_sentinel_semantics(
+    x_state: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> str:
+    """Sentinel semantics: absence is the literal sentinel, never a fake
+    digest; a block carrying neither states nothing.
+
+    Verbatim extraction of the sentinel section inside
+    ``ProvenanceVerifier._verify_x_state`` (cognitive-complexity
+    decomposition, S3776): same branch ladder and error strings, no
+    behaviour change; per-branch field checks move to
+    :func:`_x_state_absent_fields` and :func:`_x_state_evidence_fields`.
+    """
+    sentinel = x_state.get("state_evidence")
+    has_digest = x_state.get("evidence_digest") is not None
+    state = "invalid"
+    if sentinel is not None and sentinel != _STATE_ABSENT_SENTINEL:
+        report.errors.append(
+            f"line {line_no}: x_state state_evidence {sentinel!r} is not the "
+            f"literal sentinel {_STATE_ABSENT_SENTINEL!r}"
+        )
+        report.valid = False
+    if sentinel == _STATE_ABSENT_SENTINEL:
+        _x_state_absent_fields(x_state, line_no, report)
+        state = "absent"
+    elif has_digest:
+        state = "evidence"
+        _x_state_evidence_fields(x_state, line_no, report)
+    else:
+        report.errors.append(
+            f"line {line_no}: x_state carries neither evidence nor the absent "
+            "sentinel (a receipt for a pairing-covered tool must state one)"
+        )
+        report.valid = False
+    return state
+
+
+def _x_state_absent_fields(
+    x_state: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """The absent sentinel never carries evidence fields.
+
+    Verbatim extraction of the sentinel-branch check inside
+    ``ProvenanceVerifier._verify_x_state`` (cognitive-complexity
+    decomposition, S3776): same condition, same error string, no
+    behaviour change.
+    """
+    has_digest = x_state.get("evidence_digest") is not None
+    if has_digest or x_state.get("handle") is not None or x_state.get("field_classes") is not None:
+        report.errors.append(
+            f"line {line_no}: x_state state_evidence {_STATE_ABSENT_SENTINEL!r} "
+            "never carries evidence fields (absence is stated, never a "
+            "fake digest)"
+        )
+        report.valid = False
+
+
+def _x_state_evidence_fields(
+    x_state: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """Evidence-carrying x_state blocks name the pairing fields.
+
+    Verbatim extraction of the evidence-branch loop inside
+    ``ProvenanceVerifier._verify_x_state`` (cognitive-complexity
+    decomposition, S3776): same loop, same error strings, no behaviour
+    change.
+    """
+    for required in ("pairing_id", "read_tool", "handle", "field_classes"):
+        if x_state.get(required) is None:
+            report.errors.append(f"line {line_no}: x_state missing field {required!r}")
+            report.valid = False
+
+
+def _x_state_digest_shape(
+    x_state: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """The evidence digest stays in the sha256 digest shape.
+
+    Verbatim extraction inside ``ProvenanceVerifier._verify_x_state``
+    (cognitive-complexity decomposition, S3776): same check, same error
+    string, no behaviour change.
+    """
+    digest = x_state.get("evidence_digest")
+    if digest is not None and not _is_sha256_digest(digest):
+        report.errors.append(
+            f"line {line_no}: x_state evidence_digest is not a sha256 digest "
+            "of the form sha256:<64 hex characters>"
+        )
+        report.valid = False
+
+
+def _x_state_handle_shape(
+    x_state: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """The handle is a non-empty string when present.
+
+    Verbatim extraction inside ``ProvenanceVerifier._verify_x_state``
+    (cognitive-complexity decomposition, S3776): same check, same error
+    string, no behaviour change.
+    """
+    handle = x_state.get("handle")
+    if handle is not None and (not isinstance(handle, str) or not handle):
+        report.errors.append(
+            f"line {line_no}: x_state handle must be a non-empty string "
+            "(the object handle extracted per the pairing's id_pointer)"
+        )
+        report.valid = False
+
+
+def _x_state_field_classes_shape(
+    x_state: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """field_classes is a non-empty list of field-presence names.
+
+    Verbatim extraction inside ``ProvenanceVerifier._verify_x_state``
+    (cognitive-complexity decomposition, S3776): same check, same error
+    string, no behaviour change.
+    """
+    field_classes = x_state.get("field_classes")
+    if field_classes is not None and (
+        not isinstance(field_classes, list)
+        or not field_classes
+        or any(not isinstance(c, str) or not c for c in field_classes)
+    ):
+        report.errors.append(
+            f"line {line_no}: x_state field_classes must be a non-empty "
+            "list of field-presence names (names only, never content)"
+        )
+        report.valid = False
+
+
+def _x_state_collector(
+    x_state: dict[str, Any],
+    cited: str,
+    state: str,
+    line_no: int,
+    state_evidence_by_write: dict[str, dict[str, Any]],
+) -> None:
+    """Chain-end collector: the state claim bound to this write receipt
+    (last write wins, lines verify in chain order).
+
+    Verbatim extraction of the collector tail inside
+    ``ProvenanceVerifier._verify_x_state`` (cognitive-complexity
+    decomposition, S3776): same body, no behaviour change.
+    """
+    field_classes = x_state.get("field_classes")
+    if cited:
+        state_evidence_by_write[cited] = {
+            "line_no": line_no,
+            "state": state,
+            "pairing_id": str(x_state.get("pairing_id") or ""),
+            "read_tool": str(x_state.get("read_tool") or ""),
+            "field_classes": (
+                [str(c) for c in field_classes] if isinstance(field_classes, list) else []
+            ),
+        }
+
+
+def _counterfactual_required_fields(
+    cf: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """Closed field set for a counterfactual block.
+
+    Verbatim extraction of the field-set loops inside
+    ``ProvenanceVerifier._verify_counterfactual``
+    (cognitive-complexity decomposition, S3776): same loops, same error
+    strings, no behaviour change.
+    """
+    # Closed field set: the block names a hypothetical decision,
+    # never an open-ended payload.
+    for key in cf:
+        if key not in _COUNTERFACTUAL_FIELDS:
+            report.errors.append(
+                f"line {line_no}: counterfactual carries unknown field {key!r} "
+                f"(closed set: {sorted(_COUNTERFACTUAL_FIELDS)})"
+            )
+            report.valid = False
+
+    for required in ("version", "ruleset_hash", "decision", "evaluated_at"):
+        if cf.get(required) is None:
+            report.errors.append(f"line {line_no}: counterfactual missing field {required!r}")
+            report.valid = False
+
+
+def _counterfactual_vocabularies(
+    cf: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """Version gate, closed decision vocabulary and ruleset digest shape.
+
+    Verbatim extraction of the version/decision/ruleset_hash checks
+    inside ``ProvenanceVerifier._verify_counterfactual``
+    (cognitive-complexity decomposition, S3776): same checks, same error
+    strings, no behaviour change.
+    """
+    version = cf.get("version")
+    if version is not None and version != _COUNTERFACTUAL_VERSION:
+        report.errors.append(
+            f"line {line_no}: counterfactual version {version!r} is unknown "
+            f"(supported: {_COUNTERFACTUAL_VERSION}); the block is refused, "
+            f"never skipped"
+        )
+        report.valid = False
+
+    decision = cf.get("decision")
+    if decision is not None and decision not in _COUNTERFACTUAL_DECISIONS:
+        report.errors.append(
+            f"line {line_no}: counterfactual decision {decision!r} outside the "
+            f"closed vocabulary {sorted(_COUNTERFACTUAL_DECISIONS)}"
+        )
+        report.valid = False
+
+    if not _is_sha256_digest(cf.get("ruleset_hash")):
+        report.errors.append(
+            f"line {line_no}: counterfactual ruleset_hash is not a sha256 "
+            f"digest of the form sha256:<64 hex characters>"
+        )
+        report.valid = False
+
+
+def _counterfactual_evaluated_at(
+    decoded: Any,
+    cf: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """evaluated_at is an integer never later than the receipt's own
+    iat: a post-dated block is editorial, not evidence.
+
+    Verbatim extraction of the evaluated_at section inside
+    ``ProvenanceVerifier._verify_counterfactual``
+    (cognitive-complexity decomposition, S3776): same checks, same error
+    strings, no behaviour change.
+    """
+    evaluated_at = cf.get("evaluated_at")
+    iat = decoded.get("iat") if isinstance(decoded, dict) else None
+    if not isinstance(evaluated_at, int) or isinstance(evaluated_at, bool):
+        report.errors.append(f"line {line_no}: counterfactual evaluated_at is not an integer")
+        report.valid = False
+    elif isinstance(iat, int) and evaluated_at > iat:
+        report.errors.append(
+            f"line {line_no}: counterfactual evaluated_at {evaluated_at} is "
+            f"later than the receipt's own iat {iat}"
+        )
+        report.valid = False
+
+
+def _counterfactual_rule_fields(
+    cf: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """rule_id is present if and only if the alternative rule fired
+    (decision deny); an allow that carries rule fields claims a rule
+    that did not fire.
+
+    Verbatim extraction of the rule-fields section inside
+    ``ProvenanceVerifier._verify_counterfactual``
+    (cognitive-complexity decomposition, S3776): the section's
+    ``decision`` local now re-reads the same field it always used, the
+    rest of the body is unchanged, no behaviour change.
+    """
+    decision = cf.get("decision")
+    if decision == "allow":
+        for absent_field in ("rule_id", "rule_kind", "session"):
+            if cf.get(absent_field) is not None:
+                report.errors.append(
+                    f"line {line_no}: counterfactual decision 'allow' carries "
+                    f"{absent_field!r} (rule fields are present only when the "
+                    f"alternative rule fired)"
+                )
+                report.valid = False
+    elif decision == "deny":
+        for required_field in ("rule_id", "rule_kind"):
+            if cf.get(required_field) is None:
+                report.errors.append(
+                    f"line {line_no}: counterfactual decision 'deny' carries no "
+                    f"{required_field!r} (the firing alternative rule is named)"
+                )
+                report.valid = False
+
+
+def _counterfactual_rule_kind_vocab(
+    cf: dict[str, Any],
+    session_kinds: frozenset[str],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """The closed rule-kind vocabulary: a policy rule or a session rule
+    may back a counterfactual; anything else (advisory detection,
+    classifier verdicts) is detection, not this surface.
+
+    Verbatim extraction of the rule-kind section inside
+    ``ProvenanceVerifier._verify_counterfactual``
+    (cognitive-complexity decomposition, S3776): the section's
+    ``session_kinds`` local is now the parameter the caller computed in
+    the same runtime position, the rest of the body is unchanged, no
+    behaviour change.
+    """
+    rule_kind = cf.get("rule_kind")
+    if rule_kind is not None:
+        if rule_kind not in {"policy_rule"} | session_kinds:
+            report.errors.append(
+                f"line {line_no}: counterfactual rule_kind {rule_kind!r} "
+                f"outside the closed vocabulary (policy_rule or a session "
+                f"rule kind {sorted(session_kinds)})"
+            )
+            report.valid = False
+        else:
+            session = cf.get("session")
+            if rule_kind in session_kinds and session is None:
+                report.errors.append(
+                    f"line {line_no}: counterfactual rule_kind {rule_kind!r} "
+                    f"carries no session block (a session rule names the window "
+                    f"it fired over)"
+                )
+                report.valid = False
+            if rule_kind == "policy_rule" and session is not None:
+                report.errors.append(
+                    f"line {line_no}: counterfactual rule_kind 'policy_rule' "
+                    f"carries a session block (a policy rule fires on the call, "
+                    f"not over a session window)"
+                )
+                report.valid = False
+
+
+def _counterfactual_session_field_sets(
+    session: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """Closed field set and required fields for a counterfactual session
+    block.
+
+    Verbatim extraction of the field-set loops inside
+    ``ProvenanceVerifier._verify_counterfactual_session``
+    (cognitive-complexity decomposition, S3776): same loops, same error
+    strings, no behaviour change.
+    """
+    for key in session:
+        if key not in _COUNTERFACTUAL_SESSION_FIELDS:
+            report.errors.append(
+                f"line {line_no}: counterfactual session carries unknown "
+                f"field {key!r} (closed set: {sorted(_COUNTERFACTUAL_SESSION_FIELDS)})"
+            )
+            report.valid = False
+
+    for required in ("session_id", "window_seconds", "participant", "window_evidence"):
+        if session.get(required) is None:
+            report.errors.append(
+                f"line {line_no}: counterfactual session missing field {required!r}"
+            )
+            report.valid = False
+
+
+def _counterfactual_session_window(
+    session: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """window_seconds is a positive integer.
+
+    Verbatim extraction inside
+    ``ProvenanceVerifier._verify_counterfactual_session``
+    (cognitive-complexity decomposition, S3776): same check, same error
+    string, no behaviour change.
+    """
+    window_seconds = session.get("window_seconds")
+    if (
+        not isinstance(window_seconds, int)
+        or isinstance(window_seconds, bool)
+        or window_seconds < 1
+    ):
+        report.errors.append(
+            f"line {line_no}: counterfactual session window_seconds is not a positive integer"
+        )
+        report.valid = False
+
+
+def _counterfactual_session_participant(
+    session: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """session participant stays inside the closed vocabulary.
+
+    Verbatim extraction inside
+    ``ProvenanceVerifier._verify_counterfactual_session``
+    (cognitive-complexity decomposition, S3776): same check, same lazy
+    import, same error string, no behaviour change.
+    """
+    participant = session.get("participant")
+    if participant is not None:
+        from raucle.policy import PARTICIPANTS
+
+        if participant not in PARTICIPANTS:
+            report.errors.append(
+                f"line {line_no}: counterfactual session participant "
+                f"{participant!r} outside the closed vocabulary "
+                f"{list(PARTICIPANTS)}"
+            )
+            report.valid = False
+
+
+def _counterfactual_window_evidence(
+    session: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """window_evidence is exactly the closed two-key shape
+    (non-negative integer counters, string tool names).
+
+    Verbatim extraction of the window_evidence section inside
+    ``ProvenanceVerifier._verify_counterfactual_session``
+    (cognitive-complexity decomposition, S3776): same checks, same error
+    strings, no behaviour change; the shape guard's ``return`` rides on
+    it being the helper's tail.
+    """
+    evidence = session.get("window_evidence")
+    if not isinstance(evidence, dict) or set(evidence) != {"counters", "tools"}:
+        report.errors.append(
+            f"line {line_no}: counterfactual window_evidence must be exactly "
+            f"the two-key shape {{'counters', 'tools'}}"
+        )
+        report.valid = False
+        return
+    counters = evidence.get("counters")
+    if not isinstance(counters, dict) or any(
+        not isinstance(value, int) or isinstance(value, bool) or value < 0
+        for value in counters.values()
+    ):
+        report.errors.append(
+            f"line {line_no}: counterfactual window_evidence counters must "
+            f"map names to non-negative integers"
+        )
+        report.valid = False
+    tools = evidence.get("tools")
+    if not isinstance(tools, list) or any(not isinstance(tool, str) or not tool for tool in tools):
+        report.errors.append(
+            f"line {line_no}: counterfactual window_evidence tools must be a list of tool names"
+        )
+        report.valid = False
+
+
+def _revocation_v12_fields(
+    revocation: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """Closed field set for a v1.2 revocation block.
+
+    Verbatim extraction of the field-set loops inside
+    ``ProvenanceVerifier._verify_v12_revocation_block``
+    (cognitive-complexity decomposition, S3776): same loops, same error
+    strings, no behaviour change.
+    """
+    # Closed field set: the block names a revocation event, never an
+    # open-ended payload.
+    for key in revocation:
+        if key not in _REVOCATION_V12_FIELDS:
+            report.errors.append(
+                f"line {line_no}: x_revocation carries unknown field {key!r} "
+                f"(closed set: {sorted(_REVOCATION_V12_FIELDS)})"
+            )
+            report.valid = False
+
+    for required in (
+        "version",
+        "kind",
+        "revoked_ids",
+        "revoked_hashes",
+        "actor",
+        "reason_class",
+        "revoked_at",
+    ):
+        if revocation.get(required) is None:
+            report.errors.append(f"line {line_no}: x_revocation missing field {required!r}")
+            report.valid = False
+
+
+def _revocation_v12_vocabularies(
+    revocation: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> Any:
+    """Version gate and the closed kind/reason_class vocabularies.
+
+    Verbatim extraction of the version/kind/reason_class checks inside
+    ``ProvenanceVerifier._verify_v12_revocation_block``
+    (cognitive-complexity decomposition, S3776): same checks, same error
+    strings, no behaviour change; returns the block's ``kind`` the
+    citation pass needs.
+    """
+    version = revocation.get("version")
+    if version is not None and version != _REVOCATION_VERSION:
+        report.errors.append(
+            f"line {line_no}: x_revocation version {version!r} is unknown "
+            f"(supported: {_REVOCATION_VERSION}); the block is refused, "
+            f"never skipped"
+        )
+        report.valid = False
+
+    kind = revocation.get("kind")
+    if kind is not None and kind not in _REVOCATION_KINDS:
+        report.errors.append(
+            f"line {line_no}: x_revocation kind {kind!r} outside the closed "
+            f"vocabulary {sorted(_REVOCATION_KINDS)}"
+        )
+        report.valid = False
+
+    reason_class = revocation.get("reason_class")
+    if reason_class is not None and reason_class not in _REVOCATION_REASON_CLASSES:
+        report.errors.append(
+            f"line {line_no}: x_revocation reason_class {reason_class!r} "
+            f"outside the closed vocabulary {sorted(_REVOCATION_REASON_CLASSES)}"
+        )
+        report.valid = False
+    return kind
+
+
+def _revocation_ids_shape(
+    revocation: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+) -> bool:
+    """revoked_ids is a list of ids: the shape half of the chain linkage.
+
+    Verbatim extraction of the ``ids_ok`` computation and its error
+    path inside ``ProvenanceVerifier._verify_v12_revocation_block``
+    (cognitive-complexity decomposition, S3776): same check, same error
+    string, no behaviour change; returns ``ids_ok`` for the linkage and
+    citation passes.
+    """
+    revoked_ids = revocation.get("revoked_ids")
+    ids_ok = isinstance(revoked_ids, list) and all(isinstance(rid, str) for rid in revoked_ids)
+    if not ids_ok:
+        report.errors.append(f"line {line_no}: x_revocation revoked_ids must be a list of ids")
+        report.valid = False
+    return ids_ok
+
+
+def _revocation_hashes_linkage(
+    revocation: dict[str, Any],
+    ids_ok: bool,
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """Chain linkage: revoked_hashes keys exactly equal the revoked ids,
+    every value a sha256 digest a third party holding the revoked
+    material re-derives.
+
+    Verbatim extraction of the hashes section inside
+    ``ProvenanceVerifier._verify_v12_revocation_block``
+    (cognitive-complexity decomposition, S3776): same checks and order,
+    same error strings, no behaviour change.
+    """
+    revoked_ids = revocation.get("revoked_ids")
+    revoked_hashes = revocation.get("revoked_hashes")
+    if not isinstance(revoked_hashes, dict):
+        report.errors.append(f"line {line_no}: x_revocation revoked_hashes must map ids to digests")
+        report.valid = False
+    elif ids_ok:
+        if set(revoked_hashes) != set(revoked_ids):
+            report.errors.append(
+                f"line {line_no}: x_revocation revoked_hashes keys must equal "
+                f"the revoked ids exactly (chain linkage)"
+            )
+            report.valid = False
+        for rid, digest in revoked_hashes.items():
+            if not _is_sha256_digest(digest):
+                report.errors.append(
+                    f"line {line_no}: x_revocation revoked_hashes for {rid!r} "
+                    f"is not a sha256 digest of the form "
+                    f"sha256:<64 hex characters>"
+                )
+                report.valid = False
+
+
+def _revocation_v12_timestamp(
+    revocation: dict[str, Any],
+    decoded: Any,
+    line_no: int,
+    report: VerificationReport,
+) -> None:
+    """revoked_at is an integer never later than the receipt's own iat:
+    a post-dated revocation timestamp is editorial, not evidence.
+
+    Verbatim extraction of the timestamp section inside
+    ``ProvenanceVerifier._verify_v12_revocation_block``
+    (cognitive-complexity decomposition, S3776): same checks, same error
+    strings, no behaviour change.
+    """
+    revoked_at = revocation.get("revoked_at")
+    iat = decoded.get("iat") if isinstance(decoded, dict) else None
+    if not isinstance(revoked_at, int) or isinstance(revoked_at, bool):
+        report.errors.append(f"line {line_no}: x_revocation revoked_at is not an integer")
+        report.valid = False
+    elif isinstance(iat, int) and revoked_at > iat:
+        report.errors.append(
+            f"line {line_no}: x_revocation revoked_at {revoked_at} is later "
+            f"than the receipt's own iat {iat}"
+        )
+        report.valid = False
+
+
+def _revocation_v12_bounded_reason(
+    revocation: dict[str, Any],
+    line_no: int,
+    report: VerificationReport,
+    intent_constraint_values: set[str],
+) -> None:
+    """Bounded disclosure: the reason stays at class level. A revocation
+    receipt is retained for the life of the archive, so it must never
+    quote a constraint value the chain's intent receipts disclose.
+
+    Verbatim extraction of the bounded-reason section inside
+    ``ProvenanceVerifier._verify_v12_revocation_block``
+    (cognitive-complexity decomposition, S3776): same loop and break,
+    same error string, no behaviour change.
+    """
+    reason = revocation.get("reason")
+    if isinstance(reason, str) and reason:
+        for value in intent_constraint_values:
+            if value and value in reason:
+                report.errors.append(
+                    f"line {line_no}: x_revocation reason quotes a constraint "
+                    f"value the chain's receipts disclose (bounded disclosure: "
+                    f"the reason stays at class level)"
+                )
+                report.valid = False
+                break
+
+
+def _revocation_v12_receipt_citations(
+    revocation: dict[str, Any],
+    kind: Any,
+    ids_ok: bool,
+    line_no: int,
+    report: VerificationReport,
+    receipts_by_hash: dict[str, ProvenanceReceipt],
+) -> None:
+    """kind = receipt: the same membership rule every extension citation
+    obeys - every cited receipt must exist in this chain.
+
+    Verbatim extraction of the citation section inside
+    ``ProvenanceVerifier._verify_v12_revocation_block``
+    (cognitive-complexity decomposition, S3776): the section's
+    ``revoked_ids`` local now re-reads the same field it always used,
+    the rest of the body is unchanged, no behaviour change.
+    """
+    if kind == "receipt" and ids_ok:
+        revoked_ids = revocation.get("revoked_ids")
+        for rid in revoked_ids:
+            if rid not in receipts_by_hash:
+                report.errors.append(
+                    f"line {line_no}: x_revocation cites receipt {rid!r} not in the chain"
+                )
+                report.valid = False
+
+
+# Ancestry walk node states (lane Q19): white = unvisited, grey = in
+# flight, black = finished and memoised. Hoisted verbatim (same ints)
+# from a _verify_ancestry_bounds local when its body was decomposed.
+_white, _grey, _black = 0, 1, 2
 
 
 def migrate_chain_envelope(

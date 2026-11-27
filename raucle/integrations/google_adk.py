@@ -160,6 +160,64 @@ def _identity_from_tool_context(tool_context: Any) -> str | None:
     return None
 
 
+def _extract_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[dict[str, Any], Any]:
+    """Present either call spelling as (call_args, tool_context).
+
+    ADK calls tools positionally as fn(args, tool_context); the
+    keyword spelling is accepted too without weakening either.
+
+    Module-level extraction of the former closure inside
+    :func:`_make_gated_function` (cognitive-complexity decomposition,
+    S3776): verbatim body, no behaviour change.
+    """
+    call_args: dict[str, Any] | None = None
+    tool_context: Any = None
+    if args:
+        call_args = args[0] if isinstance(args[0], dict) else {"input": args[0]}
+        if len(args) > 1:
+            tool_context = args[1]
+    if "args" in kwargs:
+        value = kwargs["args"]
+        call_args = value if isinstance(value, dict) else {"input": value}
+    if "tool_context" in kwargs:
+        tool_context = kwargs["tool_context"]
+    return call_args or {}, tool_context
+
+
+def _decide(
+    gate: CapabilityGate,
+    sink: HashChainSink | NullSink,
+    tool_name: str,
+    agent_id: str | None,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> None:
+    """Gate one call: emit its receipt, then raise on DENY.
+
+    Module-level extraction of the former closure inside
+    :func:`_make_gated_function` (cognitive-complexity decomposition,
+    S3776): the closure's captured names move onto the parameter list,
+    the body is verbatim.
+    """
+    call_args, tool_context = _extract_call(args, kwargs)
+    acting = agent_id or _identity_from_tool_context(tool_context)
+    token = get_in_force_token()
+    decision = evaluate_gate(gate, token, tool_name, call_args, acting)
+    # Emission precedes enforcement: there is no path that drops a
+    # decision, and a sink failure aborts an in-flight ALLOW too.
+    emit_receipt(
+        sink,
+        framework="google-adk",
+        token=token,
+        agent_id=acting,
+        tool=tool_name,
+        args=call_args,
+        decision=decision,
+    )
+    if not decision.allowed:
+        raise CapabilityDenied(tool_name, decision.reason or "denied")
+
+
 def _make_gated_function(
     original: Any,
     *,
@@ -170,53 +228,15 @@ def _make_gated_function(
     """Build the gate-checked wrapper, preserving sync/async identity."""
     tool_name = getattr(original, "__name__", None) or "<unknown>"
 
-    def _extract_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> tuple[dict[str, Any], Any]:
-        """Present either call spelling as (call_args, tool_context).
-
-        ADK calls tools positionally as fn(args, tool_context); the
-        keyword spelling is accepted too without weakening either.
-        """
-        call_args: dict[str, Any] | None = None
-        tool_context: Any = None
-        if args:
-            call_args = args[0] if isinstance(args[0], dict) else {"input": args[0]}
-            if len(args) > 1:
-                tool_context = args[1]
-        if "args" in kwargs:
-            value = kwargs["args"]
-            call_args = value if isinstance(value, dict) else {"input": value}
-        if "tool_context" in kwargs:
-            tool_context = kwargs["tool_context"]
-        return call_args or {}, tool_context
-
-    def _decide(args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
-        call_args, tool_context = _extract_call(args, kwargs)
-        acting = agent_id or _identity_from_tool_context(tool_context)
-        token = get_in_force_token()
-        decision = evaluate_gate(gate, token, tool_name, call_args, acting)
-        # Emission precedes enforcement: there is no path that drops a
-        # decision, and a sink failure aborts an in-flight ALLOW too.
-        emit_receipt(
-            sink,
-            framework="google-adk",
-            token=token,
-            agent_id=acting,
-            tool=tool_name,
-            args=call_args,
-            decision=decision,
-        )
-        if not decision.allowed:
-            raise CapabilityDenied(tool_name, decision.reason or "denied")
-
     @functools.wraps(original)
     def gated_sync(*args: Any, **kwargs: Any) -> Any:
-        _decide(args, kwargs)
+        _decide(gate, sink, tool_name, agent_id, args, kwargs)
         # A deny raised inside _decide; only an ALLOW reaches the delegate.
         return original(*args, **kwargs)
 
     @functools.wraps(original)
     async def gated_async(*args: Any, **kwargs: Any) -> Any:
-        _decide(args, kwargs)
+        _decide(gate, sink, tool_name, agent_id, args, kwargs)
         return await original(*args, **kwargs)
 
     return gated_async if inspect.iscoroutinefunction(original) else gated_sync
