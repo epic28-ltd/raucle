@@ -2405,7 +2405,10 @@ class ProvenanceVerifier:
         ``ProvenanceVerifier._verify_state_evidence_pins``
         (cognitive-complexity decomposition, S3776): same checks, same
         error strings, no behaviour change; the loop ``continue`` rides
-        on ``return`` inside the extracted body.
+        on ``return`` inside the extracted body, and the tool linkage
+        and field-class presence re-checks ride on
+        :meth:`_verify_state_tool_linkage` and
+        :meth:`_verify_state_field_classes`.
         """
         pairing_id = str(bound.get("pairing_id") or "")
         if not pairing_id:
@@ -2418,6 +2421,28 @@ class ProvenanceVerifier:
             )
             report.valid = False
             return
+        self._verify_state_tool_linkage(
+            write_hash, bound, row, pairing_id, gate_tools_by_hash, report
+        )
+        self._verify_state_field_classes(bound, row, report)
+
+    def _verify_state_tool_linkage(
+        self,
+        write_hash: str,
+        bound: dict[str, Any],
+        row: dict[str, Any],
+        pairing_id: str,
+        gate_tools_by_hash: dict[str, str],
+        report: VerificationReport,
+    ) -> None:
+        """The cited receipt's tool is the pairing's write tool, and the
+        block's read tool is the pairing's read tool (EPIC W lane W1).
+
+        Verbatim extraction of the tool-linkage section inside
+        ``ProvenanceVerifier._verify_one_state_evidence_pin``
+        (cognitive-complexity decomposition, S3776): same checks, same
+        error strings, no behaviour change.
+        """
         cited_tool = gate_tools_by_hash.get(write_hash)
         row_write_tool = str(row.get("write_tool") or "")
         if cited_tool is None or row_write_tool != cited_tool:
@@ -2435,6 +2460,21 @@ class ProvenanceVerifier:
                 f"the pairing's read tool {row_read_tool!r}"
             )
             report.valid = False
+
+    def _verify_state_field_classes(
+        self,
+        bound: dict[str, Any],
+        row: dict[str, Any],
+        report: VerificationReport,
+    ) -> None:
+        """Evidence-carrying claims re-check every required field class
+        name is present (a presence re-check, deliberately dumb).
+
+        Verbatim extraction of the field-class presence loop inside
+        ``ProvenanceVerifier._verify_one_state_evidence_pin``
+        (cognitive-complexity decomposition, S3776): same conditions,
+        same error string, no behaviour change.
+        """
         if bound.get("state") == "evidence":
             present = set(bound.get("field_classes") or [])
             for required_class in row.get("require_field_classes") or []:
