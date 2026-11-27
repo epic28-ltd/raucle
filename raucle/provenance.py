@@ -2405,7 +2405,10 @@ class ProvenanceVerifier:
         ``ProvenanceVerifier._verify_state_evidence_pins``
         (cognitive-complexity decomposition, S3776): same checks, same
         error strings, no behaviour change; the loop ``continue`` rides
-        on ``return`` inside the extracted body.
+        on ``return`` inside the extracted body, and the tool linkage
+        and field-class presence re-checks ride on
+        :meth:`_verify_state_tool_linkage` and
+        :meth:`_verify_state_field_classes`.
         """
         pairing_id = str(bound.get("pairing_id") or "")
         if not pairing_id:
@@ -2418,6 +2421,28 @@ class ProvenanceVerifier:
             )
             report.valid = False
             return
+        self._verify_state_tool_linkage(
+            write_hash, bound, row, pairing_id, gate_tools_by_hash, report
+        )
+        self._verify_state_field_classes(bound, row, report)
+
+    def _verify_state_tool_linkage(
+        self,
+        write_hash: str,
+        bound: dict[str, Any],
+        row: dict[str, Any],
+        pairing_id: str,
+        gate_tools_by_hash: dict[str, str],
+        report: VerificationReport,
+    ) -> None:
+        """The cited receipt's tool is the pairing's write tool, and the
+        block's read tool is the pairing's read tool (EPIC W lane W1).
+
+        Verbatim extraction of the tool-linkage section inside
+        ``ProvenanceVerifier._verify_one_state_evidence_pin``
+        (cognitive-complexity decomposition, S3776): same checks, same
+        error strings, no behaviour change.
+        """
         cited_tool = gate_tools_by_hash.get(write_hash)
         row_write_tool = str(row.get("write_tool") or "")
         if cited_tool is None or row_write_tool != cited_tool:
@@ -2435,6 +2460,21 @@ class ProvenanceVerifier:
                 f"the pairing's read tool {row_read_tool!r}"
             )
             report.valid = False
+
+    def _verify_state_field_classes(
+        self,
+        bound: dict[str, Any],
+        row: dict[str, Any],
+        report: VerificationReport,
+    ) -> None:
+        """Evidence-carrying claims re-check every required field class
+        name is present (a presence re-check, deliberately dumb).
+
+        Verbatim extraction of the field-class presence loop inside
+        ``ProvenanceVerifier._verify_one_state_evidence_pin``
+        (cognitive-complexity decomposition, S3776): same conditions,
+        same error string, no behaviour change.
+        """
         if bound.get("state") == "evidence":
             present = set(bound.get("field_classes") or [])
             for required_class in row.get("require_field_classes") or []:
@@ -2460,16 +2500,49 @@ class ProvenanceVerifier:
         ``ProvenanceVerifier._verify_tool_definition_pins``
         (cognitive-complexity decomposition, S3776): same checks, same
         error strings, no behaviour change; the loop ``continue`` rides
-        on ``return`` inside the extracted body.
+        on ``return`` inside the extracted body, and the manifest lookup
+        and digest re-derivation ride on
+        :meth:`_tool_definition_manifest_row` and
+        :meth:`_rederive_tool_definition_digest`.
         """
         manifest = str(record["manifest"] or "")
         digest = record["digest"]
         line_no = int(record["line_no"])
         if not manifest or digest is None:
             return
+        row = self._tool_definition_manifest_row(tool, manifest, line_no, report)
+        if row is None:
+            return
+        finding_line = tool_definition_drift.get(tool)
+        if finding_line is not None and finding_line > line_no:
+            # The divergence is receipted: a definition_changed finding
+            # later in the chain records the observed transition, so
+            # the manifest's newer state is signed evidence, never
+            # silent drift.
+            return
+        self._rederive_tool_definition_digest(tool, row, digest, line_no, report)
+
+    def _tool_definition_manifest_row(
+        self,
+        tool: str,
+        manifest: str,
+        line_no: int,
+        report: VerificationReport,
+    ) -> dict[str, Any] | None:
+        """Read the pinned manifest and find the tool's registry entry.
+
+        Verbatim extraction of the manifest read and row lookup inside
+        ``ProvenanceVerifier._verify_one_tool_definition_pin``
+        (cognitive-complexity decomposition, S3776): same read, same
+        error string, same order, no behaviour change. Returns the row,
+        or None when the entries are unreadable or the tool is
+        undeclared (the undeclared case still reports; the caller
+        returns on None either way, exactly as the loop ``continue``
+        did).
+        """
         entries = self._read_definition_manifest(manifest)
         if not isinstance(entries, list):
-            return
+            return None
         row = next(
             (r for r in entries if isinstance(r, dict) and r.get("name") == tool),
             None,
@@ -2480,14 +2553,24 @@ class ProvenanceVerifier:
                 f"does not declare the receipt's tool {tool!r}"
             )
             report.valid = False
-            return
-        finding_line = tool_definition_drift.get(tool)
-        if finding_line is not None and finding_line > line_no:
-            # The divergence is receipted: a definition_changed finding
-            # later in the chain records the observed transition, so
-            # the manifest's newer state is signed evidence, never
-            # silent drift.
-            return
+            return None
+        return row
+
+    def _rederive_tool_definition_digest(
+        self,
+        tool: str,
+        row: dict[str, Any],
+        digest: Any,
+        line_no: int,
+        report: VerificationReport,
+    ) -> None:
+        """Digest-blind re-derivation against the registry's schema.
+
+        Verbatim extraction of the digest recheck inside
+        ``ProvenanceVerifier._verify_one_tool_definition_pin``
+        (cognitive-complexity decomposition, S3776): same check, same
+        error string, no behaviour change.
+        """
         if isinstance(row.get("inputSchema"), dict):
             from raucle.tool_schema import _definition_digest
 
@@ -4082,7 +4165,10 @@ def _x_dlp_span_count_row(
             f"line {line_no}: x_dlp span_counts for {spclass!r} is not a non-negative integer"
         )
         report.valid = False
-    if isinstance(spclass, str) and spclass in _DLP_MATCHED_CLASSES and spclass not in classes:
+    # The row-shape guard above returned for a non-string key or an
+    # unknown class, so the membership cross-check against
+    # matched_classes needs none of those conjuncts repeated.
+    if spclass not in classes:
         report.errors.append(
             f"line {line_no}: x_dlp span_counts names class {spclass!r} absent from matched_classes"
         )
