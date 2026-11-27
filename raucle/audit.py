@@ -340,6 +340,27 @@ def _is_meta_record(rec: dict[str, Any]) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _frontier_level_hash(elements: list[bytes], j: int, count: int) -> bytes | None:
+    """One frontier level's hash step: the combine rule over the pending
+    level and the accumulator.
+
+    Moved verbatim from ``_frontier_root_digest``'s loop body (S3776
+    helper): two elements hash pairwise, a lone element duplicates
+    itself only over an odd count (an even count over one element is
+    the guarded-unreachable inconsistency), and nothing hashes into an
+    empty level.
+    """
+    if len(elements) == 2:
+        return hashlib.sha256(elements[0] + elements[1]).digest()
+    if len(elements) == 1:
+        if count % 2 != 1:
+            raise AssertionError(  # pragma: no cover - unreachable
+                f"frontier level {j} holds one element over an even {count}"
+            )
+        return hashlib.sha256(elements[0] + elements[0]).digest()
+    return None
+
+
 def _frontier_root_digest(count: int, pending: list) -> str:
     """The Merkle root digest over ``count`` leaves, given the frontier's
     pending levels.
@@ -353,16 +374,7 @@ def _frontier_root_digest(count: int, pending: list) -> str:
     while count > 1:
         level = pending[j] if j < len(pending) else None
         elements = ([level] if level is not None else []) + ([acc] if acc is not None else [])
-        if len(elements) == 2:
-            acc = hashlib.sha256(elements[0] + elements[1]).digest()
-        elif len(elements) == 1:
-            if count % 2 != 1:
-                raise AssertionError(  # pragma: no cover - unreachable
-                    f"frontier level {j} holds one element over an even {count}"
-                )
-            acc = hashlib.sha256(elements[0] + elements[0]).digest()
-        else:
-            acc = None
+        acc = _frontier_level_hash(elements, j, count)
         count = (count + 1) // 2
         j += 1
     top = pending[j] if j < len(pending) else None

@@ -3754,7 +3754,9 @@ class RaucleGateway:
         try:
             token = self._ensure_fresh_token(tool, token, matched_rule, time.time())
         except Exception:
-            logger.exception("Re-mint failed for %s", tool)
+            # The untrusted tool name stays out of the log call (S5145);
+            # the receipted deny in result carries the tool identity.
+            logger.exception("Re-mint failed before the call was decided")
             return self._deny_result(result, "token expired and re-mint failed", start)
         self._bind_rule_metadata(result, matched_rule, tool)
         return self._decide_and_finish(

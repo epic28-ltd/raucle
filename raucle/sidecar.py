@@ -478,9 +478,7 @@ def _submit_header_guards(
     return None
 
 
-def _submit_envelope_guard(
-    handler: Any, body: bytes
-) -> tuple[tuple[int, dict[str, Any]] | None, dict[str, Any]]:
+def _submit_envelope_guard(body: bytes) -> tuple[tuple[int, dict[str, Any]] | None, dict[str, Any]]:
     """Decode and shape-check the submitted envelope.
 
     On success returns ``(None, envelope)``; on a refusal the FIRST slot
@@ -621,7 +619,7 @@ def _handle_submit(handler: Any, sidecar: ReceiptSidecar) -> None:
     if guard is not None:
         handler._respond(guard[0], guard[1])
         return
-    guard, envelope = _submit_envelope_guard(handler, body)
+    guard, envelope = _submit_envelope_guard(body)
     if guard is not None:
         handler._respond(guard[0], guard[1])
         return
