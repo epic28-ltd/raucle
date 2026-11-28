@@ -5333,7 +5333,7 @@ function tourShow(){
   const resolveTarget = () => {
     if (runId !== tourRunId) return;
     if (s.target === '#rcpt-offline') {
-      const verifyLink = document.querySelector('#rcptRows a[data-hi="offlineVerify(event)"]');
+      const verifyLink = Array.from(document.querySelectorAll('#rcptRows a[data-hi]')).find(a => a.getAttribute('data-hi') === 'offlineVerify(event)');
       const panel = document.getElementById('rcpt-offline');
       if (verifyLink && panel && getComputedStyle(panel).display === 'none') verifyLink.click();
     }
