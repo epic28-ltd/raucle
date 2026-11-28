@@ -585,7 +585,7 @@ def test_tour_spotlight_tracks_scroll_and_cancels_stale_steps() -> None:
 
 def test_tour_can_always_be_dismissed_and_escape_closes_it() -> None:
     assert 'data-hi="tourEnd(false)">×</button>' in ADMIN_PANEL_HTML
-    assert 'ev.key === \'Escape\' && document.getElementById(\'tourCard\')' in ADMIN_PANEL_HTML
+    assert "ev.key === 'Escape' && document.getElementById('tourCard')" in ADMIN_PANEL_HTML
     assert "localStorage.setItem(TOUR_SEEN_KEY, '1')" in ADMIN_PANEL_HTML
 
 
@@ -602,7 +602,7 @@ def test_tour_never_spotlights_an_unrelated_tab_fallback() -> None:
 
 def test_tour_reveals_offline_verify_panel_before_spotlighting() -> None:
     assert "s.target === '#rcpt-offline'" in ADMIN_PANEL_HTML
-    assert "a[data-hi=\"offlineVerify(event)\"]" in ADMIN_PANEL_HTML
+    assert 'a[data-hi="offlineVerify(event)"]' in ADMIN_PANEL_HTML
     assert "verifyLink.click();" in ADMIN_PANEL_HTML
 
 
