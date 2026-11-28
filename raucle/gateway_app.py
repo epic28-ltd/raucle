@@ -3416,8 +3416,12 @@ body.demo #policyEditorCard{display:none}
 
 /* Guided tour */
 #tourHost{position:fixed;inset:0;pointer-events:none;z-index:9000}
-.tour-spot{position:absolute;border:2px solid #171717;border-radius:12px;box-shadow:0 0 0 4000px rgba(255,255,255,0.35);pointer-events:none;}
-  .tour-card{position:fixed;width:320px;background:#ffffff;background-color:#ffffff;opacity:1;mix-blend-mode:normal;border:1px solid #171717;border-radius:12px;padding:16px 18px 12px;box-shadow:0 12px 40px rgba(0,0,0,0.18);pointer-events:auto;animation:tourIn .25s ease}
+.tour-spot{position:absolute;border:2px solid #171717;border-radius:12px;box-shadow:0 0 0 4000px rgba(23,23,23,0.18);pointer-events:none;}
+.tour-card{position:fixed;width:min(360px,calc(100vw - 24px));max-height:calc(100vh - 32px);overflow:auto;background:#fff;color:#171717;opacity:1;mix-blend-mode:normal;border:1px solid #e5e7eb;border-radius:16px;padding:16px 18px 12px;box-shadow:0 18px 56px rgba(15,23,42,.24);pointer-events:auto;animation:tourIn .25s ease}
+.tour-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.tour-close{flex:0 0 30px;width:30px;height:30px;margin:-6px -8px 0 0;border:0;border-radius:8px;background:#f3f4f6;color:#374151;font-size:22px;line-height:1;cursor:pointer}
+.tour-close:hover{background:#e5e7eb}
+.tour-unavailable{margin-top:10px;padding:8px 10px;border-radius:8px;background:#f3f4f6;color:#52525b;font-size:.78rem}
 @keyframes tourIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .tour-step{font-size:0.68rem;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#8b919e;margin-bottom:8px}
 .tour-body{font-size:0.85rem;line-height:1.5;color:#171717;margin-bottom:14px}
@@ -5322,45 +5326,65 @@ function tourShow(){
     x.dataset.tabId === s.tab || x.getAttribute('data-hi') === "showTab('" + s.tab + "',this)"
   );
   if (nav && !nav.classList.contains('active')) nav.click();
-  tourTimer = window.setTimeout(() => {
+
+  // Some receipt panels are populated on demand. Open the first receipt's
+  // read-only offline verifier for the corresponding tour step.
+  let attempts = 0;
+  const resolveTarget = () => {
     if (runId !== tourRunId) return;
-    let target = document.querySelector(s.target);
-    if (!target || target.getClientRects().length === 0) {
-      target = document.getElementById('tab-' + s.tab);
+    if (s.target === '#rcpt-offline') {
+      const verifyLink = Array.from(document.querySelectorAll('#rcptRows a[data-hi]')).find(a => a.getAttribute('data-hi') === 'offlineVerify(event)');
+      const panel = document.getElementById('rcpt-offline');
+      if (verifyLink && panel && getComputedStyle(panel).display === 'none') verifyLink.click();
     }
-    if (!target || target.getClientRects().length === 0) {
-      tourStep += 1;
-      tourShow();
+    const target = document.querySelector(s.target);
+    const visible = target && target.getClientRects().length > 0;
+    if (!visible && attempts < 24) {
+      attempts += 1;
+      tourTimer = window.setTimeout(resolveTarget, 100);
       return;
     }
-    tourTarget = target;
-    const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    target.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center' });
+
     const host = document.getElementById('tourHost');
-    if (!host) return;
+    if (!host || runId !== tourRunId) return;
     host.replaceChildren();
-    const spot = document.createElement('div');
-    spot.className = 'tour-spot';
-    host.appendChild(spot);
+    if (visible) {
+      tourTarget = target;
+      const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      target.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center' });
+      const spot = document.createElement('div');
+      spot.className = 'tour-spot';
+      host.appendChild(spot);
+    }
+
+    // A missing/hidden target is never replaced by the whole tab: that made
+    // the spotlight point at unrelated content. Keep the tour usable and
+    // explain the unavailable step without drawing a misleading cutout.
     const card = document.createElement('div');
     card.className = 'tour-card';
     card.id = 'tourCard';
     card.innerHTML =
-      '<div class="tour-step">Step ' + (tourStep + 1) + ' of ' + TOUR_STEPS.length + ' · ' + esc(s.title) + '</div>' +
-      '<div class="tour-body">' + esc(s.body) + '</div>' +
-      '<div class="tour-actions"><button class="tour-skip" data-hi="tourEnd(false)">Skip tour</button>' +
+      '<div class="tour-card-head"><div class="tour-step">Step ' + (tourStep + 1) + ' of ' + TOUR_STEPS.length + ' · ' + esc(s.title) + '</div>' +
+      '<button type="button" class="tour-close" aria-label="Close walkthrough" title="Close walkthrough" data-hi="tourEnd(false)">×</button></div>' +
+      '<div class="tour-body">' + esc(s.body) + (visible ? '' : '<p class="tour-unavailable">This section is not available in this demo session. Continue or close the walkthrough.</p>') + '</div>' +
+      '<div class="tour-actions"><button class="tour-skip" data-hi="tourEnd(false)">Skip walkthrough</button>' +
       '<button class="tour-next" data-hi="tourNext()">' +
-      (tourStep + 1 < TOUR_STEPS.length ? 'Next' : 'Start exploring') + '</button></div>' +
+      (tourStep + 1 < TOUR_STEPS.length ? 'Next' : 'Finish') + '</button></div>' +
       '<div class="tour-dots">' + TOUR_STEPS.map((_, i) =>
         '<span class="' + (i === tourStep ? 'on' : '') + '"></span>'
       ).join('') + '</div>';
     host.appendChild(card);
     installTourReposition();
-    positionTourCard(target);
+    if (visible) positionTourCard(target);
+    else {
+      card.style.left = Math.max(12, window.innerWidth - Math.min(360, window.innerWidth - 24) - 12) + 'px';
+      card.style.top = '16px';
+    }
     tourTimer = window.setTimeout(() => {
       if (runId === tourRunId && tourTarget) positionTourCard(tourTarget);
-    }, reduced ? 0 : 360);
-  }, 280);
+    }, 360);
+  };
+  tourTimer = window.setTimeout(resolveTarget, 120);
 }
 function positionTourCard(el){
   if (!el) return;
@@ -5392,6 +5416,12 @@ function installTourReposition(){
   };
   window.addEventListener('resize', reposition);
   window.addEventListener('scroll', reposition, true);
+  if (!window.__tourEscapeBound) {
+    window.__tourEscapeBound = true;
+    document.addEventListener('keydown', ev => {
+      if (ev.key === 'Escape' && document.getElementById('tourCard')) tourEnd(false);
+    });
+  }
 }
 function tourNext(){
   clearTimeout(tourTimer);
@@ -5405,15 +5435,24 @@ function tourEnd(seen){
   tourStep = 0;
   const host = document.getElementById('tourHost');
   if (host) host.replaceChildren();
-  try { localStorage.setItem(TOUR_SEEN_KEY, seen ? '1' : '1'); } catch(e) {}
+  // Both Skip and Finish are an explicit dismissal; don't auto-open again.
+  try { localStorage.setItem(TOUR_SEEN_KEY, '1'); } catch(e) {}
 }
 function tourMaybeStart(){
   let force = false;
-  try { force = new URLSearchParams(window.location.search).get('tour') === '1'; } catch(e) {}
-  if (force) { try { localStorage.removeItem(TOUR_SEEN_KEY); } catch(e) {} }
+  try {
+    const params = new URLSearchParams(window.location.search);
+    force = params.get('tour') === '1';
+    if (force) {
+      params.delete('tour');
+      const query = params.toString();
+      history.replaceState(null, '', window.location.pathname + (query ? '?' + query : '') + window.location.hash);
+      localStorage.removeItem(TOUR_SEEN_KEY);
+    }
+  } catch(e) {}
   let done = false;
   try { done = localStorage.getItem(TOUR_SEEN_KEY) === '1'; } catch(e) {}
-  if (done) return;
+  if (done && !force) return;
   tourStep = 0;
   tourShow();
 }
