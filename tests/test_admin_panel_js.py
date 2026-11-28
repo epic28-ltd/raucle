@@ -579,6 +579,8 @@ def test_tour_spotlight_tracks_scroll_and_cancels_stale_steps() -> None:
     assert "window.addEventListener('scroll', reposition, true);" in ADMIN_PANEL_HTML
     assert "positionTourCard(tourTarget);" in ADMIN_PANEL_HTML
     assert "clearTimeout(tourTimer);" in ADMIN_PANEL_HTML
+    assert "tourTarget = null;" in ADMIN_PANEL_HTML
+    assert "if (oldHost) oldHost.replaceChildren();" in ADMIN_PANEL_HTML
 
 
 def test_tour_card_is_responsive_and_reduced_motion_aware() -> None:

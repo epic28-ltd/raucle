@@ -5315,6 +5315,9 @@ function tourShow(){
   const runId = ++tourRunId;
   const s = TOUR_STEPS[tourStep];
   if (!s) { tourEnd(true); return; }
+  tourTarget = null;
+  const oldHost = document.getElementById('tourHost');
+  if (oldHost) oldHost.replaceChildren();
   const nav = Array.from(document.querySelectorAll('.tab')).find(x =>
     x.dataset.tabId === s.tab || x.getAttribute('data-hi') === `showTab('${s.tab}',this)`
   );
