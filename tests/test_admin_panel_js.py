@@ -586,6 +586,7 @@ def test_tour_card_is_responsive_and_reduced_motion_aware() -> None:
     assert "prefers-reduced-motion: reduce" in ADMIN_PANEL_HTML
     assert "rgba(9,16,34,.66)" in ADMIN_PANEL_HTML
 
+
 # ---------------------------------------------------------------------------
 # G9: left side navigation
 # ---------------------------------------------------------------------------
