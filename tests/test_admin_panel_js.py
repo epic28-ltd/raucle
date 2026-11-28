@@ -564,6 +564,27 @@ def test_tour_spotlights_the_session_catch_with_real_traffic_copy() -> None:
     )
 
 
+def test_tour_navigation_can_activate_every_tour_tab() -> None:
+    """Each tour step must switch to its own panel before spotlighting it."""
+    for tab, _, _ in _tour_steps():
+        assert f'data-tab-id="{tab}"' in ADMIN_PANEL_HTML, tab
+
+
+def test_tour_spotlight_tracks_scroll_and_cancels_stale_steps() -> None:
+    """Scrolling keeps the cutout aligned; rapid Next/Skip cannot race timers."""
+    assert "let tourStep = 0, tourBox = null, tourTimer = null, tourRunId = 0, tourTarget = null;" in ADMIN_PANEL_HTML
+    assert "const runId = ++tourRunId;" in ADMIN_PANEL_HTML
+    assert "if (runId !== tourRunId) return;" in ADMIN_PANEL_HTML
+    assert "window.addEventListener('scroll', reposition, true);" in ADMIN_PANEL_HTML
+    assert "positionTourCard(tourTarget);" in ADMIN_PANEL_HTML
+    assert "clearTimeout(tourTimer);" in ADMIN_PANEL_HTML
+
+
+def test_tour_card_is_responsive_and_reduced_motion_aware() -> None:
+    assert "Math.min(360, Math.max(220, window.innerWidth - 24))" in ADMIN_PANEL_HTML
+    assert "prefers-reduced-motion: reduce" in ADMIN_PANEL_HTML
+    assert "rgba(9,16,34,.66)" in ADMIN_PANEL_HTML
+
 # ---------------------------------------------------------------------------
 # G9: left side navigation
 # ---------------------------------------------------------------------------

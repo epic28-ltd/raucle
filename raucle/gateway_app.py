@@ -3441,6 +3441,73 @@ body.demo #policyEditorCard{display:none}
   #loginBackdrop { position: fixed; inset: 0; z-index: 1; pointer-events: none; background: url('assets/login-bg.jpg') 28% center / cover no-repeat; }
   body:has(#login:not(.hidden)) #field { display: none; }
   @media (prefers-reduced-motion: reduce) { #field { display: none; } }
+
+/* Demo console visual refresh: calmer chrome, clearer content hierarchy,
+   responsive capability cards and a readable guided-tour spotlight. */
+:root {
+  --rc-navy: #111b36;
+  --rc-blue: #9aafff;
+  --rc-blue-deep: #334a91;
+  --rc-blue-line: #dce4f4;
+  --rc-blue-soft: #c7d2ee;
+  --rc-header-h: 68px;
+}
+.header {
+  min-height: var(--rc-header-h);
+  padding: 12px clamp(16px, 3vw, 32px);
+  background: rgba(255,255,255,.96);
+  border-bottom: 1px solid #e7ebf3;
+  box-shadow: 0 4px 18px rgba(17,27,54,.045);
+  backdrop-filter: blur(16px);
+}
+.logo-mark { width: 36px; height: 36px; border-radius: 10px; object-fit: contain; }
+.logo { font-size: 21px; font-weight: 700; letter-spacing: -.045em; color: #111b36; }
+.header .badge { background: #f2f5ff; color: #46577f; border: 1px solid #e0e7f8; padding: 4px 10px; }
+#demoBanner { background: #f7f9ff; border-color: #e1e7f5; border-radius: 12px; padding: 7px 12px; }
+.layout::before { width: 236px; background: linear-gradient(180deg,#111b36 0%,#17264b 100%); }
+.sidenav { width: 236px; flex-basis: 236px; padding: 18px 12px 28px; border-right-color: rgba(154,175,255,.14); }
+.nav-heading { padding: 14px 12px 7px; color: #a7b8f2; font-size: 10px; letter-spacing: .11em; }
+.sidenav .tab { margin: 2px 0; padding: 9px 12px; border-radius: 9px; font-size: 13px; color: #c2cce5; }
+.sidenav .tab:hover { background: rgba(255,255,255,.08); }
+.sidenav .tab.active { background: rgba(154,175,255,.16); border-left-color: #9aafff; color: #fff; }
+.layout > .content { background: #f6f8fc; min-height: calc(100vh - var(--rc-header-h)); }
+.content { max-width: 1520px; padding: clamp(20px, 2.8vw, 40px); }
+.card { border: 1px solid #e5eaf3; border-radius: 16px; padding: clamp(18px, 2vw, 28px); margin-bottom: 18px; box-shadow: 0 5px 22px rgba(20,35,72,.045); }
+.card-title { color: #53617c; font-size: 11px; letter-spacing: .09em; margin-bottom: 18px; }
+.ov-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.ov-card { min-width: 0; border-color: #e3e9f4; border-radius: 15px; padding: 19px; gap: 11px; background: linear-gradient(155deg,#fff 0%,#fbfcff 100%); box-shadow: 0 3px 14px rgba(20,35,72,.035); transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
+.ov-card:hover { transform: translateY(-2px); border-color: #cbd6ef; box-shadow: 0 10px 26px rgba(20,35,72,.075); }
+.ov-title { font-size: 14px; line-height: 1.4; color: #172344; }
+.ov-desc { color: #596781; font-size: 12.5px; line-height: 1.6; }
+.ov-card .btn { padding: 7px 12px; border-radius: 8px; font-size: 11px; }
+.honesty-banner { margin: 18px clamp(16px, 2.8vw, 40px) 0; border: 1px solid #dce5f7; border-radius: 12px; background: #f1f5ff; color: #33446d; padding: 12px 16px; }
+.tour-spot { border: 2px solid #8ea8ff; border-radius: 14px; box-shadow: 0 0 0 9999px rgba(9,16,34,.66), 0 0 0 5px rgba(142,168,255,.18); }
+.tour-card { width: min(360px, calc(100vw - 24px)); max-width: calc(100vw - 24px); max-height: min(52vh, 420px); overflow-y: auto; z-index: 9002; border: 1px solid #dce4f4; border-radius: 16px; padding: 19px 20px 15px; box-shadow: 0 22px 70px rgba(0,0,0,.28); color: #172344; }
+.tour-step { color: #586c9e; font-size: 10px; letter-spacing: .12em; }
+.tour-body { color: #3d4960; font-size: 13px; line-height: 1.65; }
+.tour-next { background: #18264a; border-radius: 9px; padding: 9px 17px; }
+.tour-next:hover { background: #2a3d6e; }
+.tour-skip { color: #65718a; }
+.tour-dots span { width: 7px; height: 7px; background: #d8deeb; }
+.tour-dots span.on { background: #506bb2; }
+@media (max-width: 1120px) { .ov-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 900px) {
+  .layout::before { display: none; }
+  .content { padding: 18px 16px 28px; }
+  .sidenav { padding: 9px 12px; }
+  .header { gap: 10px; }
+  #demoBanner { max-width: 100%; }
+}
+@media (max-width: 620px) {
+  .ov-grid { grid-template-columns: minmax(0, 1fr); }
+  .header { align-items: flex-start; flex-wrap: wrap; }
+  #demoBanner { width: 100%; margin-left: 0; }
+  .honesty-banner { margin: 12px 12px 0; font-size: 12px; line-height: 1.55; }
+  .tour-card { max-height: 46vh; padding: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-card, .tour-card, .sidenav .tab { transition: none; animation: none; }
+}
 </style>
 </head>
 <body><canvas id="field" aria-hidden="true" tabindex="-1"></canvas>
@@ -3489,12 +3556,12 @@ body.demo #policyEditorCard{display:none}
   <nav class="sidenav" id="sidenav" aria-label="Panel sections">
     <div class="nav-group" data-nav-group="trust">
       <div class="nav-heading">Raucle Agent Trust</div>
-      <div class="tab active" tabindex="0" data-hi="showTab('dashboard',this)">Dashboard</div>
+      <div class="tab active" tabindex="0" data-hi="showTab('dashboard',this)" data-tab-id="dashboard">Dashboard</div>
       <div class="tab" tabindex="0" data-hi="showTab('connections',this)">Connections</div>
       <div class="tab" tabindex="0" data-hi="showTab('policies',this)" data-tab-id="policies">Policies</div>
       <div class="tab" tabindex="0" data-hi="showTab('simulate',this)" data-tab-id="simulate">Policy simulate</div>
       <div class="tab" tabindex="0" data-hi="showTab('capdemo',this)" data-tab-id="capdemo">Capability tokens</div>
-      <div class="tab" tabindex="0" data-hi="showTab('receipts',this)">Receipts</div>
+      <div class="tab" tabindex="0" data-hi="showTab('receipts',this)" data-tab-id="receipts">Receipts</div>
       <div class="tab" tabindex="0" data-hi="showTab('learn',this)" data-tab-id="learn">Learn</div>
       <div class="tab" tabindex="0" data-hi="showTab('siem',this)" data-tab-id="siem">SIEM</div>
       <div class="tab" tabindex="0" data-hi="showTab('users',this)" data-tab-id="users">Users</div>
@@ -5197,7 +5264,7 @@ function showMainDemo() {
 
 // ================= GUIDED TOUR =================
 const TOUR_SEEN_KEY = 'raucle_demo_tour_done_v1';
-let tourStep = 0, tourBox = null, tourTimer = null;
+let tourStep = 0, tourBox = null, tourTimer = null, tourRunId = 0, tourTarget = null;
 const TOUR_STEPS = [
   // Narrative arc (D17): enterprise overview, what the EE console shows
   // over OSS raucle, session monitoring catching a real runaway loop, DLP
@@ -5237,63 +5304,114 @@ const TOUR_STEPS = [
    body:'Everything labelled EE-ONLY is simulated here because that surface is not built yet: the fleet multi-org view, SIEM targets and the classifier layer. What you watched catch a runaway loop was real raucle, today.'},
 ];
 function tourShow(){
-  const s=TOUR_STEPS[tourStep];
-  if(!s){tourEnd(true);return;}
-  document.querySelectorAll('.tab').forEach(x=>{if(x.dataset.tabId===s.tab)x.click();});
-  setTimeout(()=>{
-    const el=document.querySelector(s.target)||document.getElementById('tab-'+s.tab);
-    if(!el){tourStep++;tourShow();return;}
-    el.scrollIntoView({behavior:'smooth',block:'center'});
-    const host=document.getElementById('tourHost');
-    host.innerHTML=`<div class="tour-card" id="tourCard"></div>`;
-    const spot=document.createElement('div');
-    spot.className='tour-spot';
-    const sb=el.getBoundingClientRect();
-    spot.style.left=sb.left+'px';spot.style.top=sb.top+'px';spot.style.width=sb.width+'px';spot.style.height=sb.height+'px';
-    host.insertBefore(spot,host.firstChild);
-    positionTourCard(el);
-  },220);
+  clearTimeout(tourTimer);
+  const runId = ++tourRunId;
+  const s = TOUR_STEPS[tourStep];
+  if (!s) { tourEnd(true); return; }
+  const nav = Array.from(document.querySelectorAll('.tab')).find(x =>
+    x.dataset.tabId === s.tab || x.getAttribute('data-hi') === `showTab('${s.tab}',this)`
+  );
+  if (nav && !nav.classList.contains('active')) nav.click();
+  tourTimer = window.setTimeout(() => {
+    if (runId !== tourRunId) return;
+    let target = document.querySelector(s.target);
+    if (!target || target.getClientRects().length === 0) {
+      target = document.getElementById('tab-' + s.tab);
+    }
+    if (!target || target.getClientRects().length === 0) {
+      tourStep += 1;
+      tourShow();
+      return;
+    }
+    tourTarget = target;
+    const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center' });
+    const host = document.getElementById('tourHost');
+    if (!host) return;
+    host.replaceChildren();
+    const spot = document.createElement('div');
+    spot.className = 'tour-spot';
+    host.appendChild(spot);
+    const card = document.createElement('div');
+    card.className = 'tour-card';
+    card.id = 'tourCard';
+    card.innerHTML =
+      '<div class="tour-step">Step ' + (tourStep + 1) + ' of ' + TOUR_STEPS.length + ' · ' + esc(s.title) + '</div>' +
+      '<div class="tour-body">' + esc(s.body) + '</div>' +
+      '<div class="tour-actions"><button class="tour-skip" data-hi="tourEnd(false)">Skip tour</button>' +
+      '<button class="tour-next" data-hi="tourNext()">' +
+      (tourStep + 1 < TOUR_STEPS.length ? 'Next' : 'Start exploring') + '</button></div>' +
+      '<div class="tour-dots">' + TOUR_STEPS.map((_, i) =>
+        '<span class="' + (i === tourStep ? 'on' : '') + '"></span>'
+      ).join('') + '</div>';
+    host.appendChild(card);
+    installTourReposition();
+    positionTourCard(target);
+    tourTimer = window.setTimeout(() => {
+      if (runId === tourRunId && tourTarget) positionTourCard(tourTarget);
+    }, reduced ? 0 : 360);
+  }, 280);
 }
 function positionTourCard(el){
-  const s=TOUR_STEPS[tourStep];
-  if(!s){return;}
-  const r=el.getBoundingClientRect();
-  let bx=Math.min(Math.max(r.left+r.width/2-160,12),window.innerWidth-332);
-  let by=Math.max(r.bottom+12,12);
-  if(by+170>window.innerHeight-12) by=Math.max(12,r.top-186);
-  const host=document.getElementById('tourHost');
-  const card=document.getElementById('tourCard');
-  if(!card)return;
-  card.style.left=bx+'px';card.style.top=by+'px';
-  card.innerHTML=`
-      <div class="tour-step">Step ${tourStep+1} of ${TOUR_STEPS.length} · ${esc(s.title)}</div>
-      <div class="tour-body">${esc(s.body)}</div>
-      <div class="tour-actions">
-        <button class="tour-skip" data-hi="tourEnd(false)">Skip tour</button>
-        <button class="tour-next" data-hi="tourNext()">${tourStep+1<TOUR_STEPS.length?'Next':'Start exploring'}</button>
-      </div>
-      <div class="tour-dots">${TOUR_STEPS.map((_,i)=>`<span class="${i===tourStep?'on':''}"></span>`).join('')}</div>
-    </div>`;
-  // keep the card anchored if the panel scrolls or resizes mid-step
-  if(!window.__tourReposition){window.__tourReposition=true;window.addEventListener('resize',()=>{const c=document.getElementById('tourCard');if(!c)return;const s=TOUR_STEPS[tourStep];const el2=s&&(document.querySelector(s.target)||document.getElementById('tab-'+s.tab));if(el2)positionTourCard(el2);});}
-  window.addEventListener('scroll',()=>{const c=document.getElementById('tourCard');if(!c)return;const s=TOUR_STEPS[tourStep];const el2=s&&(document.querySelector(s.target)||document.getElementById('tab-'+s.tab));if(el2)positionTourCard(el2);},{passive:true});
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const host = document.getElementById('tourHost');
+  const spot = host && host.querySelector('.tour-spot');
+  const card = document.getElementById('tourCard');
+  if (spot) {
+    spot.style.left = r.left + 'px';
+    spot.style.top = r.top + 'px';
+    spot.style.width = r.width + 'px';
+    spot.style.height = r.height + 'px';
+  }
+  if (!card) return;
+  card.style.width = Math.min(360, Math.max(220, window.innerWidth - 24)) + 'px';
+  const cr = card.getBoundingClientRect();
+  const maxLeft = Math.max(12, window.innerWidth - cr.width - 12);
+  const bx = Math.min(Math.max(r.left + r.width / 2 - cr.width / 2, 12), maxLeft);
+  let by = r.bottom + 16;
+  if (by + cr.height > window.innerHeight - 12) by = Math.max(12, r.top - cr.height - 16);
+  card.style.left = bx + 'px';
+  card.style.top = by + 'px';
 }
-function tourNext(){tourStep++;tourShow();}
+function installTourReposition(){
+  if (window.__tourReposition) return;
+  window.__tourReposition = true;
+  const reposition = () => {
+    if (tourTarget && document.getElementById('tourCard')) positionTourCard(tourTarget);
+  };
+  window.addEventListener('resize', reposition);
+  window.addEventListener('scroll', reposition, true);
+}
+function tourNext(){
+  clearTimeout(tourTimer);
+  tourStep += 1;
+  tourShow();
+}
 function tourEnd(seen){
-  clearTimeout(tourTimer);tourStep=0;
-  const host=document.getElementById('tourHost');if(host)host.innerHTML='';
-  try{localStorage.setItem(TOUR_SEEN_KEY,seen?'1':'1');}catch(e){}
+  ++tourRunId;
+  clearTimeout(tourTimer);
+  tourTarget = null;
+  tourStep = 0;
+  const host = document.getElementById('tourHost');
+  if (host) host.replaceChildren();
+  try { localStorage.setItem(TOUR_SEEN_KEY, seen ? '1' : '1'); } catch(e) {}
 }
 function tourMaybeStart(){
   let force = false;
   try { force = new URLSearchParams(window.location.search).get('tour') === '1'; } catch(e) {}
-  if (force) { try{localStorage.removeItem(TOUR_SEEN_KEY);}catch(e){} }
-  let done=false;
-  try{done=localStorage.getItem(TOUR_SEEN_KEY)==='1';}catch(e){}
-  if(done)return;
-  tourStep=0;tourShow();
+  if (force) { try { localStorage.removeItem(TOUR_SEEN_KEY); } catch(e) {} }
+  let done = false;
+  try { done = localStorage.getItem(TOUR_SEEN_KEY) === '1'; } catch(e) {}
+  if (done) return;
+  tourStep = 0;
+  tourShow();
 }
-function tourRestart(){try{localStorage.removeItem(TOUR_SEEN_KEY);}catch(e){}tourStep=0;tourShow();}
+function tourRestart(){
+  try { localStorage.removeItem(TOUR_SEEN_KEY); } catch(e) {}
+  tourStep = 0;
+  tourShow();
+}
 
 // ================= EMBEDDED LIVE TOPOLOGY =================
 // Hero palette: ink #171717, green #22c55e, deny red #dd6b78, warn #e5b85c,
