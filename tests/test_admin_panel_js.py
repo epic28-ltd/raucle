@@ -602,7 +602,7 @@ def test_tour_never_spotlights_an_unrelated_tab_fallback() -> None:
 
 def test_tour_reveals_offline_verify_panel_before_spotlighting() -> None:
     assert "s.target === '#rcpt-offline'" in ADMIN_PANEL_HTML
-    assert 'a[data-hi="offlineVerify(event)"]' in ADMIN_PANEL_HTML
+    assert "getAttribute('data-hi') === 'offlineVerify(event)'" in ADMIN_PANEL_HTML
     assert "verifyLink.click();" in ADMIN_PANEL_HTML
 
 
