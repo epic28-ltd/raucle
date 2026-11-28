@@ -572,7 +572,11 @@ def test_tour_navigation_can_activate_every_tour_tab() -> None:
 
 def test_tour_spotlight_tracks_scroll_and_cancels_stale_steps() -> None:
     """Scrolling keeps the cutout aligned; rapid Next/Skip cannot race timers."""
-    assert "let tourStep = 0, tourBox = null, tourTimer = null, tourRunId = 0, tourTarget = null;" in ADMIN_PANEL_HTML
+    tour_state = (
+        "let tourStep = 0, tourBox = null, tourTimer = null, "
+        "tourRunId = 0, tourTarget = null;"
+    )
+    assert tour_state in ADMIN_PANEL_HTML
     assert "const runId = ++tourRunId;" in ADMIN_PANEL_HTML
     assert "if (runId !== tourRunId) return;" in ADMIN_PANEL_HTML
     assert "window.addEventListener('scroll', reposition, true);" in ADMIN_PANEL_HTML
