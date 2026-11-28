@@ -5319,7 +5319,7 @@ function tourShow(){
   const oldHost = document.getElementById('tourHost');
   if (oldHost) oldHost.replaceChildren();
   const nav = Array.from(document.querySelectorAll('.tab')).find(x =>
-    x.dataset.tabId === s.tab || x.getAttribute('data-hi') === `showTab('${s.tab}',this)`
+    x.dataset.tabId === s.tab || x.getAttribute('data-hi') === "showTab('" + s.tab + "',this)"
   );
   if (nav && !nav.classList.contains('active')) nav.click();
   tourTimer = window.setTimeout(() => {
