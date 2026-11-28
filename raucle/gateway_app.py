@@ -3494,7 +3494,14 @@ body.demo #policyEditorCard{display:none}
 @media (max-width: 900px) {
   .layout::before { display: none; }
   .content { padding: 18px 16px 28px; }
-  .sidenav { padding: 9px 12px; }
+  .sidenav { width: auto; flex: none; top: var(--rc-header-h); height: auto; max-height: none;
+    display: flex; flex-direction: row; align-items: stretch; gap: 4px; overflow-x: auto; overflow-y: hidden;
+    padding: 9px 12px; border-right: none; border-bottom: 1px solid var(--rc-blue-deep); }
+  .nav-group { display: inline-flex; flex-direction: row; align-items: stretch; gap: 4px; }
+  .nav-group + .nav-group { margin-top: 0; border-top: none; border-left: 1px solid rgba(154,175,255,.2); padding-top: 0; padding-left: 8px; }
+  .nav-heading { display: none; }
+  .sidenav .tab { display: inline-block; white-space: nowrap; border-radius: 999px; border-left: none; padding: 6px 14px; }
+  .sidenav .tab.active { border-left: none; }
   .header { gap: 10px; }
   #demoBanner { max-width: 100%; }
 }
