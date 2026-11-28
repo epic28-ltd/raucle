@@ -583,6 +583,29 @@ def test_tour_spotlight_tracks_scroll_and_cancels_stale_steps() -> None:
     assert "if (oldHost) oldHost.replaceChildren();" in ADMIN_PANEL_HTML
 
 
+def test_tour_can_always_be_dismissed_and_escape_closes_it() -> None:
+    assert 'data-hi="tourEnd(false)">×</button>' in ADMIN_PANEL_HTML
+    assert 'ev.key === \'Escape\' && document.getElementById(\'tourCard\')' in ADMIN_PANEL_HTML
+    assert "localStorage.setItem(TOUR_SEEN_KEY, '1')" in ADMIN_PANEL_HTML
+
+
+def test_tour_query_is_consumed_after_forced_start() -> None:
+    assert "params.delete('tour')" in ADMIN_PANEL_HTML
+    assert "history.replaceState(null, '', window.location.pathname" in ADMIN_PANEL_HTML
+
+
+def test_tour_never_spotlights_an_unrelated_tab_fallback() -> None:
+    assert "target = document.getElementById('tab-' + s.tab)" not in ADMIN_PANEL_HTML
+    assert "This section is not available in this demo session." in ADMIN_PANEL_HTML
+    assert "if (visible) positionTourCard(target);" in ADMIN_PANEL_HTML
+
+
+def test_tour_reveals_offline_verify_panel_before_spotlighting() -> None:
+    assert "s.target === '#rcpt-offline'" in ADMIN_PANEL_HTML
+    assert "a[data-hi=\"offlineVerify(event)\"]" in ADMIN_PANEL_HTML
+    assert "verifyLink.click();" in ADMIN_PANEL_HTML
+
+
 def test_tour_card_is_responsive_and_reduced_motion_aware() -> None:
     assert "Math.min(360, Math.max(220, window.innerWidth - 24))" in ADMIN_PANEL_HTML
     assert "prefers-reduced-motion: reduce" in ADMIN_PANEL_HTML
